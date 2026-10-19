@@ -23,7 +23,7 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_RELAY_RETENTION_DAYS` | 30 | How long queued items and DM requests are kept |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests per device per minute: those a local user's device sends through `/api/remote/…`, and those a host accepts |
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it new delegations are refused as `limited`, while renewals of active ones still go through |
-| `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to join, subscribe, forward, report presence and bring revocations here |
+| `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to push identities, join, subscribe, forward, report presence and bring revocations here |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Requests a local user sends through `/api/remote/…` per day |
 | `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers who are not their contacts |
 | `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest profile card a local user publishes |
@@ -52,8 +52,11 @@ When a local user adds someone from another server, this server fetches their id
 devices with certificates and revocations, profile card) from their relay, checks every signature,
 and stores them as a `user` row of kind `remote` named `r_` and the first 30 characters of their
 principal id. Their relay pushes identity changes (`POST /s2s/v1/identity`) to the servers that
-queued items or filed requests for them; `principalDevices` also refetches a remote person's
-identity when the stored copy is over an hour old. If such a person later signs up here with
+queued items or filed requests for them; this server applies a push only from a relay their
+profile card lists, their home relay while they have no card, or a relay holding a delegation of
+one of their devices, and refuses any other server with `403 not_delegated`. `principalDevices`
+also refetches a remote person's identity when the stored copy is over an hour old, from the
+relays their card lists and then their home relay. If such a person later signs up here with
 their key, the remote row becomes their local account and keeps its memberships.
 
 Remote users never sign in here and never run account mutations here: sign-in, sign-up, device

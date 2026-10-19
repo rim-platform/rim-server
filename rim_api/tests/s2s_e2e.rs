@@ -1,7 +1,8 @@
 //! Two RIM servers in one process, each with its own database (`DATABASE_URL` and the same name
 //! with `b` appended, created when missing), talking over plain HTTP on loopback with
 //! `RIM_S2S_ALLOW_HTTP` and `RIM_S2S_ALLOW_PRIVATE_ADDRESSES`: discovery, pinning, signed
-//! requests and responses, and every refusal of the transport.
+//! requests and responses, every refusal of the transport, and which relays may push a
+//! person's identity to a host.
 //!
 //! Run with:
 //! ```sh
@@ -12,6 +13,7 @@
 mod support;
 
 use support::nodes::{Node, databases, start};
+use support::relay::{relays, sign_up};
 
 use std::path::Path;
 use std::time::Duration;
@@ -579,6 +581,102 @@ async fn a_rotated_key_has_a_grace_period_and_a_forked_log_is_refused_until_rese
         .await
         .expect("pin again");
     assert_eq!(client_ping(&b, &a).await.status, 200);
+    a.stop().await;
+    b.stop().await;
+}
+
+/// What `node` holds about `principal_id`'s identity: their device's key package activity, the
+/// relay the cached copy names and when it was cached, and their home relay.
+async fn held_identity(node: &Node, principal_id: &str) -> Vec<Option<String>> {
+    let row = node
+        .db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT dk.last_key_package_upload_at::text AS active, c.served_by,
+                      c.fetched_at::text AS fetched_at, u.home_relay
+               FROM "user" u JOIN device_key dk ON dk.user_id = u.id
+               LEFT JOIN remote_identity_cache c ON c.principal_id = u.principal_id
+               WHERE u.principal_id = $1"#,
+            [principal_id.into()],
+        ))
+        .await
+        .expect("query")
+        .expect("a remote user with a device");
+    ["active", "served_by", "fetched_at", "home_relay"]
+        .iter()
+        .map(|column| row.try_get::<Option<String>>("", column).expect(column))
+        .collect()
+}
+
+/// `principal_id`'s identity as `relay` serves it to `host`, with every device's `mlsActive`
+/// turned off.
+async fn inactive_identity(host: &Node, relay: &Node, principal_id: &str) -> Vec<u8> {
+    let served = host
+        .s2s
+        .client
+        .send(S2sRequest {
+            peer_server_id: relay.id(),
+            method: S2sMethod::Get,
+            path: format!("/principals/{principal_id}"),
+            body: vec![],
+            content_type: None,
+            headers: vec![],
+        })
+        .await
+        .expect("the relay answers");
+    assert_eq!(served.status, 200);
+    let mut document: Value = serde_json::from_slice(&served.body).expect("json");
+    for device in document["devices"].as_array_mut().expect("devices") {
+        device["mlsActive"] = Value::Bool(false);
+    }
+    serde_json::to_vec(&document).expect("json")
+}
+
+async fn push_identity(from: &Node, to: &Node, body: Vec<u8>) -> (u16, Value) {
+    let answer = from
+        .s2s
+        .client
+        .send(S2sRequest {
+            peer_server_id: to.id(),
+            method: S2sMethod::Post,
+            path: "/identity".into(),
+            body,
+            content_type: None,
+            headers: vec![],
+        })
+        .await
+        .expect("a verified answer");
+    (
+        answer.status,
+        serde_json::from_slice(&answer.body).expect("json"),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_pushes_identities_only_for_people_whose_card_names_it() {
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 71).await;
+    let carol = sign_up(&a, "carol", 72).await;
+    carol.publish_card(2, &["https://relay.invalid"]).await;
+    let bob = sign_up(&b, "bob", 73).await;
+    bob.start_dm(&alice, &a, true).await;
+    bob.start_dm(&carol, &a, true).await;
+
+    // B holds Carol, whose card names another relay; A pushes her public identity anyway.
+    let before = held_identity(&b, &carol.principal()).await;
+    assert!(before[0].is_some(), "her device uploaded key packages");
+    let (status, body) =
+        push_identity(&a, &b, inactive_identity(&b, &a, &carol.principal()).await).await;
+    assert_eq!((status, error_code(&body)), (403, "not_delegated"));
+    assert_eq!(held_identity(&b, &carol.principal()).await, before);
+
+    // Alice's card names A, so A's push applies, device activity included.
+    assert!(held_identity(&b, &alice.principal()).await[0].is_some());
+    let (status, body) =
+        push_identity(&a, &b, inactive_identity(&b, &a, &alice.principal()).await).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["applied"], Value::Bool(true));
+    assert_eq!(held_identity(&b, &alice.principal()).await[0], None);
     a.stop().await;
     b.stop().await;
 }

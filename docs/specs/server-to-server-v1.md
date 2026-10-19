@@ -292,7 +292,7 @@ Actix's request types.
 |---|---|---|
 | `RIM_PUBLIC_BASE_URL` | unset | S2S is on only when it is `https` (or `http` with `RIM_S2S_ALLOW_HTTP`); its origin is `Rim-Origin` and the base of `@target-uri` |
 | `RIM_SERVER_KEY_FILE` | `<RIM_DATA_DIR>/server-key.json` | The server key seed |
-| `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids allowed on host endpoints (`join`, `subscriptions`, `forward`, `revocations`, `presence`) |
+| `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids allowed on host endpoints (`identity`, `join`, `subscriptions`, `forward`, `revocations`, `presence`) |
 | `RIM_S2S_DENIED_PEERS` | empty | Server ids refused everywhere |
 | `RIM_DM_INBOUND` | `requests` | DMs from other servers and from strangers here: `open`, `requests`, `partners`, `none` ("The request inbox") |
 | `RIM_DM_OUTBOUND` | `allowed` | DMs local users start with other servers: `allowed`, `partners`, `none` |
@@ -325,7 +325,7 @@ delegation):
 | `username` | `r_` + the first 30 characters after `rimp1_`. From S5-1 on local signups refuse the `r_` prefix, so nobody squats a principal's name; existing local names are left alone |
 | `display_name` | The card's `displayName`, updated with each newer card |
 | `password_hash`, `email` | Null (allowed: `principal_id` is set) |
-| `home_relay` | Server id of the relay that most recently presented a valid delegation for the user, else the first relay of their newest card that pins, else the relay that served their identity; null for local users |
+| `home_relay` | Server id of the relay that most recently presented a valid delegation for the user, else the first relay of their newest card that pins, else the relay that served their identity: one that speaks for them (7.4a) or one the host fetched it from. Null for local users |
 
 Key log, devices (with certificates and revocations) and card live in the existing
 `key_log_entry`, `device_key` and `profile_card` tables, as for an enrolled local user. A key-only
@@ -533,11 +533,22 @@ event (`c:` its conversation, `u:` the app's principal). Then per stream:
   copy, new devices with valid certificates, revocations, a card of higher version. A receiver
   ignores a listed device whose certificate a recovery voided, after checking its signature like
   any other; a recovery entry new to the receiver revokes every device it held for the person.
+  It applies it only from a relay that speaks for the principal: their newest stored card lists
+  the relay's origin; the pushed card, verifying against the pushed log's head and of a higher
+  version than the stored one, lists it; it is their `home_relay` and no card is stored; or it
+  holds an active delegation of one of their devices. Any other peer gets `403 not_delegated`
+  and nothing is stored. `mlsActive` is outside every signed statement, the relay's own
+  observation: a host takes it only from a relay that speaks for the principal, from one it
+  chose to fetch from (below), or from the relay a local user named for a principal the host
+  did not hold yet; a relay that presents a delegation or revocation for a device the host does
+  not know is fetched from only when it speaks for the principal.
 - **Fetching.** `remoteIdentity(principalId, relayUrl)` answers local principals directly and
   otherwise fetches from `relayUrl` (pinning it), cached 24 hours. The app verifies the log against
   the principal id, each certificate against the log and the card against the head, as
   `e2ee-mls-v1.md` requires for leaves. `principalDevices` answers remote users from the stored
-  copy, refreshed from their relay when older than an hour.
+  copy, refreshed when older than an hour from the relays their newest card lists that are
+  pinned, then their `home_relay`. The relay that last served or pushed the copy (`servedBy`)
+  is informational and never chooses where it is refreshed from.
 - **Contacts.** A contact link is `rim-contact:1:<principalId>:<relayUrl>` (relay URL rules as a
   device-link endpoint: 1 to 256 bytes of printable ASCII, no `?`, `#`, `@`), shown as a byte-mode
   QR code. The principal id authenticates everything fetched with it. Rejected: the card in the link
@@ -1131,7 +1142,7 @@ queue bytes, S2S responses by status, signature failures by reason.
 |---|---|---|
 | Hostile relay | Read plaintext channel events and DM metadata it queues; drop, delay, reorder; refuse to forward; see which spaces its users use and when | Forge a write (no device key); forge or alter host events or responses (pinned host key); replay (`seq`, nonces); use a delegation for another workspace, host or relay; hide a revocation past 24 hours once the app reaches the host directly; read DMs (MLS) |
 | Hostile host | What a server can for its own spaces today, plus remote members' principals, devices and activity there | Sign as a device; use a delegation at another host; read DMs homed elsewhere; see a remote member's IP outside a direct connection |
-| Hostile peer | Send signed junk up to its limits; claim last-resort packages and send DM requests as a stranger | Impersonate another server (self-certifying id); replay; push events for spaces it does not host (envelopes name their host; relays accept only subscribed spaces); pass an allow-list |
+| Hostile peer | Send signed junk up to its limits; claim last-resort packages and send DM requests as a stranger | Impersonate another server (self-certifying id); replay; push events for spaces it does not host (envelopes name their host; relays accept only subscribed spaces); change another principal's devices, device activity or relays at a host (it does not speak for them, 7.4a); pass an allow-list |
 | Stolen server key | Sign as that server until recovery: receive delegated events as a relay, sign false events to its own members as a host | Sign as users; extend delegations; outlive a `signer: recovery` rotation (peers drop the old key at once, delegations naming it die) |
 | Stolen device | Whatever that device can do, through any relay or directly | Act after a host applies the revocation |
 | Network attacker | See TLS metadata between servers | Alter bodies (digest, signature), replay, substitute a server at a pinned id |

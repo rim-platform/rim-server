@@ -91,7 +91,8 @@ impl Endpoint {
     pub(crate) fn host_allow_list_applies(self) -> bool {
         matches!(
             self,
-            Self::Forward
+            Self::Identity
+                | Self::Forward
                 | Self::JoinChallenge
                 | Self::Join
                 | Self::Subscriptions
@@ -178,7 +179,7 @@ mod tests {
             }
         }
         assert!(Endpoint::Forward.host_allow_list_applies());
-        assert!(!Endpoint::Identity.host_allow_list_applies());
+        assert!(Endpoint::Identity.host_allow_list_applies());
         assert!(!Endpoint::Outbox.host_allow_list_applies());
         assert!(!Endpoint::Deliver.host_allow_list_applies());
     }

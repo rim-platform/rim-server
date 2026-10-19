@@ -45,7 +45,7 @@ use rim_services::s2s::service::PeerService;
 use rim_services::session_revocation::SessionRevocations;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
-use crate::host::DefaultHostService;
+use crate::host::{DefaultHostService, IdentitySource};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::device_key;
 use crate::remote_workspace::{MAX_ACCEPTED_LIFETIME, MAX_DELEGATIONS_PER_REQUEST};
@@ -577,7 +577,12 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
         }
 
         // The person as a user here: a remote user created or updated, or a local account.
-        self.host.store_identity(&document, &peer_server_id).await?;
+        self.host
+            .store_identity(
+                &document,
+                IdentitySource::Authorized(peer_server_id.clone()),
+            )
+            .await?;
         let (user_id, kind) = self
             .repos
             .host_repo

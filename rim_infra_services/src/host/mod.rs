@@ -4,6 +4,9 @@
 
 pub mod outbox;
 
+#[cfg(test)]
+mod identity_tests;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -37,7 +40,8 @@ use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::dto::{
     ConversationPredecessorDto, ForwardAuth, ForwardOutcome, ForwardRefusal, ForwardRequest,
-    HostCleanup, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
+    HostCleanup, IdentityPush, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember,
+    StreamHeadDto,
 };
 use rim_services::host::service::{DelegationCheck, HostService, RemoteKeyPackages};
 use rim_services::limits::InstanceLimits;
@@ -45,14 +49,16 @@ use rim_services::relay::dto::{
     ClaimConversation, Claimer, DeliverItem, IdentityDocument, OutboxPage, PeerClaimRequest,
     PeerClaimResponse,
 };
-use rim_services::s2s::dto::{S2sMethod, S2sRequest};
+use rim_services::s2s::dto::{PeerLookup, S2sMethod, S2sRequest};
 use rim_services::s2s::service::{PeerService, S2sClient};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::clock::Clock;
 use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
-use crate::relay::identity::{IdentityStore, Stored, store_remote, verify_identity};
+use crate::relay::identity::{
+    IdentityStore, Stored, VerifiedIdentity, store_remote, verify_identity,
+};
 use crate::relay::policy::{DmPolicy, PolicySource, outbound_refused};
 use crate::relay::{
     MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, card_relays, check_relay_urls, fetch_from_relays,
@@ -115,6 +121,38 @@ pub struct DefaultHostService {
 
 fn upstream(server_id: &str) -> ServiceError {
     ServiceError::upstream(server_id)
+}
+
+/// The relay an identity document came from, and why it may speak for the principal. Only the
+/// relay named here is recorded as the document's source and as the home relay fallback, and
+/// only such a relay's unsigned device activity is applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IdentitySource {
+    /// A relay that pushed or presented the document and speaks for the principal: their
+    /// newest card lists it, the document's newer card lists it, it is their home relay while
+    /// no card is stored, it holds an active delegation of one of their devices, or it
+    /// presented a login proof one of their devices signed for this host.
+    Authorized(String),
+    /// A relay this host fetched the document from: one of the relays the principal's newest
+    /// card lists or their home relay, or the relay a local user named for a principal not
+    /// held here yet.
+    Fetched(String),
+}
+
+impl IdentitySource {
+    fn relay(&self) -> &str {
+        match self {
+            Self::Authorized(relay) | Self::Fetched(relay) => relay,
+        }
+    }
+}
+
+/// Whether a card's relays include one at `origin`.
+fn relays_include_origin(relays: &[String], origin: &str) -> bool {
+    relays
+        .iter()
+        .filter_map(|url| origin_of(url))
+        .any(|o| o == origin)
 }
 
 impl DefaultHostService {
@@ -321,21 +359,36 @@ impl DefaultHostService {
     }
 
     /// Store a fetched or pushed identity as a remote user and remember where it came from.
+    ///
+    /// # Errors
+    /// `Validation` when the document does not verify or its key log does not extend the
+    /// stored one.
     pub(crate) async fn store_identity(
         &self,
         document: &IdentityDocument,
-        served_by: &str,
+        source: IdentitySource,
     ) -> ServiceResult<Option<Stored>> {
         let verified = verify_identity(document).map_err(ServiceError::Validation)?;
-        let home_relay = self.pin_card_relays(document).await;
+        self.store_verified(document, &verified, source).await
+    }
+
+    /// [`Self::store_identity`] for a document that verified as `verified`.
+    async fn store_verified(
+        &self,
+        document: &IdentityDocument,
+        verified: &VerifiedIdentity,
+        source: IdentitySource,
+    ) -> ServiceResult<Option<Stored>> {
+        let served_by = source.relay();
+        let home_relay = self.home_relay_for(document, served_by).await?;
         let (scope, repos) = self.begin().await?;
         let stored = store_remote(
             &IdentityStore {
                 host_repo: repos.host_repo.as_ref(),
                 key_identity_repo: repos.key_identity_repo.as_ref(),
             },
-            &verified,
-            home_relay.as_deref().or(Some(served_by)),
+            verified,
+            home_relay.as_deref(),
         )
         .await?;
         Self::commit(scope).await?;
@@ -375,6 +428,123 @@ impl DefaultHostService {
             }
         }
         first
+    }
+
+    /// The home relay to record with a stored identity: none, so the stored one stays, while
+    /// the stored home relay holds an active delegation of the user; else the first relay of
+    /// the document's card that pins; else `served_by`.
+    async fn home_relay_for(
+        &self,
+        document: &IdentityDocument,
+        served_by: &str,
+    ) -> ServiceResult<Option<String>> {
+        if let Some((user_id, UserKind::Remote)) = self
+            .repos
+            .host_repo
+            .find_user(&document.principal_id)
+            .await?
+            && let Some(home) = self.repos.host_repo.home_relay(user_id).await?
+            && !self
+                .repos
+                .delegation_repo
+                .delegated_workspaces(user_id, &home, self.clock.now())
+                .await?
+                .is_empty()
+        {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.pin_card_relays(document)
+                .await
+                .unwrap_or_else(|| served_by.to_string()),
+        ))
+    }
+
+    /// Whether the relay `relay` at `relay_origin` speaks for the remote user `user_id`, whose
+    /// document verified as `verified`: their newest stored card lists the relay's origin; the
+    /// document's card, of a higher version than the stored one, lists it; it is their home
+    /// relay and no card is stored; or it holds an active delegation of one of their devices.
+    async fn relay_speaks_for(
+        &self,
+        user_id: UserId,
+        relay: &str,
+        relay_origin: &str,
+        verified: &VerifiedIdentity,
+    ) -> ServiceResult<bool> {
+        let stored = self
+            .repos
+            .key_identity_repo
+            .get_profile_card(user_id)
+            .await?;
+        match &stored {
+            Some(card) if relays_include_origin(&card_relays(&card.payload), relay_origin) => {
+                return Ok(true);
+            }
+            None if self.repos.host_repo.home_relay(user_id).await?.as_deref() == Some(relay) => {
+                return Ok(true);
+            }
+            _ => {}
+        }
+        if let Some((card, _)) = &verified.card
+            && stored
+                .as_ref()
+                .is_none_or(|s| card.version > u64::from(s.version))
+            && relays_include_origin(&card.relays, relay_origin)
+        {
+            return Ok(true);
+        }
+        Ok(!self
+            .repos
+            .delegation_repo
+            .delegated_workspaces(user_id, relay, self.clock.now())
+            .await?
+            .is_empty())
+    }
+
+    /// [`Self::relay_speaks_for`] for a relay known by its server id only: false when it is
+    /// not pinned.
+    async fn pinned_relay_speaks_for(
+        &self,
+        user_id: UserId,
+        relay: &str,
+        verified: &VerifiedIdentity,
+    ) -> ServiceResult<bool> {
+        match self.peers.resolve(relay, None, None).await {
+            Ok(PeerLookup::Ready(keys)) => {
+                self.relay_speaks_for(user_id, relay, &keys.origin, verified)
+                    .await
+            }
+            Ok(_) => Ok(false),
+            Err(e) => {
+                warn!(peer_server_id = %relay, error = %e, "could not look up a relay's origin");
+                Ok(false)
+            }
+        }
+    }
+
+    /// The relays this host fetches a remote user's identity from: those their newest card
+    /// lists that are pinned, else their home relay, and then their home relay.
+    async fn chosen_relays(&self, user_id: UserId) -> ServiceResult<Vec<String>> {
+        let card = self
+            .repos
+            .key_identity_repo
+            .get_profile_card(user_id)
+            .await?;
+        let home = self.repos.host_repo.home_relay(user_id).await?;
+        let mut relays = Self::relays_of(
+            self.repos.host_repo.as_ref(),
+            &self.own_id(),
+            card.as_ref().map(|c| c.payload.as_str()),
+            home.as_deref(),
+        )
+        .await?;
+        if let Some(home) = home
+            && home != self.own_id()
+            && !relays.contains(&home)
+        {
+            relays.push(home);
+        }
+        Ok(relays)
     }
 
     /// The relays to send a remote user's traffic to: those their card lists that are pinned,
@@ -426,10 +596,10 @@ impl DefaultHostService {
         else {
             return Ok(false);
         };
-        Ok(card_relays(&card.payload)
-            .iter()
-            .filter_map(|url| origin_of(url))
-            .any(|origin| origin == peer_origin))
+        Ok(relays_include_origin(
+            &card_relays(&card.payload),
+            peer_origin,
+        ))
     }
 
     /// Count an invite `actor` sends to someone on another server against their daily quota,
@@ -681,11 +851,30 @@ impl HostService for DefaultHostService {
                 )
                 .await;
                 let user_id = match (fetched, existing) {
-                    (Ok((document, served_by)), _) => {
-                        self.store_identity(&document, &served_by)
+                    (Ok((document, served_by)), None) => {
+                        self.store_identity(&document, IdentitySource::Fetched(served_by))
                             .await?
                             .ok_or(ServiceError::NotFound)?
                             .user_id
+                    }
+                    (Ok((document, served_by)), Some((user_id, _))) => {
+                        let verified =
+                            verify_identity(&document).map_err(ServiceError::Validation)?;
+                        if self
+                            .pinned_relay_speaks_for(user_id, &served_by, &verified)
+                            .await?
+                        {
+                            self.store_verified(
+                                &document,
+                                &verified,
+                                IdentitySource::Authorized(served_by),
+                            )
+                            .await?;
+                        } else {
+                            warn!(user_id = %user_id, peer_server_id = %served_by, "using a stored identity; the named relay does not speak for them");
+                            self.ensure_outbound_to(user_id).await?;
+                        }
+                        user_id
                     }
                     (Err(e @ ServiceError::Forbidden(_)), _) => return Err(e),
                     // Their relays are down: the stored copy still names them.
@@ -742,21 +931,33 @@ impl HostService for DefaultHostService {
     async fn apply_identity(
         &self,
         peer_server_id: String,
+        peer_origin: String,
         document: IdentityDocument,
-    ) -> ServiceResult<bool> {
-        match self
+    ) -> ServiceResult<IdentityPush> {
+        let Some((user_id, UserKind::Remote)) = self
             .repos
             .host_repo
             .find_user(&document.principal_id)
             .await?
-        {
-            Some((_, UserKind::Remote)) => {}
-            _ => return Ok(false),
-        }
-        Ok(self
-            .store_identity(&document, &peer_server_id)
+        else {
+            return Ok(IdentityPush::Applied(false));
+        };
+        let verified = verify_identity(&document).map_err(ServiceError::Validation)?;
+        if !self
+            .relay_speaks_for(user_id, &peer_server_id, &peer_origin, &verified)
             .await?
-            .is_some())
+        {
+            warn!(user_id = %user_id, "refused an identity from a relay that does not speak for the user");
+            return Ok(IdentityPush::NotDelegated);
+        }
+        let stored = self
+            .store_verified(
+                &document,
+                &verified,
+                IdentitySource::Authorized(peer_server_id),
+            )
+            .await?;
+        Ok(IdentityPush::Applied(stored.is_some()))
     }
 
     async fn refresh_remote(&self, principal_ids: Vec<String>) -> ServiceResult<()> {
@@ -774,21 +975,19 @@ impl HostService for DefaultHostService {
             {
                 continue;
             }
-            let relay = match cached.map(|c| c.served_by) {
-                Some(relay) => Some(relay),
-                None => self.repos.host_repo.home_relay(user_id).await?,
-            };
-            let Some(relay) = relay else {
-                continue;
-            };
-            match self.fetch_document(&relay, &principal_id).await {
-                Some(document) => {
-                    if let Err(e) = self.store_identity(&document, &relay).await {
-                        warn!(error = %e, user_id = %user_id, "a refreshed identity was refused");
+            for relay in self.chosen_relays(user_id).await? {
+                let Some(document) = self.fetch_document(&relay, &principal_id).await else {
+                    warn!(user_id = %user_id, peer_server_id = %relay, "could not refresh a remote identity");
+                    continue;
+                };
+                match self
+                    .store_identity(&document, IdentitySource::Fetched(relay.clone()))
+                    .await
+                {
+                    Ok(_) => break,
+                    Err(e) => {
+                        warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "a refreshed identity was refused")
                     }
-                }
-                _ => {
-                    warn!(user_id = %user_id, peer_server_id = %relay, "could not refresh a remote identity")
                 }
             }
         }
@@ -805,37 +1004,35 @@ impl HostService for DefaultHostService {
         else {
             return Ok(false);
         };
+        let presented = from_relay.is_some();
         let relays = match from_relay {
             Some(relay) => vec![relay],
-            None => {
-                let card = self
-                    .repos
-                    .key_identity_repo
-                    .get_profile_card(user_id)
-                    .await?;
-                let home = self.repos.host_repo.home_relay(user_id).await?;
-                let mut relays = Self::relays_of(
-                    self.repos.host_repo.as_ref(),
-                    &self.own_id(),
-                    card.as_ref().map(|c| c.payload.as_str()),
-                    home.as_deref(),
-                )
-                .await?;
-                if let Some(home) = home
-                    && home != self.own_id()
-                    && !relays.contains(&home)
-                {
-                    relays.push(home);
-                }
-                relays
-            }
+            None => self.chosen_relays(user_id).await?,
         };
         for relay in relays {
             let Some(document) = self.fetch_document(&relay, &principal_id).await else {
                 warn!(user_id = %user_id, peer_server_id = %relay, "could not refresh a remote identity");
                 continue;
             };
-            match self.store_identity(&document, &relay).await {
+            let verified = match verify_identity(&document) {
+                Ok(verified) => verified,
+                Err(e) => {
+                    warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "a refreshed identity was refused");
+                    continue;
+                }
+            };
+            let source = if !presented {
+                IdentitySource::Fetched(relay.clone())
+            } else if self
+                .pinned_relay_speaks_for(user_id, &relay, &verified)
+                .await?
+            {
+                IdentitySource::Authorized(relay.clone())
+            } else {
+                warn!(user_id = %user_id, peer_server_id = %relay, "refused an identity from a relay that does not speak for the user");
+                continue;
+            };
+            match self.store_verified(&document, &verified, source).await {
                 Ok(stored) => return Ok(stored.is_some()),
                 Err(e) => {
                     warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "a refreshed identity was refused")
