@@ -44,7 +44,7 @@ actix-http = "3.11.2"
 tempfile = "3"
 async-trait = "0.1.89"
 anyhow = "1.0.99"
-ed25519-dalek = "2.2"
+ed25519-dalek = "3.0"
 hmac = "0.12.1"
 openmls = "=0.9.1"
 openmls_rust_crypto = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
