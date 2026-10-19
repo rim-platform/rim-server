@@ -516,6 +516,13 @@ mod tests {
             "rim_s2s_requests_total{outcome=\"signature_invalid\"} 1",
             "rim_forwarded_requests_total{direction=\"outgoing\",outcome=\"upstream_unavailable\"} 1",
             "rim_rate_limit_rejections_total{limiter=\"s2s_peer\"} 1",
+            "rim_registrations_total 0",
+            "rim_messages_created_total{encryption=\"plaintext\"} 0",
+            "rim_messages_created_total{encryption=\"encrypted\"} 0",
+            "rim_websocket_connections 0",
+            "rim_graphql_subscriptions 0",
+            "rim_graphql_failed_operations_total{kind=\"internal\"} 0",
+            "rim_database_sample_success{sample=\"usage\"} 0",
             "# TYPE rim_http_request_duration_seconds histogram",
             "# HELP rim_s2s_requests_total Server-to-server requests received, by outcome.",
         ] {
