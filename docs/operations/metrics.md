@@ -52,25 +52,37 @@ hours. The dashboards and alert rules that read these series are in the
 
 ### Container metrics
 
-`deploy/compose.monitoring-containers.yml`, on top of the files above, adds cAdvisor and a
-Docker socket proxy, and `deploy/monitoring-containers.alloy` to Alloy's configuration
-directory. It needs rootful Docker on Linux with the `overlay2` storage driver
-(`docker info --format '{{.Driver}}'`), and `DOCKER_GID` in `deploy/.env`, the group of
-`/var/run/docker.sock` (`stat -c %g /var/run/docker.sock`).
+`deploy/compose.monitoring-containers.yml`, on top of the files above, adds cAdvisor, a Docker
+socket proxy and a containerd socket proxy, and `deploy/monitoring-containers.alloy` to Alloy's
+configuration directory. It needs rootful Docker on Linux, with containerd's socket at
+`/run/containerd/containerd.sock` as Docker's own packages install it, and `DOCKER_GID` in
+`deploy/.env`, the group of `/var/run/docker.sock` (`stat -c %g /var/run/docker.sock`). It
+covers the containerd image store, the default of a new Docker 29 install (`docker info
+--format '{{.Driver}}'` says `overlayfs`). On the older `overlay2` storage driver add
+`deploy/compose.monitoring-containers-overlay2.yml` after it, which mounts Docker's layer
+database read-only; without it cAdvisor logs "failed to identify the read-write layer ID" and
+sends no container series. A missing host path stops the container from starting rather than
+being created empty.
 
-Only the proxy (`wollomatic/socket-proxy`) mounts the socket. It answers cAdvisor alone, on a
-network of the two with no way out, and only `HEAD /_ping`, `GET /version`, `GET /info` and
-`GET /containers/<id>/json`; any other path or method is refused, so nothing can create,
-start, stop or remove a container, exec into one, read its logs or copy files out of it.
-cAdvisor runs unprivileged without capabilities, reads the host's cgroups and the read-only
-layer ids under `/var/lib/docker/image/overlay2/layerdb/mounts`, and has no way out either;
-Alloy scrapes it on the internal network and forwards only the two series above.
+cAdvisor reaches neither socket itself:
 
-What remains: inspecting a container returns its configuration, environment variables
-included, and other containers' environments hold secrets such as `DATABASE_URL` with the
-database password and `GRAFANA_CLOUD_METRICS_TOKEN`. A compromised cAdvisor could read them;
-it has no route to the internet itself, but it shares the internal network with the other
-services.
+- The Docker socket proxy (`wollomatic/socket-proxy`) answers cAdvisor alone, on a network of
+  the two with no way out, and only `HEAD /_ping`, `GET /version`, `GET /info` and
+  `GET /containers/<id>/json`. Any other path or method is refused, so nothing can create,
+  start, stop or remove a container, exec into one, read its logs or copy files out of it.
+- The containerd proxy (Envoy, `deploy/containerd-proxy.yaml`) has no network. It gives cAdvisor
+  a socket that forwards one call, `Containers.Get` in Docker's `moby` namespace, which cAdvisor
+  needs on the containerd image store; every other call, tasks and exec included, is refused.
+
+cAdvisor runs unprivileged without capabilities, reads the host's cgroups in the host cgroup
+namespace, and has no way out; Alloy scrapes it on the internal network and forwards only the
+two series above.
+
+What remains: a container's inspection and its containerd record return its configuration,
+environment variables included, and other containers' environments hold secrets such as
+`DATABASE_URL` with the database password and `GRAFANA_CLOUD_METRICS_TOKEN`. A compromised
+cAdvisor could read them; it has no route to the internet itself, but it shares the internal
+network with the other services.
 
 ## The metrics
 

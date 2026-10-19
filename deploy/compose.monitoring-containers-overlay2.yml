@@ -1,0 +1,20 @@
+# =============================================================================
+# RIM — container metrics on the overlay2 storage driver: added after
+# compose.monitoring-containers.yml on a host where
+# `docker info --format '{{.Driver}}'` says overlay2. cAdvisor there reads each
+# container's layer id from Docker's layer database, mounted read-only.
+#
+#   docker compose -f deploy/compose.yml -f deploy/compose.monitoring.yml \
+#     -f deploy/compose.monitoring-containers.yml \
+#     -f deploy/compose.monitoring-containers-overlay2.yml up -d
+# =============================================================================
+
+services:
+  cadvisor:
+    volumes:
+      - type: bind
+        source: /var/lib/docker/image/overlay2/layerdb/mounts
+        target: /var/lib/docker/image/overlay2/layerdb/mounts
+        read_only: true
+        bind:
+          create_host_path: false

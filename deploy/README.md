@@ -115,10 +115,13 @@ dc logs alloy          # no "level=error" once it scrapes and sends
 ```
 
 Each compose service's CPU and memory use (job `cadvisor`) comes from a second overlay,
-`compose.monitoring-containers.yml`, on rootful Docker on Linux with the `overlay2` storage
-driver. It runs cAdvisor and a Docker socket proxy that lets cAdvisor make only read-only calls;
-`docs/operations/metrics.md`, "Container metrics", says which and what they still expose. Set
-`DOCKER_GID` in `deploy/.env` and add the overlay after `compose.monitoring.yml`:
+`compose.monitoring-containers.yml`, on rootful Docker on Linux. It runs cAdvisor behind a
+Docker socket proxy and a containerd socket proxy that let it make only read-only calls;
+`docs/operations/metrics.md`, "Container metrics", says which and what they still expose. It
+covers the containerd image store, the default of a new Docker 29 install; on the older
+`overlay2` storage driver (`docker info --format '{{.Driver}}'`) add
+`compose.monitoring-containers-overlay2.yml` after it. Set `DOCKER_GID` in `deploy/.env` and
+add the overlay after `compose.monitoring.yml`:
 
 ```sh
 echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> deploy/.env
