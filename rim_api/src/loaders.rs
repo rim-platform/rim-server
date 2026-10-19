@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_graphql::dataloader::Loader;
+use futures_util::future::try_join_all;
 
 use rim_core::message::model::MessageId;
 use rim_core::user::model::UserId;
@@ -61,6 +62,8 @@ pub struct ReactionLoaderKey {
     pub actor_user_id: UserId,
 }
 
+/// Batches reaction lookups with one service call per viewer in the batch, so each key's
+/// `reacted_by_me` is computed for its own viewer even when one batch holds several requests.
 pub struct ReactionLoader {
     reaction_service: Arc<dyn MessageReactionService>,
 }
@@ -83,29 +86,42 @@ impl Loader<ReactionLoaderKey> for ReactionLoader {
         let keys = keys.to_vec();
         let svc = Arc::clone(&self.reaction_service);
         async move {
-            if keys.is_empty() {
-                return Ok(HashMap::new());
+            let mut by_actor: HashMap<UserId, Vec<MessageId>> = HashMap::new();
+            for key in keys {
+                by_actor
+                    .entry(key.actor_user_id)
+                    .or_default()
+                    .push(key.message_id);
             }
 
-            // All keys in a single request share the same actor.
-            let actor_user_id = keys[0].actor_user_id;
-            let message_ids: Vec<MessageId> = keys.iter().map(|k| k.message_id).collect();
+            let calls = by_actor.into_iter().map(|(actor_user_id, message_ids)| {
+                let svc = Arc::clone(&svc);
+                async move {
+                    let reaction_map = svc
+                        .get_reactions_for_messages(GetReactionsForMessagesQuery {
+                            actor: Actor::new(actor_user_id),
+                            message_ids: message_ids.clone(),
+                        })
+                        .await
+                        .map_err(loader_error)?;
+                    Ok::<_, Self::Error>(
+                        message_ids
+                            .into_iter()
+                            .map(|message_id| {
+                                let key = ReactionLoaderKey {
+                                    message_id,
+                                    actor_user_id,
+                                };
+                                let reactions =
+                                    reaction_map.get(&message_id).cloned().unwrap_or_default();
+                                (key, reactions)
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+            });
 
-            let reaction_map = svc
-                .get_reactions_for_messages(GetReactionsForMessagesQuery {
-                    actor: Actor::new(actor_user_id),
-                    message_ids,
-                })
-                .await
-                .map_err(loader_error)?;
-
-            Ok(keys
-                .into_iter()
-                .map(|k| {
-                    let reactions = reaction_map.get(&k.message_id).cloned().unwrap_or_default();
-                    (k, reactions)
-                })
-                .collect())
+            Ok(try_join_all(calls).await?.into_iter().flatten().collect())
         }
     }
 }
