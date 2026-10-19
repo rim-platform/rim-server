@@ -354,5 +354,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   relay answers with an identity the host refuses; it still falls back to the stored copy when
   no relay answers (`server-to-server-v1.md` "Profile cards and contacts", "Direct
   connection").
+- A relay bounds the items DM requests hold apart from each user's queue: at most 1 MiB per
+  request and 16 MiB per user, the invites of ignored requests included, past which a new
+  invite is refused `limited` and a later item is dropped. Held items no longer count toward
+  `RIM_RELAY_QUEUE_BYTES_PER_USER`. Before, they counted toward it but could not be dropped,
+  so requests from strangers could make the relay drop every item queued for that user's
+  devices (`server-to-server-v1.md` "Relay queues", "The request inbox", "Limits and audit").
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

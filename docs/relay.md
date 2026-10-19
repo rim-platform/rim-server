@@ -82,9 +82,11 @@ A relay stores each envelope once and one item per recipient. Each device reads 
 above its cursor; a device added later starts at the newest item queued before it. An item is
 deleted once every non-revoked device of its user has acknowledged it, and after the retention
 period regardless. Over the per-user byte cap the oldest items go first and the devices online get
-a `QueueOverflow` notice; a device offline at the time sees the gap in the stream's `seq`. A relay
-pulls what a host still holds for it (`GET /s2s/v1/outbox`) every minute, so a delivery missed
-while the relay was down arrives on the next pull.
+a `QueueOverflow` notice; a device offline at the time sees the gap in the stream's `seq`. Items a
+DM request holds are not counted toward that cap and are never dropped for it; the request
+inbox's own limits bound them. A relay pulls what a host still holds for it
+(`GET /s2s/v1/outbox`) every minute, so a delivery missed while the relay was down arrives on the
+next pull.
 
 ### The request inbox
 
@@ -95,9 +97,9 @@ workspace hosted here judged by the recipient's choice for that workspace (or it
 delivered when they are its Owner or a Moderator. What the setting delivers is recorded as
 accepted at once; what it takes as a request is filed as a DM request; what it refuses is
 answered `blocked`. A request keeps the sender's card and holds up to three items of the
-conversation; later ones are dropped until it is accepted. Items of a conversation the relay has
-no invite for are refused (`not_subscribed`), so a host cannot skip the inbox. A decided
-conversation keeps its decision when the settings change later.
+conversation in at most 1 MiB; later ones are dropped until it is accepted. Items of a
+conversation the relay has no invite for are refused (`not_subscribed`), so a host cannot skip
+the inbox. A decided conversation keeps its decision when the settings change later.
 
 The same rule covers conversations of this server's own direct space whose creator is someone
 else (a person from another relay creating a DM with a local user through the forward path, or a
@@ -119,9 +121,11 @@ once.
 | Nothing | Expires after the retention period |
 
 Limits: 100 pending requests per recipient and `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
-principal per day on this relay; past them invites are refused as `limited`. A claim of a local user's key packages by a stranger
-(not a contact, never accepted, sharing no workspace here) gets last-resort packages only, at
-most 20 claims per stranger per day.
+principal per day on this relay, and 16 MiB of held items per recipient, the invites ignored
+requests keep included; past them invites are refused as `limited`, and an item past the held
+bytes is dropped. A claim of a local user's key packages by a stranger (not a contact, never
+accepted, sharing no workspace here) gets last-resort packages only, at most 20 claims per
+stranger per day.
 
 With `RIM_DM_INBOUND=partners` the identity endpoint (`GET /s2s/v1/principals/<id>`) answers
 only the servers `RIM_DM_PARTNERS` lists, and with `none` no server; everyone else gets `404` as

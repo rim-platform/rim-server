@@ -370,7 +370,9 @@ async fn the_oldest_items_go_over_the_cap_and_held_ones_stay() {
         let env = repo.insert_envelope(envelope(Some(seq), w)).await.unwrap();
         repo.insert_item(item(user.id, env)).await.unwrap();
     }
-    assert_eq!(repo.queued_bytes(user.id).await.unwrap(), 400);
+    assert_eq!(repo.queued_bytes(user.id).await.unwrap(), 300);
+    assert_eq!(repo.user_held_bytes(user.id).await.unwrap(), 100);
+    assert_eq!(repo.request_held_bytes(request.id).await.unwrap(), 100);
     assert_eq!(
         repo.queue_stats().await.unwrap(),
         RelayQueueStats {
@@ -387,7 +389,7 @@ async fn the_oldest_items_go_over_the_cap_and_held_ones_stay() {
     );
     let spaces: HashSet<Uuid> = dropped.iter().map(|d| d.workspace_id).collect();
     assert_eq!(spaces, HashSet::from([w1, w2]));
-    assert_eq!(repo.queued_bytes(user.id).await.unwrap(), 200);
+    assert_eq!(repo.queued_bytes(user.id).await.unwrap(), 100);
     assert_eq!(
         repo.queue_stats().await.unwrap(),
         RelayQueueStats {
@@ -401,6 +403,54 @@ async fn the_oldest_items_go_over_the_cap_and_held_ones_stay() {
         repo.count_held(request.id).await.unwrap(),
         1,
         "held items stay"
+    );
+}
+
+#[tokio::test]
+async fn held_bytes_over_the_cap_leave_the_live_queue_alone() {
+    const CAP: i64 = 1000;
+    let ctx = support::TestCtx::new().await;
+    let user = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let w = Uuid::now_v7();
+    for n in 0..3 {
+        let request = repo
+            .insert_request(NewDmRequest {
+                status: DmRequestStatus::Pending,
+                user_id: user.id,
+                from_principal_id: format!("rimp1_stranger{n}"),
+                card_payload: "{}".to_string(),
+                card_signature: "ed25519:c".to_string(),
+                host_server_id: HOST.to_string(),
+                conversation_id: Uuid::now_v7(),
+                expires_at: Utc::now() + Duration::days(30),
+            })
+            .await
+            .unwrap();
+        let env = repo.insert_envelope(envelope(None, w)).await.unwrap();
+        repo.insert_item(NewRelayItem {
+            request_id: Some(request.id),
+            size_bytes: 600,
+            ..item(user.id, env)
+        })
+        .await
+        .unwrap();
+    }
+    for seq in 1..=4 {
+        let env = repo.insert_envelope(envelope(Some(seq), w)).await.unwrap();
+        repo.insert_item(item(user.id, env)).await.unwrap();
+    }
+
+    // The queue's cap is checked against its own bytes, so 1800 held bytes over a cap of
+    // 1000 drop none of the 400 queued.
+    let over = repo.queued_bytes(user.id).await.unwrap() - CAP;
+    assert!(over <= 0, "held bytes count toward the queue: {over} over");
+    assert_eq!(repo.user_held_bytes(user.id).await.unwrap(), 1800);
+    let d = device(&ctx.db, user.id, 1).await;
+    assert_eq!(
+        repo.list_items(user.id, d.id, 0, 10).await.unwrap().len(),
+        4,
+        "every queued item is still there"
     );
 }
 
@@ -540,6 +590,11 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
     let first = repo.held_items(other.id).await.unwrap()[0].id;
     assert_eq!(repo.delete_held(other.id).await.unwrap(), 1);
     assert_eq!(repo.held_items(other.id).await.unwrap()[0].id, first);
+    assert_eq!(
+        repo.user_held_bytes(user.id).await.unwrap(),
+        100,
+        "the invite an ignored request keeps counts as held"
+    );
     assert_eq!(
         repo.delete_expired_requests(Utc::now() + Duration::days(31))
             .await

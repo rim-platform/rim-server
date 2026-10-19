@@ -1,8 +1,8 @@
 //! The relay's key package claims for hosts (the stranger rule, blocks, the claim's host), the
-//! operator's DM settings at its claims, identities and request inbox, its queue cap,
-//! contacts, identity fetches and remote server lookups, and the host's checks of forwarded
-//! device requests (the device, its signature, the forwarded body, the `seq` window, and which
-//! relay may carry a user's traffic).
+//! operator's DM settings at its claims, identities and request inbox, its held bytes, its
+//! queue cap, oversized envelopes, contacts, identity fetches and remote server lookups, and
+//! the host's checks of forwarded device requests (the device, its signature, the forwarded
+//! body, the `seq` window, and which relay may carry a user's traffic).
 
 use std::sync::{Arc, Mutex};
 
@@ -469,10 +469,11 @@ fn invite_item(signer: &ServerSigner) -> DeliverItem {
     }
 }
 
-/// A relay under `policy` where Alice is a stranger to Bob with default settings; `filed`
-/// records the status of each request it files.
+/// A relay under `policy` where Alice is a stranger to Bob with default settings, and Bob's
+/// pending requests hold `held_bytes`; `filed` records the status of each request it files.
 fn inbox_relay(
     policy: DmOperatorPolicy,
+    held_bytes: i64,
     filed: Arc<Mutex<Vec<rim_core::relay::model::DmRequestStatus>>>,
 ) -> DefaultRelayService {
     use rim_core::relay::model::{DmRequest, DmRequestId};
@@ -510,6 +511,9 @@ fn inbox_relay(
     relay
         .expect_count_requests_from()
         .returning(|_, _| Box::pin(async { Ok(0) }));
+    relay
+        .expect_user_held_bytes()
+        .returning(move |_| Box::pin(async move { Ok(held_bytes) }));
     relay.expect_insert_request().returning(move |new| {
         filed.lock().expect("lock").push(new.status);
         Box::pin(async move {
@@ -559,13 +563,14 @@ fn inbox_relay(
     .with_dm_policy(policy)
 }
 
-/// What Bob's relay does with Alice's invite from `PEER` under `policy`: the refusal reason
-/// and the requests filed.
-async fn file_invite(
+/// What Bob's relay does with Alice's invite from `PEER` under `policy` while his pending
+/// requests hold `held_bytes`: the refusal reasons and the requests filed.
+async fn file_invite_holding(
     policy: DmOperatorPolicy,
+    held_bytes: i64,
 ) -> (Vec<String>, Vec<rim_core::relay::model::DmRequestStatus>) {
     let filed = Arc::default();
-    let svc = inbox_relay(policy, Arc::clone(&filed));
+    let svc = inbox_relay(policy, held_bytes, Arc::clone(&filed));
     let response = svc
         .deliver(PEER.to_string(), vec![invite_item(&host_signer(40))])
         .await
@@ -573,6 +578,38 @@ async fn file_invite(
     let refused = response.refused.into_iter().map(|r| r.reason).collect();
     let filed = filed.lock().expect("lock").clone();
     (refused, filed)
+}
+
+/// What Bob's relay does with Alice's invite from `PEER` under `policy`.
+async fn file_invite(
+    policy: DmOperatorPolicy,
+) -> (Vec<String>, Vec<rim_core::relay::model::DmRequestStatus>) {
+    file_invite_holding(policy, 0).await
+}
+
+/// An invite that would take Bob's held bytes past their cap is refused as `limited` and files
+/// no request; one that fits files a request.
+#[tokio::test]
+async fn an_invite_past_the_recipients_held_bytes_is_refused_as_limited() {
+    use rim_core::relay::model::DmRequestStatus;
+
+    use crate::relay::inbox::MAX_HELD_BYTES_PER_USER;
+
+    let invite = invite_item(&host_signer(40));
+    let size = i64::try_from(invite.envelope.payload.len() + invite.envelope.signature.len())
+        .expect("size");
+    assert_eq!(
+        file_invite_holding(DmOperatorPolicy::default(), MAX_HELD_BYTES_PER_USER - size).await,
+        (Vec::new(), vec![DmRequestStatus::Pending])
+    );
+    assert_eq!(
+        file_invite_holding(
+            DmOperatorPolicy::default(),
+            MAX_HELD_BYTES_PER_USER - size + 1
+        )
+        .await,
+        (vec!["limited".to_string()], Vec::new())
+    );
 }
 
 #[tokio::test]
@@ -880,6 +917,66 @@ async fn an_envelope_at_an_unconfirmed_or_retired_key_is_refused() {
         assert_eq!(response.refused[0].reason, "invalid_envelope");
         assert_eq!(response.acked_through, "1");
     }
+}
+
+/// An envelope whose payload is over a host event's 512 KiB is refused as invalid and not
+/// queued, whatever its signature.
+#[tokio::test]
+async fn an_envelope_over_the_host_event_size_is_refused() {
+    let signer = host_signer(40);
+    let workspace_id = Uuid::from_u128(5).to_string();
+    let issued_at = timestamp(Utc::now());
+    let padding = "x".repeat(rim_s2s::ServerStatement::HostEvent.max_payload_len());
+    let event = serde_json::json!({ "type": "MessageCreated", "padding": padding }).to_string();
+    let statement = sign_host_event(
+        &signer,
+        &HostEventFields {
+            host: PEER,
+            key_seq: 0,
+            workspace_id: &workspace_id,
+            stream: "e",
+            seq: None,
+            event_json: &event,
+            issued_at: &issued_at,
+        },
+    );
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay.expect_insert_envelope().never();
+    relay.expect_insert_item().never();
+    let svc = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&signer, 0), None),
+        MockS2sClient::new(),
+    );
+
+    let response = svc
+        .deliver(
+            PEER.to_string(),
+            vec![DeliverItem {
+                id: "1".to_string(),
+                envelope: SignedJson {
+                    payload: statement.payload,
+                    signature: statement.signature,
+                },
+                recipients: vec![BOB.to_string()],
+                device_id: None,
+            }],
+        )
+        .await
+        .expect("answered");
+
+    assert_eq!(response.refused.len(), 1);
+    assert_eq!(response.refused[0].reason, "invalid_envelope");
+    assert_eq!(response.acked_through, "1");
 }
 
 // ── Contacts ─────────────────────────────────────────────────────────────────────────────
