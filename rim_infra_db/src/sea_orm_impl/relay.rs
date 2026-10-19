@@ -610,7 +610,8 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.request(
             &format!(
                 "UPDATE relay_dm_request SET status = $2, decided_at = now(), expires_at = $3 \
-                 WHERE id = $1 AND status = 'pending' RETURNING {REQUEST_COLUMNS}"
+                 WHERE id = $1 AND status = 'pending' AND expires_at > now() \
+                 RETURNING {REQUEST_COLUMNS}"
             ),
             vec![uuid(id), status.as_str().into(), expires_at.into()],
         )

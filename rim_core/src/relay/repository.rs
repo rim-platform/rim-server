@@ -116,8 +116,8 @@ pub trait RelayRepository: Send + Sync {
         since: DateTime<Utc>,
     ) -> RepoResult<i64>;
 
-    /// Move a pending request to `status`, expiring at `expires_at`. Returns `None` when the
-    /// request is not pending.
+    /// Move a pending, unexpired request to `status`, expiring at `expires_at`. Returns `None`
+    /// when the request is not pending or has expired.
     async fn decide_request(
         &self,
         id: DmRequestId,

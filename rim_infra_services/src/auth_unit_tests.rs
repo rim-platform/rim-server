@@ -739,6 +739,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invite_emails_follow_the_invites_per_user_per_day_cap_when_invites_are_gone() {
+        let (server_id, owner) = (ServerId::new(), UserId::new());
+        // The day's invites count 0, as when their workspace was deleted.
+        let svc = invite_service(
+            server_id,
+            owner,
+            Some(0),
+            rim_services::limits::InstanceLimits {
+                invites_per_user_per_day: Some(2),
+                ..Default::default()
+            },
+        );
+        let emailed = |email: Option<&str>| CreateInviteCmd {
+            actor: Actor::new(owner),
+            server_id,
+            expires_at: None,
+            max_uses: 1,
+            recipient_email: email.map(str::to_string),
+            role: ServerMemberRole::Member,
+        };
+        for _ in 0..2 {
+            svc.create_invite(emailed(Some("invitee@example.com")))
+                .await
+                .expect("below the cap");
+        }
+        let err = svc
+            .create_invite(emailed(Some("invitee@example.com")))
+            .await
+            .expect_err("at the cap");
+        assert!(
+            matches!(&err, ServiceError::Validation(m)
+                if m == "this instance allows 2 invite emails per user per day"),
+            "{err:?}"
+        );
+        svc.create_invite(emailed(None))
+            .await
+            .expect("an invite without an email is not counted as one");
+    }
+
+    #[tokio::test]
+    async fn invite_emails_are_not_counted_without_a_cap() {
+        let (server_id, owner) = (ServerId::new(), UserId::new());
+        let svc = invite_service(server_id, owner, None, Default::default());
+        for _ in 0..3 {
+            svc.create_invite(CreateInviteCmd {
+                actor: Actor::new(owner),
+                server_id,
+                expires_at: None,
+                max_uses: 1,
+                recipient_email: Some("invitee@example.com".to_string()),
+                role: ServerMemberRole::Member,
+            })
+            .await
+            .expect("no cap");
+        }
+    }
+
+    #[tokio::test]
     async fn create_invite_follows_the_invite_max_uses_cap() {
         for (cap, max_uses, allowed) in [
             (Some(5), 5, true),

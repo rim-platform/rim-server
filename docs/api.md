@@ -354,8 +354,8 @@ process, so a restart forgets them and two processes behind one proxy each allow
 amount. `/healthz`, `/readyz`, discovery and `/s2s/v1/...` are outside the per-address limit;
 server-to-server traffic has its own, `RIM_S2S_PEER_RATE_PER_MIN`.
 
-An operator can also cap how much of each thing the instance holds. Every cap is off unless its
-variable is set to a number above 0; `serverInfo.limits` reports each one, so a client can show
+An operator can also cap how much of each thing the instance holds. Every cap but two is off
+unless its variable is set to a number above 0; `serverInfo.limits` reports each one, so a client can show
 "5 of 5" before it tries. Creating one more past a cap answers `VALIDATION`, with a message
 naming the cap, such as "this instance allows 5 workspaces per user".
 
@@ -369,7 +369,7 @@ naming the cap, such as "this instance allows 5 workspaces per user".
 | `RIM_LIMIT_MACROS_PER_WORKSPACE` | `macrosPerWorkspace` | Macros of a workspace. |
 | `RIM_LIMIT_PIPELINES_PER_WORKSPACE` | `pipelinesPerWorkspace` | Pipelines of a workspace. |
 | `RIM_LIMIT_PLUGINS_PER_WORKSPACE` | `pluginsPerWorkspace` | Plugins of a workspace's registry, at most the built-in 100. |
-| `RIM_LIMIT_INVITES_PER_USER_PER_DAY` | `invitesPerUserPerDay` | Workspace invites one user creates in the last 24 hours. |
+| `RIM_LIMIT_INVITES_PER_USER_PER_DAY` | `invitesPerUserPerDay` | Workspace invites one user creates in the last 24 hours, and invite emails (`recipientEmail`) one user sends in the last 24 hours. Unlike most caps it defaults to 50; 0 turns it off. |
 | `RIM_LIMIT_INVITE_MAX_USES` | `inviteMaxUses` | The uses one invite may have. |
 | `RIM_LIMIT_MESSAGE_BYTES` | `messageBytes` | A message's text in UTF-8 bytes, at most 65536. An encrypted message's ciphertext may exceed it by 4096 bytes of framing. |
 | `RIM_LIMIT_PENDING_INVITES_PER_USER` | `pendingInvitesPerUser` | Pending invitations to encrypted conversations one user holds. Unlike the others it defaults to 50; 0 turns it off. Inviting someone who holds that many refuses the whole create or add. |
