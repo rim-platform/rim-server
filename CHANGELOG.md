@@ -297,5 +297,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   (`UNAUTHENTICATED`) after a reset or an enrollment and with `FORBIDDEN` after a ban. Before,
   a sign-in with the old password that was already being checked could create a session after
   the reset or enrollment had ended all the others.
+- A message's reactions, `reactedByMe` included, are read for the user who asked. Before, when
+  several users' requests loaded reactions at the same moment, one of them could be shown
+  another user's reaction state.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master
