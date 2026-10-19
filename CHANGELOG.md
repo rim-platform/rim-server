@@ -246,6 +246,15 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- A relay files a DM invite another server delivers only when that server speaks for the
+  sender it names: the sender's card must be signed by their key, and their newest card must
+  list the delivering server (or the sender is a local user subscribed there). Anything else is
+  refused `invalid_invite` and reaches no inbox; a sender whose identity neither server can
+  produce is taken as a stranger, a request at most. Before, a peer could name anyone,
+  including the recipient's contacts or fellow workspace members, to skip the request inbox, or
+  invent a new sender for each request to get past the daily limit. A delivering server now
+  also files at most 1,000 DM requests per day on a relay, whichever senders it names
+  (`docs/specs/server-to-server-v1.md`, "The request inbox").
 - `rustls` 0.23.46: the TLS library behind outgoing HTTPS requests picks up the fixes for
   RUSTSEC-2026-0346, -0347, -0348 and -0349 (TLS secrets in `Debug` output, buffered data after
   an ECH rejection, certificate decompression memory, key-exchange downgrade).

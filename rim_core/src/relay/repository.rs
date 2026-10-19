@@ -109,6 +109,13 @@ pub trait RelayRepository: Send + Sync {
         since: DateTime<Utc>,
     ) -> RepoResult<Option<DateTime<Utc>>>;
 
+    /// Requests a host delivered since `since`, for every local user.
+    async fn count_requests_via_host(
+        &self,
+        host_server_id: &str,
+        since: DateTime<Utc>,
+    ) -> RepoResult<i64>;
+
     /// Move a pending request to `status`, expiring at `expires_at`. Returns `None` when the
     /// request is not pending.
     async fn decide_request(

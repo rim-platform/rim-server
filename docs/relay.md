@@ -96,10 +96,19 @@ the floors of the recipient's workspaces, then the recipient's choice, with fell
 workspace hosted here judged by the recipient's choice for that workspace (or its default) and
 delivered when they are its Owner or a Moderator. What the setting delivers is recorded as
 accepted at once; what it takes as a request is filed as a DM request; what it refuses is
-answered `blocked`. A request keeps the sender's card and holds up to three items of the
-conversation in at most 1 MiB; later ones are dropped until it is accepted. Items of a
-conversation the relay has no invite for are refused (`not_subscribed`), so a host cannot skip
-the inbox. A decided conversation keeps its decision when the settings change later.
+answered `blocked`. Before any of that, an invite another host delivers must come from someone
+that host speaks for: its card verifies against the sender's key log (the copy held here, an
+identity cached in the last day, or the one the host serves), and the newest card known for
+the sender lists the host's origin, or the sender is a local user subscribed to a workspace
+there. Otherwise it is refused (`invalid_invite`) and nothing is filed, so a host cannot pass
+off a stranger's DM as one from a contact or a fellow workspace member. When neither this
+server nor the host has an identity for the sender (the host may serve identities to its
+partners only), the invite is judged as a stranger's, whoever it names: a pending request at
+most, which the app verifies before it shows the sender's name. A request keeps the sender's
+card and holds up to three items of the conversation in at most 1 MiB; later ones are dropped
+until it is accepted. Items of a conversation the relay has no invite for are refused
+(`not_subscribed`), so a host cannot skip the inbox. A decided conversation keeps its decision
+when the settings change later.
 
 The same rule covers conversations of this server's own direct space whose creator is someone
 else (a person from another relay creating a DM with a local user through the forward path, or a
@@ -120,17 +129,18 @@ once.
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored |
 | Nothing | Expires after the retention period |
 
-Limits: 100 pending requests per recipient and `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
-principal per day on this relay, and 16 MiB of held items per recipient, the invites ignored
-requests keep included; past them invites are refused as `limited`, and an item past the held
-bytes is dropped. A conversation started on this server (by a local user, or through the forward
-path) that would file a request past the pending or daily limit is refused when it is started:
-`FORBIDDEN` for a full inbox, `RATE_LIMITED` with `retryAfterSeconds` for the sender's daily limit
-(`docs/messaging.md`, "Who May Start A DM"). An own invite still refused for a local member
-(`limited` or `blocked`) is kept as an ignored request that is never listed or counted and expires
-after 30 days, so its conversation stays out of their view and raises no notification. A claim of
-a local user's key packages by a stranger (not a contact, never accepted, sharing no workspace
-here) gets last-resort packages only, at most 20 claims per stranger per day.
+Limits: 100 pending requests per recipient, `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
+principal per day on this relay, 1,000 per delivering host per day whichever principals it names,
+and 16 MiB of held items per recipient, the invites ignored requests keep included; past them
+invites are refused as `limited`, and an item past the held bytes is dropped. A conversation
+started on this server (by a local user, or through the forward path) that would file a request
+past the pending or daily limit is refused when it is started: `FORBIDDEN` for a full inbox,
+`RATE_LIMITED` with `retryAfterSeconds` for the sender's daily limit (`docs/messaging.md`, "Who
+May Start A DM"). An own invite still refused for a local member (`limited` or `blocked`) is kept
+as an ignored request that is never listed or counted and expires after 30 days, so its
+conversation stays out of their view and raises no notification. A claim of a local user's key
+packages by a stranger (not a contact, never accepted, sharing no workspace here) gets
+last-resort packages only, at most 20 claims per stranger per day.
 
 With `RIM_DM_INBOUND=partners` the identity endpoint (`GET /s2s/v1/principals/<id>`) answers
 only the servers `RIM_DM_PARTNERS` lists, and with `none` no server; everyone else gets `404` as

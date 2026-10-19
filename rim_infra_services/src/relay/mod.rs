@@ -32,7 +32,7 @@ use rim_core::relay::model::{
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository, SubscriptionRepository};
 use rim_core::user::model::UserId;
 use rim_core::user::repository::UserRepository;
-use rim_identity::{SignedStatement, UnverifiedDeviceRequest, is_principal_id};
+use rim_identity::{ProfileCard, SignedStatement, UnverifiedDeviceRequest, is_principal_id};
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_s2s::SharedIdentity;
 use rim_s2s::host::{read_host_event, verify_host_event};
@@ -53,7 +53,7 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{local_document, verify_identity};
-use crate::relay::inbox::{Filing, InboxFacts, SENDER_WINDOW, file};
+use crate::relay::inbox::{Filing, InboxFacts, MAX_REQUESTS_PER_HOST_PER_DAY, SENDER_WINDOW, file};
 use crate::relay::policy::{DmPolicy, PolicySource};
 use crate::repos::AppRepos;
 
@@ -177,6 +177,14 @@ pub(crate) fn card_relays(card_payload: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Whether a card's relays include one at `origin`.
+pub(crate) fn relays_include_origin(relays: &[String], origin: &str) -> bool {
+    relays
+        .iter()
+        .filter_map(|url| origin_of(url))
+        .any(|o| o == origin)
+}
+
 /// The relays a card lists as a contact's relay URLs: its first ones when they follow the
 /// contact link rules, else none.
 pub(crate) fn contact_relays(card_payload: &str) -> Vec<String> {
@@ -215,6 +223,8 @@ struct ReadEnvelope {
     conversation_id: Option<Uuid>,
     invite: Option<Invite>,
     local: bool,
+    /// The delivering host's pinned origin; `None` for this server's own events.
+    host_origin: Option<String>,
 }
 
 /// The request inbox's decision for one recipient of an item.
@@ -223,6 +233,18 @@ enum Filed {
     Queue(Option<DmRequestId>),
     /// Do not queue it; a refusal reason when the host is told.
     Done(Option<&'static str>),
+}
+
+/// What the request inbox makes of the sender an invite from another host names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InviteSender {
+    /// The card verified against the sender's key log, and the host speaks for them.
+    Verified,
+    /// The sender's identity could not be obtained, here or from the host: the invite is taken
+    /// as from a stranger.
+    Unverified,
+    /// Refused with a reason the host sees.
+    Refused(&'static str),
 }
 
 /// The parts of a `DmInvite` the request inbox keeps.
@@ -413,8 +435,26 @@ impl DefaultRelayService {
         };
         let key = rim_identity::PublicKey::parse(&key_text, "peer key").ok()?;
         let event = verify_host_event(&key, &statement).ok()?;
-        envelope_fields(event, false)
+        let mut read = envelope_fields(event, false)?;
+        read.host_origin = Some(keys.origin.clone());
+        Some(read)
     }
+}
+
+/// The card of a verified identity document, when it verifies against the log's head.
+fn verified_card(document: &IdentityDocument) -> Option<ProfileCard> {
+    verify_identity(document).ok()?.card.map(|(card, _)| card)
+}
+
+/// `card` verified as `principal_id`'s card against `key_log`, their key log: `None` when the
+/// log or the card does not verify, or the card was signed before the log's head.
+fn card_of(principal_id: &str, key_log: Vec<SignedJson>, card: &SignedJson) -> Option<ProfileCard> {
+    verified_card(&IdentityDocument {
+        principal_id: principal_id.to_string(),
+        key_log,
+        devices: Vec::new(),
+        card: Some(card.clone()),
+    })
 }
 
 /// Where a host event belongs. `local` marks an event of this server's own direct space, filed
@@ -454,6 +494,7 @@ fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadE
             conversation_id,
             invite,
             local,
+            host_origin: None,
         })
     }
 }
@@ -577,6 +618,7 @@ impl DefaultRelayService {
             item_bytes: i64::from(size),
             request_held_bytes: 0,
             user_held_bytes: 0,
+            filed_by_host_today: 0,
         };
         if let Some(conversation_id) = read.conversation_id
             && let Some(request) = repos
@@ -598,18 +640,57 @@ impl DefaultRelayService {
             facts.blocked = repos.relay_repo.is_blocked(user_id, from).await?
                 || repos.relay_abuse_repo.is_principal_blocked(from).await?;
             if facts.request.is_none() {
+                let mut verified = true;
+                if let Some(host_origin) = &read.host_origin
+                    && !facts.blocked
+                {
+                    facts.filed_by_host_today = repos
+                        .relay_repo
+                        .count_requests_via_host(peer_server_id, now - Duration::days(1))
+                        .await?;
+                    match self
+                        .invite_sender(
+                            repos,
+                            peer_server_id,
+                            host_origin,
+                            invite,
+                            facts.filed_by_host_today,
+                        )
+                        .await?
+                    {
+                        InviteSender::Verified => {}
+                        InviteSender::Unverified => {
+                            info!(peer_server_id = %peer_server_id, "an invite's sender could not be verified; taken as a stranger");
+                            verified = false;
+                        }
+                        InviteSender::Refused(reason) => {
+                            if reason == "limited" {
+                                crate::metrics::rate_limited("dm_requests");
+                            } else {
+                                warn!(peer_server_id = %peer_server_id, "refused an invite whose sender the host does not speak for");
+                            }
+                            return Ok(Filed::Done(Some(reason)));
+                        }
+                    }
+                }
                 let own_id = self.own_id();
                 let sender_server = self
                     .sender_server(repos, peer_server_id, read, from)
                     .await?;
-                facts.policy = PolicySource {
+                let source = PolicySource {
                     relay_repo: repos.relay_repo.as_ref(),
                     dm_policy_repo: repos.dm_policy_repo.as_ref(),
                     operator: &self.dm_policy,
                     own_server_id: &own_id,
-                }
-                .inbound(user_id, from, &sender_server)
-                .await?;
+                };
+                facts.policy = if verified {
+                    source.inbound(user_id, from, &sender_server).await?
+                } else {
+                    match source.stranger(user_id, &sender_server).await? {
+                        DmPolicy::Deliver => DmPolicy::Request,
+                        policy => policy,
+                    }
+                };
                 facts.pending_for_user = repos.relay_repo.count_pending_requests(user_id).await?;
                 facts.user_held_bytes = repos.relay_repo.user_held_bytes(user_id).await?;
                 facts.filed_by_sender_today = repos
@@ -703,6 +784,112 @@ impl DefaultRelayService {
             }
         };
         Ok(Filed::Queue(request_id))
+    }
+
+    /// Whether `host` at `host_origin` speaks for the sender of an invite it delivered. The
+    /// card must verify against the sender's key log: the one stored here, else a cached
+    /// identity younger than a day, else the identity the host serves for them. The sender's
+    /// newest card (the stored, the cached or served, or the invite's) must then list the
+    /// host's origin, unless the sender is a local user holding an active subscription at the
+    /// host.
+    ///
+    /// Returns `Unverified` when the host serves no identity for a sender held and cached
+    /// nowhere here; `Refused("invalid_invite")` when the invite has no card or names no
+    /// principal, the card does not verify against a log obtained (the held one included when
+    /// the host serves none), or the newest card does not
+    /// list the host; and `Refused("limited")` when the identity would be fetched for a host
+    /// past [`MAX_REQUESTS_PER_HOST_PER_DAY`].
+    ///
+    /// # Errors
+    /// What the repositories return.
+    async fn invite_sender(
+        &self,
+        repos: &RelayRepos,
+        host: &str,
+        host_origin: &str,
+        invite: &Invite,
+        filed_by_host_today: i64,
+    ) -> ServiceResult<InviteSender> {
+        const INVALID: InviteSender = InviteSender::Refused("invalid_invite");
+        let from = invite.from_principal_id.as_str();
+        let Some(card) = &invite.card else {
+            return Ok(INVALID);
+        };
+        if !is_principal_id(from) {
+            return Ok(INVALID);
+        }
+        let mut cards: Vec<(u64, Vec<String>)> = Vec::new();
+        let mut verified = None;
+        let mut subscribed = false;
+        let held = repos.host_repo.find_user(from).await?;
+        if let Some((user_id, kind)) = held {
+            let log: Vec<SignedJson> = repos
+                .key_identity_repo
+                .list_key_log(user_id)
+                .await?
+                .into_iter()
+                .map(|e| SignedJson {
+                    payload: e.payload,
+                    signature: e.signature,
+                })
+                .collect();
+            verified = card_of(from, log, card);
+            if let Some(stored) = repos.key_identity_repo.get_profile_card(user_id).await? {
+                cards.push((u64::from(stored.version), card_relays(&stored.payload)));
+            }
+            if kind == UserKind::Local {
+                if verified.is_none() {
+                    return Ok(INVALID);
+                }
+                subscribed = repos
+                    .subscription_repo
+                    .subscribed_hosts(user_id, Utc::now())
+                    .await?
+                    .iter()
+                    .any(|h| h == host);
+            }
+        }
+        if verified.is_none() {
+            let cached = repos
+                .relay_repo
+                .cached_identity(from)
+                .await?
+                .filter(|c| Utc::now() - c.fetched_at < IDENTITY_CACHE_TTL)
+                .and_then(|c| serde_json::from_str::<IdentityDocument>(&c.identity).ok())
+                .filter(|d| d.principal_id == from);
+            let document = match cached {
+                Some(document) => document,
+                None if filed_by_host_today >= MAX_REQUESTS_PER_HOST_PER_DAY => {
+                    return Ok(InviteSender::Refused("limited"));
+                }
+                None => match self.fetch_identity(host, from).await {
+                    Ok(document) => document,
+                    // A log held here that the card failed is checked, not missing.
+                    Err(_) if held.is_some() => return Ok(INVALID),
+                    Err(_) => return Ok(InviteSender::Unverified),
+                },
+            };
+            if let Some(served) = verified_card(&document) {
+                cards.push((served.version, served.relays));
+            }
+            verified = card_of(from, document.key_log, card);
+        }
+        let Some(card) = verified else {
+            return Ok(INVALID);
+        };
+        if subscribed {
+            return Ok(InviteSender::Verified);
+        }
+        cards.push((card.version, card.relays));
+        let names_host = cards
+            .into_iter()
+            .max_by_key(|(version, _)| *version)
+            .is_some_and(|(_, relays)| relays_include_origin(&relays, host_origin));
+        Ok(if names_host {
+            InviteSender::Verified
+        } else {
+            INVALID
+        })
     }
 
     /// Drop a user's oldest queued items over the byte cap. Held items are neither counted nor

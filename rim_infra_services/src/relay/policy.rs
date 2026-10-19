@@ -187,6 +187,30 @@ impl PolicySource<'_> {
                 .relay_repo
                 .accepted_from(recipient, sender_principal_id)
                 .await?;
+        self.judge(recipient, sender_server_id, contact, &shared)
+            .await
+    }
+
+    /// The policy for a DM to the local user `recipient` from a sender this server could not
+    /// verify, coming from `sender_server_id`: as from a stranger, whoever the sender claims
+    /// to be.
+    pub(crate) async fn stranger(
+        &self,
+        recipient: UserId,
+        sender_server_id: &str,
+    ) -> ServiceResult<DmPolicy> {
+        self.judge(recipient, sender_server_id, false, &[]).await
+    }
+
+    /// The policy for a DM to `recipient` from `sender_server_id`, from a sender who is their
+    /// contact or not and shares `shared` with them.
+    async fn judge(
+        &self,
+        recipient: UserId,
+        sender_server_id: &str,
+        contact: bool,
+        shared: &[SharedWorkspace],
+    ) -> ServiceResult<DmPolicy> {
         let (workspaces, outside) = if shared.is_empty() && !contact {
             (
                 self.dm_policy_repo.user_workspaces(recipient).await?,
@@ -202,7 +226,7 @@ impl PolicySource<'_> {
             recipient_server_id: self.own_server_id,
             recipient: Some(LocalRecipient {
                 contact,
-                shared: &shared,
+                shared,
                 workspaces: &workspaces,
                 outside,
             }),

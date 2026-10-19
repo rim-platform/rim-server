@@ -472,7 +472,8 @@ POST /s2s/v1/deliver
   the peer, so redelivery is idempotent. It refuses items for non-local principals
   (`unknown_principal`), items of a conversation it holds no invite or request for and workspace
   items without an active subscription (`not_subscribed`), invites from a principal the recipient
-  blocked (`blocked`) or past the request limits (`limited`), a device-targeted item for an unknown
+  blocked (`blocked`) or past the request limits (`limited`), invites whose sender the host does
+  not speak for (`invalid_invite`, see "The request inbox"), a device-targeted item for an unknown
   device (`unknown_device`), and envelopes over 512 KiB, that do not verify under the delivering
   host's key or that name another host (`invalid_envelope`). A refusal for one recipient carries
   `principalId`. The host skips a (relay, principal) for 24 hours after `unknown_principal` only;
@@ -648,6 +649,26 @@ floor (`none` refuses senders on R_B too), the workspaces' floors and Bob's choi
 request or a refusal (`blocked`). A **contact** is someone Bob added, accepted, or messaged first:
 the home records each other member of a DM as its creator's contact.
 
+An invite another host delivers names its sender, and R_B checks that the host speaks for them
+before anything else. `from_card` must verify against the key log of `from_principal_id`: the
+copy R_B holds (the person is its own user or a remote user it stores), else an identity it
+cached less than a day ago, else the identity the delivering host serves for them at
+`GET /s2s/v1/principals/<id>`. The newest card R_B then knows for them (the one it stores, the
+one served, or `from_card`) must list the host's origin; a sender who is R_B's own user may
+instead hold an active subscription at that host. A card that fails against a log R_B has, or
+a verified card that does not list the host, is refused (`invalid_invite`) and nothing is
+filed. The policy above, contacts and shared workspaces included, then judges that verified
+principal. When R_B holds no log for the sender and the host serves none (its
+`RIM_DM_INBOUND` may not admit R_B), the sender is **unverified**: whoever the invite names,
+it is judged as a stranger's, so it can only be a pending request or refused, never recorded
+as accepted or delivered directly, and the request counts against the limits below. The relay
+keeps no mark of this on the request: the app verifies the card against the sender's key log
+before it shows the name, as below, and shows an unverified sender as such. So a conversation
+homed on a server its creator's card does not list (created there through the forward path)
+reaches members on the home itself, and members on the creator's own relay while the creator
+holds an active subscription at the home; another relay refuses its invites when it can verify
+the creator, and otherwise takes them as a stranger's.
+
 A request is a `relay_dm_request` row: the sender's card, the conversation, and up to 3 held items
 of it in at most 1 MiB, the `DmInvite` first (later ones dropped until accepted; the app reads them
 from the host). The app verifies the held `DmInvite` like any relay item to bind the
@@ -685,9 +706,14 @@ messages before deciding. It may accept on its own a request from someone the pe
 for a shared workspace deliver directly (`myDmSettings`, checked on host-signed member lists),
 such as a member of a workspace hosted on another server, which R_B cannot see.
 Limits: 100 pending per recipient, 20 per sender principal per day per relay
-(`RIM_RELAY_DM_REQUESTS_PER_DAY`), 16 MiB held per recipient; `reportDmRequest(id, reason)`
-reports abuse: it files a `relay_abuse_report` row naming the reporter, the sender, the host and
-the request (audit `relay.dm_request_reported`), and a pending request is ignored.
+(`RIM_RELAY_DM_REQUESTS_PER_DAY`), and 1,000 per delivering host per day whichever principals
+they name, 16 MiB held per recipient; past them an invite is refused (`limited`), and once the
+host is past its 1,000 an invite whose sender R_B would have to fetch is refused without the
+fetch. Principal ids cost nothing to mint, so for an unverified sender the per-sender limit is
+advisory: the per-host limit and the 100 pending per recipient are what bound a host that invents
+senders. `reportDmRequest(id, reason)` reports abuse: it files a `relay_abuse_report` row naming
+the reporter, the sender, the host and the request (audit `relay.dm_request_reported`), and a
+pending request is ignored.
 
 Under `RIM_DM_INBOUND=partners` R_B answers `GET /s2s/v1/principals/<id>` only to the servers
 `RIM_DM_PARTNERS` lists (the S2S signature names the caller), under `none` to no server: `404`
@@ -1136,7 +1162,7 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 | Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay) |
 | Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
-| DM requests | 100 pending per recipient; 20 per sender per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
+| DM requests | 100 pending per recipient; 20 per sender and 1,000 per delivering host per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
 | Stranger claims | Last-resort packages only; 20 per claimer per day |
 | Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h |
 | Remote user's direct session | 24 h |
@@ -1160,7 +1186,7 @@ queue bytes, S2S responses by status, signature failures by reason.
 |---|---|---|
 | Hostile relay | Read plaintext channel events and DM metadata it queues; drop, delay, reorder; refuse to forward; see which spaces its users use and when | Forge a write (no device key); forge or alter host events or responses (pinned host key); replay (`seq`, nonces); use a delegation for another workspace, host or relay; hide a revocation past 24 hours once the app reaches the host directly; read DMs (MLS) |
 | Hostile host | What a server can for its own spaces today, plus remote members' principals, devices and activity there | Sign as a device; use a delegation at another host; read DMs homed elsewhere; see a remote member's IP outside a direct connection |
-| Hostile peer | Send signed junk up to its limits; claim last-resort packages and send DM requests as a stranger | Impersonate another server (self-certifying id); replay; push events for spaces it does not host (envelopes name their host; relays accept only subscribed spaces); change another principal's devices, device activity or relays at a host (it does not speak for them, 7.4a); pass an allow-list |
+| Hostile peer | Send signed junk up to its limits; claim last-resort packages and send DM requests as a stranger, under any name the relay cannot check, up to 1,000 a day per relay | Impersonate another server (self-certifying id); replay; push events for spaces it does not host (envelopes name their host; relays accept only subscribed spaces); change another principal's devices, device activity or relays at a host (it does not speak for them, 7.4a); file an invite in the name of someone whose card does not list it, or with a card their key did not sign, so it borrows no contact's or workspace member's standing; pass an allow-list |
 | Stolen server key | Sign as that server until recovery: receive delegated events as a relay, sign false events to its own members as a host | Sign as users; extend delegations; outlive a `signer: recovery` rotation (peers drop the old key at once, delegations naming it die) |
 | Stolen device | Whatever that device can do, through any relay or directly | Act after a host applies the revocation |
 | Network attacker | See TLS metadata between servers | Alter bodies (digest, signature), replay, substitute a server at a pinned id |

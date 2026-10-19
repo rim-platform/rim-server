@@ -65,7 +65,7 @@ use crate::relay::inbox::{RequestLimit, SENDER_WINDOW, request_limit};
 use crate::relay::policy::{DmPolicy, PolicySource, outbound_refused};
 use crate::relay::{
     MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, card_relays, check_relay_urls, fetch_from_relays,
-    origin_of,
+    origin_of, relays_include_origin,
 };
 use crate::repos::AppRepos;
 
@@ -155,14 +155,6 @@ impl IdentitySource {
             Self::Authorized(relay) | Self::Fetched(relay) => relay,
         }
     }
-}
-
-/// Whether a card's relays include one at `origin`.
-fn relays_include_origin(relays: &[String], origin: &str) -> bool {
-    relays
-        .iter()
-        .filter_map(|url| origin_of(url))
-        .any(|o| o == origin)
 }
 
 impl DefaultHostService {
