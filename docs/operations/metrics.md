@@ -197,6 +197,8 @@ Slow mode in a conversation is not counted here.
 `state` is `queued` for stored items eligible for delivery, `held` for items behind a DM request
 the recipient has not answered. These gauges count stored rows: acknowledged or expired rows
 can remain until cleanup runs. They are not exact counts of pending delivery or unread messages.
+Queue byte gauges sum the bytes charged to each recipient item. Several items may share one
+stored envelope, so these gauges are not physical PostgreSQL or filesystem usage.
 
 ### Pending device delivery
 
