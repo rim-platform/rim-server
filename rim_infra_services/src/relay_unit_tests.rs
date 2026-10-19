@@ -469,10 +469,12 @@ fn invite_item(signer: &ServerSigner) -> DeliverItem {
     }
 }
 
-/// A relay under `policy` where Alice is a stranger to Bob with default settings, and Bob's
-/// pending requests hold `held_bytes`; `filed` records the status of each request it files.
+/// A relay under `policy` where Alice is a stranger to Bob with default settings, Bob holds
+/// `pending` pending requests whose items take `held_bytes`, and Alice filed `filed_today` in
+/// the last day; `filed` records the status of each request it files.
 fn inbox_relay(
     policy: DmOperatorPolicy,
+    (pending, filed_today): (i64, i64),
     held_bytes: i64,
     filed: Arc<Mutex<Vec<rim_core::relay::model::DmRequestStatus>>>,
 ) -> DefaultRelayService {
@@ -507,10 +509,10 @@ fn inbox_relay(
         .returning(|_, _| Box::pin(async { Ok(false) }));
     relay
         .expect_count_pending_requests()
-        .returning(|_| Box::pin(async { Ok(0) }));
+        .returning(move |_| Box::pin(async move { Ok(pending) }));
     relay
         .expect_count_requests_from()
-        .returning(|_, _| Box::pin(async { Ok(0) }));
+        .returning(move |_, _| Box::pin(async move { Ok(filed_today) }));
     relay
         .expect_user_held_bytes()
         .returning(move |_| Box::pin(async move { Ok(held_bytes) }));
@@ -570,7 +572,7 @@ async fn file_invite_holding(
     held_bytes: i64,
 ) -> (Vec<String>, Vec<rim_core::relay::model::DmRequestStatus>) {
     let filed = Arc::default();
-    let svc = inbox_relay(policy, held_bytes, Arc::clone(&filed));
+    let svc = inbox_relay(policy, (0, 0), held_bytes, Arc::clone(&filed));
     let response = svc
         .deliver(PEER.to_string(), vec![invite_item(&host_signer(40))])
         .await
@@ -636,6 +638,74 @@ async fn an_invite_from_a_server_the_operator_refuses_is_refused_as_blocked() {
         assert_eq!(
             file_invite(policy).await,
             (vec!["blocked".to_string()], Vec::new())
+        );
+    }
+}
+
+/// What Bob's relay does with this server's own invite from Alice, a local user, with the
+/// request inbox's counts at `counts`: the requests filed and the notices raised.
+async fn file_own_invite(
+    counts: (i64, i64),
+) -> (Vec<rim_core::relay::model::DmRequestStatus>, usize) {
+    let filed = Arc::default();
+    let svc = inbox_relay(DmOperatorPolicy::default(), counts, 0, Arc::clone(&filed));
+    let mut notices = svc.subscribe();
+    let workspace_id = Uuid::from_u128(5).to_string();
+    let issued_at = timestamp(Utc::now());
+    let event = serde_json::json!({
+        "type": "DmInvite",
+        "workspace_id": workspace_id,
+        "conversation_id": Uuid::from_u128(9),
+        "from_principal_id": ALICE,
+        "from_card": { "payload": "{}", "signature": "ed25519:c" },
+        "member_principal_ids": [ALICE, BOB],
+    })
+    .to_string();
+    let stream = format!("u:{BOB}");
+    let statement = sign_host_event(
+        &ServerSigner::from_seed([30; 32]),
+        &HostEventFields {
+            host: PEER,
+            key_seq: 0,
+            workspace_id: &workspace_id,
+            stream: &stream,
+            seq: Some(1),
+            event_json: &event,
+            issued_at: &issued_at,
+        },
+    );
+    svc.file_local(
+        SignedJson {
+            payload: statement.payload,
+            signature: statement.signature,
+        },
+        vec![BOB.to_string()],
+    )
+    .await
+    .expect("filed");
+    let mut raised = 0;
+    while notices.try_recv().is_ok() {
+        raised += 1;
+    }
+    let filed = filed.lock().expect("lock").clone();
+    (filed, raised)
+}
+
+#[tokio::test]
+async fn an_own_invite_past_a_limit_is_kept_as_ignored_and_raises_no_notice() {
+    use crate::relay::inbox::MAX_PENDING_PER_USER;
+    use rim_core::relay::model::DmRequestStatus;
+    let daily = i64::from(Quotas::default().dm_requests_per_day);
+    assert_eq!(
+        file_own_invite((0, 0)).await,
+        (vec![DmRequestStatus::Pending], 2),
+        "within the limits it is a request, held with its invite"
+    );
+    for counts in [(MAX_PENDING_PER_USER, 0), (0, daily)] {
+        assert_eq!(
+            file_own_invite(counts).await,
+            (vec![DmRequestStatus::Ignored], 0),
+            "past {counts:?} the conversation stays hidden"
         );
     }
 }
@@ -1678,11 +1748,12 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
     };
 
     let host = probation_host(ada, accounts.clone(), in_probation);
-    host.ensure_may_request(Actor::new(ada), vec![ada, contact, coworker])
+    let direct = host.direct_space_id();
+    host.ensure_may_request(Actor::new(ada), direct, vec![ada, contact, coworker], false)
         .await
         .expect("contacts and coworkers are no strangers");
     refused(
-        host.ensure_may_request(Actor::new(ada), vec![contact, stranger])
+        host.ensure_may_request(Actor::new(ada), direct, vec![contact, stranger], false)
             .await,
     );
     refused(
@@ -1699,14 +1770,24 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
 
     let later = probation_host(ada, accounts.clone(), created + Duration::hours(1));
     later
-        .ensure_may_request(Actor::new(ada), vec![stranger])
+        .ensure_may_request(
+            Actor::new(ada),
+            later.direct_space_id(),
+            vec![stranger],
+            false,
+        )
         .await
         .expect("probation is over");
     let off = probation_host(ada, accounts, in_probation)
         .with_limits(rim_services::limits::InstanceLimits::default());
-    off.ensure_may_request(Actor::new(ada), vec![stranger])
-        .await
-        .expect("no probation on this instance");
+    off.ensure_may_request(
+        Actor::new(ada),
+        off.direct_space_id(),
+        vec![stranger],
+        false,
+    )
+    .await
+    .expect("no probation on this instance");
 }
 
 #[tokio::test]
@@ -1727,4 +1808,260 @@ async fn outbound_none_refuses_a_person_on_another_server_before_reaching_their_
         .await
         .expect_err("refused");
     assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+}
+
+// ── DM request limits when a conversation is started ─────────────────────────────────────
+
+/// Requests per sender per day in the limit tests.
+const DAILY: u32 = 3;
+
+/// What a host knows of Ada's DM requests: how many she filed in the last day, each
+/// recipient's pending requests, who holds her as a contact, who shares a workspace with her
+/// (and how they take DMs from its members), and whether her DM with the recipient exists.
+#[derive(Default, Clone)]
+struct Inbox {
+    filed_today: i64,
+    pending: Vec<(UserId, i64)>,
+    contacts: Vec<UserId>,
+    coworkers: Vec<(UserId, rim_core::dm_policy::model::MemberDm)>,
+    existing_dm: bool,
+}
+
+/// A host at `now` with a daily limit of `DAILY` requests per sender, where Ada's oldest
+/// request of the window was filed 20 hours ago.
+fn limits_host(ada: UserId, inbox: Inbox, now: chrono::DateTime<Utc>) -> DefaultHostService {
+    use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+    use rim_core::dm_policy::model::{OutsideDm, OutsideFloor, SharedWorkspace, UserWorkspaceDm};
+
+    let mut host = MockHostRepository::new();
+    host.expect_user_kind()
+        .returning(|_| Box::pin(async { Ok(Some(UserKind::Local)) }));
+    let accounts = vec![crate::probation_fixtures::account(
+        ada,
+        now - Duration::days(30),
+        Some(&TestIdentity::new(70).principal_id()),
+    )];
+    let mut relay = MockRelayRepository::new();
+    let contacts = inbox.contacts.clone();
+    relay.expect_is_contact().returning(move |user, _| {
+        let known = contacts.contains(&user);
+        Box::pin(async move { Ok(known) })
+    });
+    relay
+        .expect_accepted_from()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    let pending = inbox.pending.clone();
+    relay
+        .expect_count_pending_requests()
+        .returning(move |user| {
+            let n = pending
+                .iter()
+                .find(|(u, _)| *u == user)
+                .map_or(0, |(_, n)| *n);
+            Box::pin(async move { Ok(n) })
+        });
+    let filed = inbox.filed_today;
+    relay
+        .expect_count_requests_from()
+        .returning(move |_, since| {
+            assert_eq!(since, now - Duration::days(1));
+            Box::pin(async move { Ok(filed) })
+        });
+    relay
+        .expect_oldest_request_from()
+        .returning(move |_, _| Box::pin(async move { Ok(Some(now - Duration::hours(20))) }));
+    let mut dm = MockDmPolicyRepository::new();
+    let coworkers = inbox.coworkers.clone();
+    dm.expect_shared_workspaces().returning(move |user, _| {
+        let shared = coworkers
+            .iter()
+            .filter(|(u, _)| *u == user)
+            .map(|(_, members)| SharedWorkspace {
+                workspace: UserWorkspaceDm {
+                    server_id: ServerId::from(Uuid::from_u128(7)),
+                    name: "Acme".to_string(),
+                    outside_floor: OutsideFloor::None,
+                    member_default: *members,
+                    choice: None,
+                },
+                sender_role: ServerMemberRole::Member,
+            })
+            .collect();
+        Box::pin(async move { Ok(shared) })
+    });
+    dm.expect_user_workspaces()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    dm.expect_outside()
+        .returning(|_| Box::pin(async { Ok(OutsideDm::Requests) }));
+    let mut conversations = MockConversationRepository::new();
+    let existing = inbox.existing_dm;
+    conversations
+        .expect_find_direct_between_users()
+        .returning(move |server_id, user, _| {
+            let found = existing.then(|| Conversation {
+                id: ConversationId::new(),
+                conversation_type: ConversationType::Direct,
+                title: None,
+                topic: None,
+                created_at: now,
+                last_activity_at: now,
+                server_id,
+                is_private: false,
+                archived_at: None,
+                created_by: Some(user),
+                slow_mode_seconds: 0,
+                encrypted_at: None,
+            });
+            Box::pin(async move { Ok(found) })
+        });
+    DefaultHostService::new(
+        HostRepos {
+            host_repo: Arc::new(host),
+            relay_repo: Arc::new(relay),
+            key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
+            e2ee_repo: Arc::new(MockE2eeRepository::new()),
+            user_repo: Arc::new(crate::probation_fixtures::users(accounts)),
+            conversation_repo: Arc::new(conversations),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            delegation_repo: Arc::new(MockDelegationRepository::new()),
+            relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
+            dm_policy_repo: Arc::new(dm),
+            session_repo: Arc::new(rim_core::auth::repository::MockSessionRepository::new()),
+        },
+        None,
+        identity(42),
+        Arc::new(MockPeerService::new()),
+        Arc::new(MockS2sClient::new()),
+        ServerId::new(),
+        120,
+    )
+    .with_quotas(Quotas {
+        dm_requests_per_day: DAILY,
+        ..Quotas::default()
+    })
+    .with_clock(crate::clock::Clock::fixed(now))
+}
+
+/// Ada starting a conversation with `others` in the direct space, a DM when `dm`.
+async fn start_direct(
+    inbox: Inbox,
+    ada: UserId,
+    others: Vec<UserId>,
+    dm: bool,
+) -> Result<(), ServiceError> {
+    let host = limits_host(ada, inbox, Utc::now());
+    let direct = host.direct_space_id();
+    host.ensure_may_request(Actor::new(ada), direct, others, dm)
+        .await
+}
+
+#[tokio::test]
+async fn a_dm_request_past_the_senders_daily_limit_is_refused_until_a_slot_opens() {
+    let (ada, stranger) = (UserId::new(), UserId::new());
+    let within = Inbox {
+        filed_today: i64::from(DAILY) - 1,
+        ..Inbox::default()
+    };
+    start_direct(within, ada, vec![stranger], true)
+        .await
+        .expect("within the limit");
+    let over = Inbox {
+        filed_today: i64::from(DAILY),
+        ..Inbox::default()
+    };
+    match start_direct(over, ada, vec![stranger], true).await {
+        Err(ServiceError::RateLimited {
+            retry_after_seconds,
+        }) => assert_eq!(retry_after_seconds, 4 * 60 * 60, "the oldest leaves in 4 h"),
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_full_request_inbox_refuses_new_requests() {
+    let (ada, stranger) = (UserId::new(), UserId::new());
+    let full = Inbox {
+        pending: vec![(stranger, crate::relay::inbox::MAX_PENDING_PER_USER)],
+        ..Inbox::default()
+    };
+    match start_direct(full, ada, vec![stranger], true).await {
+        Err(ServiceError::Forbidden(message)) => {
+            assert_eq!(message, "their request inbox is full")
+        }
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_group_counts_each_request_it_files() {
+    let ada = UserId::new();
+    let strangers: Vec<UserId> = (0..3).map(|_| UserId::new()).collect();
+    let inbox = Inbox {
+        filed_today: 1,
+        ..Inbox::default()
+    };
+    start_direct(inbox.clone(), ada, strangers[..2].to_vec(), false)
+        .await
+        .expect("two more fit");
+    assert!(matches!(
+        start_direct(inbox, ada, strangers, false).await,
+        Err(ServiceError::RateLimited { .. })
+    ));
+}
+
+#[tokio::test]
+async fn contacts_coworkers_and_a_reopened_dm_meet_no_request_limit() {
+    use rim_core::dm_policy::model::MemberDm;
+    let (ada, contact, coworker, stranger) =
+        (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+    let over = Inbox {
+        filed_today: i64::from(DAILY),
+        pending: vec![
+            (contact, crate::relay::inbox::MAX_PENDING_PER_USER),
+            (coworker, crate::relay::inbox::MAX_PENDING_PER_USER),
+        ],
+        contacts: vec![contact],
+        coworkers: vec![(coworker, MemberDm::Direct)],
+        ..Inbox::default()
+    };
+    start_direct(over.clone(), ada, vec![contact, coworker], false)
+        .await
+        .expect("delivered directly, no request");
+    start_direct(
+        Inbox {
+            existing_dm: true,
+            ..over.clone()
+        },
+        ada,
+        vec![stranger],
+        true,
+    )
+    .await
+    .expect("an existing DM is reopened");
+    assert!(start_direct(over, ada, vec![stranger], true).await.is_err());
+}
+
+#[tokio::test]
+async fn a_workspace_dm_taken_as_a_request_meets_the_limits_and_groups_there_do_not() {
+    use rim_core::dm_policy::model::MemberDm;
+    let (ada, direct, requests) = (UserId::new(), UserId::new(), UserId::new());
+    let inbox = Inbox {
+        filed_today: i64::from(DAILY),
+        coworkers: vec![(direct, MemberDm::Direct), (requests, MemberDm::Requests)],
+        ..Inbox::default()
+    };
+    let host = limits_host(ada, inbox, Utc::now());
+    let acme = ServerId::from(Uuid::from_u128(7));
+    host.ensure_may_request(Actor::new(ada), acme, vec![direct], true)
+        .await
+        .expect("a DM the member takes directly");
+    assert!(matches!(
+        host.ensure_may_request(Actor::new(ada), acme, vec![requests], true)
+            .await,
+        Err(ServiceError::RateLimited { .. })
+    ));
+    host.ensure_may_request(Actor::new(ada), acme, vec![requests, direct], false)
+        .await
+        .expect("a workspace group files no request");
 }

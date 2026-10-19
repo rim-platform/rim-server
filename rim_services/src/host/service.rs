@@ -105,12 +105,23 @@ pub trait HostService: Send + Sync {
     /// Delete outbox rows older than 7 days and accepted request `seq`s that left the window.
     async fn cleanup(&self) -> ServiceResult<HostCleanup>;
 
-    /// Whether `actor` may start a conversation in the direct space with `user_ids`:
-    /// `Forbidden` when one is on a server the operator's outbound DM setting does not admit,
-    /// or a local one's DM settings refuse the actor; `Validation` naming the time left while
-    /// `actor`'s account is in probation and one is a stranger to them, someone neither their
-    /// contact nor in a workspace with them, whom the conversation would send a DM request.
-    async fn ensure_may_request(&self, actor: Actor, user_ids: Vec<UserId>) -> ServiceResult<()>;
+    /// Whether `actor` may start a conversation with `user_ids` in `server_id`, a DM when
+    /// `direct_message`. In the direct space: `Forbidden` when one is on a server the
+    /// operator's outbound DM setting does not admit, or a local one's DM settings refuse the
+    /// actor; `Validation` naming the time left while `actor`'s account is in probation and one
+    /// is a stranger to them, someone neither their contact nor in a workspace with them, whom
+    /// the conversation would send a DM request. There and in a workspace's DMs, a new
+    /// conversation that files a DM request with a local user meets the request inbox's
+    /// limits: `Forbidden` when that user's pending requests are at the limit, `RateLimited`
+    /// when the actor would file more requests on this relay than they may per day. An existing
+    /// DM is reopened, not requested again. Everything else is allowed.
+    async fn ensure_may_request(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        user_ids: Vec<UserId>,
+        direct_message: bool,
+    ) -> ServiceResult<()>;
 }
 
 /// Claims key packages of remote users' devices from their relays.

@@ -379,5 +379,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   or none; `revokeInvite` ends them. Redeeming a workspace invite now checks its revocation and
   expiry in the same update that counts the use, so an invite revoked or expiring while a join
   or signup runs admits nobody.
+- The request inbox's limits hold for DMs started on this server. A conversation that would
+  file a DM request past them is refused when it is started (`createConversation`,
+  `addConversationMembers`): `RATE_LIMITED` with `retryAfterSeconds` once the sender would file
+  more than `RIM_RELAY_DM_REQUESTS_PER_DAY` requests in 24 hours, `FORBIDDEN` ("their request
+  inbox is full") while the recipient holds 100 pending requests. Before, a DM past either
+  limit from someone on this server, or from someone elsewhere through the forward path,
+  skipped the request inbox and reached the recipient's conversations and notifications
+  directly. Workspace DMs a member takes as requests meet the same limits.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

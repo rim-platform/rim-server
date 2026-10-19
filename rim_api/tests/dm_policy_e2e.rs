@@ -3,8 +3,9 @@
 //! DM back directly; only the owner sets a workspace's rules
 //! and a closing floor binds each member's choice; a server closed by its operator serves no
 //! identity, takes no DM from a stranger here or elsewhere and starts none with another server;
-//! a partner server's people reach this one's while a server that is not a partner reads no
-//! identity.
+//! a stranger's DM request past the daily limit is refused when it is started and reaches no
+//! one; a partner server's people reach this one's while a server that is not a partner reads
+//! no identity.
 //!
 //! Run with:
 //! ```sh
@@ -375,6 +376,56 @@ async fn a_closed_server_takes_no_dm_from_outside_and_starts_none_with_another_s
 
     a.stop().await;
     b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_strangers_dm_request_past_the_daily_limit_is_refused_and_reaches_no_one() {
+    let a = one_server(|c| c.relay_dm_requests_per_day = Some(3)).await;
+    let sam = sign_up(&a, "sam", 1).await;
+    let direct = direct_space(&sam).await;
+    let mut strangers = Vec::new();
+    for seed in 10..14u8 {
+        strangers.push(sign_up(&a, &format!("stranger{seed}"), seed).await);
+    }
+    let (last, first) = strangers.split_last().expect("strangers");
+
+    // Sam's first three DMs of the day with strangers are requests.
+    for stranger in first {
+        created(&dm(&a, &sam, &direct, stranger).await);
+    }
+    first[2].pending_request(&sam).await;
+
+    // The fourth is refused when it is started, and its recipient sees nothing of it.
+    let refused = dm(&a, &sam, &direct, last).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(listed(last, &direct).await, Vec::<String>::new());
+    let requests = last.ok(REQUESTS, json!({})).await;
+    assert_eq!(requests["dmRequests"], json!([]));
+    let notifications = last
+        .ok(
+            "query($s: ID!) { myNotifications(serverId: $s, dir: AFTER, limit: 50) { items { id } } \
+             myUnreadNotificationCount(serverId: $s) }",
+            json!({ "s": direct }),
+        )
+        .await;
+    assert_eq!(notifications["myNotifications"]["items"], json!([]));
+    assert_eq!(notifications["myUnreadNotificationCount"], json!(0));
+    assert_eq!(code(&refused), "RATE_LIMITED", "{refused}");
+    let retry = refused["errors"][0]["extensions"]["retryAfterSeconds"]
+        .as_i64()
+        .expect("retryAfterSeconds");
+    assert!((1..=86_400).contains(&retry), "{retry}");
+
+    // Once the recipient holds Sam as a contact, a DM from Sam files no request and is not limited.
+    last.ok(
+        "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+        json!({ "p": sam.principal(), "r": [a.origin] }),
+    )
+    .await;
+    let delivered = created(&dm(&a, &sam, &direct, last).await);
+    assert!(listed(last, &direct).await.contains(&delivered));
+
+    a.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
