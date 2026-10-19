@@ -68,6 +68,31 @@ pub struct PeerDelivery {
     pub delivered_through: i64,
     pub failures: i32,
     pub next_attempt_at: DateTime<Utc>,
+    /// When the current run of failed deliveries began; `None` while deliveries succeed.
+    pub failing_since: Option<DateTime<Utc>>,
+}
+
+/// What a relay's outbox holds above what it acknowledged, and since when deliveries to it
+/// fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxBacklog {
+    pub rows: i64,
+    pub bytes: i64,
+    pub failing_since: Option<DateTime<Utc>>,
+}
+
+/// The outbox rows every relay has yet to acknowledge, and the relays failing since before a
+/// given time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutboxStats {
+    pub rows: i64,
+    pub bytes: i64,
+    /// The most rows one relay has waiting.
+    pub peer_max_rows: i64,
+    /// The most bytes one relay has waiting.
+    pub peer_max_bytes: i64,
+    /// Relays whose deliveries have failed since before the given time.
+    pub dead_peers: i64,
 }
 
 /// The answer to a forwarded device request's `seq`.

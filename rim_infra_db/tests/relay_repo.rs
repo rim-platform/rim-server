@@ -207,6 +207,104 @@ async fn outbox_rows_come_in_order_per_peer_within_the_byte_cap() {
 }
 
 #[tokio::test]
+async fn the_outbox_backlog_counts_only_rows_above_the_acknowledgement() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmHostRepository::new(ctx.db.clone());
+    let empty = repo.outbox_backlog("rims1_a").await.unwrap();
+    assert_eq!((empty.rows, empty.bytes, empty.failing_since), (0, 0, None));
+    let mut ids = Vec::new();
+    for size in [100, 200, 300, 400] {
+        ids.push(repo.insert_outbox("rims1_a", "a", size).await.unwrap());
+    }
+    repo.insert_outbox("rims1_b", "b", 7).await.unwrap();
+    let before = repo.outbox_backlog("rims1_a").await.unwrap();
+    assert_eq!((before.rows, before.bytes), (4, 1000));
+
+    repo.record_delivered("rims1_a", ids[1]).await.unwrap();
+    let after = repo.outbox_backlog("rims1_a").await.unwrap();
+    assert_eq!(
+        (after.rows, after.bytes),
+        (2, 700),
+        "delivered rows do not count"
+    );
+    assert_eq!(
+        repo.outbox_after("rims1_a", 0, 256, 1_000_000)
+            .await
+            .unwrap()
+            .len(),
+        4,
+        "delivered rows are kept"
+    );
+    let stats = repo
+        .outbox_stats(Utc::now() - Duration::hours(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            stats.rows,
+            stats.bytes,
+            stats.peer_max_rows,
+            stats.peer_max_bytes
+        ),
+        (3, 707, 2, 700)
+    );
+    assert_eq!(stats.dead_peers, 0);
+}
+
+#[tokio::test]
+async fn a_run_of_failures_starts_once_and_ends_with_a_success() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmHostRepository::new(ctx.db.clone());
+    let id = repo.insert_outbox("rims1_a", "a", 10).await.unwrap();
+    let now = Utc::now();
+    repo.record_failure("rims1_a", 1, now - Duration::seconds(1))
+        .await
+        .unwrap();
+    let since = repo
+        .outbox_backlog("rims1_a")
+        .await
+        .unwrap()
+        .failing_since
+        .expect("failing");
+    repo.record_failure("rims1_a", 2, now - Duration::seconds(1))
+        .await
+        .unwrap();
+    let delivery = repo.delivery("rims1_a").await.unwrap();
+    assert_eq!(
+        delivery.failing_since,
+        Some(since),
+        "a later failure keeps the start"
+    );
+    assert_eq!(delivery.failures, 2);
+    assert_eq!(
+        dead_peers(&repo, Utc::now() + Duration::minutes(1)).await,
+        1
+    );
+    assert_eq!(dead_peers(&repo, Utc::now() - Duration::hours(1)).await, 0);
+
+    // Nothing left to send: a failing relay is still due, so a probe can end its failures.
+    repo.delete_outbox_before(Utc::now() + Duration::seconds(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.outbox_peers_due(Utc::now()).await.unwrap(),
+        vec!["rims1_a".to_string()]
+    );
+    repo.record_delivered("rims1_a", id).await.unwrap();
+    let delivery = repo.delivery("rims1_a").await.unwrap();
+    assert_eq!((delivery.failures, delivery.failing_since), (0, None));
+    assert!(repo.outbox_peers_due(Utc::now()).await.unwrap().is_empty());
+    assert_eq!(
+        dead_peers(&repo, Utc::now() + Duration::minutes(1)).await,
+        0
+    );
+}
+
+async fn dead_peers(repo: &SeaOrmHostRepository, dead_before: chrono::DateTime<Utc>) -> i64 {
+    repo.outbox_stats(dead_before).await.unwrap().dead_peers
+}
+
+#[tokio::test]
 async fn received_through_only_moves_up_and_envelopes_are_stored_once() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmRelayRepository::new(ctx.db.clone());

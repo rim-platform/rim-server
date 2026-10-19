@@ -11,6 +11,7 @@ pub struct Model {
     pub failures: i32,
     pub next_attempt_at: DateTimeWithTimeZone,
     pub last_success_at: Option<DateTimeWithTimeZone>,
+    pub failing_since: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

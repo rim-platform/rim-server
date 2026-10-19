@@ -206,7 +206,7 @@ month of normal traffic shows the baseline.
 | Watch | How | Alert at |
 |---|---|---|
 | Queue bytes | `rim-sql -c 'SELECT sum(size_bytes) AS bytes, count(DISTINCT user_id) AS users FROM relay_item'`; per user: `… GROUP BY user_id ORDER BY 2 DESC LIMIT 10`; log `relay queue over its cap; dropped the oldest items` | **FILL** |
-| Outbox depth per peer | the query below | **FILL** rows or oldest over **FILL** minutes |
+| Outbox depth per peer | `rim_outbox_peer_max_pending_rows`, `rim_outbox_dead_peers`, `rim_outbox_not_queued_rows_total`; per peer the query below; log `host events for a relay are not queued` | **FILL** rows or oldest over **FILL** minutes |
 | Deliver failures | logs `delivery to a relay failed`, `a relay refused a delivery`, `outbox delivery to a relay failed`; `s2s_peer_delivery.failures` | **FILL** |
 | `401` from peers | log `refused a server-to-server signature` (with `reason` and `peer_server_id`) | **FILL** per hour |
 | `403` to peers | log `refused a peer that is not allowed` | any from a peer not known to be blocked |
@@ -221,10 +221,11 @@ dc logs --since 1h rim | grep -c '"event":"relay.registration_pow"'
 dc logs --since 1h rim | grep 'refused a server-to-server signature' | grep -o '"reason":"[a-z_]*"' | sort | uniq -c
 rim-sql <<'SQL'
 SELECT o.peer_server_id, count(*) AS rows, min(o.created_at) AS oldest,
-       d.failures, d.next_attempt_at, d.last_success_at
+       sum(o.size_bytes) AS bytes, d.failures, d.failing_since, d.next_attempt_at,
+       d.last_success_at
 FROM s2s_outbox o LEFT JOIN s2s_peer_delivery d USING (peer_server_id)
 WHERE o.id > COALESCE(d.delivered_through, 0)
-GROUP BY o.peer_server_id, d.failures, d.next_attempt_at, d.last_success_at
+GROUP BY o.peer_server_id, d.failures, d.failing_since, d.next_attempt_at, d.last_success_at
 ORDER BY rows DESC;
 SQL
 ```

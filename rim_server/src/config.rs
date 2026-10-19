@@ -151,6 +151,11 @@ pub struct RIMConfig {
     /// `RIM_S2S_SUBSCRIPTIONS_PER_PEER`.
     pub s2s_subscriptions_per_peer: Option<u32>,
 
+    /// Hours every delivery to a relay may fail before it is dead: host events are no longer
+    /// queued for it until a delivery succeeds again. Default 24, from 1 to 168. Controlled by
+    /// `RIM_S2S_PEER_DEAD_AFTER_HOURS`.
+    pub s2s_peer_dead_after_hours: Option<u32>,
+
     /// Bytes queued per local user before the oldest items are dropped. Default 256 MiB.
     /// Controlled by `RIM_RELAY_QUEUE_BYTES_PER_USER`.
     pub relay_queue_bytes_per_user: Option<i64>,
@@ -406,6 +411,7 @@ impl fmt::Debug for RIMConfig {
                 "s2s_subscriptions_per_peer",
                 &self.s2s_subscriptions_per_peer(),
             )
+            .field("s2s_peer_dead_after", &self.s2s_peer_dead_after())
             .field("metrics_addr", &self.metrics_addr)
             .field("audit_retention_days", &self.audit_retention_days)
             .field("features_disabled", &self.features_disabled)
@@ -464,6 +470,7 @@ impl Default for RIMConfig {
             s2s_allow_http: None,
             s2s_device_rate_per_min: None,
             s2s_subscriptions_per_peer: None,
+            s2s_peer_dead_after_hours: None,
             relay_queue_bytes_per_user: None,
             relay_retention_days: None,
             registration_pow_bits: None,
@@ -785,6 +792,13 @@ impl RIMConfig {
 
     pub fn s2s_subscriptions_per_peer(&self) -> u32 {
         self.s2s_subscriptions_per_peer.unwrap_or(10_000).max(1)
+    }
+
+    /// How long every delivery to a relay may fail before it is dead.
+    pub fn s2s_peer_dead_after(&self) -> chrono::Duration {
+        chrono::Duration::hours(i64::from(
+            self.s2s_peer_dead_after_hours.unwrap_or(24).clamp(1, 168),
+        ))
     }
 
     pub fn relay_queue_bytes_per_user(&self) -> i64 {

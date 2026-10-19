@@ -299,6 +299,7 @@ Actix's request types.
 | `RIM_DM_PARTNERS` | empty | Server ids the `partners` settings name |
 | `RIM_S2S_PEER_RATE_PER_MIN` | 600 | Requests per peer (in memory, per node) |
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations per relay on a host |
+| `RIM_S2S_PEER_DEAD_AFTER_HOURS` | 24 | Hours every delivery to a relay may fail before it is dead and gets no new outbox rows (1 to 168) |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests per device |
 | `RIM_S2S_MAX_BODY_BYTES` | 8388608 | Body cap (forward path: 32 MiB) |
 | `RIM_RELAY_QUEUE_BYTES_PER_USER` | 268435456 | Queued bytes per local user |
@@ -486,9 +487,29 @@ POST /s2s/v1/deliver
   subscription. A refusal for one recipient carries `principalId`. The host skips a (relay,
   principal) for 24 hours after `unknown_principal` only; the other refusals are about one
   conversation or item.
-- Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days; a relay down longer
-  gets nothing and its clients catch up from the change feed. A relay may pull what it missed:
-  `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
+- Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days, delivered or not; a
+  relay down longer gets nothing and its clients catch up from the change feed. A relay may pull
+  what it missed: `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
+- **Per-relay caps.** A relay's backlog, its rows above what it acknowledged, holds at most
+  100,000 rows and 2 GiB. Delivered rows kept for the 7 days do not count. While the backlog is at
+  either cap, an event's row for that relay is not written: the event is dropped for that relay
+  only, counted (`rim_outbox_not_queued_rows_total{reason="peer_cap"}`) and logged at warn at most
+  once a minute per relay. The write that caused the event succeeds, the host's database has it,
+  and other relays and local members get it as usual. The writer reads each relay's backlog at
+  most every 10 seconds and counts its own rows in between, so with several nodes a backlog can
+  pass a cap by what the other nodes write in that time.
+- **Dead relays.** A relay every delivery to has failed for `RIM_S2S_PEER_DEAD_AFTER_HOURS`
+  (24) since the first failure after its last success (`s2s_peer_delivery.failing_since`) is dead.
+  Its backlog is kept, within the caps and the 7 days, and no new rows are written for it
+  (`reason="dead_peer"`). The sender tries a dead relay once every 5 minutes, the longest backoff:
+  with its next batch, or with an empty `deliver` (`{"items":[]}`) when nothing is left, which a
+  relay answers like any other. The first `200` ends the failures, and rows are written for it
+  again within 10 seconds.
+- An event a relay does not get still takes its stream's `seq`. When the relay is back, the next
+  event on each stream arrives with `seq > last + 1`, and the app reconciles from the host as for
+  any gap ("What the client checks"): change feed, pins, reactions, members and `streamHeads`,
+  through the forward path. Not recovered: `e` events (no `seq`), and a `DmInvite` written in
+  that window, which the recipient's relay never files.
 
 ### Relay queues
 
@@ -1078,6 +1099,9 @@ CREATE TABLE relay_abuse_report (id uuid PRIMARY KEY,
     subject_principal_id text NULL, subject_server_id text NULL,
     request_id uuid NULL REFERENCES relay_dm_request ON DELETE SET NULL, reason text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz NULL);
+
+-- add_peer_delivery_failing_since: when a relay's run of failed deliveries began
+ALTER TABLE s2s_peer_delivery ADD COLUMN failing_since timestamptz NULL;
 ```
 
 A per-minute cleanup (like the key challenge cleanup) deletes expired nonces, `device_request_seen`
@@ -1166,7 +1190,7 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 |---|---|
 | S2S body / forward body / discovery fetch | 8 MiB / 32 MiB / 64 KiB |
 | Clock window; nonce retention | `created` ≤ 300 s ahead, `expires − created ≤ 300`; 600 s |
-| Deliver; outbox | 256 items and 8 MiB per request; 7 days |
+| Deliver; outbox | 256 items and 8 MiB per request; 7 days, delivered or not; per relay 100,000 rows and 2 GiB not yet acknowledged; a relay failing every delivery for 24 hours gets no new rows |
 | Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay); 2 GiB of items per delivering host per day, across all recipients, those of subscribed workspaces not counted |
 | Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
@@ -1185,7 +1209,7 @@ database, so correctness never depends on one node. Audit (ids only):
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `relay.registration_pow`,
 `server_key.created`, `server_key.rotated`, `server_key.recovered`, `s2s.peer_reset`. Events with an acting user and workspace go to `command_audit_log`; the server
 key and peer events have neither (its columns are `NOT NULL`), so they go to the audit log stream
-(`target = "audit"`, as key logins do). Logs carry server, principal and row ids, never payloads. Metrics: outbox depth and oldest age per peer, deliver failures, relay
+(`target = "audit"`, as key logins do). Logs carry server, principal and row ids, never payloads. Metrics: outbox rows and bytes not yet acknowledged, in all and for the relay with the most, dead relays, rows not queued by reason, deliver failures, relay
 queue bytes, S2S responses by status, signature failures by reason.
 
 ## Threat model
@@ -1230,8 +1254,10 @@ device keys move to hybrid.
   recovery, grace), the `seq` window, delegation rules, stranger rules, request transitions, queue
   retention and overflow, the revocation schedule, the role table.
 - **db-tests.** One nonce inserted twice concurrently, one wins; per-stream `seq` under concurrency
-  without gaps or repeats; outbox order per peer; `received_through` idempotency; items deleted only
-  once every device acked; cascades; each migration up and down, and the refusing `down`s.
+  without gaps or repeats; outbox order per peer; a relay's backlog counts only rows above its
+  acknowledgement, and a run of failures starts once and ends with a success; `received_through`
+  idempotency; items deleted only once every device acked; cascades; each migration up and down,
+  and the refusing `down`s.
 - **e2e with two servers** (`rim_api/tests/s2s_e2e.rs`, `e2e-tests`): two Actix servers in one
   process with two databases, `RIM_S2S_ALLOW_HTTP` and `RIM_S2S_ALLOW_PRIVATE_ADDRESSES`. Flows:
   pinning and rotation; an encrypted DM across relays from creation to edit and read state

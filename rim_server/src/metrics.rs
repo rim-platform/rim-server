@@ -1,6 +1,6 @@
 //! Prometheus metrics: the recorder, HTTP request metrics by route class, the server-to-server
-//! and forwarded request outcomes, the database and relay queue samplers, and the `/metrics`
-//! listener that serves them on its own address.
+//! and forwarded request outcomes, the database, relay queue and outbox samplers, and the
+//! `/metrics` listener that serves them on its own address.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
@@ -16,6 +16,7 @@ use metrics::{
 };
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use rim_core::monitoring::MonitoringRepository;
+use rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository;
 use rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository;
 use sea_orm::{DatabaseConnection, DbBackend};
 use tokio::sync::watch;
@@ -47,7 +48,7 @@ const DURATION_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
 ];
 
-/// How often the relay queue and the pending migrations are read from the database.
+/// How often the relay queue, the outbox and the pending migrations are read from the database.
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How long one database sample may take before it is skipped.
@@ -268,9 +269,14 @@ fn sample_pool(db: &DatabaseConnection) {
     gauge!(DB_POOL_MAX).set(f64::from(pool.options().get_max_connections()));
 }
 
-/// Read the relay queue and the pending migrations and set their gauges; a read that fails or
-/// takes too long leaves its gauge as it was.
-async fn sample_database(db: &DatabaseConnection, monitoring_repo: &dyn MonitoringRepository) {
+/// Read the relay queue, the outbox (relays dead after `dead_peer_after` of failures) and the
+/// pending migrations and set their gauges; a read that fails or takes too long leaves its
+/// gauge as it was.
+async fn sample_database(
+    db: &DatabaseConnection,
+    monitoring_repo: &dyn MonitoringRepository,
+    dead_peer_after: chrono::Duration,
+) {
     let relay_repo = SeaOrmRelayRepository::new(db.clone().into());
     match tokio::time::timeout(
         SAMPLE_TIMEOUT,
@@ -282,6 +288,19 @@ async fn sample_database(db: &DatabaseConnection, monitoring_repo: &dyn Monitori
         result => {
             rim_infra_services::usage_metrics::sample_outcome("relay", false);
             tracing::warn!(?result, "could not sample the relay queue");
+        }
+    }
+    let host_repo = SeaOrmHostRepository::new(db.clone().into());
+    match tokio::time::timeout(
+        SAMPLE_TIMEOUT,
+        rim_infra_services::metrics::sample_outbox(&host_repo, dead_peer_after),
+    )
+    .await
+    {
+        Ok(Ok(())) => rim_infra_services::usage_metrics::sample_outcome("outbox", true),
+        result => {
+            rim_infra_services::usage_metrics::sample_outcome("outbox", false);
+            tracing::warn!(?result, "could not sample the outbox");
         }
     }
     match tokio::time::timeout(SAMPLE_TIMEOUT, crate::health::count_pending_migrations(db)).await {
@@ -336,9 +355,9 @@ pub(crate) fn configure(state: MetricsState) -> impl FnOnce(&mut web::ServiceCon
     }
 }
 
-/// Install the recorder, bind `addr` and serve `/metrics` there, and read the relay queue and
-/// pending migrations every [`SAMPLE_INTERVAL`], until `shutdown` changes or its sender is
-/// dropped.
+/// Install the recorder, bind `addr` and serve `/metrics` there, and read the relay queue, the
+/// outbox (relays dead after `dead_peer_after` of failures) and the pending migrations every
+/// [`SAMPLE_INTERVAL`], until `shutdown` changes or its sender is dropped.
 ///
 /// # Errors
 /// When the recorder cannot be installed or the address cannot be bound.
@@ -346,6 +365,7 @@ pub(crate) fn start(
     addr: SocketAddr,
     db: DatabaseConnection,
     monitoring_repo: Arc<dyn MonitoringRepository>,
+    dead_peer_after: chrono::Duration,
     shutdown: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let handle = install().map_err(std::io::Error::other)?;
@@ -371,7 +391,9 @@ pub(crate) fn start(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = tick.tick() => sample_database(&db, monitoring_repo.as_ref()).await,
+                _ = tick.tick() => {
+                    sample_database(&db, monitoring_repo.as_ref(), dead_peer_after).await
+                }
                 _ = shutdown_for_sampler.changed() => break,
             }
         }

@@ -77,7 +77,7 @@ pub fn describe() {
     for reason in ["acknowledged", "expired", "overflow"] {
         counter!("rim_relay_removed_items_total", "reason" => reason).increment(0);
     }
-    for sample in ["relay", "migrations", "usage", "delivery"] {
+    for sample in ["relay", "outbox", "migrations", "usage", "delivery"] {
         gauge!("rim_database_sample_success", "sample" => sample).set(0.0);
         gauge!("rim_database_sample_last_success_timestamp_seconds", "sample" => sample).set(0.0);
         counter!("rim_database_sample_failures_total", "sample" => sample).increment(0);
