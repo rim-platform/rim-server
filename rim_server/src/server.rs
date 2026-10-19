@@ -6,8 +6,7 @@ use crate::file_handlers::{
     handle_report_attachment_download,
 };
 use crate::graphql_support::{
-    apply_auth_cookies, count_mutation_fields, enforce_csrf_for_batch, extract_auth,
-    internal_graphql_error_response,
+    apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
 };
 use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
@@ -226,9 +225,7 @@ async fn graphql_handler(
     gql: GraphQLBatchRequest,
 ) -> Either<GraphQLResponse, HttpResponse> {
     let batch = gql.into_inner();
-    if let async_graphql::BatchRequest::Batch(requests) = &batch
-        && edge_limits.batch_too_large(requests.len())
-    {
+    if edge_limits.refuses_batch(&batch) {
         return Either::Right(crate::edge::batch_too_large_response());
     }
     let request_id = req
@@ -274,10 +271,11 @@ async fn graphql_handler(
             (None, None) => None,
         };
         if let Some(caller) = caller
-            && let Err(retry_after_seconds) =
-                edge_limits.spend_mutations(&caller, count_mutation_fields(&batch))
+            && let Err(retry_after_seconds) = edge_limits.charge_batch(&caller, &batch)
         {
-            return rate_limited_graphql_response(retry_after_seconds);
+            return GraphQLResponse::from(crate::edge::mutation_budget_refusal(
+                retry_after_seconds,
+            ));
         }
         if let Some(user_id) = auth.user_id
             && let Some(response) = refuse_remote_account_mutation(&req, &batch, user_id).await
@@ -322,17 +320,6 @@ async fn graphql_handler(
     .instrument(span)
     .await;
     Either::Left(response)
-}
-
-/// The GraphQL answer to a request over its mutation budget: `RATE_LIMITED` with
-/// `retryAfterSeconds`.
-fn rate_limited_graphql_response(retry_after_seconds: u64) -> GraphQLResponse {
-    let error = rim_api::errors::map_service_error(rim_services::ServiceError::RateLimited {
-        retry_after_seconds,
-    });
-    GraphQLResponse::from(async_graphql::Response::from_errors(vec![
-        error.into_server_error(async_graphql::Pos::default()),
-    ]))
 }
 
 /// `FORBIDDEN` when someone whose relay is another server, signed in here directly, sends a

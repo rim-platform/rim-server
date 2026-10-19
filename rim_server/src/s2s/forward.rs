@@ -22,6 +22,7 @@ use rim_services::storage::service::StorageService;
 use rim_services::workspace_plugin::service::PluginBundleService;
 use serde_json::json;
 
+use crate::edge::{EdgeLimits, MutationCaller};
 use crate::s2s::S2sState;
 use crate::s2s::guard::{Reply, Verified, internal};
 
@@ -91,15 +92,44 @@ async fn reply_of(response: HttpResponse) -> Reply {
     }
 }
 
-/// Run GraphQL as the forwarded user and device.
+/// The answer refusing a forwarded batch over this server's batch cap, or one whose mutation
+/// fields the device's budget cannot pay; `None` charges them and lets the batch run. The
+/// refusals are those of `/api`.
+fn over_limits(
+    limits: &EdgeLimits,
+    auth: &ForwardAuth,
+    batch: &async_graphql::BatchRequest,
+) -> Option<Reply> {
+    if limits.refuses_batch(batch) {
+        return Some(Reply::json(
+            StatusCode::BAD_REQUEST,
+            &crate::edge::batch_too_large_body(),
+        ));
+    }
+    let retry_after_seconds = limits
+        .charge_batch(&MutationCaller::Device(auth.device_key_id), batch)
+        .err()?;
+    Some(
+        match serde_json::to_value(crate::edge::mutation_budget_refusal(retry_after_seconds)) {
+            Ok(body) => Reply::ok(body),
+            Err(e) => internal(e),
+        },
+    )
+}
+
+/// Run GraphQL as the forwarded user and device, under this server's batch cap and with its
+/// mutation fields charged to the device's budget.
 async fn graphql(
     req: &HttpRequest,
     auth: &ForwardAuth,
     peer_server_id: &str,
     body: &[u8],
 ) -> Reply {
-    let Some(schema) = req.app_data::<web::Data<AppSchema>>() else {
-        return internal("the schema is not configured");
+    let (Some(schema), Some(edge_limits)) = (
+        req.app_data::<web::Data<AppSchema>>(),
+        req.app_data::<web::Data<EdgeLimits>>(),
+    ) else {
+        return internal("the schema or the API limits are not configured");
     };
     let batch: async_graphql::BatchRequest = match serde_json::from_slice(body) {
         Ok(batch) => batch,
@@ -107,6 +137,9 @@ async fn graphql(
             return Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed GraphQL");
         }
     };
+    if let Some(refused) = over_limits(edge_limits, auth, &batch) {
+        return refused;
+    }
     if let Some(field) = batch.iter().find_map(|request| {
         refused_account_mutation(&request.query, request.operation_name.as_deref())
     }) {
@@ -314,5 +347,97 @@ pub(crate) async fn run(state: &S2sState, req: &HttpRequest, verified: &Verified
     match outcome.request_payload {
         Some(payload) => with_host_response(state, reply, &payload),
         None => reply,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rim_core::key_identity::model::DeviceKeyId;
+    use rim_core::user::model::UserId;
+    use rim_infra_services::token_bucket::BucketRate;
+    use serde_json::Value;
+
+    use super::*;
+    use crate::config::ApiLimits;
+
+    /// A batch cap of 2 and a budget of 3 mutation fields per minute.
+    fn limits() -> EdgeLimits {
+        EdgeLimits::new(
+            ApiLimits {
+                requests_per_ip: None,
+                mutations_per_session: BucketRate::per_minute(3),
+                messages: None,
+                probation_messages: None,
+                ws_connections_per_user: None,
+                subscriptions_per_connection: None,
+                max_batch: 2,
+            },
+            false,
+        )
+    }
+
+    fn device() -> ForwardAuth {
+        ForwardAuth {
+            user_id: UserId::new(),
+            device_key_id: DeviceKeyId::new(),
+            principal_id: "rimp1_test".to_string(),
+        }
+    }
+
+    fn batch(queries: &[&str]) -> async_graphql::BatchRequest {
+        let requests: Vec<Value> = queries.iter().map(|q| json!({ "query": q })).collect();
+        serde_json::from_value(Value::Array(requests)).expect("a batch")
+    }
+
+    fn body(reply: &Reply) -> Value {
+        serde_json::from_slice(&reply.body).expect("json")
+    }
+
+    #[test]
+    fn a_forwarded_batch_over_the_cap_is_refused_as_on_api() {
+        let limits = limits();
+        let auth = device();
+        let reply = over_limits(&limits, &auth, &batch(&["{ a }"; 3])).expect("refused");
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_eq!(body(&reply), json!({ "error": "batch_too_large" }));
+        assert!(over_limits(&limits, &auth, &batch(&["{ a }"; 2])).is_none());
+        let single: async_graphql::BatchRequest =
+            serde_json::from_value(json!({ "query": "{ a }" })).expect("a request");
+        assert!(over_limits(&limits, &auth, &single).is_none());
+    }
+
+    #[test]
+    fn forwarded_mutations_spend_a_budget_of_their_own_device() {
+        let limits = limits();
+        let first = device();
+        assert!(over_limits(&limits, &first, &batch(&["mutation { a b }"])).is_none());
+        let reply = over_limits(
+            &limits,
+            &first,
+            &batch(&["mutation { a }", "mutation { b }"]),
+        )
+        .expect("over the budget");
+        assert_eq!(reply.status, StatusCode::OK);
+        let body = body(&reply);
+        assert_eq!(body["errors"][0]["extensions"]["code"], "RATE_LIMITED");
+        assert_eq!(body["errors"][0]["extensions"]["retryAfterSeconds"], 20);
+        assert!(
+            over_limits(&limits, &first, &batch(&["{ a }"])).is_none(),
+            "queries are free"
+        );
+        let same_user_other_device = ForwardAuth {
+            device_key_id: DeviceKeyId::new(),
+            ..first.clone()
+        };
+        assert!(
+            over_limits(
+                &limits,
+                &same_user_other_device,
+                &batch(&["mutation { a b c }"])
+            )
+            .is_none(),
+            "another device has its own budget"
+        );
+        assert!(over_limits(&limits, &device(), &batch(&["mutation { a b c }"])).is_none());
     }
 }

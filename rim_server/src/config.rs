@@ -204,8 +204,9 @@ pub struct RIMConfig {
     /// Requests one client address sends to `/api` routes per minute, with a burst of the same
     /// size; unset or 0 sets no limit. Controlled by `RIM_RATE_REQUESTS_PER_MIN_PER_IP`.
     pub rate_requests_per_min_per_ip: Option<u32>,
-    /// Mutation fields one session runs per minute, counted per GraphQL request; callers
-    /// without a session count per address. Unset or 0 sets no limit. Controlled by
+    /// Mutation fields one session runs per minute, counted per GraphQL request; a request
+    /// another server forwards counts per device, other callers without a session per address.
+    /// Unset or 0 sets no limit. Controlled by
     /// `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`.
     pub rate_mutations_per_min_per_session: Option<u32>,
     /// Messages one user sends per minute; unset or 0 sets no limit. Controlled by

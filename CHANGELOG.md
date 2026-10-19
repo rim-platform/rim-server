@@ -297,5 +297,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   (`UNAUTHENTICATED`) after a reset or an enrollment and with `FORBIDDEN` after a ban. Before,
   a sign-in with the old password that was already being checked could create a session after
   the reset or enrollment had ended all the others.
+- GraphQL a relay forwards for one of its users keeps this server's `RIM_API_MAX_BATCH` and
+  `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`, the mutation budget counted per device of the remote
+  user, with the same refusals as `/api`. Before, a forwarded batch ran with no batch cap and
+  no mutation budget.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master
