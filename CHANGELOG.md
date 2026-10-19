@@ -418,5 +418,16 @@ tag `v<version>`, the version every crate in the workspace carries.
   limit from someone on this server, or from someone elsewhere through the forward path,
   skipped the request inbox and reached the recipient's conversations and notifications
   directly. Workspace DMs a member takes as requests meet the same limits.
+- Cached identities of people on other servers, stored by `remoteIdentity` and by a host
+  refreshing its remote members, are deleted 30 days after they were fetched unless the person
+  is a remote user here. A pin of another server is forgotten after 90 days without a fetch or
+  a request when nothing here refers to it and the configuration does not name it; its key-log
+  head is kept, so its next contact pins it again only with a log that extends the one seen
+  before (another history is pinned `forked`, a shorter one is not pinned). One origin holds at
+  most 4 pins: a fifth server id there is refused until `rim_server peer reset` removes one.
+  Before, any signed-in user could grow both tables without bound by looking up principals and
+  servers. The hourly job, its `s2s.peer_forgotten` audit line and the
+  `rim_remote_identities_purged_total` and `rim_peer_pins_forgotten_total` counters are in
+  `docs/operations/background-jobs.md` (`docs/specs/server-to-server-v1.md`, "Pinning a peer").
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

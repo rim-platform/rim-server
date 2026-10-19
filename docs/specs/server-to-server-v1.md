@@ -155,6 +155,28 @@ A first pin keeps the key before the head but gives it no grace: the grace count
 extension this server saw. A refetch whose inception hashes to another id (the origin now serves
 another server) fails and keeps the pin; only a log from the same inception can fork it.
 
+**Idle pins.** An hourly job forgets an `active` pin that was neither fetched nor sent a request
+for 90 days, that nothing here refers to (a remote user's home relay, a remote user's card
+listing its origin, a delegation, a subscription, an outbox row, an inbound cursor, a queued
+envelope, a DM request, a revocation fan-out, a conversation's predecessor, a cached identity it
+served) and that `RIM_S2S_DENIED_PEERS`, `RIM_HOST_ALLOWED_RELAYS` and `RIM_DM_PARTNERS` do not
+name. Its row and log are deleted and its head stays in `peer_server_forgotten`: the seq and the
+exact payload of the head entry. The next pin of that id must hold that entry at that seq; each
+entry names the hash of the one before it, so such a log extends the forgotten one. A log that
+holds another entry there is pinned `forked` (ERROR log, audit `s2s.peer_forked`), and one that
+stops short of it is not pinned and the head stays, as a refetch keeps a pin for a prefix.
+Deleting the head as well would let the next contact pin any history from the same inception,
+such as one a server key stolen before a `signer: recovery` rotation can sign. `forked` and
+`blocked` pins are never forgotten, and `rim_server peer reset` deletes a pin and a forgotten head
+alike. Audit `s2s.peer_forgotten`.
+
+**Pins per origin.** One origin may hold pins of several server ids: when its operator starts
+over with a new identity (server key and recovery key lost, or the key file moved away), the
+origin serves a new id and the earlier id's pin stays, since a refetch that finds another id
+keeps it. An origin holds at most 4 pins, whatever their status. A fifth id there is not pinned
+(`CONFLICT` from `remoteServer`, an unknown peer to a request) until `rim_server peer reset` or
+the idle purge removes one. A lookup by origin takes the `active` pin fetched last.
+
 ### Host keys in clients
 
 - **From an invite** (`rim-invite:1:<hostServerId>:<hostKeyHash>:<inviteToken>:<hostOrigin>`): the
@@ -1070,11 +1092,18 @@ CREATE TABLE relay_abuse_report (id uuid PRIMARY KEY,
     subject_principal_id text NULL, subject_server_id text NULL,
     request_id uuid NULL REFERENCES relay_dm_request ON DELETE SET NULL, reason text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz NULL);
+
+-- add_peer_pin_forgotten
+CREATE TABLE peer_server_forgotten (server_id text PRIMARY KEY, origin text NOT NULL,
+    head_seq integer NOT NULL CHECK (head_seq >= 0), head_payload text NOT NULL,
+    forgotten_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX idx_remote_identity_cache_fetched ON remote_identity_cache (fetched_at);
 ```
 
 A per-minute cleanup (like the key challenge cleanup) deletes expired nonces, `device_request_seen`
 rows, relay items and orphaned envelopes, expired requests and outbox rows older than 7 days, and
-ends expired delegations. Code follows the layers: repository traits in `rim_core` (`s2s`, `relay`),
+ends expired delegations. An hourly purge deletes cached identities fetched more than 30 days ago,
+except those of remote users held here, and forgets idle pins ("Pinning a peer"). Code follows the layers: repository traits in `rim_core` (`s2s`, `relay`),
 `S2sService`, `RelayService` and `HostService` traits in `rim_services`, implementations in
 `rim_infra_services`, handlers in `rim_server` (the `s2s` module and `remote_handlers.rs`), wired in
 `app.rs`.
@@ -1164,7 +1193,8 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender and 1,000 per delivering host per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
 | Stranger claims | Last-resort packages only; 20 per claimer per day |
-| Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h |
+| Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h, rows kept 30 days (a remote user's while the user exists) |
+| Peer pins | 4 per origin; an unreferenced `active` pin forgotten after 90 idle days, its head kept |
 | Remote user's direct session | 24 h |
 
 Rate limits are the in-memory per-node limiters; nonces, `seq` windows and cursors are in the
@@ -1175,7 +1205,8 @@ database, so correctness never depends on one node. Audit (ids only):
 `relay.principal_blocked` (`scope` `user` for `blockPrincipal`, `server` for the operator's),
 `relay.principal_unblocked`, `relay.blocked_principal_refused`, `relay.dm_request_reported`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `relay.registration_pow`,
-`server_key.created`, `server_key.rotated`, `server_key.recovered`, `s2s.peer_reset`. Events with an acting user and workspace go to `command_audit_log`; the server
+`server_key.created`, `server_key.rotated`, `server_key.recovered`, `s2s.peer_reset`,
+`s2s.peer_forgotten`. Events with an acting user and workspace go to `command_audit_log`; the server
 key and peer events have neither (its columns are `NOT NULL`), so they go to the audit log stream
 (`target = "audit"`, as key logins do). Logs carry server, principal and row ids, never payloads. Metrics: outbox depth and oldest age per peer, deliver failures, relay
 queue bytes, S2S responses by status, signature failures by reason.

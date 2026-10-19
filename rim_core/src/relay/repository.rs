@@ -202,6 +202,10 @@ pub trait RelayRepository: Send + Sync {
         served_by: &str,
         identity: &str,
     ) -> RepoResult<()>;
+
+    /// Delete the cached identities fetched before `fetched_before`, except those of principals
+    /// held here as remote users. Returns how many were deleted.
+    async fn purge_identities(&self, fetched_before: DateTime<Utc>) -> RepoResult<u64>;
 }
 
 /// A relay's side of workspaces hosted elsewhere: its users' subscriptions, and revocations of

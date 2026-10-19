@@ -880,4 +880,14 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await?;
         Ok(())
     }
+
+    async fn purge_identities(&self, fetched_before: DateTime<Utc>) -> RepoResult<u64> {
+        self.execute(
+            r#"DELETE FROM remote_identity_cache c WHERE c.fetched_at < $1
+               AND NOT EXISTS (SELECT 1 FROM "user" u
+                               WHERE u.principal_id = c.principal_id AND u.kind = 'remote')"#,
+            vec![fetched_before.into()],
+        )
+        .await
+    }
 }

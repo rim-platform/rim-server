@@ -44,7 +44,8 @@ use support::unknown_id;
 
 /// Everything these tests touch, emptied on both databases first.
 const RESET: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor, peer_key_log_entry, \
-     peer_server, s2s_nonce, s2s_outbox, s2s_peer_delivery, s2s_peer_inbound, relay_envelope, \
+     peer_server, peer_server_forgotten, s2s_nonce, s2s_outbox, s2s_peer_delivery, s2s_peer_inbound, \
+     relay_envelope, \
      remote_identity_cache, key_challenge, host_delegation, relay_subscription, \
      relay_revocation_fanout, \"user\", server RESTART IDENTITY CASCADE";
 

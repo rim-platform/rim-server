@@ -275,6 +275,13 @@ lifts the principal's block and its email's, not the sessions or invites that en
 forked peer stays forked; a peer never pinned is refused with `RIM_S2S_DENIED_PEERS` instead.
 Audited as `s2s.peer_blocked` and `s2s.peer_unblocked`.
 
+**Idle pins and cached identities.** An hourly job forgets the pin of a server that was neither
+fetched nor sent a request for 90 days when nothing here refers to it and the configuration does
+not name it, keeping its key-log head: its next contact pins it again only with a log that
+extends that head (`docs/specs/server-to-server-v1.md`, "Pinning a peer"). Forked and blocked
+pins stay. The same job deletes cached identities of people on other servers 30 days after they
+were fetched, except those of remote users held here. One origin holds at most 4 pins.
+
 **Abuse reports.** `reportDmRequest` in the app and reports that come by mail (`rim_server
 abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list` and
 `abuse-reports resolve` work through.
@@ -283,9 +290,12 @@ abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list`
 
 - `relayInfo { serverId roles directSpaceId }` (no session needed) names the direct space.
 - `remoteServer(origin)` pins another server through the relay and returns its discovery
-  document to verify and pin in the app.
+  document to verify and pin in the app. It fails `CONFLICT` when 4 other servers are pinned at
+  that origin.
 - `remoteIdentity(principalId, relayUrl)` returns a principal's key log, devices and card, from
-  this server or fetched from `relayUrl` and cached for 24 hours. Verify the log against the
+  this server or fetched from `relayUrl` and cached for 24 hours. Without `relayUrl` it refetches
+  from the relay that served the cached copy, which is deleted 30 days after the fetch (kept for
+  remote users held here); after that `relayUrl` is needed again. Verify the log against the
   principal id, each certificate against the log and the card against the head.
 - `contacts`, `addContact(principalId, relayUrls)`, `removeContact(principalId)`: the contact list
   the request inbox filters by. Relay URLs are 1 to 8 of 1 to 256 bytes of printable ASCII
