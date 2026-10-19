@@ -41,6 +41,16 @@ pub struct ForwardRequest {
     pub body: Vec<u8>,
 }
 
+/// What a host did with an identity a relay pushed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityPush {
+    /// The relay may speak for the principal; `true` when the identity was stored, `false` when
+    /// the principal is not held here as remote or the relay served an older view.
+    Applied(bool),
+    /// The relay does not speak for the principal and nothing was stored: `403 not_delegated`.
+    NotDelegated,
+}
+
 /// The user and device a forwarded request runs as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardAuth {

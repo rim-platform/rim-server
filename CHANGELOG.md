@@ -320,5 +320,16 @@ tag `v<version>`, the version every crate in the workspace carries.
   rotations and recoveries are now pushed to hosts like device and card changes
   (`server-to-server-v1.md` "Profile cards and contacts", `key-identity-v1.md` "Rotation and
   recovery").
+- A host applies an identity pushed for someone from another server (`POST /s2s/v1/identity`)
+  only from a relay that speaks for them: one their profile card lists (or a newer pushed card
+  lists), their home relay while they have no card, or one holding a delegation of one of
+  their devices. Any other server gets `403 not_delegated` and nothing changes. Before, any
+  peer could push a copy of someone's public identity and switch their devices' encryption
+  activity on or off or become the relay the host refreshed them from. The relay a local user
+  names, or one presenting a delegation or revocation for an unknown device, likewise only
+  updates a known person when it speaks for them; refreshes go to the relays the person's card
+  lists and then their home relay. `RIM_HOST_ALLOWED_RELAYS` now covers identity pushes too.
+  `docs/specs/server-to-server-v1.md` ("Profile cards and contacts (7.4a)", "Remote users on a
+  host", the threat model) states the rule.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

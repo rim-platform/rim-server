@@ -14,6 +14,7 @@ use rim_s2s::http_sig::{
 };
 use rim_services::ServiceError;
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::host::dto::IdentityPush;
 use rim_services::relay::dto::{DeliverRequest, IdentityDocument, PeerClaimRequest};
 use rim_services::remote_workspace::dto::{
     CancelRequest, JoinChallengeRequest, JoinRequest, PresenceRequest, RevocationAnswer,
@@ -383,8 +384,17 @@ async fn dispatch(
                 Ok(document) => document,
                 Err(reply) => return reply,
             };
-            match state.host.apply_identity(peer, document).await {
-                Ok(applied) => Reply::ok(json!({ "applied": applied })),
+            match state
+                .host
+                .apply_identity(peer, verified.peer.origin.clone(), document)
+                .await
+            {
+                Ok(IdentityPush::Applied(applied)) => Reply::ok(json!({ "applied": applied })),
+                Ok(IdentityPush::NotDelegated) => Reply::error(
+                    StatusCode::FORBIDDEN,
+                    "not_delegated",
+                    "the relay does not speak for this principal",
+                ),
                 Err(e) => Reply::from_service_error(e),
             }
         }

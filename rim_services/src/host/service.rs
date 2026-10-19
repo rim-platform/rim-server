@@ -7,8 +7,8 @@ use rim_core::user::model::UserId;
 use uuid::Uuid;
 
 use crate::host::dto::{
-    ConversationPredecessorDto, ForwardOutcome, ForwardRequest, HostCleanup, RemoteClaim,
-    RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
+    ConversationPredecessorDto, ForwardOutcome, ForwardRequest, HostCleanup, IdentityPush,
+    RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
 };
 use crate::relay::dto::{IdentityDocument, OutboxPage};
 use crate::{Actor, ServiceResult};
@@ -51,21 +51,30 @@ pub trait HostService: Send + Sync {
         conversation_id: ConversationId,
     ) -> ServiceResult<Option<ConversationPredecessorDto>>;
 
-    /// Apply an identity a relay pushed, for a principal held here as remote. Returns whether
-    /// it was applied.
+    /// Apply an identity the relay `peer_server_id` at `peer_origin` pushed, for a principal
+    /// held here as remote. The relay must speak for the principal: their newest stored card
+    /// lists its origin, the pushed card (newer than the stored one) lists it, it is their home
+    /// relay while no card is stored, or it holds an active delegation of one of their devices;
+    /// otherwise nothing is stored and the answer is `NotDelegated`.
+    ///
+    /// # Errors
+    /// `Validation` when the document does not verify or its key log does not extend the
+    /// stored one.
     async fn apply_identity(
         &self,
         peer_server_id: String,
+        peer_origin: String,
         document: IdentityDocument,
-    ) -> ServiceResult<bool>;
+    ) -> ServiceResult<IdentityPush>;
 
-    /// Refetch remote principals whose stored identity is over an hour old, from their home
-    /// relay. Failures keep the stored copy.
+    /// Refetch remote principals whose stored identity is over an hour old, from the relays
+    /// their newest card lists and then their home relay. Failures keep the stored copy.
     async fn refresh_remote(&self, principal_ids: Vec<String>) -> ServiceResult<()>;
 
     /// Fetch a principal held here as remote from `from_relay`, or else from the relays their
-    /// newest card lists and then their home relay, and store what verifies. Returns whether
-    /// an identity was stored; a relay that is down keeps the stored copy.
+    /// newest card lists and then their home relay, and store what verifies. What `from_relay`
+    /// serves is stored only when it speaks for the principal, as for `apply_identity`. Returns
+    /// whether an identity was stored; a relay that is down keeps the stored copy.
     async fn refresh_identity(
         &self,
         principal_id: String,
