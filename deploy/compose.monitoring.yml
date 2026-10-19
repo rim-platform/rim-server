@@ -1,0 +1,57 @@
+# =============================================================================
+# RIM — monitoring: compose.yml (or a relay) with rim-server's metrics listener
+# on and Grafana Alloy collecting the server's metrics, its readiness and the
+# host's metrics every 15 seconds, then remote-writing them to Grafana Cloud or
+# any Prometheus remote-write endpoint.
+#
+#   docker compose -f deploy/compose.yml -f deploy/compose.monitoring.yml up -d
+#   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml \
+#     -f deploy/compose.monitoring.yml up -d
+#
+# GRAFANA_CLOUD_METRICS_URL, GRAFANA_CLOUD_METRICS_USER and
+# GRAFANA_CLOUD_METRICS_TOKEN come from deploy/.env. monitoring.alloy is the
+# collector's configuration. Nothing is published: the metrics port stays on
+# the internal network and Alloy only connects out.
+# =============================================================================
+
+services:
+  rim:
+    environment:
+      # Metrics on the internal network only; never publish the port or route it through Caddy.
+      RIM_METRICS_ADDR: 0.0.0.0:9090
+
+  alloy:
+    image: grafana/alloy:v1.21.0
+    # The image's own unprivileged user, which owns the storage directory.
+    user: alloy
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      # Alloy's own UI and API stay inside the container.
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --disable-reporting
+      - /etc/alloy/config.alloy
+    environment:
+      GRAFANA_CLOUD_METRICS_URL: ${GRAFANA_CLOUD_METRICS_URL:?set GRAFANA_CLOUD_METRICS_URL in deploy/.env}
+      GRAFANA_CLOUD_METRICS_USER: ${GRAFANA_CLOUD_METRICS_USER:?set GRAFANA_CLOUD_METRICS_USER in deploy/.env}
+      GRAFANA_CLOUD_METRICS_TOKEN: ${GRAFANA_CLOUD_METRICS_TOKEN:?set GRAFANA_CLOUD_METRICS_TOKEN in deploy/.env}
+      # The `instance` of the host's metrics.
+      RIM_DOMAIN: ${RIM_DOMAIN:?set RIM_DOMAIN in deploy/.env}
+    volumes:
+      - ./monitoring.alloy:/etc/alloy/config.alloy:ro
+      # Samples not yet accepted by the endpoint, kept across restarts.
+      - alloy_data:/var/lib/alloy/data
+      # The host, read-only, for the host metrics.
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    # `internal` reaches rim-server, `egress` the remote-write endpoint.
+    networks: [internal, egress]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  alloy_data:

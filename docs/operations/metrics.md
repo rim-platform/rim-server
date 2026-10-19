@@ -12,7 +12,8 @@ listener of its own. The API port never serves them.
 On a host, `127.0.0.1:9090` keeps the endpoint on the machine; run Prometheus there or scrape it
 through an SSH tunnel. In a container, `127.0.0.1` is the container itself, so bind
 `0.0.0.0:9090` and do not publish the port: Prometheus reaches it over the compose network.
-`deploy/compose.yml` has the line commented out in the `rim` service.
+`deploy/compose.yml` has the line commented out in the `rim` service;
+`deploy/compose.monitoring.yml` sets it (below).
 
 The endpoint has no authentication. Keep it on an internal network, and never route it through
 Caddy or any other public reverse proxy: it shows request rates, limiter names and queue sizes
@@ -26,6 +27,27 @@ scrape_configs:
     static_configs:
       - targets: ["rim:9090"]
 ```
+
+## Collecting them with Grafana Alloy
+
+`deploy/compose.monitoring.yml`, on top of `deploy/compose.yml` (and `compose.relay.yml` for a
+relay), sets `RIM_METRICS_ADDR=0.0.0.0:9090` and adds a Grafana Alloy collector configured by
+`deploy/monitoring.alloy`. Alloy sits on the internal network next to rim-server, publishes no
+port, and every 15 seconds collects:
+
+| Job | What |
+|---|---|
+| `rim` | rim-server's `/metrics` on `rim:9090`, with `up`. |
+| `rim-readyz` | `probe_success` of a GET of `http://rim:8080/readyz`: a `200` passes, a redirect fails. `instance` is that URL. |
+| `node` | The host's CPU, memory, filesystem and network metrics (`node_*`), read from `/proc`, `/sys` and `/` mounted read-only. `instance` is `RIM_DOMAIN`. |
+| `alloy` | The collector's own metrics, such as its remote-write queue. |
+
+It remote-writes them to `GRAFANA_CLOUD_METRICS_URL` with `GRAFANA_CLOUD_METRICS_USER` and
+`GRAFANA_CLOUD_METRICS_TOKEN` from `deploy/.env` (`deploy/.env.example` says where Grafana Cloud
+shows them); any Prometheus remote-write endpoint with basic authentication works the same way.
+Samples the endpoint does not accept are kept in Alloy's volume and retried for up to two
+hours. The dashboards and alert rules that read these series are in the
+[rim-monitoring](https://github.com/rim-platform/rim-monitoring) repository.
 
 ## The metrics
 

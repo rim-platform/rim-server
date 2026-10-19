@@ -1,0 +1,138 @@
+// Grafana Alloy configuration for deploy/compose.monitoring.yml: scrapes rim-server's metrics,
+// probes its readiness and reads the host's metrics, every 15 seconds, and remote-writes them
+// to GRAFANA_CLOUD_METRICS_URL.
+
+// rim-server's metrics listener (RIM_METRICS_ADDR) on the internal network.
+prometheus.scrape "rim" {
+	targets         = [{"__address__" = "rim:9090"}]
+	job_name        = "rim"
+	scrape_interval = "15s"
+	scrape_timeout  = "10s"
+	forward_to      = [prometheus.remote_write.cloud.receiver]
+}
+
+// Readiness: GET /readyz on the API port passes on a 200 only, without following redirects.
+prometheus.exporter.blackbox "readyz" {
+	config = `
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      follow_redirects: false
+      valid_status_codes: [200]
+`
+
+	target {
+		name    = "rim-readyz"
+		address = "http://rim:8080/readyz"
+		module  = "http_2xx"
+	}
+}
+
+// The probe's instance is the URL it probes.
+discovery.relabel "readyz" {
+	targets = prometheus.exporter.blackbox.readyz.targets
+
+	rule {
+		source_labels = ["__param_target"]
+		target_label  = "instance"
+	}
+
+	rule {
+		target_label = "job"
+		replacement  = "rim-readyz"
+	}
+}
+
+prometheus.scrape "readyz" {
+	targets         = discovery.relabel.readyz.output
+	job_name        = "rim-readyz"
+	scrape_interval = "15s"
+	scrape_timeout  = "10s"
+	forward_to      = [prometheus.remote_write.cloud.receiver]
+}
+
+// Host metrics, read from the host's /proc, /sys and / mounted read-only under /host.
+prometheus.exporter.unix "host" {
+	procfs_path = "/host/proc"
+	sysfs_path  = "/host/sys"
+	rootfs_path = "/host/root"
+
+	// Disk names and properties for the diskstats collector.
+	udev_data_path = "/host/root/run/udev/data"
+
+	filesystem {
+		mount_points_exclude = "^/(dev|proc|run/credentials/.+|sys|var/lib/docker/.+|var/lib/containers/storage/.+)($|/)"
+	}
+}
+
+// The host's instance is RIM_DOMAIN, which stays the same when the container is recreated.
+discovery.relabel "node" {
+	targets = prometheus.exporter.unix.host.targets
+
+	rule {
+		target_label = "job"
+		replacement  = "node"
+	}
+
+	rule {
+		target_label = "instance"
+		replacement  = sys.env("RIM_DOMAIN")
+	}
+}
+
+prometheus.scrape "node" {
+	targets         = discovery.relabel.node.output
+	job_name        = "node"
+	scrape_interval = "15s"
+	scrape_timeout  = "10s"
+	forward_to      = [prometheus.remote_write.cloud.receiver]
+}
+
+// Alloy's own metrics: scrapes, remote-write queue and WAL.
+prometheus.exporter.self "alloy" { }
+
+discovery.relabel "alloy" {
+	targets = prometheus.exporter.self.alloy.targets
+
+	rule {
+		target_label = "job"
+		replacement  = "alloy"
+	}
+}
+
+prometheus.scrape "alloy" {
+	targets         = discovery.relabel.alloy.output
+	job_name        = "alloy"
+	scrape_interval = "15s"
+	scrape_timeout  = "10s"
+	forward_to      = [prometheus.remote_write.cloud.receiver]
+}
+
+prometheus.remote_write "cloud" {
+	endpoint {
+		url = sys.env("GRAFANA_CLOUD_METRICS_URL")
+
+		basic_auth {
+			username = sys.env("GRAFANA_CLOUD_METRICS_USER")
+			password = sys.env("GRAFANA_CLOUD_METRICS_TOKEN")
+		}
+
+		queue_config {
+			capacity             = 2500
+			max_shards           = 5
+			max_samples_per_send = 500
+			sample_age_limit     = "2h"
+		}
+	}
+
+	// Samples the endpoint has not accepted are kept and retried for up to two hours.
+	wal {
+		truncate_frequency = "15m"
+		min_keepalive_time = "5m"
+		max_keepalive_time = "2h"
+	}
+}
