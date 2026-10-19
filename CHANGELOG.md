@@ -23,6 +23,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Production monitoring metrics for local accounts and activity, committed plaintext and
+  encrypted messages, GraphQL operations, WebSocket connections and pending device delivery.
+  Relay delivery metrics distinguish device acknowledgements from human read receipts and
+  stored queue rows. Adds `user_activity` for persistent, throttled activity tracking.
+  `docs/operations/metrics.md` describes their scope and sampling.
 - Who may start a DM, in three layers where each only tightens the one above ("Who May Start A
   DM" in `docs/messaging.md`). The operator sets `RIM_DM_INBOUND` (`open`, `requests` by default,
   `partners`, `none`), `RIM_DM_OUTBOUND` (`allowed` by default, `partners`, `none`) and
