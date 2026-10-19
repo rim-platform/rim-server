@@ -269,8 +269,10 @@ production's. Record each drill: **FILL** where.
   `https://<domain>/.well-known/rim-server` and the web client's `/`.
 - **Metrics.** Uncomment `RIM_METRICS_ADDR: 0.0.0.0:9090` in the `rim` service and run
   Prometheus in a container on the compose project's `internal` network, scraping `rim:9090`.
-  Never publish the port or route it through Caddy. `docs/operations/metrics.md` lists the
-  metrics and what to alert on.
+  Never publish the port or route it through Caddy. Or add `-f deploy/compose.monitoring.yml`:
+  it turns the listener on and forwards the metrics, a `/readyz` probe and the host's metrics
+  to Grafana Cloud with Grafana Alloy. `docs/operations/metrics.md` lists the metrics, what
+  the collector sends and what to alert on.
 - **Logs.** JSON on stdout: `dc logs --since 1h rim`. Audit events (`"target":"audit"`) also go
   to `/data/audit.log`; `docs/operations/audit-retention.md` covers its rotation and
   `RIM_AUDIT_RETENTION_DAYS` for the audit table.

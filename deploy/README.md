@@ -99,6 +99,25 @@ The operator's commands (`/app/rim-server` inside the `rim` container: invites t
 proof-of-work, principal and peer blocks, abuse reports, key rotation) are listed in the runbook,
 "Command reference".
 
+## Metrics to Grafana Cloud
+
+`compose.monitoring.yml` on top turns on the server's metrics listener and adds a Grafana Alloy
+collector (`monitoring.alloy`): every 15 seconds it scrapes the server's metrics (job `rim`),
+probes `/readyz` (job `rim-readyz`) and reads the host's CPU, memory and filesystems (job
+`node`), and remote-writes them to Grafana Cloud. Nothing new is published; the collector only
+connects out. Add the three settings `deploy/.env.example` describes under "Monitoring" to
+`deploy/.env`, then put the overlay in the alias:
+
+```sh
+alias dc='docker compose -f deploy/compose.yml -f deploy/compose.relay.yml -f deploy/compose.monitoring.yml'
+dc up -d
+dc logs alloy          # no "level=error" once it scrapes and sends
+```
+
+The dashboards and alert rules that read these series are in the
+[rim-monitoring](https://github.com/rim-platform/rim-monitoring) repository;
+`docs/operations/metrics.md` lists the metrics.
+
 ## Another proxy
 
 Caddy is an example. Any TLS proxy works if it:

@@ -23,6 +23,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `deploy/compose.monitoring.yml`, an opt-in overlay that turns on the metrics listener and
+  adds a Grafana Alloy collector: every 15 seconds it scrapes rim-server's metrics, probes
+  `/readyz` and reads the host's metrics, and remote-writes them to Grafana Cloud with the new
+  `GRAFANA_CLOUD_METRICS_URL`, `GRAFANA_CLOUD_METRICS_USER` and `GRAFANA_CLOUD_METRICS_TOKEN`
+  in `deploy/.env`. "Collecting them with Grafana Alloy" in `docs/operations/metrics.md`
+  describes what it sends.
 - Production monitoring metrics for local accounts and activity, committed plaintext and
   encrypted messages, GraphQL operations, WebSocket connections and pending device delivery.
   Relay delivery metrics distinguish device acknowledgements from human read receipts and
