@@ -675,6 +675,15 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
+    async fn accepted_at_host(&self, user_id: UserId, host_server_id: &str) -> RepoResult<bool> {
+        self.flag(
+            "SELECT EXISTS (SELECT 1 FROM relay_dm_request \
+             WHERE user_id = $1 AND host_server_id = $2 AND status = 'accepted') AS flag",
+            vec![uuid(user_id), host_server_id.into()],
+        )
+        .await
+    }
+
     async fn ignore_pending_from(
         &self,
         user_id: UserId,

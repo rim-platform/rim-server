@@ -1,6 +1,7 @@
 //! Two RIM servers, one hosting a workspace and one the relay of a person who joins it: the join
 //! through the relay with channel traffic both ways and every host event checked against the
-//! host's key, presence, a kick; a delegation expiring and renewed; the host's allow-list; a
+//! host's key, presence, a kick; workspace items queued for subscribers only; a delegation
+//! expiring and renewed; the host's allow-list; a
 //! device revocation acknowledged through the relay and brought directly to a host the relay
 //! cannot reach; a recovery at the relay applied by the host, ending the old devices' direct
 //! sessions and delegations there; the direct sign-in of a remote member with its day-long
@@ -31,9 +32,11 @@ use rim_identity::{
     Delegation, KeyState, PublicKey, Purpose, SignedStatement, StatementVersion,
     UnverifiedRevocation, device_request_payload, sign_with_context,
 };
-use rim_s2s::host::{verify_host_event, verify_host_response};
+use rim_s2s::host::{HostEventFields, sign_host_event, verify_host_event, verify_host_response};
 use rim_s2s::revocation::verify_revocation_ack;
 use rim_server::config::RIMConfig;
+use rim_services::relay::dto::{DeliverItem, SignedJson};
+use rim_services::relay::service::RelayService;
 use rim_services::remote_workspace::service::{WorkspaceHostService, WorkspaceRelayService};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
@@ -822,6 +825,88 @@ async fn a_remote_member_joins_through_the_relay_and_channel_traffic_flows_both_
         .await;
     assert_eq!(refused.status, 403);
     assert_eq!(refused.body["error"], "not_delegated");
+
+    h.stop().await;
+    r.stop().await;
+}
+
+/// An item `host` signs for `to` with outbox id `id`: a `w` event of `workspace_id`.
+fn workspace_item(host: &Node, id: i64, workspace_id: &str, to: &Person) -> DeliverItem {
+    let identity = host.identity();
+    let server_id = host.id();
+    let issued_at = rim_s2s::timestamp(Utc::now());
+    let event = json!({
+        "type": "WorkspacePluginChanged",
+        "workspace_id": workspace_id,
+        "plugin_id": format!("plugin-{id}"),
+        "change": "added",
+    })
+    .to_string();
+    let statement = sign_host_event(
+        &identity.signer,
+        &HostEventFields {
+            host: &server_id,
+            key_seq: identity.state.seq,
+            workspace_id,
+            stream: "w",
+            seq: Some(u64::try_from(id).expect("id")),
+            event_json: &event,
+            issued_at: &issued_at,
+        },
+    );
+    DeliverItem {
+        id: id.to_string(),
+        envelope: SignedJson {
+            payload: statement.payload,
+            signature: statement.signature,
+        },
+        recipients: vec![to.principal()],
+        device_id: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workspace_items_are_queued_for_subscribers_and_refused_otherwise() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let rita = sign_up(&r, "rita", 2).await;
+    let (ws, _, invite) = workspace(&h, &hannah).await;
+    rita.join(&h, &r, &ws, Some(&invite)).await;
+
+    // Ids above anything the host's own sender delivered, so neither is skipped as seen.
+    let elsewhere = unknown_id();
+    let answer = r
+        .s2s
+        .relay
+        .deliver(
+            h.id(),
+            vec![
+                workspace_item(&h, 1_000_000, &ws, &rita),
+                workspace_item(&h, 1_000_001, &elsewhere, &rita),
+            ],
+        )
+        .await
+        .expect("delivered");
+    assert_eq!(answer.acked_through, "1000001");
+    assert_eq!(answer.refused.len(), 1, "{:?}", answer.refused);
+    assert_eq!(answer.refused[0].id, "1000001");
+    assert_eq!(answer.refused[0].reason, "not_subscribed");
+    assert_eq!(answer.refused[0].principal_id, Some(rita.principal()));
+
+    let subscribed = rita
+        .item_of(&h, "WorkspacePluginChanged", |i| {
+            i.event["plugin_id"] == "plugin-1000000"
+        })
+        .await;
+    assert_eq!(subscribed.workspace_id, ws);
+    assert_eq!(subscribed.stream, "w");
+    assert!(
+        rita.items(&h)
+            .await
+            .iter()
+            .all(|i| i.workspace_id != elsewhere),
+        "nothing is queued for a workspace Rita holds no subscription to"
+    );
 
     h.stop().await;
     r.stop().await;

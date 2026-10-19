@@ -61,6 +61,8 @@ use crate::repos::AppRepos;
 pub(crate) const MAX_DELIVER_ITEMS: usize = 256;
 /// Most bytes one delivery or outbox page carries.
 pub(crate) const MAX_DELIVER_BYTES: i64 = 8 * 1024 * 1024;
+/// Most bytes of items queued from one peer per day, across all recipients, by default.
+pub const QUEUED_BYTES_PER_PEER_PER_DAY: u64 = 2 * 1024 * 1024 * 1024;
 /// Most relay URLs a contact carries.
 const MAX_CONTACT_RELAYS: usize = 8;
 /// Longest relay URL, in bytes.
@@ -105,6 +107,10 @@ pub struct RelaySettings {
     pub retention: Duration,
     /// Forwarded requests and DM requests per user.
     pub quotas: Quotas,
+    /// Bytes of items queued from one peer per day, across all recipients; past it the peer's
+    /// items are refused (`limited`). Items of a workspace the recipient subscribed to are not
+    /// counted.
+    pub queued_bytes_per_peer_per_day: u64,
 }
 
 pub struct DefaultRelayService {
@@ -120,6 +126,8 @@ pub struct DefaultRelayService {
     forwards_per_device: RegistrationRateLimiter,
     /// Requests each user sends through `/api/remote/…` per day.
     forwards_per_user: DailyCounter,
+    /// Bytes of items queued from each peer per day, by server id.
+    queued_per_peer: DailyCounter,
     /// The operator's DM settings.
     dm_policy: DmOperatorPolicy,
 }
@@ -277,7 +285,10 @@ impl DefaultRelayService {
                 60,
                 settings.quotas.forwards_per_device_per_min,
             ),
-            forwards_per_user: DailyCounter::per_day(settings.quotas.forwards_per_user_per_day),
+            forwards_per_user: DailyCounter::per_day(u64::from(
+                settings.quotas.forwards_per_user_per_day,
+            )),
+            queued_per_peer: DailyCounter::per_day(settings.queued_bytes_per_peer_per_day),
             dm_policy: DmOperatorPolicy::default(),
         }
     }
@@ -552,7 +563,15 @@ impl DefaultRelayService {
             None
         } else {
             match self
-                .inbox_filing(repos, peer_server_id, read, user_id, size, now, notices)
+                .inbox_filing(
+                    repos,
+                    peer_server_id,
+                    read,
+                    (user_id, principal_id),
+                    size,
+                    now,
+                    notices,
+                )
                 .await?
             {
                 Filed::Queue(request_id) => request_id,
@@ -589,26 +608,47 @@ impl DefaultRelayService {
                 expires_at: now + self.settings.retention,
             })
             .await?;
+        if !subscribed && !read.local {
+            self.queued_per_peer
+                .add(peer_server_id, now, u64::try_from(size).unwrap_or(0));
+        }
         notices.push(RelayNotice::Items { user_id });
         Ok(None)
     }
 
-    /// Where the request inbox files an item of `size` bytes for one recipient: the queue,
-    /// possibly held by a request, or nowhere, with any refusal.
+    /// Where the request inbox files an item of `size` bytes for one recipient, given by user
+    /// and principal id: the queue, possibly held by a request, or nowhere, with any refusal.
     #[allow(clippy::too_many_arguments)]
     async fn inbox_filing(
         &self,
         repos: &RelayRepos,
         peer_server_id: &str,
         read: &ReadEnvelope,
-        user_id: UserId,
+        (user_id, principal_id): (UserId, &str),
         size: i32,
         now: DateTime<Utc>,
         notices: &mut Vec<RelayNotice>,
     ) -> ServiceResult<Filed> {
+        // Items without a conversation reach a direct space's members on `e` and on their own
+        // `u:` stream only.
+        let direct_stream = read.conversation_id.is_none()
+            && (read.stream == "e" || read.stream.strip_prefix("u:") == Some(principal_id));
         let mut facts = InboxFacts {
             is_invite: read.invite.is_some(),
             conversation_scoped: read.conversation_id.is_some(),
+            direct_stream,
+            accepted_at_host: direct_stream
+                && !read.local
+                && repos
+                    .relay_repo
+                    .accepted_at_host(user_id, peer_server_id)
+                    .await?,
+            peer_bytes_left: if read.local {
+                i64::MAX
+            } else {
+                i64::try_from(self.queued_per_peer.remaining(peer_server_id, now))
+                    .unwrap_or(i64::MAX)
+            },
             blocked: false,
             policy: DmPolicy::Request,
             request: None,
@@ -701,6 +741,10 @@ impl DefaultRelayService {
         }
 
         let request_id = match file(&facts) {
+            Filing::PeerLimited => {
+                crate::metrics::rate_limited("relay_peer_bytes");
+                return Ok(Filed::Done(Some("limited")));
+            }
             Filing::Refuse(reason) => {
                 if reason == "limited" {
                     crate::metrics::rate_limited("dm_requests");

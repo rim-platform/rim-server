@@ -269,7 +269,9 @@ unblock each account a cascade blocked.
 ### A hostile peer
 
 Signs: one `peer_server_id` in many signature refusals, replays or rate limits; deliveries
-refused as `invalid_envelope`; reports naming one server.
+refused as `invalid_envelope`; `rim_rate_limit_rejections_total{limiter="relay_peer_bytes"}`
+climbing, one server past the 2 GiB of items a day this relay queues from a host; reports naming
+one server.
 
 1. `rim-relay peer block <serverId>`: refused both ways at once, its requests get
    `403 peer_not_allowed`, nothing is sent to it. Audited as `s2s.peer_blocked`.

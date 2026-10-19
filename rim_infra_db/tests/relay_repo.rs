@@ -475,6 +475,10 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
         .await
         .unwrap();
     assert_eq!(request.status, DmRequestStatus::Pending);
+    assert!(
+        !repo.accepted_at_host(user.id, HOST).await.unwrap(),
+        "a pending request is no accepted conversation"
+    );
     let err = repo
         .insert_request(new(DmRequestStatus::Pending, conversation))
         .await
@@ -494,6 +498,11 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
         accepted_at_once.decided_at,
         Some(accepted_at_once.created_at)
     );
+    assert!(
+        repo.accepted_at_host(user.id, HOST).await.unwrap(),
+        "an accepted conversation the host homes"
+    );
+    assert!(!repo.accepted_at_host(user.id, "rims1_other").await.unwrap());
     assert_eq!(repo.list_requests(user.id, None).await.unwrap().len(), 1);
     assert_eq!(
         repo.count_requests_from("rimp1_alice", Utc::now() - Duration::days(1))

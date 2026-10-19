@@ -179,7 +179,7 @@ impl DefaultHostService {
             e2ee_service: OnceLock::new(),
             session_revocations: OnceLock::new(),
             delegations: None,
-            dm_invites: DailyCounter::per_day(Quotas::default().dm_requests_per_day),
+            dm_invites: DailyCounter::per_day(u64::from(Quotas::default().dm_requests_per_day)),
             dm_requests_per_day: Quotas::default().dm_requests_per_day,
             limits: InstanceLimits::default(),
             clock: Clock::default(),
@@ -350,7 +350,7 @@ impl DefaultHostService {
     /// Apply the per-user quotas: invites to people on other servers, and DM requests filed
     /// here, per day.
     pub fn with_quotas(mut self, quotas: Quotas) -> Self {
-        self.dm_invites = DailyCounter::per_day(quotas.dm_requests_per_day);
+        self.dm_invites = DailyCounter::per_day(u64::from(quotas.dm_requests_per_day));
         self.dm_requests_per_day = quotas.dm_requests_per_day;
         self
     }

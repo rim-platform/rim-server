@@ -402,5 +402,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   limit from someone on this server, or from someone elsewhere through the forward path,
   skipped the request inbox and reached the recipient's conversations and notifications
   directly. Workspace DMs a member takes as requests meet the same limits.
+- A relay queues a host's items that name no conversation (workspace events, presence,
+  directory events) only for recipients subscribed to that workspace, or, for presence and a
+  recipient's own directory events from a host's direct space, for recipients who accepted a
+  conversation that host homes; it refuses the rest `not_subscribed`. It also queues at most
+  2 GiB of items from one host a day across all its users, items of subscribed workspaces not
+  counted, and refuses that host's further items `limited` (metric limiter
+  `relay_peer_bytes`). Before, any server could queue such items for every user of the relay,
+  for any workspace, up to each user's queue cap, and keep them there for the retention period
+  (`server-to-server-v1.md` "Outbox and deliver", "Limits and audit").
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master
