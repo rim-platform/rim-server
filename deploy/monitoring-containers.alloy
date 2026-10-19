@@ -1,0 +1,21 @@
+// Container metrics for deploy/compose.monitoring-containers.yml, loaded with monitoring.alloy
+// from the same directory: cAdvisor every 15 seconds as job `cadvisor`.
+
+prometheus.scrape "cadvisor" {
+	targets         = [{"__address__" = "cadvisor:8080"}]
+	job_name        = "cadvisor"
+	scrape_interval = "15s"
+	scrape_timeout  = "10s"
+	forward_to      = [prometheus.relabel.cadvisor.receiver]
+}
+
+// Keeps `up` and the CPU and memory series of compose services; everything else stays local.
+prometheus.relabel "cadvisor" {
+	forward_to = [prometheus.remote_write.cloud.receiver]
+
+	rule {
+		source_labels = ["__name__", "container_label_com_docker_compose_service"]
+		regex         = "up;|(container_cpu_usage_seconds_total|container_memory_working_set_bytes);.+"
+		action        = "keep"
+	}
+}

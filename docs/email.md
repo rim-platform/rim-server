@@ -73,13 +73,24 @@ exists and never fail because of an SMTP hiccup.
 1. The address is validated server-side (same format check used for signup emails) **before**
    the invite is persisted — a malformed address returns a validation error immediately, rather
    than silently dropping the invite email after the invite is already created.
-2. After the invite is created, the invite link is built and
+2. The email counts against `RIM_LIMIT_INVITES_PER_USER_PER_DAY` (default 50, 0 turns it
+   off), which caps the invite emails one user sends in 24 hours as well as the invites they
+   create, so an account cannot use the server to mail arbitrary addresses in bulk. Emails are
+   counted apart from the invites, so deleting a workspace, which deletes its invites, does not
+   give the count back; the count is held in memory and starts over when the server restarts.
+   Past the cap the whole `createInvite` is refused (`VALIDATION`, "this instance allows 50
+   invite emails per user per day") and no invite is created.
+3. After the invite is created, the invite link is built and
    `templates::invite(to, link)` is sent. **Send failure is non-fatal** — the invite is still
    created and the raw token is still returned in the response either way (the copy-paste flow
    keeps working even if email delivery fails).
 
 If `recipientEmail` is omitted, no email is sent and the raw token is the only way to share the
 invite.
+
+`recipientEmail` only says where to send the link. It does not bind the invite to that address:
+whoever holds the link can use it, whatever their address, until it is used up, expires or is
+revoked.
 
 ### Notification digest
 

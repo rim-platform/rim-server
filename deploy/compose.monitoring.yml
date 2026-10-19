@@ -9,9 +9,11 @@
 #     -f deploy/compose.monitoring.yml up -d
 #
 # GRAFANA_CLOUD_METRICS_URL, GRAFANA_CLOUD_METRICS_USER and
-# GRAFANA_CLOUD_METRICS_TOKEN come from deploy/.env. monitoring.alloy is the
-# collector's configuration. Nothing is published: the metrics port stays on
-# the internal network and Alloy only connects out.
+# GRAFANA_CLOUD_METRICS_TOKEN come from deploy/.env. Alloy loads every .alloy
+# file in /etc/alloy/config.d: monitoring.alloy here, and
+# monitoring-containers.alloy with compose.monitoring-containers.yml on top.
+# Nothing is published: the metrics port stays on the internal network and
+# Alloy only connects out.
 # =============================================================================
 
 services:
@@ -30,7 +32,7 @@ services:
       # Alloy's own UI and API stay inside the container.
       - --server.http.listen-addr=127.0.0.1:12345
       - --disable-reporting
-      - /etc/alloy/config.alloy
+      - /etc/alloy/config.d
     environment:
       GRAFANA_CLOUD_METRICS_URL: ${GRAFANA_CLOUD_METRICS_URL:?set GRAFANA_CLOUD_METRICS_URL in deploy/.env}
       GRAFANA_CLOUD_METRICS_USER: ${GRAFANA_CLOUD_METRICS_USER:?set GRAFANA_CLOUD_METRICS_USER in deploy/.env}
@@ -38,7 +40,7 @@ services:
       # The `instance` of the host's metrics.
       RIM_DOMAIN: ${RIM_DOMAIN:?set RIM_DOMAIN in deploy/.env}
     volumes:
-      - ./monitoring.alloy:/etc/alloy/config.alloy:ro
+      - ./monitoring.alloy:/etc/alloy/config.d/monitoring.alloy:ro
       # Samples not yet accepted by the endpoint, kept across restarts.
       - alloy_data:/var/lib/alloy/data
       # The host, read-only, for the host metrics.

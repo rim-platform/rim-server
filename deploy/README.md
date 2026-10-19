@@ -114,6 +114,21 @@ dc up -d
 dc logs alloy          # no "level=error" once it scrapes and sends
 ```
 
+Each compose service's CPU and memory use (job `cadvisor`) comes from a second overlay,
+`compose.monitoring-containers.yml`, on rootful Docker on Linux. It runs cAdvisor behind a
+Docker socket proxy and a containerd socket proxy that let it make only read-only calls;
+`docs/operations/metrics.md`, "Container metrics", says which and what they still expose. It
+covers the containerd image store, the default of a new Docker 29 install; on the older
+`overlay2` storage driver (`docker info --format '{{.Driver}}'`) add
+`compose.monitoring-containers-overlay2.yml` after it. Set `DOCKER_GID` in `deploy/.env` and
+add the overlay after `compose.monitoring.yml`:
+
+```sh
+echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> deploy/.env
+alias dc='docker compose -f deploy/compose.yml -f deploy/compose.relay.yml -f deploy/compose.monitoring.yml -f deploy/compose.monitoring-containers.yml'
+dc up -d
+```
+
 The dashboards and alert rules that read these series are in the
 [rim-monitoring](https://github.com/rim-platform/rim-monitoring) repository;
 `docs/operations/metrics.md` lists the metrics.

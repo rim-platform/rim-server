@@ -610,7 +610,8 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.request(
             &format!(
                 "UPDATE relay_dm_request SET status = $2, decided_at = now(), expires_at = $3 \
-                 WHERE id = $1 AND status = 'pending' RETURNING {REQUEST_COLUMNS}"
+                 WHERE id = $1 AND status = 'pending' AND expires_at > now() \
+                 RETURNING {REQUEST_COLUMNS}"
             ),
             vec![uuid(id), status.as_str().into(), expires_at.into()],
         )
@@ -671,6 +672,15 @@ impl RelayRepository for SeaOrmRelayRepository {
             "SELECT EXISTS (SELECT 1 FROM relay_dm_request \
              WHERE user_id = $1 AND from_principal_id = $2 AND status = 'accepted') AS flag",
             vec![uuid(user_id), principal_id.into()],
+        )
+        .await
+    }
+
+    async fn accepted_at_host(&self, user_id: UserId, host_server_id: &str) -> RepoResult<bool> {
+        self.flag(
+            "SELECT EXISTS (SELECT 1 FROM relay_dm_request \
+             WHERE user_id = $1 AND host_server_id = $2 AND status = 'accepted') AS flag",
+            vec![uuid(user_id), host_server_id.into()],
         )
         .await
     }

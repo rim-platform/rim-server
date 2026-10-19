@@ -116,8 +116,8 @@ pub trait RelayRepository: Send + Sync {
         since: DateTime<Utc>,
     ) -> RepoResult<i64>;
 
-    /// Move a pending request to `status`, expiring at `expires_at`. Returns `None` when the
-    /// request is not pending.
+    /// Move a pending, unexpired request to `status`, expiring at `expires_at`. Returns `None`
+    /// when the request is not pending or has expired.
     async fn decide_request(
         &self,
         id: DmRequestId,
@@ -141,6 +141,10 @@ pub trait RelayRepository: Send + Sync {
 
     /// Whether the user ever accepted a request from the principal.
     async fn accepted_from(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
+
+    /// Whether the user holds an accepted request for a conversation the host homes, so takes
+    /// part in its direct space.
+    async fn accepted_at_host(&self, user_id: UserId, host_server_id: &str) -> RepoResult<bool>;
 
     /// Ignore every pending request from a principal, deleting their held items but each
     /// request's invite. Returns how many requests.
