@@ -13,8 +13,9 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::e2ee::model::{
-        E2eeDevice, FrankingRevision, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
-        MlsKeyPackageId, MlsReaddRequest, MlsReaddRequestId, MlsWelcomeId,
+        E2eeDevice, FrankingRevision, MlsCommitId, MlsDevice, MlsGroup, MlsGroupDevice,
+        MlsKeyPackage, MlsKeyPackageId, MlsReaddRequest, MlsReaddRequestId, MlsWelcomeCursor,
+        MlsWelcomeId, NewMlsWelcome,
     };
     use rim_core::e2ee::repository::E2eeRepository;
     use rim_core::key_identity::model::{DeviceKey, DeviceKeyId};
@@ -36,12 +37,15 @@ mod tests {
     };
     use rim_services::e2ee::command::{
         AckMlsWelcomesCmd, ClaimMlsKeyPackagesCmd, GetMlsGroupQuery, ListMlsCommitsQuery,
-        MlsCaller, MlsDeviceRef, PrincipalDevicesQuery, ReportEncryptedMessageCmd,
-        RequestMlsReaddCmd, SubmitMlsCommitCmd, UploadMlsKeyPackagesCmd,
+        ListMlsWelcomesQuery, MlsCaller, MlsDeviceRef, PrincipalDevicesQuery,
+        ReportEncryptedMessageCmd, RequestMlsReaddCmd, SubmitMlsCommitCmd, UploadMlsKeyPackagesCmd,
     };
     use rim_services::e2ee::service::E2eeService;
 
-    use rim_services::e2ee::{MlsCommitRequiredReason, mls_group_id};
+    use rim_services::e2ee::{
+        MAX_PENDING_WELCOME_BYTES, MAX_PENDING_WELCOMES, MAX_WELCOME_BYTES,
+        MlsCommitRequiredReason, mls_group_id,
+    };
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::{Actor, ServiceError};
 
@@ -476,6 +480,27 @@ mod tests {
             }
         }
 
+        /// Store `count` pending Welcomes of `bytes` bytes each for `d`.
+        fn pending_welcomes(&self, d: &Device, count: usize, bytes: usize) {
+            let mut state = self.repo.state();
+            for _ in 0..count {
+                state.welcomes.push((
+                    MlsWelcomeId::new(),
+                    NewMlsWelcome {
+                        commit_id: MlsCommitId::new(),
+                        conversation_id: self.conv.id,
+                        incarnation: 1,
+                        epoch: 1,
+                        message: vec![0; bytes],
+                        expires_at: Utc::now() + Duration::days(30),
+                        recipients: vec![(d.id, d.user)],
+                    },
+                    HashSet::new(),
+                    Utc::now(),
+                ));
+            }
+        }
+
         async fn submit(&self, cmd: SubmitMlsCommitCmd) -> Result<(), ServiceError> {
             self.service.submit_commit(cmd).await.map(|_| ())
         }
@@ -508,6 +533,15 @@ mod tests {
         }
     }
 
+    /// The first page of `caller`'s pending Welcomes.
+    fn welcomes_of(caller: MlsCaller) -> ListMlsWelcomesQuery {
+        ListMlsWelcomesQuery {
+            caller,
+            after: None,
+            limit: None,
+        }
+    }
+
     fn validation(err: ServiceError) -> String {
         match err {
             ServiceError::Validation(message) => message,
@@ -534,7 +568,11 @@ mod tests {
         let not_bound = "this session is not bound to a device";
         let status = f.service.key_package_status(unbound).await.unwrap_err();
         assert_eq!(forbidden(status), not_bound);
-        let welcomes = f.service.pending_welcomes(unbound).await.unwrap_err();
+        let welcomes = f
+            .service
+            .pending_welcomes(welcomes_of(unbound))
+            .await
+            .unwrap_err();
         assert_eq!(forbidden(welcomes), not_bound);
         let err = f
             .service
@@ -1502,11 +1540,15 @@ mod tests {
         f.submit(f.commit_cmd(&f.alice, 1, 0, &[(&f.bob, &r), (&f.bob2, &r2)], &[]))
             .await
             .unwrap();
-        let mine = f.service.pending_welcomes(f.bob.caller()).await.unwrap();
+        let mine = f
+            .service
+            .pending_welcomes(welcomes_of(f.bob.caller()))
+            .await
+            .unwrap();
         assert_eq!(mine.len(), 1);
         assert!(
             f.service
-                .pending_welcomes(f.alice.caller())
+                .pending_welcomes(welcomes_of(f.alice.caller()))
                 .await
                 .unwrap()
                 .is_empty()
@@ -1520,12 +1562,16 @@ mod tests {
         assert_eq!(acked, 1);
         assert!(
             f.service
-                .pending_welcomes(f.bob.caller())
+                .pending_welcomes(welcomes_of(f.bob.caller()))
                 .await
                 .unwrap()
                 .is_empty()
         );
-        let theirs = f.service.pending_welcomes(f.bob2.caller()).await.unwrap();
+        let theirs = f
+            .service
+            .pending_welcomes(welcomes_of(f.bob2.caller()))
+            .await
+            .unwrap();
         assert_eq!(theirs.len(), 1);
         let err = f
             .service
@@ -1533,6 +1579,144 @@ mod tests {
             .await
             .unwrap_err();
         assert!(validation(err).contains("at most 100"));
+    }
+
+    #[tokio::test]
+    async fn welcomes_are_read_a_page_at_a_time() {
+        let f = Fixture::new();
+        f.pending_welcomes(&f.bob, 150, 8);
+        let first = f
+            .service
+            .pending_welcomes(welcomes_of(f.bob.caller()))
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 100, "a page holds 100 Welcomes by default");
+        let last = first.last().expect("a page");
+        let rest = f
+            .service
+            .pending_welcomes(ListMlsWelcomesQuery {
+                caller: f.bob.caller(),
+                after: Some(MlsWelcomeCursor {
+                    created_at: last.created_at,
+                    id: last.id,
+                }),
+                limit: Some(100),
+            })
+            .await
+            .unwrap();
+        assert_eq!(rest.len(), 50);
+        let ids: HashSet<MlsWelcomeId> = first.iter().chain(&rest).map(|w| w.id).collect();
+        assert_eq!(ids.len(), 150, "no Welcome is read twice or skipped");
+        let few = f
+            .service
+            .pending_welcomes(ListMlsWelcomesQuery {
+                caller: f.bob.caller(),
+                after: None,
+                limit: Some(10),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            few.iter().map(|w| w.id).collect::<Vec<_>>(),
+            first[..10].iter().map(|w| w.id).collect::<Vec<_>>()
+        );
+        for limit in [0, 101] {
+            let err = f
+                .service
+                .pending_welcomes(ListMlsWelcomesQuery {
+                    caller: f.bob.caller(),
+                    after: None,
+                    limit: Some(limit),
+                })
+                .await
+                .unwrap_err();
+            assert!(validation(err).contains("limit must be 1 to 100"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_commit_is_refused_while_an_added_device_holds_the_most_pending_welcomes() {
+        let f = Fixture::new();
+        f.pending_welcomes(&f.bob, MAX_PENDING_WELCOMES as usize, 8);
+        let r = f.package(&f.bob, 1, false, Some((&f.alice, Duration::minutes(1))));
+        let err = f
+            .submit(f.commit_cmd(&f.alice, 1, 0, &[(&f.bob, &r)], &[]))
+            .await
+            .unwrap_err();
+        assert!(validation(err).contains("too many pending Welcomes"));
+        assert!(f.repo.current_group(f.conv.id).await.unwrap().is_none());
+        assert_eq!(f.repo.state().welcomes.len(), MAX_PENDING_WELCOMES as usize);
+
+        // Acknowledging one makes room for the next.
+        let oldest = f.repo.state().welcomes[0].0;
+        f.service
+            .ack_welcomes(AckMlsWelcomesCmd {
+                caller: f.bob.caller(),
+                ids: vec![oldest],
+            })
+            .await
+            .unwrap();
+        f.submit(f.commit_cmd(&f.alice, 1, 0, &[(&f.bob, &r)], &[]))
+            .await
+            .expect("room for one more");
+        assert_eq!(
+            f.repo.state().welcomes.len(),
+            MAX_PENDING_WELCOMES as usize + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_commit_is_refused_when_its_welcome_takes_a_device_past_the_byte_limit() {
+        let f = Fixture::new();
+        let r = f.package(&f.bob, 1, false, Some((&f.alice, Duration::minutes(1))));
+        let cmd = f.commit_cmd(&f.alice, 1, 0, &[(&f.bob, &r)], &[]);
+        let size = URL_SAFE_NO_PAD
+            .decode(cmd.welcome.as_deref().expect("a Welcome"))
+            .unwrap()
+            .len();
+        let room = MAX_PENDING_WELCOME_BYTES as usize - size;
+        f.pending_welcomes(&f.bob, 1, room + 1);
+        let err = f.submit(cmd.clone()).await.unwrap_err();
+        assert!(validation(err).contains("too many pending Welcomes"));
+        assert!(f.repo.current_group(f.conv.id).await.unwrap().is_none());
+
+        f.repo.state().welcomes[0].1.message = vec![0; room];
+        f.submit(cmd).await.expect("exactly at the limit");
+    }
+
+    #[tokio::test]
+    async fn a_device_without_room_for_a_welcome_gets_no_key_package() {
+        let f = Fixture::new();
+        f.package(&f.bob, 1, false, None);
+        f.package(&f.bob2, 2, false, None);
+        let largest = MAX_WELCOME_BYTES as i64;
+        f.pending_welcomes(
+            &f.bob,
+            1,
+            (MAX_PENDING_WELCOME_BYTES - largest + 1) as usize,
+        );
+        let claimed = f
+            .service
+            .claim_key_packages(claim(&f, &f.alice, &[&f.bob, &f.bob2]))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].device_id, f.bob2.device_id);
+        assert!(
+            f.repo.state().packages[0].meta.claimed_at.is_none(),
+            "the full device's package stays unclaimed"
+        );
+
+        f.pending_welcomes(&f.bob2, MAX_PENDING_WELCOMES as usize, 8);
+        f.package(&f.bob2, 3, false, None);
+        f.repo.state().welcomes.remove(0);
+        let claimed = f
+            .service
+            .claim_key_packages(claim(&f, &f.alice, &[&f.bob, &f.bob2]))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].device_id, f.bob.device_id);
     }
 
     /// A re-add request of `d` issued now, with a fresh nonce and `lastEpoch` 1.

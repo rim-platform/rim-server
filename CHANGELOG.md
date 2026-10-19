@@ -266,6 +266,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- A device holds at most 256 pending MLS Welcomes and 64 MiB of them. A Commit whose Welcome
+  would take an added device past either is refused (`VALIDATION`), and `claimMlsKeyPackages`
+  leaves out a device without room for one more, so clients do not add it until it has read and
+  acknowledged its Welcomes. Before, Welcomes for one device piled up for 30 days without limit.
+  `myMlsWelcomes` answers a page at a time: the new optional `after: MlsWelcomeCursorInput` and
+  `limit` (1 to 100, 100 by default) arguments, and the new `MlsWelcome.createdAt` that with
+  `id` makes the cursor. A client that asks with no arguments gets the oldest 100
+  (`docs/specs/e2ee-mls-v1.md`, "Welcome delivery and joining").
 - **Upgrade:** `RIM_LIMIT_INVITES_PER_USER_PER_DAY` is on by default, at 50, and also caps the
   invite emails (`createInvite` with `recipientEmail`) one user sends in 24 hours. Emails are
   counted apart from the invites, so deleting a workspace does not give them back. Past either
