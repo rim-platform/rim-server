@@ -365,7 +365,8 @@ mutation, because an identity rotation is accepted on the strength of that sessi
   holds the person as a remote user, as it does after a device or card change
   (`server-to-server-v1.md`, "Profile cards and contacts"). The document leaves out the devices
   a recovery revoked: their certificates are void, and a host revokes them when it applies the
-  recovery entry.
+  recovery entry, ending the person's direct sessions there and the delegations of those
+  devices.
 
 Every write that depends on the log (enroll, add, revoke, rotate, publish) runs in one
 transaction with the user row locked (`SELECT … FOR UPDATE`), so two of them for one account

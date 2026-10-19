@@ -249,6 +249,7 @@ fn setup(facts: Facts) -> Setup {
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
+            session_repo: Arc::new(MockSessionRepository::new()),
             relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
             dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
         },

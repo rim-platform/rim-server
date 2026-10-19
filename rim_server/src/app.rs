@@ -508,6 +508,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let session_revocations = service_provider.session_revocations();
     s2s.workspace_host
         .set_session_revocations(Arc::clone(&session_revocations));
+    s2s.host
+        .set_session_revocations(Arc::clone(&session_revocations));
     let service_provider: Arc<dyn AppServiceProvider> = Arc::new(service_provider);
     s2s.host.set_e2ee_service(service_provider.e2ee_service());
 

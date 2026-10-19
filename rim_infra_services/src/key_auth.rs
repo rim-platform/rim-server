@@ -33,6 +33,7 @@ use rim_services::auth::dto::{AuthSessionDto, LoginResultDto, RegistrationMode, 
 use rim_services::auth::terms::accepted_terms;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::events::Observers;
+use rim_services::host::dto::IdentityRefresh;
 use rim_services::host::service::HostService;
 use rim_services::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
@@ -398,8 +399,12 @@ impl DefaultKeyAuthService {
     }
 
     /// Before a person from another server signs in directly, refetch their identity from
-    /// their relays, so a device revoked there is revoked here; a relay that does not answer
-    /// in time leaves the stored copy. Returns whether the principal is held here as remote.
+    /// their relays, so a device revoked there is revoked here; relays that do not answer in
+    /// time leave the stored copy. Returns whether the principal is held here as remote.
+    ///
+    /// # Errors
+    /// `Unauthenticated` when a relay answered with an identity this server refused and no
+    /// relay's was stored.
     async fn refresh_if_remote(&self, proof: &SignedPayload) -> ServiceResult<bool> {
         let Ok(unverified) = UnverifiedLogin::read(&to_statement(proof)) else {
             return Ok(false);
@@ -422,12 +427,25 @@ impl DefaultKeyAuthService {
             )
             .await
             {
-                Ok(Ok(_)) => {}
+                Ok(Ok(IdentityRefresh::Applied(_))) => {}
+                Ok(Ok(IdentityRefresh::Refused)) => {
+                    info!(
+                        target: "audit",
+                        event = "key_login_failure",
+                        reason = "identity_refused",
+                        user_id = %user_id,
+                        "key login refused: the person's relays served an identity this server refused"
+                    );
+                    return Err(ServiceError::Unauthenticated);
+                }
+                Ok(Ok(IdentityRefresh::Unreachable)) => {
+                    warn!(user_id = %user_id, "the relays did not answer before a direct sign-in; using the stored identity")
+                }
                 Ok(Err(e)) => {
                     warn!(error = %e, user_id = %user_id, "could not refresh a remote identity before a direct sign-in")
                 }
                 Err(_) => {
-                    warn!(user_id = %user_id, "the relays did not answer before a direct sign-in")
+                    warn!(user_id = %user_id, "the relays did not answer before a direct sign-in; using the stored identity")
                 }
             }
         }

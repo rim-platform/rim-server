@@ -51,6 +51,20 @@ pub enum IdentityPush {
     NotDelegated,
 }
 
+/// What refetching a remote principal's identity from their relays came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityRefresh {
+    /// A relay's document was stored; `false` when the principal is not held here as remote.
+    Applied(bool),
+    /// A relay answered with a document that was refused, and no other relay's was stored: it
+    /// did not verify, its key log does not extend the stored one, or the relay does not speak
+    /// for the principal.
+    Refused,
+    /// No relay served a document: none answered, or storing what one served failed here. The
+    /// stored copy stays.
+    Unreachable,
+}
+
 /// The user and device a forwarded request runs as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardAuth {

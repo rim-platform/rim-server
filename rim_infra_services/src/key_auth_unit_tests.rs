@@ -35,6 +35,8 @@ mod tests {
     use rim_services::auth::command::SignupToken;
     use rim_services::auth::dto::RegistrationMode;
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
+    use rim_services::host::dto::IdentityRefresh;
+    use rim_services::host::service::MockHostService;
     use rim_services::key_auth::command::{
         AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
         IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
@@ -631,6 +633,16 @@ mod tests {
         signup: SignupRepos,
         broadcaster: Arc<dyn Broadcaster>,
     ) -> Harness {
+        harness_from(limits, signup, broadcaster, local_users_only())
+    }
+
+    /// [`harness_with`] with `host_repo` telling local users from those of other servers.
+    fn harness_from(
+        limits: Limits,
+        signup: SignupRepos,
+        broadcaster: Arc<dyn Broadcaster>,
+        host_repo: rim_core::host::repository::MockHostRepository,
+    ) -> Harness {
         let state: Shared = Arc::default();
         let repos = KeyAuthRepos {
             user_repo: Arc::new(user_repo(&state)),
@@ -638,7 +650,7 @@ mod tests {
             key_identity_repo: Arc::new(FakeKeys(Arc::clone(&state))),
             key_challenge_repo: Arc::new(FakeChallenges(Arc::clone(&state))),
             signup,
-            host_repo: Arc::new(local_users_only()),
+            host_repo: Arc::new(host_repo),
             relay_abuse_repo: Arc::new(operator_blocks(&state)),
         };
         let svc = DefaultKeyAuthService::new(
@@ -683,6 +695,32 @@ mod tests {
 
     fn harness() -> Harness {
         harness_with_limits(100, 100)
+    }
+
+    /// A harness where every user is from another server and refetching their identity before
+    /// a direct sign-in comes to `refresh`.
+    fn remote_harness(refresh: IdentityRefresh) -> Harness {
+        let mut host = rim_core::host::repository::MockHostRepository::new();
+        host.expect_user_kind()
+            .returning(|_| Box::pin(async { Ok(Some(rim_core::host::model::UserKind::Remote)) }));
+        let h = harness_from(
+            Limits {
+                challenge: 100,
+                failure: 100,
+                signup: 100,
+            },
+            no_signup_repos(),
+            Arc::new(Recording::default()),
+            host,
+        );
+        let mut host_service = MockHostService::new();
+        host_service
+            .expect_refresh_identity()
+            .returning(move |_, _| Box::pin(async move { Ok(refresh) }));
+        Harness {
+            svc: h.svc.with_host_service(Arc::new(host_service)),
+            ..h
+        }
     }
 
     fn payload(s: SignedStatement) -> SignedPayload {
@@ -3132,5 +3170,33 @@ mod tests {
             .expect("open signup");
         assert!(log.lock().unwrap().is_empty());
         assert!(events.0.lock().unwrap().is_empty());
+    }
+
+    /// A direct sign-in of someone from another server is refused when their relays answered
+    /// with an identity this server refused.
+    #[tokio::test]
+    async fn a_direct_sign_in_is_refused_when_the_relays_identity_is_refused() {
+        let h = remote_harness(IdentityRefresh::Refused);
+        let e = h.enroll(1).await;
+        let err = h
+            .login(&e, e.device_id, &e.device, AUDIENCE)
+            .await
+            .expect_err("a refused identity");
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+    }
+
+    /// A direct sign-in checks the stored identity when the relays do not answer, and the one
+    /// they served when it was stored.
+    #[tokio::test]
+    async fn a_direct_sign_in_uses_the_stored_identity_when_the_relays_do_not_answer() {
+        for refresh in [IdentityRefresh::Unreachable, IdentityRefresh::Applied(true)] {
+            let h = remote_harness(refresh);
+            let e = h.enroll(1).await;
+            let session = h
+                .login(&e, e.device_id, &e.device, AUDIENCE)
+                .await
+                .unwrap_or_else(|err| panic!("{refresh:?}: {err:?}"));
+            assert!(!h.session_revoked(session), "{refresh:?}");
+        }
     }
 }
