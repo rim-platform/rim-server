@@ -3,9 +3,10 @@
 //! each relay holding an active delegation of a recipient; for the direct space, the relays a
 //! recipient's card lists, those the operator's outbound DM setting admits); it files what local
 //! members get through the request inbox: invites and held events of the direct space and of
-//! workspace DMs. The sender delivers each relay's rows in order with backoff. A relay's rows
-//! stop being queued while its backlog is at the per-relay caps, or while it is dead: every
-//! delivery to it has failed for the configured period.
+//! workspace DMs. The sender delivers each relay's rows in order with backoff, and asks the
+//! writer to send a conversation's invite again to a member whose relay no longer holds it. A
+//! relay's rows stop being queued while its backlog is at the per-relay caps, or while it is
+//! dead: every delivery to it has failed for the configured period.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -18,18 +19,21 @@ use tokio::sync::{Notify, mpsc, watch};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{Conversation, ConversationType};
 use rim_core::host::model::{RemoteMember, UserKind};
 use rim_core::host::repository::HostRepository;
 use rim_core::server::model::ServerId;
-use rim_core::user::model::UserId;
+use rim_core::user::model::{User, UserId};
+use rim_identity::SignedStatement;
 use rim_infra_db::begin_transaction;
 use rim_s2s::SharedIdentity;
-use rim_s2s::host::{HostEventFields, sign_host_event};
+use rim_s2s::host::{HostEventFields, read_host_event, sign_host_event};
 use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
-use rim_services::relay::dto::{DeliverItem, DeliverRequest, DeliverResponse, SignedJson};
+use rim_services::relay::dto::{
+    DeliverItem, DeliverRequest, DeliverResponse, RefusedItem, SignedJson,
+};
 use rim_services::relay::service::RelayService;
 use rim_services::s2s::dto::{S2sMethod, S2sRequest};
 use rim_services::s2s::service::S2sClient;
@@ -45,6 +49,8 @@ use crate::repos::AppRepos;
 const MAX_EVENT_BYTES: usize = 512 * 1024;
 /// How long a relay's refusal of a principal keeps the writer from addressing them.
 const REFUSAL_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// How often a conversation's invite is sent again to one member whose relay refuses its items.
+const REINVITE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// Longest wait between delivery attempts.
 const MAX_BACKOFF_SECS: i64 = 300;
 /// Most outbox rows kept for one relay above what it acknowledged.
@@ -340,6 +346,74 @@ impl PeerBacklogs {
     }
 }
 
+/// A conversation whose invite a remote member's relay should get again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reinvite {
+    pub conversation_id: Uuid,
+    pub principal_id: String,
+}
+
+/// The `(conversation, principal)` pairs whose invite was sent again in the last
+/// `REINVITE_INTERVAL`, so a relay refusing every item of a conversation gets it once a day.
+#[derive(Default)]
+pub struct ReinviteGuard {
+    sent: Mutex<HashMap<(Uuid, String), Instant>>,
+}
+
+impl ReinviteGuard {
+    /// Whether the pair's invite may be sent again now; records it when it may.
+    pub fn admit(&self, conversation_id: Uuid, principal_id: &str) -> bool {
+        self.admit_at(conversation_id, principal_id, Instant::now())
+    }
+
+    /// [`Self::admit`] at `now`. A refused pair keeps the time it was last admitted, so a
+    /// relay refusing every day still gets the invite once a day.
+    fn admit_at(&self, conversation_id: Uuid, principal_id: &str, now: Instant) -> bool {
+        let mut sent = match self.sent.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        sent.retain(|_, at| now.saturating_duration_since(*at) < REINVITE_INTERVAL);
+        let key = (conversation_id, principal_id.to_string());
+        if sent.contains_key(&key) {
+            return false;
+        }
+        sent.insert(key, now);
+        true
+    }
+}
+
+/// The conversations of a delivery's `not_subscribed` refusals, with the principals refused:
+/// each refused item naming a conversation, for each principal the refusal names, or every
+/// recipient of the item when it names none.
+pub(crate) fn not_subscribed(
+    refused: &[RefusedItem],
+    items: &[DeliverItem],
+) -> Vec<(Uuid, String)> {
+    let mut found = Vec::new();
+    for refusal in refused.iter().filter(|r| r.reason == "not_subscribed") {
+        let Some(item) = items.iter().find(|i| i.id == refusal.id) else {
+            continue;
+        };
+        let statement = SignedStatement {
+            payload: item.envelope.payload.clone(),
+            signature: item.envelope.signature.clone(),
+        };
+        let Some(conversation_id) = read_host_event(&statement)
+            .ok()
+            .and_then(|e| e.event.get("conversation_id")?.as_str().map(str::to_string))
+            .and_then(|id| Uuid::parse_str(&id).ok())
+        else {
+            continue;
+        };
+        match &refusal.principal_id {
+            Some(principal) => found.push((conversation_id, principal.clone())),
+            None => found.extend(item.recipients.iter().map(|p| (conversation_id, p.clone()))),
+        }
+    }
+    found
+}
+
 /// The non-lossy sink the observers send every event to; the writer reads it.
 pub struct OutboxSink {
     sender: mpsc::UnboundedSender<WorkspaceEvent>,
@@ -417,10 +491,12 @@ impl HostEventWriter {
         self
     }
 
-    /// Write events until the channel closes or shutdown is signalled.
+    /// Write events, and the invites the sender asks to send again, until the event channel
+    /// closes or shutdown is signalled.
     pub async fn run(
         self,
         mut events: mpsc::UnboundedReceiver<WorkspaceEvent>,
+        mut reinvites: mpsc::UnboundedReceiver<Reinvite>,
         mut shutdown: watch::Receiver<bool>,
     ) {
         loop {
@@ -432,6 +508,14 @@ impl HostEventWriter {
                         }
                     }
                     None => break,
+                },
+                Some(reinvite) = reinvites.recv() => {
+                    if let Err(e) = self
+                        .reinvite(reinvite.conversation_id, &reinvite.principal_id)
+                        .await
+                    {
+                        error!(error = %e, "could not send a conversation's invite again");
+                    }
                 },
                 _ = shutdown.changed() => break,
             }
@@ -626,10 +710,6 @@ impl HostEventWriter {
             .list_member_ids(conversation_id)
             .await?;
         let users = self.repos.user_repo.get_by_ids(&member_ids).await?;
-        let member_principal_ids: Vec<String> = users
-            .iter()
-            .filter_map(|u| u.principal_id.clone())
-            .collect();
         let invitees: Vec<Invitee> = added
             .iter()
             .filter(|id| **id != creator)
@@ -647,34 +727,133 @@ impl HostEventWriter {
         {
             self.record_contacts(creator, &invitees).await?;
         }
+        let Some(invite) = self
+            .invite_event(&conversation, &from_principal_id, &users)
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(invitees.into_iter().map(|m| (invite.clone(), m)).collect())
+    }
+
+    /// The `DmInvite` of `conversation` from its creator, whose principal id is
+    /// `from_principal_id`, naming the principal ids of `users`, its members. `None` when the
+    /// creator has no profile card.
+    async fn invite_event(
+        &self,
+        conversation: &Conversation,
+        from_principal_id: &str,
+        users: &[User],
+    ) -> ServiceResult<Option<Value>> {
+        let Some(creator) = conversation.created_by else {
+            return Ok(None);
+        };
         let Some(card) = self
             .repos
             .key_identity_repo
             .get_profile_card(creator)
             .await?
         else {
-            warn!(conversation_id = %conversation_id, "no DM invite: the creator has no profile card");
-            return Ok(Vec::new());
+            warn!(conversation_id = %conversation.id, "no DM invite: the creator has no profile card");
+            return Ok(None);
         };
-        Ok(invitees
-            .into_iter()
-            .map(|m| {
-                (
-                    json!({
-                        "type": "DmInvite",
-                        "workspace_id": conversation.server_id,
-                        "conversation_id": conversation_id,
-                        "from_principal_id": from_principal_id,
-                        "from_card": SignedJson {
-                            payload: card.payload.clone(),
-                            signature: card.signature.clone(),
-                        },
-                        "member_principal_ids": member_principal_ids,
-                    }),
-                    m,
-                )
-            })
-            .collect())
+        let member_principal_ids: Vec<String> = users
+            .iter()
+            .filter_map(|u| u.principal_id.clone())
+            .collect();
+        Ok(Some(json!({
+            "type": "DmInvite",
+            "workspace_id": conversation.server_id,
+            "conversation_id": conversation.id,
+            "from_principal_id": from_principal_id,
+            "from_card": SignedJson {
+                payload: card.payload,
+                signature: card.signature,
+            },
+            "member_principal_ids": member_principal_ids,
+        })))
+    }
+
+    /// Send the `DmInvite` of a conversation of the direct space again to a remote member whose
+    /// relay refused an item of it (`not_subscribed`), so their relay judges it afresh like any
+    /// invite. Nothing is sent for a conversation elsewhere or gone, or for a principal who is
+    /// not a remote member of it. Returns how many outbox rows were added.
+    pub async fn reinvite(
+        &self,
+        conversation_id: Uuid,
+        principal_id: &str,
+    ) -> ServiceResult<usize> {
+        let Some(conversation) = self
+            .repos
+            .conversation_repo
+            .get_by_id(conversation_id.into())
+            .await?
+        else {
+            return Ok(0);
+        };
+        if conversation.server_id != self.direct_space_id {
+            return Ok(0);
+        }
+        let Some((user_id, UserKind::Remote)) =
+            self.repos.host_repo.find_user(principal_id).await?
+        else {
+            return Ok(0);
+        };
+        if self
+            .repos
+            .conversation_member_repo
+            .membership(conversation.id, user_id)
+            .await?
+            .is_none()
+        {
+            return Ok(0);
+        }
+        let members = self
+            .repos
+            .host_repo
+            .remote_members(self.direct_space_id)
+            .await?;
+        let Some(member) = members.into_iter().find(|m| m.user_id == user_id) else {
+            return Ok(0);
+        };
+        let Some(creator) = conversation.created_by else {
+            return Ok(0);
+        };
+        let Some(from_principal_id) = self
+            .repos
+            .user_repo
+            .get_by_id(creator)
+            .await?
+            .and_then(|u| u.principal_id)
+        else {
+            return Ok(0);
+        };
+        let member_ids = self
+            .repos
+            .conversation_member_repo
+            .list_member_ids(conversation.id)
+            .await?;
+        let users = self.repos.user_repo.get_by_ids(&member_ids).await?;
+        let Some(invite) = self
+            .invite_event(&conversation, &from_principal_id, &users)
+            .await?
+        else {
+            return Ok(0);
+        };
+        let planned = Planned {
+            stream: user_stream(&member),
+            recipients: vec![member],
+            device_id: None,
+            local: Vec::new(),
+        };
+        let rows = self
+            .append(self.direct_space_id, &planned, &invite.to_string(), None)
+            .await?;
+        if rows > 0 {
+            info!(conversation_id = %conversation_id, "sent a conversation's invite again to a member whose relay no longer held it");
+            self.wake.notify_one();
+        }
+        Ok(rows)
     }
 
     /// Delete the accepted row of a local member removed from a conversation of this server, so
@@ -873,6 +1052,10 @@ pub struct OutboxSender {
     refusals: Arc<RefusalCache>,
     backlogs: Arc<PeerBacklogs>,
     wake: Arc<Notify>,
+    /// Where a conversation's invite is asked for again when a relay refuses its items
+    /// `not_subscribed`; `None` asks nothing.
+    reinvites: Option<mpsc::UnboundedSender<Reinvite>>,
+    reinvited: ReinviteGuard,
 }
 
 impl OutboxSender {
@@ -889,7 +1072,16 @@ impl OutboxSender {
             refusals,
             backlogs,
             wake,
+            reinvites: None,
+            reinvited: ReinviteGuard::default(),
         }
+    }
+
+    /// Ask the writer on `reinvites` to send a conversation's invite again, at most once a day
+    /// per conversation and principal, when a relay refuses an item of it `not_subscribed`.
+    pub fn with_reinvites(mut self, reinvites: mpsc::UnboundedSender<Reinvite>) -> Self {
+        self.reinvites = Some(reinvites);
+        self
     }
 
     /// Deliver whenever the writer adds rows and at least every second, until shutdown.
@@ -948,7 +1140,8 @@ impl OutboxSender {
             .iter()
             .map(|item| (item.id.clone(), item.recipients.clone()))
             .collect();
-        let body = serde_json::to_vec(&DeliverRequest { items }).map_err(ServiceError::internal)?;
+        let request = DeliverRequest { items };
+        let body = serde_json::to_vec(&request).map_err(ServiceError::internal)?;
         let response = self
             .client
             .send(S2sRequest {
@@ -998,6 +1191,18 @@ impl OutboxSender {
             if refusal.reason == "unknown_principal" {
                 for principal in refused {
                     self.refusals.refuse(peer, &principal);
+                }
+            }
+        }
+        // A relay that holds no row for a conversation any longer (expired after a long
+        // silence) gets its invite again, and judges it afresh.
+        if let Some(reinvites) = &self.reinvites {
+            for (conversation_id, principal_id) in not_subscribed(&answer.refused, &request.items) {
+                if self.reinvited.admit(conversation_id, &principal_id) {
+                    let _ = reinvites.send(Reinvite {
+                        conversation_id,
+                        principal_id,
+                    });
                 }
             }
         }
@@ -1507,6 +1712,165 @@ mod tests {
         assert!(
             wait < Duration::seconds(5),
             "a relay not yet dead backs off as before: {wait}"
+        );
+    }
+
+    /// An item for `recipients` on `stream` carrying `event`, signed by a test host.
+    fn delivered(id: &str, stream: &str, event: Value, recipients: &[&str]) -> DeliverItem {
+        let signer = rim_s2s::ServerSigner::from_seed([7; 32]);
+        let event = event.to_string();
+        let issued_at = rim_s2s::timestamp(Utc::now());
+        let envelope = sign_host_event(
+            &signer,
+            &HostEventFields {
+                host: "rims1_host",
+                key_seq: 0,
+                workspace_id: &Uuid::from_u128(5).to_string(),
+                stream,
+                seq: Some(1),
+                event_json: &event,
+                issued_at: &issued_at,
+            },
+        );
+        DeliverItem {
+            id: id.to_string(),
+            envelope: SignedJson {
+                payload: envelope.payload,
+                signature: envelope.signature,
+            },
+            recipients: recipients.iter().map(|r| r.to_string()).collect(),
+            device_id: None,
+        }
+    }
+
+    fn refused(id: &str, reason: &str, principal_id: Option<&str>) -> RefusedItem {
+        RefusedItem {
+            id: id.to_string(),
+            reason: reason.to_string(),
+            principal_id: principal_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn not_subscribed_refusals_name_their_conversation_and_principals() {
+        let conversation = Uuid::from_u128(9);
+        let message = json!({ "type": "NewMessage", "conversation_id": conversation });
+        let items = [
+            delivered(
+                "1",
+                &format!("c:{conversation}"),
+                message.clone(),
+                &["rimp1_a", "rimp1_b"],
+            ),
+            delivered("2", &format!("c:{conversation}"), message, &["rimp1_c"]),
+            delivered("3", "w", json!({ "type": "MemberJoined" }), &["rimp1_d"]),
+        ];
+        assert_eq!(
+            not_subscribed(
+                &[
+                    refused("1", "not_subscribed", Some("rimp1_b")),
+                    refused("2", "not_subscribed", None),
+                    refused("3", "not_subscribed", None),
+                    refused("1", "unknown_principal", Some("rimp1_a")),
+                ],
+                &items
+            ),
+            vec![
+                (conversation, "rimp1_b".to_string()),
+                (conversation, "rimp1_c".to_string()),
+            ],
+            "a workspace item names no conversation, another reason asks for nothing"
+        );
+    }
+
+    /// A relay that was dead while a conversation's invite was written never got it. Back, it
+    /// refuses the conversation's items `not_subscribed`, and the sender asks for the invite
+    /// again for the member it refused, once however often it refuses.
+    #[tokio::test]
+    async fn a_relay_that_missed_an_invite_gets_it_again_once_when_it_refuses_the_conversation() {
+        let conversation = Uuid::from_u128(9);
+        let message = delivered(
+            "0",
+            &format!("c:{conversation}"),
+            json!({ "type": "NewMessage", "conversation_id": conversation }),
+            &["rimp1_bob"],
+        );
+        let row = json!({
+            "envelope": { "payload": message.envelope.payload, "signature": message.envelope.signature },
+            "recipients": ["rimp1_bob"],
+            "deviceId": null,
+        })
+        .to_string();
+        let outbox = Arc::new(Outbox::default());
+        let mut host = host_repo(&outbox);
+        host.expect_delivery()
+            .returning(|_| Box::pin(async { Ok(delivery(0, None)) }));
+        host.expect_outbox_after().returning(move |_, after, _, _| {
+            let rows = vec![OutboxRow {
+                id: after + 1,
+                item: row.clone(),
+                size_bytes: 80,
+            }];
+            Box::pin(async move { Ok(rows) })
+        });
+        let mut client = MockS2sClient::new();
+        client.expect_send().returning(|_| {
+            Box::pin(async {
+                Ok(S2sResponse {
+                    status: 200,
+                    content_type: "application/json".to_string(),
+                    body: br#"{"ackedThrough":"8","refused":[{"id":"8","reason":"not_subscribed","principalId":"rimp1_bob"}]}"#.to_vec(),
+                    key_seq: 0,
+                    headers: Vec::new(),
+                })
+            })
+        });
+        let (reinvites, mut asked) = mpsc::unbounded_channel();
+        let sender = OutboxSender::new(
+            repos(host),
+            Arc::new(client),
+            Arc::new(RefusalCache::default()),
+            Arc::new(PeerBacklogs::new(DEAD_AFTER)),
+            Arc::new(Notify::new()),
+        )
+        .with_reinvites(reinvites);
+        for _ in 0..2 {
+            assert!(sender.send_peer(DEAD).await.expect("send"));
+        }
+        assert_eq!(
+            asked.try_recv().expect("asked once"),
+            Reinvite {
+                conversation_id: conversation,
+                principal_id: "rimp1_bob".to_string(),
+            }
+        );
+        assert!(asked.try_recv().is_err(), "not again the same day");
+    }
+
+    #[test]
+    fn an_invite_is_sent_again_once_a_day_per_conversation_and_principal() {
+        let guard = ReinviteGuard::default();
+        let (one, two) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        assert!(guard.admit(one, "rimp1_a"));
+        assert!(!guard.admit(one, "rimp1_a"), "the same day");
+        assert!(guard.admit(one, "rimp1_b"));
+        assert!(guard.admit(two, "rimp1_a"));
+    }
+
+    #[test]
+    fn a_refused_reinvite_does_not_push_the_next_one_back() {
+        let guard = ReinviteGuard::default();
+        let one = Uuid::from_u128(1);
+        let start = Instant::now();
+        let hours = |h: u64| start + std::time::Duration::from_secs(h * 3600);
+        assert!(guard.admit_at(one, "rimp1_a", start));
+        assert!(
+            !guard.admit_at(one, "rimp1_a", hours(23)),
+            "refused within the day"
+        );
+        assert!(
+            guard.admit_at(one, "rimp1_a", hours(25)),
+            "a day after the last invite, whatever was refused in between"
         );
     }
 }

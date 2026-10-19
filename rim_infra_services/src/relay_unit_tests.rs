@@ -3436,3 +3436,222 @@ async fn a_local_member_removed_from_a_conversation_here_loses_its_accepted_row(
         &[(bob, own_id, conversation)]
     );
 }
+
+/// A writer for a server whose direct space is `direct` and holds `conversation`, created by
+/// Ada with a card; Bob, from the relay `PEER`, is a remote member of the direct space and, when
+/// `member`, of the conversation. `outbox` records the relay and item of each row added.
+fn reinvite_writer(
+    direct: ServerId,
+    conversation: rim_core::conversation::model::Conversation,
+    member: bool,
+    outbox: Arc<Mutex<Vec<(String, String)>>>,
+) -> crate::host::outbox::HostEventWriter {
+    use rim_core::conversation_member::model::Membership;
+    use rim_core::host::model::RemoteMember;
+    use rim_core::user::model::User;
+
+    use crate::host::outbox::{HostEventWriter, PeerBacklogs, RefusalCache};
+
+    let (ada, bob) = (conversation.created_by.expect("creator"), UserId::new());
+    let mut host = MockHostRepository::new();
+    host.expect_find_user().returning(move |principal| {
+        let found = (principal == BOB).then_some((bob, UserKind::Remote));
+        Box::pin(async move { Ok(found) })
+    });
+    host.expect_remote_members().returning(move |_| {
+        Box::pin(async move {
+            Ok(vec![RemoteMember {
+                user_id: bob,
+                principal_id: BOB.to_string(),
+                role: ServerMemberRole::Guest,
+                home_relay: Some(PEER.to_string()),
+                card_payload: None,
+            }])
+        })
+    });
+    host.expect_next_stream_seq()
+        .returning(|_, _| Box::pin(async { Ok(1) }));
+    host.expect_outbox_backlog().returning(|_| {
+        Box::pin(async {
+            Ok(rim_core::host::model::OutboxBacklog {
+                rows: 0,
+                bytes: 0,
+                failing_since: None,
+            })
+        })
+    });
+    host.expect_insert_outbox()
+        .returning(move |relay, item, _| {
+            outbox
+                .lock()
+                .expect("lock")
+                .push((relay.to_string(), item.to_string()));
+            Box::pin(async { Ok(1) })
+        });
+    let stored = conversation.clone();
+    let mut conversations = MockConversationRepository::new();
+    conversations.expect_get_by_id().returning(move |id| {
+        let found = (id == stored.id).then(|| stored.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    let mut members = MockConversationMemberRepository::new();
+    members.expect_membership().returning(move |_, user_id| {
+        let found = (member && user_id == bob).then_some(Membership::Active);
+        Box::pin(async move { Ok(found) })
+    });
+    members
+        .expect_list_member_ids()
+        .returning(move |_| Box::pin(async move { Ok(vec![ada, bob]) }));
+    let user = |id: UserId, principal: &str| User {
+        id,
+        username: principal.to_string(),
+        password_hash: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        last_login_at: None,
+        display_name: None,
+        avatar_url: None,
+        status_text: None,
+        bio: None,
+        email: None,
+        timezone: None,
+        principal_id: Some(principal.to_string()),
+        deletion_scheduled_for: None,
+    };
+    let mut users = MockUserRepository::new();
+    let creator = user(ada, ALICE);
+    users
+        .expect_get_by_id()
+        .returning(move |_| Ok(Some(creator.clone())));
+    let all = vec![user(ada, ALICE), user(bob, BOB)];
+    users
+        .expect_get_by_ids()
+        .returning(move |_| Ok(all.clone()));
+    let mut keys = MockKeyIdentityRepository::new();
+    keys.expect_get_profile_card().returning(move |user_id| {
+        Box::pin(async move {
+            Ok(Some(StoredProfileCard {
+                user_id,
+                version: 1,
+                payload: "{}".to_string(),
+                signature: "ed25519:c".to_string(),
+                updated_at: Utc::now(),
+            }))
+        })
+    });
+    HostEventWriter::new(
+        HostRepos {
+            host_repo: Arc::new(host),
+            relay_repo: Arc::new(MockRelayRepository::new()),
+            key_identity_repo: Arc::new(keys),
+            e2ee_repo: Arc::new(MockE2eeRepository::new()),
+            user_repo: Arc::new(users),
+            conversation_repo: Arc::new(conversations),
+            conversation_member_repo: Arc::new(members),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            delegation_repo: Arc::new(MockDelegationRepository::new()),
+            session_repo: Arc::new(rim_core::auth::repository::MockSessionRepository::new()),
+            relay_abuse_repo: Arc::new(blocks(&[])),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
+        },
+        None,
+        identity(30),
+        direct,
+        Arc::new(RefusalCache::default()),
+        Arc::new(PeerBacklogs::new(Duration::hours(24))),
+        Arc::new(tokio::sync::Notify::new()),
+    )
+}
+
+/// A group of the space `server_id`, created by someone.
+fn group_in(server_id: ServerId) -> rim_core::conversation::model::Conversation {
+    use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+    Conversation {
+        id: ConversationId::from(Uuid::from_u128(9)),
+        conversation_type: ConversationType::Group,
+        title: None,
+        topic: None,
+        created_at: Utc::now(),
+        last_activity_at: Utc::now(),
+        server_id,
+        is_private: false,
+        archived_at: None,
+        created_by: Some(UserId::new()),
+        slow_mode_seconds: 0,
+        encrypted_at: Some(Utc::now()),
+    }
+}
+
+#[tokio::test]
+async fn a_member_whose_relay_refused_a_conversation_gets_its_invite_again() {
+    let direct = ServerId::from(Uuid::from_u128(5));
+    let outbox = Arc::default();
+    let writer = reinvite_writer(direct, group_in(direct), true, Arc::clone(&outbox));
+    assert_eq!(
+        writer
+            .reinvite(Uuid::from_u128(9), BOB)
+            .await
+            .expect("sent"),
+        1
+    );
+    let rows = outbox.lock().expect("lock").clone();
+    let [(relay, item)] = rows.as_slice() else {
+        panic!("one row: {rows:?}");
+    };
+    assert_eq!(relay, PEER);
+    let item: serde_json::Value = serde_json::from_str(item).expect("json");
+    assert_eq!(item["recipients"], serde_json::json!([BOB]));
+    let envelope = rim_identity::SignedStatement {
+        payload: item["envelope"]["payload"]
+            .as_str()
+            .expect("payload")
+            .to_string(),
+        signature: item["envelope"]["signature"]
+            .as_str()
+            .expect("signature")
+            .to_string(),
+    };
+    let event = rim_s2s::host::read_host_event(&envelope).expect("host event");
+    assert_eq!(event.stream, format!("u:{BOB}"));
+    assert_eq!(event.event["type"], "DmInvite");
+    assert_eq!(
+        event.event["conversation_id"],
+        Uuid::from_u128(9).to_string()
+    );
+    assert_eq!(event.event["from_principal_id"], ALICE);
+    assert_eq!(
+        event.event["member_principal_ids"],
+        serde_json::json!([ALICE, BOB])
+    );
+}
+
+#[tokio::test]
+async fn no_invite_is_sent_again_to_a_non_member_or_for_a_conversation_elsewhere() {
+    let direct = ServerId::from(Uuid::from_u128(5));
+    for (conversation, member, principal) in [
+        (group_in(direct), false, BOB),
+        (group_in(direct), true, "rimp1_carol"),
+        (group_in(ServerId::from(Uuid::from_u128(6))), true, BOB),
+    ] {
+        let outbox = Arc::default();
+        let writer = reinvite_writer(direct, conversation, member, Arc::clone(&outbox));
+        assert_eq!(
+            writer
+                .reinvite(Uuid::from_u128(9), principal)
+                .await
+                .expect("answered"),
+            0
+        );
+        assert!(outbox.lock().expect("lock").is_empty());
+    }
+    let outbox = Arc::default();
+    let writer = reinvite_writer(direct, group_in(direct), true, Arc::clone(&outbox));
+    assert_eq!(
+        writer
+            .reinvite(Uuid::from_u128(10), BOB)
+            .await
+            .expect("answered"),
+        0,
+        "a conversation gone"
+    );
+}

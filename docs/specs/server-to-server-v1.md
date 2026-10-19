@@ -508,7 +508,11 @@ POST /s2s/v1/deliver
   refuses everything else naming no conversation (`w`, another person's `u:`) without a
   subscription. A refusal for one recipient carries `principalId`. The host skips a (relay,
   principal) for 24 hours after `unknown_principal` only; the other refusals are about one
-  conversation or item.
+  conversation or item. After `not_subscribed` for an item of a conversation of its direct space
+  that the principal is still a member of, the host sends that member the conversation's
+  `DmInvite` again, as when they were added, at most once a day per conversation and principal,
+  whatever the relay lost it to: a row that expired after a long silence, or an invite written
+  while the relay was dead and never delivered. The refused item itself is not sent again.
 - Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days, delivered or not; a
   relay down longer gets nothing and its clients catch up from the change feed. A relay may pull
   what it missed: `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
@@ -530,8 +534,8 @@ POST /s2s/v1/deliver
 - An event a relay does not get still takes its stream's `seq`. When the relay is back, the next
   event on each stream arrives with `seq > last + 1`, and the app reconciles from the host as for
   any gap ("What the client checks"): change feed, pins, reactions, members and `streamHeads`,
-  through the forward path. Not recovered: `e` events (no `seq`), and a `DmInvite` written in
-  that window, which the recipient's relay never files.
+  through the forward path. Not recovered: `e` events (no `seq`). A `DmInvite` written in that
+  window is sent again once the relay refuses a later item of its conversation (`not_subscribed`).
 
 ### Relay queues
 
@@ -737,8 +741,10 @@ is refused (`limited`). Accepting a request is never refused, and no row is evic
 
 An accepted row expires 400 days after the last item R_B delivered for its conversation (the
 expiry moves at most once a day): over a year, so a conversation whose members write once a year
-stays open, while one gone silent, or whose home is gone, is let go and its later items are
-refused (`not_subscribed`); the members still read it from the home. The row is deleted when Bob
+stays open, while one gone silent, or whose home is gone, is let go. The next item of a
+conversation let go is refused (`not_subscribed`), and the home sends its `DmInvite` again (see
+"Outbox and `deliver`"), which R_B files like any invite: accepted at once for a contact or a
+principal accepted before, a request otherwise. The row is deleted when Bob
 leaves the conversation or is removed from it. A home that is also Bob's relay deletes it when it
 removes him. Another relay deletes it on the home's `MemberRemovedFromConversation` naming the id
 the home gives Bob, which it learns from the first event of the home on Bob's own `u:` stream that

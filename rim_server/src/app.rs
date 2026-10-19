@@ -672,14 +672,16 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         )
         .with_relay(Arc::clone(&s2s.relay) as Arc<dyn RelayService>)
         .with_dm_policy(dm_policy.clone());
+        let (reinvite_tx, reinvites) = tokio::sync::mpsc::unbounded_channel();
         let sender = OutboxSender::new(
             repos.for_host(),
             Arc::clone(&s2s.client),
             refusals,
             backlogs,
             wake,
-        );
-        tokio::spawn(writer.run(events, shutdown_tx.subscribe()));
+        )
+        .with_reinvites(reinvite_tx);
+        tokio::spawn(writer.run(events, reinvites, shutdown_tx.subscribe()));
         tokio::spawn(sender.run(shutdown_tx.subscribe()));
     }
 

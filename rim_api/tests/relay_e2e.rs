@@ -9,8 +9,8 @@
 //! key. The public relay: proof-of-work
 //! signups refused, accepted and replaced by an invite; a reported DM request listed and
 //! resolved by the operator; a principal blocked on its relay signed out and refused signup,
-//! login and delivery; and a peer blocked both ways. A member who leaves a group hosted on
-//! another server loses their relay's accepted row for it.
+//! login and delivery; and a peer blocked both ways. A member's accepted row on their relay is
+//! filed again from a resent invite after it expired, and goes when they leave the group.
 //!
 //! Run with:
 //! ```sh
@@ -2096,8 +2096,21 @@ async fn accepted_row(node: &Node, conversation: &str) -> Option<Option<Uuid>> {
         .map(|row| row.try_get::<Option<Uuid>>("", "host_user_id").expect("id"))
 }
 
+/// How many of `host`'s `ReadStateUpdated` items for `conversation` wait in `person`'s queue.
+async fn read_states(person: &Person, host: &Node, conversation: &str) -> usize {
+    person
+        .items(host, None)
+        .await
+        .into_iter()
+        .filter(|i| {
+            i.event["type"] == "ReadStateUpdated"
+                && i.event["conversation_id"] == json!(conversation)
+        })
+        .count()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_member_who_leaves_a_group_at_another_server_loses_the_accepted_row_there() {
+async fn a_members_accepted_row_is_filed_again_after_it_expires_and_goes_when_they_leave() {
     const LEAVE: &str =
         "mutation($s: ID!, $c: ID!) { leaveConversation(serverId: $s, conversationId: $c) }";
     let (a, b) = relays().await;
@@ -2145,6 +2158,39 @@ async fn a_member_who_leaves_a_group_at_another_server_loses_the_accepted_row_th
     .await;
     let bob_at_a = user_id(&a, &bob.principal()).await;
     eventually("the row to learn Bob's id at the host", || async {
+        (accepted_row(&b, &group).await == Some(Some(bob_at_a.into()))).then_some(())
+    })
+    .await;
+
+    // After a long silence the row expires. The next item is refused, the home sends the
+    // invite again, Bob's relay files it accepted (Alice became his contact) and later items
+    // flow.
+    b.db.execute_unprepared(&format!(
+        "UPDATE relay_dm_request SET expires_at = now() - interval '1 day' \
+         WHERE conversation_id = '{group}'"
+    ))
+    .await
+    .expect("expire");
+    b.s2s.relay.cleanup().await.expect("cleanup");
+    assert_eq!(accepted_row(&b, &group).await, None);
+    let before = read_states(&bob, &a, &group).await;
+    let mark_read = json!({ "input": { "workspaceId": direct, "conversationId": group, "readAt": chrono::Utc::now().to_rfc3339() } });
+    bob.remote(&a, MARK_READ, mark_read.clone()).await;
+    eventually("the invite to be filed again", || async {
+        accepted_row(&b, &group).await.map(|_| ())
+    })
+    .await;
+    assert_eq!(
+        read_states(&bob, &a, &group).await,
+        before,
+        "the refused item is not queued"
+    );
+    bob.remote(&a, MARK_READ, mark_read).await;
+    eventually("a later item to reach Bob", || async {
+        (read_states(&bob, &a, &group).await == before + 1).then_some(())
+    })
+    .await;
+    eventually("the row to learn Bob's id again", || async {
         (accepted_row(&b, &group).await == Some(Some(bob_at_a.into()))).then_some(())
     })
     .await;

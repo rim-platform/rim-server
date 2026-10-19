@@ -468,12 +468,20 @@ tag `v<version>`, the version every crate in the workspace carries.
   for any workspace, up to each user's queue cap, and keep them there for the retention period
   (`server-to-server-v1.md` "Outbox and deliver", "Limits and audit").
 - A relay no longer keeps a person's accepted conversations forever. The record of an accepted
+- **Upgrade:** the migration shortens the expiry of every accepted conversation a relay holds
+  to 400 days from the upgrade, and drops the stored sender card of conversations accepted on
+  arrival; nothing is to be done, and the previous release keeps working on the result. A relay
+  no longer keeps a person's accepted conversations forever. The record of an accepted
   conversation is deleted when they leave it or are removed from it, and otherwise expires 400
   days after the last item delivered for it; a person holds at most 5,000 from one host, past
   which a new conversation their settings would deliver is refused `limited`. A conversation
-  accepted as it arrived no longer stores its sender's card. Before, each accepted conversation
-  was kept for a hundred years with a card of up to 128 KiB, so a host could fill a relay's
-  database by inventing conversations. Existing records are bounded the same way on upgrade
-  (`server-to-server-v1.md` "The request inbox", "Storage", "Limits and audit").
+  accepted as it arrived no longer stores its sender's card. When a relay refuses an item of a
+  direct-space conversation `not_subscribed` for someone still in it, the host sends them its
+  invite again, at most once a day, so a conversation that wakes up after its record expired,
+  or whose invite was written while that relay was unreachable for a day and never delivered,
+  is filed again. Before, each accepted conversation was kept for a hundred years with a card of up
+  to 128 KiB, so a host could fill a relay's database by inventing conversations
+  (`server-to-server-v1.md` "Outbox and `deliver`", "The request inbox", "Storage", "Limits and
+  audit").
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master
