@@ -6,6 +6,11 @@ use rim_core::relay::model::RelayQueueStats;
 use rim_core::relay::repository::RelayRepository;
 use rim_core::repository::error::RepoResult;
 
+/// Newly committed messages, labelled `encryption` (`plaintext` or `encrypted`).
+pub const MESSAGES_CREATED: &str = "rim_messages_created_total";
+/// Successful local human account registrations.
+pub const REGISTRATIONS: &str = "rim_registrations_total";
+
 /// Requests a rate limiter or quota refused, labelled `limiter`.
 pub const RATE_LIMIT_REJECTIONS: &str = "rim_rate_limit_rejections_total";
 /// Key-only signups refused for a proof-of-work that does not meet the required bits.
@@ -27,6 +32,20 @@ pub const CONVERSATION_INVITES_EXPIRED: &str = "rim_conversation_invites_expired
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
+    describe_counter!(
+        MESSAGES_CREATED,
+        Unit::Count,
+        "New messages committed, including replies and forwards, by encryption."
+    );
+    describe_counter!(
+        REGISTRATIONS,
+        Unit::Count,
+        "Successful local human account registrations."
+    );
+    counter!(REGISTRATIONS).absolute(0);
+    for encryption in ["plaintext", "encrypted"] {
+        counter!(MESSAGES_CREATED, "encryption" => encryption).absolute(0);
+    }
     describe_counter!(
         RATE_LIMIT_REJECTIONS,
         Unit::Count,
@@ -72,6 +91,17 @@ pub fn describe() {
         Unit::Count,
         "Expired conversation invitations the hourly purge deleted."
     );
+}
+
+/// Count one newly committed message.
+pub(crate) fn message_created(encrypted: bool) {
+    let encryption = if encrypted { "encrypted" } else { "plaintext" };
+    counter!(MESSAGES_CREATED, "encryption" => encryption).increment(1);
+}
+
+/// Count one successfully committed human account registration.
+pub(crate) fn registered() {
+    counter!(REGISTRATIONS).increment(1);
 }
 
 /// Count one request the limiter named `limiter` refused.
@@ -158,6 +188,17 @@ pub(crate) mod test_support {
     pub(crate) struct Recorded(Vec<(CompositeKey, DebugValue)>);
 
     impl Recorded {
+        pub(crate) fn snapshot(snapshotter: &metrics_util::debugging::Snapshotter) -> Self {
+            Self(
+                snapshotter
+                    .snapshot()
+                    .into_vec()
+                    .into_iter()
+                    .map(|(key, _, _, value)| (key, value))
+                    .collect(),
+            )
+        }
+
         fn value(
             &self,
             kind: MetricKind,
@@ -200,6 +241,25 @@ mod tests {
 
     use super::test_support::{block_on, recorded};
     use super::*;
+
+    #[test]
+    fn application_counters_start_at_zero_and_bootstrap_preserves_existing_events() {
+        let ((), got) = recorded(|| {
+            describe();
+            registered();
+            message_created(false);
+            describe();
+        });
+        assert_eq!(got.counter(REGISTRATIONS, &[]), 1);
+        assert_eq!(
+            got.counter(MESSAGES_CREATED, &[("encryption", "plaintext")]),
+            1
+        );
+        assert_eq!(
+            got.counter(MESSAGES_CREATED, &[("encryption", "encrypted")]),
+            0
+        );
+    }
 
     #[test]
     fn rejections_are_counted_by_limiter() {

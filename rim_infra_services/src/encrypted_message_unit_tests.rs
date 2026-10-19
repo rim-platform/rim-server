@@ -305,6 +305,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_message_is_stored_with_its_receipt_mentions_and_events() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
         let f = Fixture::new(true);
         let id = MessageId::new();
         let stranger = TestIdentity::with_version(9, StatementVersion::V2).principal_id();
@@ -372,6 +376,14 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(_)));
+        let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+        assert_eq!(
+            got.counter(
+                crate::metrics::MESSAGES_CREATED,
+                &[("encryption", "encrypted")]
+            ),
+            1
+        );
     }
 
     #[tokio::test]
@@ -511,6 +523,10 @@ mod tests {
 
     #[tokio::test]
     async fn only_the_author_edits_and_an_edit_replaces_the_mentions() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
         let f = Fixture::new(true);
         let id = MessageId::new();
         f.service
@@ -584,6 +600,14 @@ mod tests {
             !events
                 .iter()
                 .any(|e| matches!(e, WorkspaceEvent::UserMentioned { .. }))
+        );
+        let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+        assert_eq!(
+            got.counter(
+                crate::metrics::MESSAGES_CREATED,
+                &[("encryption", "encrypted")]
+            ),
+            1
         );
     }
 

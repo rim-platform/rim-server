@@ -2073,6 +2073,10 @@ mod tests {
 
     #[tokio::test]
     async fn signup_with_key_in_open_mode_creates_a_key_only_account_on_the_device() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
         let h = harness();
         let p = h.present(1).await;
         let res = h.svc.signup_with_key(open_cmd(&p, "ada")).await.unwrap();
@@ -2116,6 +2120,8 @@ mod tests {
         h.login(&enrolled, enrolled.device_id, &enrolled.device, AUDIENCE)
             .await
             .unwrap();
+        let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+        assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 1);
     }
 
     #[tokio::test]
@@ -2385,6 +2391,10 @@ mod tests {
 
     #[tokio::test]
     async fn signup_with_key_refuses_a_taken_username() {
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
         let h = harness();
         let first = h.present(1).await;
         h.svc
@@ -2402,6 +2412,8 @@ mod tests {
             "{err:?}"
         );
         assert_eq!(h.user_count(), 1);
+        let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
+        assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 0);
     }
 
     #[tokio::test]

@@ -4823,6 +4823,8 @@ dependencies = [
  "entity",
  "futures-util",
  "hmac 0.12.1",
+ "metrics",
+ "metrics-util",
  "migration",
  "openmls",
  "openmls_rust_crypto",

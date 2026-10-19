@@ -844,6 +844,7 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
+        crate::metrics::registered();
         signup::announce_claimed(&token, user.id, username, &self.observers);
         default_workspace::announce(joined_default, user.id, username, &self.observers);
 
@@ -1039,6 +1040,7 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
+        crate::metrics::registered();
         signup::announce_claimed(&token, user.id, username, &self.observers);
         default_workspace::announce(joined_default, user.id, username, &self.observers);
 
@@ -1113,6 +1115,7 @@ impl AuthService for DefaultAuthService {
         }
 
         default_workspace::announce(joined_default, user.id, username, &self.observers);
+        crate::metrics::registered();
         // Audit: successful open-mode signup.
         tracing::info!(
             target: "audit",

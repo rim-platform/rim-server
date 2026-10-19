@@ -1139,6 +1139,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         repos.key_identity_repo.touch_device(device.id).await?;
         Self::commit(scope).await?;
 
+        crate::metrics::registered();
         match (&token, pow_bits) {
             (Some(token), _) => signup::announce_claimed(token, user.id, username, &self.observers),
             (None, Some(bits)) => info!(
