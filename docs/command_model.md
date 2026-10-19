@@ -230,6 +230,25 @@ Neither pipes: each step's payload is collected under its command id in the resu
 receives another step's result. Only `executeCommand` with `isPipe` (the palette's `|`) passes
 one command's result to the next stage.
 
+A user command has limits that keep one run, and one lookup of its definition, bounded:
+
+- it lists at most 20 steps, and a user keeps at most 100 user commands
+- a chain of user commands naming user commands holds at most eight
+- one run performs at most 100 built-in steps: a nested user command counts its own steps each
+  time a step names it, and the stages of a pipe count together
+
+`createUserCommand` and `updateUserCommand` refuse a command over a limit with a `VALIDATION`
+error that names it: "a user command may have at most 20 steps", "a user may have at most 100
+user commands", "user command recursion depth exceeded" or "a user command expands to more
+than 100 steps". An update is refused the same way when it would take a stored command that
+names the updated one past 100 steps. A stored user command that nests deeper than eight or
+expands past 100 steps, saved before these limits, is refused when it runs, before any of its
+steps runs; a pipe over 100 steps is refused with "a pipe expands to more than 100 steps".
+`commands` leaves out a user command whose definition cannot be resolved (one past 100 steps,
+or with a step naming an unknown or disabled command, or a cycle) and lists the rest. A
+disabled user command does not run: `executeCommand` answers `NOT_FOUND` for it, as for an id
+that names no command.
+
 A macro run asks for one confirmation up front when the macro's own `sensitivity` is
 `Restricted` or when any step needs one under the confirmation gate below, judged with the
 run's initiator: a dangerous step, a `Restricted` one, or a `Mutating` one the agent or a plugin

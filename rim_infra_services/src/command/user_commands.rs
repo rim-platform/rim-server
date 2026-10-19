@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
 use rim_core::command::model::UserCommand;
 use rim_services::command::dto::{CommandDefinitionDto, UserCommandDto, UserCommandStepDto};
 use rim_services::{ServiceError, ServiceResult};
+
+use super::DefaultCommandService;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct PersistedUserCommandStep {
@@ -16,6 +18,9 @@ pub(super) fn user_command_exists_locally(command_id: &str) -> bool {
     command_id.starts_with("user.")
 }
 
+/// Refuses `steps` for the user command `command_key` when there are none, more than
+/// [`DefaultCommandService::MAX_USER_COMMAND_STEPS`], one without a command id, or one naming
+/// `command_key` itself.
 pub(super) fn validate_user_command_step_shape(
     command_key: &str,
     steps: &[UserCommandStepDto],
@@ -24,6 +29,12 @@ pub(super) fn validate_user_command_step_shape(
         return Err(ServiceError::Validation(
             "user command must have at least one step".to_string(),
         ));
+    }
+    if steps.len() > DefaultCommandService::MAX_USER_COMMAND_STEPS {
+        return Err(ServiceError::Validation(format!(
+            "a user command may have at most {} steps",
+            DefaultCommandService::MAX_USER_COMMAND_STEPS
+        )));
     }
 
     for step in steps {
@@ -92,6 +103,78 @@ pub(super) fn longest_chain_through(
     longest_path(&calls, command_key, &mut HashMap::new())
         + longest_path(&callers, command_key, &mut HashMap::new())
         - 1
+}
+
+/// Most builtin steps one run performs among `command_key`, once it has `steps`, and the stored
+/// commands that call it directly or through others. A step naming one of the stored commands
+/// counts that command's steps; any other step counts one.
+pub(super) fn most_expanded_steps_through(
+    stored: &[UserCommandDto],
+    command_key: &str,
+    steps: &[UserCommandStepDto],
+) -> usize {
+    let mut steps_by_key: HashMap<&str, &[UserCommandStepDto]> = stored
+        .iter()
+        .filter(|command| command.command_key != command_key)
+        .map(|command| (command.command_key.as_str(), command.steps.as_slice()))
+        .collect();
+    steps_by_key.insert(command_key, steps);
+
+    let mut callers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (&caller, steps) in &steps_by_key {
+        for step in steps.iter() {
+            if steps_by_key.contains_key(step.command_id.as_str()) {
+                callers
+                    .entry(step.command_id.as_str())
+                    .or_default()
+                    .push(caller);
+            }
+        }
+    }
+    let mut affected = vec![command_key];
+    let mut reached: HashSet<&str> = HashSet::from([command_key]);
+    let mut next = 0;
+    while let Some(&callee) = affected.get(next) {
+        for &caller in callers.get(callee).into_iter().flatten() {
+            if reached.insert(caller) {
+                affected.push(caller);
+            }
+        }
+        next += 1;
+    }
+
+    let mut memo = HashMap::new();
+    affected
+        .into_iter()
+        .map(|key| expanded_steps(&steps_by_key, key, &mut memo))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Builtin steps one run of `key` performs, with `steps_by_key` holding the steps of every user
+/// command. A command reached again while its own count is open counts zero, so a cycle in
+/// stored data ends the walk.
+fn expanded_steps<'a>(
+    steps_by_key: &HashMap<&'a str, &'a [UserCommandStepDto]>,
+    key: &'a str,
+    memo: &mut HashMap<&'a str, Option<usize>>,
+) -> usize {
+    match memo.get(key) {
+        Some(Some(count)) => return *count,
+        Some(None) => return 0,
+        None => {}
+    }
+    memo.insert(key, None);
+    let mut count = 0usize;
+    for step in steps_by_key.get(key).copied().unwrap_or_default() {
+        let step_count = match steps_by_key.get_key_value(step.command_id.as_str()) {
+            Some((&callee, _)) => expanded_steps(steps_by_key, callee, memo),
+            None => 1,
+        };
+        count = count.saturating_add(step_count);
+    }
+    memo.insert(key, Some(count));
+    count
 }
 
 fn user_command_steps(steps: &[UserCommandStepDto]) -> Vec<&str> {
