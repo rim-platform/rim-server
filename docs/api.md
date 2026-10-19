@@ -342,11 +342,11 @@ a number above 0, so a private server limits nothing but the batch size.
 | Variable | Limits | Over the limit |
 |---|---|---|
 | `RIM_RATE_REQUESTS_PER_MIN_PER_IP` | Requests to routes under `/api` per client address per minute, with a burst of the same size. IPv6 addresses count per /64. | HTTP 429, `Retry-After` and `{"error":"rate_limited","retryAfterSeconds":n}` |
-| `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` | Mutation fields per session per minute, each field, alias and fragment expansion counted, a fragment spread twice counting twice; a request without a session counts against its address. | `RATE_LIMITED` with `retryAfterSeconds`; nothing in the request runs |
+| `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` | Mutation fields per session per minute, each field, alias and fragment expansion counted, a fragment spread twice counting twice; a request another server forwards for one of its users counts against that user's device, any other request without a session against its address. | `RATE_LIMITED` with `retryAfterSeconds`; nothing in the request runs |
 | `RIM_RATE_MESSAGES_PER_MIN_PER_USER`, `RIM_RATE_MESSAGES_BURST` | Messages per user per minute, sent, replied, forwarded or encrypted, with a burst defaulting to the per-minute number. | `RATE_LIMITED` with `retryAfterSeconds` on the mutation |
 | `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
-| `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20. | HTTP 400 and `{"error":"batch_too_large"}` |
+| `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
 
 The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the client a
 `Forwarded` or `X-Forwarded-For` header names. The limits are kept in memory by each server

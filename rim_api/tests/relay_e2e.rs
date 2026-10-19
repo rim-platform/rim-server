@@ -2,7 +2,8 @@
 //! across relays from creation through Welcome, Commit, a message, an edit and a read state;
 //! the request inbox accepted, ignored and blocked; queued host events pushed on `relayStream`
 //! and a gap pulled from the host's outbox; forwarded requests with replayed and tampered device
-//! requests; and the roles' refusals. Clients talk to their own relay only, over HTTP, and check
+//! requests; forwarded GraphQL under the host's batch cap and a mutation budget per device; and
+//! the roles' refusals. Clients talk to their own relay only, over HTTP, and check
 //! every host event and forwarded answer against the host's key. The public relay: proof-of-work
 //! signups refused, accepted and replaced by an invite; a reported DM request listed and
 //! resolved by the operator; a principal blocked on its relay signed out and refused signup,
@@ -590,6 +591,75 @@ async fn forwarded_requests_refuse_replays_tampering_and_relays_a_card_does_not_
     let (stranger, _) = bob.forward(&a, "POST", "/api", body, None, None).await;
     assert_eq!(stranger.status, 403);
     assert_eq!(stranger.body["error"], "not_delegated");
+
+    a.stop().await;
+    b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarded_graphql_keeps_the_hosts_batch_cap_and_a_mutation_budget_per_device() {
+    let (a_url, b_url) = databases_with(RESET).await;
+    let a = start(&a_url, |config| {
+        open_registration(config);
+        config.api_max_batch = Some(2);
+        config.rate_mutations_per_min_per_session = Some(10);
+    })
+    .await;
+    let b = start(&b_url, open_registration).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    let mut carol = sign_up(&b, "carol", 3).await;
+    alice.start_dm(&bob, &b, true).await;
+    alice.start_dm(&carol, &b, true).await;
+    bob.pending_request(&alice).await;
+    carol.pending_request(&alice).await;
+    let direct = alice.direct_space().await;
+    let heads = json!({ "query": "query($s: ID!) { streamHeads(serverId: $s, streams: [\"w\"]) { seq } }", "variables": { "s": direct } });
+
+    // The relay allows 20 requests in a batch; the host allows 2.
+    let three = serde_json::to_vec(&json!([heads, heads, heads])).expect("json");
+    let (refused, _) = bob.forward(&a, "POST", "/api", three, None, None).await;
+    assert_eq!(refused.status, 400);
+    assert!(refused.host_signed);
+    assert_eq!(refused.body, json!({ "error": "batch_too_large" }));
+    let two = serde_json::to_vec(&json!([heads, heads])).expect("json");
+    let (answer, _) = bob.forward(&a, "POST", "/api", two, None, None).await;
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    assert_eq!(answer.body.as_array().map(Vec::len), Some(2));
+
+    // Six mutation fields of the ten a minute: charged though none of them exists.
+    let six = serde_json::to_vec(&json!({
+        "query": "mutation { a: nope b: nope c: nope d: nope e: nope f: nope }",
+    }))
+    .expect("json");
+    let (charged, _) = bob
+        .forward(&a, "POST", "/api", six.clone(), None, None)
+        .await;
+    assert_eq!(charged.status, 200);
+    assert_ne!(
+        charged.body["errors"][0]["extensions"]["code"],
+        "RATE_LIMITED"
+    );
+    let (limited, _) = bob
+        .forward(&a, "POST", "/api", six.clone(), None, None)
+        .await;
+    assert_eq!(limited.status, 200);
+    assert!(limited.host_signed);
+    assert_eq!(
+        limited.body["errors"][0]["extensions"]["code"], "RATE_LIMITED",
+        "{}",
+        limited.body
+    );
+    assert!(limited.body["errors"][0]["extensions"]["retryAfterSeconds"].as_u64() > Some(0));
+
+    // Another person's device on the same relay has its own budget.
+    let (own, _) = carol.forward(&a, "POST", "/api", six, None, None).await;
+    assert_eq!(own.status, 200);
+    assert_ne!(
+        own.body["errors"][0]["extensions"]["code"], "RATE_LIMITED",
+        "{}",
+        own.body
+    );
 
     a.stop().await;
     b.stop().await;

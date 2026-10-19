@@ -407,7 +407,11 @@ may carry this user's traffic: it holds an active delegation of this device for 
 or the user is a member of this host's direct space and the relay's origin is in their newest card
 (`403 not_delegated` otherwise). It runs the normal handler (GraphQL, attachment upload and download,
 avatar upload, stored-file download, plugin bundle download) as that user and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
-`relay:<serverId>:<principalId>` for forwarded requests.
+`relay:<serverId>:<principalId>` for forwarded requests. Forwarded GraphQL keeps the host's own
+`/api` limits, whatever the relay's are: a batch over `RIM_API_MAX_BATCH` is answered
+`400 {"error":"batch_too_large"}` and none of it runs, and its mutation fields are charged to a
+`RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` budget of the device, so a batch past it answers
+`RATE_LIMITED` with `retryAfterSeconds` and nothing in it runs.
 
 Every forwarded response carries `Rim-Host-Response` (base64url payload) and `Rim-Host-Signature`:
 

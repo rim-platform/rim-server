@@ -1,6 +1,6 @@
 //! Limits applied at the HTTP edge: the client address of a request, the IP deny list, the
-//! per-address request limit on `/api` routes, the per-session mutation budget, the GraphQL
-//! batch cap and the per-user WebSocket connection cap.
+//! per-address request limit on `/api` routes, the mutation budget per session, forwarded
+//! device or address, the GraphQL batch cap and the per-user WebSocket connection cap.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -14,6 +14,7 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::{DateTime, Utc};
 use rim_core::auth::model::SessionId;
 use rim_core::ip_block::model::IpRange;
+use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::user::model::UserId;
 use rim_infra_services::token_bucket::TokenBucketLimiter;
 use rim_services::ServiceResult;
@@ -82,15 +83,33 @@ pub(crate) fn rate_limited_response(retry_after_seconds: u64) -> HttpResponse {
         }))
 }
 
-/// `400` with `{"error":"batch_too_large"}`.
-pub(crate) fn batch_too_large_response() -> HttpResponse {
-    HttpResponse::BadRequest().json(serde_json::json!({ "error": "batch_too_large" }))
+/// The body refusing a GraphQL batch over the cap: `{"error":"batch_too_large"}`.
+pub(crate) fn batch_too_large_body() -> serde_json::Value {
+    serde_json::json!({ "error": "batch_too_large" })
 }
 
-/// Who a mutation budget belongs to: the session, or the address of a caller without one.
+/// `400` with `{"error":"batch_too_large"}`.
+pub(crate) fn batch_too_large_response() -> HttpResponse {
+    HttpResponse::BadRequest().json(batch_too_large_body())
+}
+
+/// The GraphQL answer to a batch over its mutation budget: `RATE_LIMITED` with
+/// `retryAfterSeconds`.
+pub(crate) fn mutation_budget_refusal(retry_after_seconds: u64) -> async_graphql::Response {
+    let error = rim_api::errors::map_service_error(rim_services::ServiceError::RateLimited {
+        retry_after_seconds,
+    });
+    async_graphql::Response::from_errors(vec![
+        error.into_server_error(async_graphql::Pos::default()),
+    ])
+}
+
+/// Who a mutation budget belongs to: the session, the device of a request another server
+/// forwarded, or the address of a caller with neither.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum MutationCaller {
     Session(SessionId),
+    Device(DeviceKeyId),
     Address(IpAddr),
 }
 
@@ -201,6 +220,21 @@ impl EdgeLimits {
     /// Whether a batch of `len` requests is over the cap.
     pub(crate) fn batch_too_large(&self, len: usize) -> bool {
         len > self.max_batch
+    }
+
+    /// Whether `batch` holds more requests than the cap; a single request never does.
+    pub(crate) fn refuses_batch(&self, batch: &async_graphql::BatchRequest) -> bool {
+        matches!(batch, async_graphql::BatchRequest::Batch(requests) if self.batch_too_large(requests.len()))
+    }
+
+    /// Spend the mutation fields of `batch` from `caller`'s budget, or the seconds until they
+    /// are back.
+    pub(crate) fn charge_batch(
+        &self,
+        caller: &MutationCaller,
+        batch: &async_graphql::BatchRequest,
+    ) -> Result<(), u64> {
+        self.spend_mutations(caller, crate::graphql_support::count_mutation_fields(batch))
     }
 
     /// Spend `fields` mutation fields from `caller`'s budget, or the seconds until they are
