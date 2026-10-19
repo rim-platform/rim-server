@@ -25,7 +25,7 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it new delegations are refused as `limited`, while renewals of active ones still go through |
 | `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to push identities, join, subscribe, forward, report presence and bring revocations here |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Requests a local user sends through `/api/remote/…` per day |
-| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers who are not their contacts |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers they do not know (a contact who lists them too, or someone either accepted a DM request from here) |
 | `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest profile card a local user publishes |
 | `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | Unclaimed one-time key packages per device and cipher suite |
 | `RIM_RELAY_DEVICES_PER_USER` | 32 | Devices a local user keeps, revoked ones not counted |
@@ -299,7 +299,10 @@ abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list`
 - `contacts`, `addContact(principalId, relayUrls)`, `removeContact(principalId)`: the contact list
   the request inbox filters by. Relay URLs are 1 to 8 of 1 to 256 bytes of printable ASCII
   without `?`, `#` or `@`. The caller's own principal is refused (`VALIDATION`, "cannot add
-  yourself as a contact").
+  yourself as a contact"), and so is someone new once the caller holds 1,000 contacts
+  (`VALIDATION`, "a user holds at most 1000 contacts; remove one first"). A contact added on one
+  side only does not exempt its holder from the daily invites to other servers or from
+  probation; one who lists the holder too does.
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
   group with people on other servers; people on this relay may be named the same way. A

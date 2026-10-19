@@ -266,6 +266,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- Adding someone as a contact no longer lets a user skip their own limits on DMs to strangers.
+  The daily invites to people on other servers (`RIM_RELAY_DM_REQUESTS_PER_DAY`) and a new
+  account's probation (`RIM_PROBATION_HOURS`) now pass only for people the user knows: a contact
+  who lists the user as a contact too, or someone either of them accepted a DM request from on
+  this server. A user holds at most 1,000 contacts; `addContact` for someone new past that
+  answers `VALIDATION`. "Who May Start A DM" in `docs/messaging.md` and "Public relay" in
+  `docs/specs/server-to-server-v1.md` describe both.
 - A device holds at most 256 pending MLS Welcomes and 64 MiB of them. A Commit whose Welcome
   would take an added device past either is refused (`VALIDATION`), and `claimMlsKeyPackages`
   leaves out a device without room for one more, so clients do not add it until it has read and

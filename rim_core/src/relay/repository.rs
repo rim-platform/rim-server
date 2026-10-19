@@ -184,6 +184,13 @@ pub trait RelayRepository: Send + Sync {
 
     async fn is_contact(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
+    async fn count_contacts(&self, user_id: UserId) -> RepoResult<i64>;
+
+    /// Whether a user and the holder of a principal know each other: each lists the other as
+    /// a contact (only a user of this server has a list here), or one accepted a DM request
+    /// from the other here. A contact listed by one side only does not count.
+    async fn knows(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
+
     /// Returns whether the block is new.
     async fn block(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
