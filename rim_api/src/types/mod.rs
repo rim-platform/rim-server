@@ -68,8 +68,8 @@ pub use dm_policy::{
 pub use e2ee::{
     ClaimMlsKeyPackagesInput, ClaimedKeyPackage, EditEncryptedMessageInput, MessageEncryption,
     MlsCommit, MlsCommitPage, MlsDevice, MlsDeviceRefInput, MlsGroup, MlsKeyPackageStatus,
-    MlsPendingDevice, MlsReaddRequest, MlsWelcome, PrincipalDevice, PrincipalDevices,
-    ReportEncryptedMessageInput, RequestMlsReaddInput, SendEncryptedMessageInput,
+    MlsPendingDevice, MlsReaddRequest, MlsWelcome, MlsWelcomeCursorInput, PrincipalDevice,
+    PrincipalDevices, ReportEncryptedMessageInput, RequestMlsReaddInput, SendEncryptedMessageInput,
     SubmitMlsCommitInput,
 };
 pub use instance_moderation::{

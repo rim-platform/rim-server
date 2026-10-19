@@ -6,8 +6,9 @@ use rim_core::e2ee::model::{
     ClaimedKeyPackage, E2eeDevice, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
     MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
-    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit,
-    NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, MlsWelcome, MlsWelcomeBacklog, MlsWelcomeCursor, MlsWelcomeId,
+    NewEncryptedMessage, NewFrankingRevision, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage,
+    NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -235,6 +236,24 @@ impl From<CommitRow> for MlsCommit {
             created_at: row.created_at.into(),
         }
     }
+}
+
+/// The recipient rows and their Welcomes, as `r` and `w`.
+const PENDING_WELCOMES: &str = "FROM mls_welcome_recipient r
+     JOIN mls_welcome w ON w.id = r.welcome_id";
+
+/// What makes a recipient row pending: not acknowledged, not expired, and its user a member of
+/// the conversation.
+const PENDING_WELCOME_FILTER: &str = "r.acked_at IS NULL AND w.expires_at > now()
+     AND EXISTS (SELECT 1 FROM conversation_member cm
+                 WHERE cm.conversation_id = w.conversation_id
+                   AND cm.user_id = r.user_id AND cm.pending_since IS NULL)";
+
+#[derive(FromQueryResult)]
+struct WelcomeBacklogRow {
+    device_key_id: Uuid,
+    count: i64,
+    bytes: i64,
 }
 
 #[derive(FromQueryResult)]
@@ -1237,21 +1256,35 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         Ok(id)
     }
 
-    async fn pending_welcomes(&self, device_key_id: DeviceKeyId) -> RepoResult<Vec<MlsWelcome>> {
+    async fn pending_welcomes(
+        &self,
+        device_key_id: DeviceKeyId,
+        after: Option<MlsWelcomeCursor>,
+        limit: u32,
+    ) -> RepoResult<Vec<MlsWelcome>> {
         let id: Uuid = device_key_id.into();
+        let mut values = vec![id.into(), i64::from(limit).into()];
+        let after_clause = match after {
+            Some(cursor) => {
+                let after_id: Uuid = cursor.id.into();
+                values.push(utc(cursor.created_at));
+                values.push(after_id.into());
+                "AND (w.created_at, w.id) > ($3, $4)"
+            }
+            None => "",
+        };
         let rows: Vec<WelcomeRow> = self
             .all(
-                "SELECT w.id, c.server_id, w.conversation_id, w.incarnation, w.epoch, w.message,
-                        w.created_at, w.expires_at
-                 FROM mls_welcome_recipient r
-                 JOIN mls_welcome w ON w.id = r.welcome_id
-                 JOIN conversation c ON c.id = w.conversation_id
-                 WHERE r.device_key_id = $1 AND r.acked_at IS NULL AND w.expires_at > now()
-                   AND EXISTS (SELECT 1 FROM conversation_member cm
-                               WHERE cm.conversation_id = w.conversation_id
-                                 AND cm.user_id = r.user_id AND cm.pending_since IS NULL)
-                 ORDER BY w.created_at, w.id",
-                vec![id.into()],
+                &format!(
+                    "SELECT w.id, c.server_id, w.conversation_id, w.incarnation, w.epoch, w.message,
+                            w.created_at, w.expires_at
+                     {PENDING_WELCOMES}
+                     JOIN conversation c ON c.id = w.conversation_id
+                     WHERE r.device_key_id = $1 AND {PENDING_WELCOME_FILTER} {after_clause}
+                     ORDER BY w.created_at, w.id
+                     LIMIT $2"
+                ),
+                values,
             )
             .await?;
         Ok(rows
@@ -1265,6 +1298,35 @@ impl E2eeRepository for SeaOrmE2eeRepository {
                 message: row.message,
                 created_at: row.created_at.into(),
                 expires_at: row.expires_at.into(),
+            })
+            .collect())
+    }
+
+    async fn welcome_backlog(
+        &self,
+        device_key_ids: &[DeviceKeyId],
+    ) -> RepoResult<Vec<MlsWelcomeBacklog>> {
+        if device_key_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<WelcomeBacklogRow> = self
+            .all(
+                &format!(
+                    "SELECT r.device_key_id, count(*) AS count,
+                            COALESCE(sum(octet_length(w.message)), 0)::bigint AS bytes
+                     {PENDING_WELCOMES}
+                     WHERE r.device_key_id = ANY($1) AND {PENDING_WELCOME_FILTER}
+                     GROUP BY r.device_key_id"
+                ),
+                vec![uuids(device_key_ids)],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| MlsWelcomeBacklog {
+                device_key_id: row.device_key_id.into(),
+                count: row.count,
+                bytes: row.bytes,
             })
             .collect())
     }

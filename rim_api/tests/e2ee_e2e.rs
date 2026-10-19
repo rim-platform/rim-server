@@ -88,7 +88,10 @@ query Commits($serverId: ID!, $conversationId: ID!, $incarnation: Int!, $afterEp
   mlsCommits(serverId: $serverId, conversationId: $conversationId, incarnation: $incarnation,
              afterEpoch: $afterEpoch) { commits { epoch message } hasMore }
 }"#;
-const WELCOMES: &str = "query { myMlsWelcomes { id conversationId incarnation epoch message } }";
+const WELCOMES: &str =
+    "query { myMlsWelcomes { id conversationId incarnation epoch message createdAt } }";
+const WELCOMES_PAGE: &str = "query Page($after: MlsWelcomeCursorInput, $limit: Int) { \
+     myMlsWelcomes(after: $after, limit: $limit) { id } }";
 const ACK: &str = "mutation Ack($ids: [ID!]!) { ackMlsWelcomes(ids: $ids) }";
 const MESSAGE_FIELDS: &str = "id text authorId forwardedFromMessageId mentionedUserIds \
      encryption { incarnation epoch senderDeviceId ciphertext frankingReceipt frankingKeyId sentAtUs }";
@@ -371,6 +374,26 @@ impl Fixture {
         assert_eq!(welcomes.as_array().map(Vec::len), Some(1));
         assert_eq!(welcomes[0]["conversationId"], json!(conv));
         assert_eq!(welcomes[0]["epoch"], json!(1));
+        // A page of one holds it; the page after it is empty.
+        let first = exec_ok(
+            &self.schema,
+            self.bob.request(WELCOMES_PAGE, json!({ "limit": 1 })),
+        )
+        .await;
+        assert_eq!(
+            first["myMlsWelcomes"],
+            json!([{ "id": welcomes[0]["id"].clone() }])
+        );
+        let cursor = json!({
+            "createdAt": welcomes[0]["createdAt"].clone(),
+            "welcomeId": welcomes[0]["id"].clone(),
+        });
+        let after = exec_ok(
+            &self.schema,
+            self.bob.request(WELCOMES_PAGE, json!({ "after": cursor })),
+        )
+        .await;
+        assert_eq!(after["myMlsWelcomes"], json!([]));
         let welcome = MlsMessageIn::tls_deserialize_exact_bytes(&unb64(
             welcomes[0]["message"].as_str().expect("message"),
         ))

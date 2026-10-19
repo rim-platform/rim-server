@@ -259,6 +259,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- A device holds at most 256 pending MLS Welcomes and 64 MiB of them. A Commit whose Welcome
+  would take an added device past either is refused (`VALIDATION`), and `claimMlsKeyPackages`
+  leaves out a device without room for one more, so clients do not add it until it has read and
+  acknowledged its Welcomes. Before, Welcomes for one device piled up for 30 days without limit.
+  `myMlsWelcomes` answers a page at a time: the new optional `after: MlsWelcomeCursorInput` and
+  `limit` (1 to 100, 100 by default) arguments, and the new `MlsWelcome.createdAt` that with
+  `id` makes the cursor. A client that asks with no arguments gets the oldest 100
+  (`docs/specs/e2ee-mls-v1.md`, "Welcome delivery and joining").
 - A relay files a DM invite another server delivers only when that server speaks for the
   sender it names: the sender's card must be signed by their key, and their newest card must
   list the delivering server (or the sender is a local user subscribed there). Anything else is

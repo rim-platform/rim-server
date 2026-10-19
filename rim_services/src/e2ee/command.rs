@@ -1,5 +1,5 @@
 use rim_core::conversation::model::ConversationId;
-use rim_core::e2ee::model::MlsWelcomeId;
+use rim_core::e2ee::model::{MlsWelcomeCursor, MlsWelcomeId};
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::message::model::MessageId;
 use rim_core::server::model::ServerId;
@@ -61,6 +61,15 @@ pub struct ListMlsCommitsQuery {
     /// Exclusive; `None` reads from epoch 0.
     pub after_epoch: Option<i64>,
     /// 1 to 100; 50 when `None`.
+    pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListMlsWelcomesQuery {
+    pub caller: MlsCaller,
+    /// Exclusive; `None` reads from the oldest.
+    pub after: Option<MlsWelcomeCursor>,
+    /// 1 to 100; 100 when `None`.
     pub limit: Option<i32>,
 }
 
