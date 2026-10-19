@@ -88,6 +88,16 @@ decide, and each may only tighten the one above it:
 - **Refused here.** A DM in the direct space that a recipient here refuses answers `FORBIDDEN`
   when it is started (`createConversation`, `addConversationMembers`). A refused DM from another
   server is answered as for a block, so its server stops addressing the recipient.
+- **Request limits.** A conversation that would file a DM request with someone here meets the
+  request inbox's limits when it is started (`createConversation`, `addConversationMembers`, in
+  the direct space and for a workspace's DMs): `FORBIDDEN` ("their request inbox is full") while
+  the recipient holds 100 pending requests, and `RATE_LIMITED` with `retryAfterSeconds` (until
+  the sender's oldest request of the last 24 hours leaves the window) once the sender would file
+  more than `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) requests in 24 hours on this server; a group
+  counts each request it files. A DM delivered directly (from a contact, an Owner or Moderator,
+  or a member the recipient takes DMs from directly) files no request and meets no limit, and
+  reopening an existing DM files none. A conversation the request inbox still refuses for a
+  recipient here is kept from them as an ignored request is, with no notification.
 - **Workspace DMs.** In a workspace hosted here, a DM a member whose relay is this server takes
   as a request is held in their request inbox like a DM from outside: until they accept it, it stays out of their
   `inboxConversations` and `workspaceEvents`, and its notifications and unread counts out of

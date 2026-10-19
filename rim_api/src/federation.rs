@@ -68,26 +68,36 @@ pub(crate) fn direct_space<'a>(ctx: &'a Context<'_>) -> Result<&'a FederationCon
     Ok(federation)
 }
 
-/// Whether the caller may start a conversation in the direct space with `user_ids`:
-/// `FORBIDDEN` when one is on a server the operator's outbound DM setting does not admit, or a
-/// local one's DM settings refuse the caller; `VALIDATION` while the caller's account is in
-/// probation and the conversation would send a DM request to a stranger among them. Elsewhere,
-/// and on a server without the direct space, it allows everything.
+/// Whether the caller may start a conversation with `user_ids` in `server_id`, a DM when
+/// `direct_message`. In the direct space: `FORBIDDEN` when one is on a server the operator's
+/// outbound DM setting does not admit, or a local one's DM settings refuse the caller;
+/// `VALIDATION` while the caller's account is in probation and the conversation would send a DM
+/// request to a stranger among them. There and in a workspace's DMs, a conversation that files
+/// a DM request answers `FORBIDDEN` when its recipient's request inbox is full and
+/// `RATE_LIMITED` (with `retryAfterSeconds`) when the caller would file more requests than they
+/// may per day. Everything else, and everything on a server without server-to-server traffic,
+/// is allowed.
 pub(crate) async fn ensure_may_request(
     ctx: &Context<'_>,
     actor: UserId,
     server_id: rim_core::server::model::ServerId,
     user_ids: Vec<UserId>,
+    direct_message: bool,
 ) -> Result<(), Error> {
     let Ok(federation) = ctx.data::<FederationContext>() else {
         return Ok(());
     };
-    if server_id != federation.host.direct_space_id() || user_ids.is_empty() {
+    if user_ids.is_empty() {
         return Ok(());
     }
     federation
         .host
-        .ensure_may_request(rim_services::Actor::new(actor), user_ids)
+        .ensure_may_request(
+            rim_services::Actor::new(actor),
+            server_id,
+            user_ids,
+            direct_message,
+        )
         .await
         .map_err(map_service_error)
 }

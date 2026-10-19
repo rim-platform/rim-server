@@ -53,7 +53,7 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 use crate::quota::{DailyCounter, Quotas};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{local_document, verify_identity};
-use crate::relay::inbox::{Filing, InboxFacts, file};
+use crate::relay::inbox::{Filing, InboxFacts, SENDER_WINDOW, file};
 use crate::relay::policy::{DmPolicy, PolicySource};
 use crate::repos::AppRepos;
 
@@ -614,7 +614,7 @@ impl DefaultRelayService {
                 facts.user_held_bytes = repos.relay_repo.user_held_bytes(user_id).await?;
                 facts.filed_by_sender_today = repos
                     .relay_repo
-                    .count_requests_from(from, now - Duration::days(1))
+                    .count_requests_from(from, now - SENDER_WINDOW)
                     .await?;
             }
         }
@@ -623,6 +623,33 @@ impl DefaultRelayService {
             Filing::Refuse(reason) => {
                 if reason == "limited" {
                     crate::metrics::rate_limited("dm_requests");
+                }
+                // An own invite's conversation already exists here; an ignored row, decided as
+                // it is filed, keeps it out of the local member's view without making it a
+                // request.
+                if read.local
+                    && facts.request.is_none()
+                    && let (Some(invite), Some(conversation_id)) =
+                        (&read.invite, read.conversation_id)
+                {
+                    let (card_payload, card_signature) = invite
+                        .card
+                        .as_ref()
+                        .map(|c| (c.payload.clone(), c.signature.clone()))
+                        .unwrap_or_default();
+                    repos
+                        .relay_repo
+                        .insert_request(NewDmRequest {
+                            status: DmRequestStatus::Ignored,
+                            user_id,
+                            from_principal_id: invite.from_principal_id.clone(),
+                            card_payload,
+                            card_signature,
+                            host_server_id: peer_server_id.to_string(),
+                            conversation_id,
+                            expires_at: now + IGNORED_REQUEST_TTL,
+                        })
+                        .await?;
                 }
                 return Ok(Filed::Done(Some(reason)));
             }
@@ -1470,17 +1497,21 @@ impl RelayService for DefaultRelayService {
         let mut notices = Vec::new();
         let mut envelope_id = None;
         for principal_id in &recipients {
-            self.file_for(
-                &repos,
-                &own_id,
-                &read,
-                &envelope,
-                &mut envelope_id,
-                principal_id,
-                None,
-                &mut notices,
-            )
-            .await?;
+            if let Some(reason) = self
+                .file_for(
+                    &repos,
+                    &own_id,
+                    &read,
+                    &envelope,
+                    &mut envelope_id,
+                    principal_id,
+                    None,
+                    &mut notices,
+                )
+                .await?
+            {
+                info!(principal_id = %principal_id, reason, stream = %read.stream, "the request inbox refused an own event for a local member");
+            }
         }
         Self::commit(scope).await?;
         for notice in notices {

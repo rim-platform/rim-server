@@ -1,6 +1,7 @@
 //! How a relay files a delivered item for one recipient: into the queue, held by a DM request,
 //! dropped, or refused.
 
+use chrono::Duration;
 use rim_core::relay::model::{DmRequestId, DmRequestStatus};
 
 use crate::relay::policy::DmPolicy;
@@ -18,6 +19,33 @@ pub(crate) const MAX_HELD_BYTES_PER_REQUEST: i64 = 1024 * 1024;
 /// it and never dropped to make room in it, so this cap does not follow the configured queue
 /// cap; it is a quarter of the public relay's (64 MiB).
 pub(crate) const MAX_HELD_BYTES_PER_USER: i64 = 16 * 1024 * 1024;
+/// The window a sender's daily request limit counts over.
+pub(crate) const SENDER_WINDOW: Duration = Duration::days(1);
+
+/// A limit that keeps a new DM request from being filed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestLimit {
+    /// The recipient holds `MAX_PENDING_PER_USER` pending requests.
+    RecipientFull,
+    /// The sender filed their daily limit of requests in the last `SENDER_WINDOW`.
+    SenderDaily,
+}
+
+/// The limit a new request is over, if any, given the recipient's pending requests and those
+/// the sender filed in the last `SENDER_WINDOW`.
+pub(crate) fn request_limit(
+    pending_for_user: i64,
+    filed_by_sender_today: i64,
+    sender_daily_limit: i64,
+) -> Option<RequestLimit> {
+    if pending_for_user >= MAX_PENDING_PER_USER {
+        Some(RequestLimit::RecipientFull)
+    } else if filed_by_sender_today >= sender_daily_limit {
+        Some(RequestLimit::SenderDaily)
+    } else {
+        None
+    }
+}
 
 /// What the relay knows about an item and its recipient.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,8 +117,12 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
         }
         None if facts.policy == DmPolicy::Deliver => Filing::FileAccepted,
         None if facts.policy == DmPolicy::Refuse => Filing::Refuse("blocked"),
-        None if facts.pending_for_user >= MAX_PENDING_PER_USER
-            || facts.filed_by_sender_today >= facts.sender_daily_limit
+        None if request_limit(
+            facts.pending_for_user,
+            facts.filed_by_sender_today,
+            facts.sender_daily_limit,
+        )
+        .is_some()
             || !facts.holding_fits() =>
         {
             Filing::Refuse("limited")
@@ -195,6 +227,23 @@ mod tests {
                 ..invite()
             }),
             Filing::FileRequest
+        );
+    }
+
+    #[test]
+    fn a_full_inbox_is_named_before_the_senders_limit() {
+        assert_eq!(request_limit(0, 0, SENDER_LIMIT), None);
+        assert_eq!(
+            request_limit(MAX_PENDING_PER_USER - 1, SENDER_LIMIT - 1, SENDER_LIMIT),
+            None
+        );
+        assert_eq!(
+            request_limit(MAX_PENDING_PER_USER, SENDER_LIMIT, SENDER_LIMIT),
+            Some(RequestLimit::RecipientFull)
+        );
+        assert_eq!(
+            request_limit(0, SENDER_LIMIT, SENDER_LIMIT),
+            Some(RequestLimit::SenderDaily)
         );
     }
 

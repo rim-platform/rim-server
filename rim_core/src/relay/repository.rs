@@ -101,6 +101,14 @@ pub trait RelayRepository: Send + Sync {
         since: DateTime<Utc>,
     ) -> RepoResult<i64>;
 
+    /// When the oldest of the requests [`Self::count_requests_from`] counts was filed; `None`
+    /// when there is none.
+    async fn oldest_request_from(
+        &self,
+        principal_id: &str,
+        since: DateTime<Utc>,
+    ) -> RepoResult<Option<DateTime<Utc>>>;
+
     /// Move a pending request to `status`, expiring at `expires_at`. Returns `None` when the
     /// request is not pending.
     async fn decide_request(
