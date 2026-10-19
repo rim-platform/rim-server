@@ -307,5 +307,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A message's reactions, `reactedByMe` included, are read for the user who asked. Before, when
   several users' requests loaded reactions at the same moment, one of them could be shown
   another user's reaction state.
+- An identity recovered with the recovery phrase reaches other servers again. The identity
+  document a relay serves and pushes (`GET /s2s/v1/principals/<id>`) leaves out the devices
+  the recovery revoked, so hosts accept it, apply the recovery and revoke those devices; before,
+  hosts refused the whole document and kept trusting the old devices, and the person could not
+  be looked up or join a workspace on another server. A receiver ignores such a device instead
+  of refusing the document, and a document past 64 devices keeps the current ones. Identity key
+  rotations and recoveries are now pushed to hosts like device and card changes
+  (`server-to-server-v1.md` "Profile cards and contacts", `key-identity-v1.md` "Rotation and
+  recovery").
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

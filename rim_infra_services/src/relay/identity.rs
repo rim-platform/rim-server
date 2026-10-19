@@ -1,18 +1,19 @@
 //! Identity documents (`GET /s2s/v1/principals/<id>`): built for local users, verified when
 //! fetched or pushed, and stored for remote users.
 
+use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use chrono::Utc;
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::model::{NewRemoteUser, UserKind};
 use rim_core::host::repository::HostRepository;
-use rim_core::key_identity::model::{KeyLogEntryType, NewDeviceKey, NewKeyLogEntry};
+use rim_core::key_identity::model::{DeviceKey, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry};
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::user::model::UserId;
 use rim_identity::{
     DeviceCert, IdentityError, KeyState, ProfileCard, PublicKey, RotationSigner, SignedStatement,
-    UnverifiedRevocation, verify_device_cert, verify_profile_card,
+    UnverifiedRevocation, entry_signer, verify_device_cert, verify_profile_card,
 };
 use rim_services::relay::dto::{IdentityDevice, IdentityDocument, SignedJson};
 use rim_services::{ServiceError, ServiceResult};
@@ -65,6 +66,7 @@ pub(crate) struct VerifiedIdentity {
     pub head: KeyState,
     /// Every entry, inception first, with the state after it and its signer.
     pub entries: Vec<(SignedJson, KeyState, Option<RotationSigner>)>,
+    /// The listed devices whose certificates no recovery voided.
     pub devices: Vec<VerifiedDevice>,
     /// The card, when it verifies against the head; a card signed before a rotation is left
     /// out.
@@ -75,9 +77,19 @@ fn refused(what: &str, err: IdentityError) -> String {
     format!("{what}: {err}")
 }
 
+/// Whether a recovery rotation voids a certificate signed at `key_seq`: some entry after
+/// `key_seq` in a log whose entries were signed by `signers` (inception first) is signed by
+/// the recovery key.
+fn voided_by_recovery(signers: &[Option<RotationSigner>], key_seq: usize) -> bool {
+    signers
+        .iter()
+        .rposition(|signer| *signer == Some(RotationSigner::Recovery))
+        .is_some_and(|last| key_seq < last)
+}
+
 /// Verify a document: the log from its inception (naming `principal_id`), each certificate
-/// against the log at its `keySeq` with no recovery rotation after it, each revocation, and
-/// the card against the head.
+/// against the log at its `keySeq`, each revocation, and the card against the head. A device
+/// whose certificate a recovery voided is checked like the others and then left out.
 pub(crate) fn verify_identity(doc: &IdentityDocument) -> Result<VerifiedIdentity, String> {
     if doc.key_log.is_empty() || doc.key_log.len() > MAX_LOG_ENTRIES {
         return Err(format!("a key log has 1 to {MAX_LOG_ENTRIES} entries"));
@@ -100,6 +112,7 @@ pub(crate) fn verify_identity(doc: &IdentityDocument) -> Result<VerifiedIdentity
         return Err("the key log is another principal's".to_string());
     }
 
+    let signers: Vec<_> = entries.iter().map(|(_, _, signer)| *signer).collect();
     let mut seen = HashSet::new();
     let mut devices = Vec::with_capacity(doc.devices.len());
     for device in &doc.devices {
@@ -117,6 +130,9 @@ pub(crate) fn verify_identity(doc: &IdentityDocument) -> Result<VerifiedIdentity
             }
             None => None,
         };
+        if voided_by_recovery(&signers, cert.key_seq as usize) {
+            continue;
+        }
         devices.push(VerifiedDevice {
             cert,
             certificate: device.certificate.clone(),
@@ -156,12 +172,6 @@ fn verify_certificate(
     let (_, state, _) = entries
         .get(key_seq)
         .ok_or_else(|| "a certificate names a key seq past the log".to_string())?;
-    if entries[key_seq + 1..]
-        .iter()
-        .any(|(_, _, signer)| *signer == Some(RotationSigner::Recovery))
-    {
-        return Err("a certificate predates a recovery rotation".to_string());
-    }
     verify_device_cert(state, &statement(certificate)).map_err(|e| refused("certificate", e))
 }
 
@@ -184,7 +194,38 @@ fn verify_revocation(
     Err("a revocation does not verify".to_string())
 }
 
+/// The devices a document lists, in the order given: those whose certificates no recovery
+/// voided, and when more than [`MAX_DEVICES`] remain, the unrevoked ones first, then the most
+/// recently revoked.
+fn listed_devices(signers: &[Option<RotationSigner>], devices: Vec<DeviceKey>) -> Vec<DeviceKey> {
+    let mut devices: Vec<DeviceKey> = devices
+        .into_iter()
+        .filter(|d| !voided_by_recovery(signers, d.key_seq as usize))
+        .collect();
+    if devices.len() > MAX_DEVICES {
+        let mut order: Vec<usize> = (0..devices.len()).collect();
+        order.sort_by_key(|&i| {
+            (
+                devices[i].revoked_at.is_some(),
+                Reverse(devices[i].revoked_at),
+                Reverse(i),
+            )
+        });
+        let keep: HashSet<usize> = order.into_iter().take(MAX_DEVICES).collect();
+        devices = devices
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| keep.contains(i))
+            .map(|(_, d)| d)
+            .collect();
+    }
+    devices
+}
+
 /// A local user's document, or `None` when the user has no key identity.
+///
+/// # Errors
+/// What the repositories return, and `Internal` when a stored key log entry cannot be read.
 pub(crate) async fn local_document(
     key_identity_repo: &dyn KeyIdentityRepository,
     e2ee_repo: &dyn E2eeRepository,
@@ -195,16 +236,23 @@ pub(crate) async fn local_document(
     if log.is_empty() {
         return Ok(None);
     }
+    let signers = log
+        .iter()
+        .map(|e| {
+            entry_signer(&SignedStatement {
+                payload: e.payload.clone(),
+                signature: e.signature.clone(),
+            })
+            .map_err(|e| ServiceError::internal(anyhow::anyhow!("stored key log entry: {e}")))
+        })
+        .collect::<ServiceResult<Vec<_>>>()?;
     let active: HashSet<uuid::Uuid> = e2ee_repo
         .mls_active_device_ids(user_id, crate::e2ee::active_since(Utc::now()))
         .await?
         .into_iter()
         .collect();
-    let devices = key_identity_repo
-        .list_devices(user_id)
-        .await?
+    let devices = listed_devices(&signers, key_identity_repo.list_devices(user_id).await?)
         .into_iter()
-        .take(MAX_DEVICES)
         .map(|d| IdentityDevice {
             device_id: d.device_id,
             mls_active: d.revoked_at.is_none() && active.contains(&d.device_id),
@@ -448,11 +496,201 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, Duration};
+    use rim_core::e2ee::repository::MockE2eeRepository;
+    use rim_core::key_identity::model::{DeviceKeyId, KeyLogEntry};
+    use rim_core::key_identity::repository::MockKeyIdentityRepository;
     use rim_identity::testing::{TestIdentity, signing_key};
     use uuid::Uuid;
 
     use super::testing::{document, signed};
     use super::*;
+
+    /// A stored device row for `cert`, revoked at `revoked_at` when given.
+    fn row(
+        user_id: UserId,
+        device_id: Uuid,
+        cert: &SignedStatement,
+        key_seq: u32,
+        revoked_at: Option<DateTime<Utc>>,
+    ) -> DeviceKey {
+        DeviceKey {
+            id: DeviceKeyId::new(),
+            user_id,
+            device_id,
+            public_key: String::new(),
+            name: "Device".to_string(),
+            cert_payload: cert.payload.clone(),
+            cert_signature: cert.signature.clone(),
+            key_seq,
+            added_at: Utc::now(),
+            last_used_at: None,
+            revoked_at,
+            revocation_payload: None,
+            revocation_signature: None,
+        }
+    }
+
+    fn log_entry(user_id: UserId, seq: u32, entry: &SignedStatement) -> KeyLogEntry {
+        KeyLogEntry {
+            user_id,
+            seq,
+            entry_type: if seq == 0 {
+                KeyLogEntryType::Inception
+            } else {
+                KeyLogEntryType::Rotate
+            },
+            payload: entry.payload.clone(),
+            signature: entry.signature.clone(),
+            created_at: Utc::now(),
+        }
+    }
+
+    /// The document `local_document` builds from `log` and `devices`, every unrevoked device
+    /// uploading key packages.
+    async fn exported(
+        principal_id: &str,
+        log: Vec<KeyLogEntry>,
+        devices: Vec<DeviceKey>,
+    ) -> IdentityDocument {
+        let active: Vec<Uuid> = devices
+            .iter()
+            .filter(|d| d.revoked_at.is_none())
+            .map(|d| d.device_id)
+            .collect();
+        let mut keys = MockKeyIdentityRepository::new();
+        keys.expect_list_key_log().returning(move |_| {
+            let log = log.clone();
+            Box::pin(async move { Ok(log) })
+        });
+        keys.expect_list_devices().returning(move |_| {
+            let devices = devices.clone();
+            Box::pin(async move { Ok(devices) })
+        });
+        keys.expect_get_profile_card()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        let mut e2ee = MockE2eeRepository::new();
+        e2ee.expect_mls_active_device_ids().returning(move |_, _| {
+            let active = active.clone();
+            Box::pin(async move { Ok(active) })
+        });
+        local_document(&keys, &e2ee, UserId::new(), principal_id)
+            .await
+            .expect("document")
+            .expect("a key identity")
+    }
+
+    /// An identity with `old` devices certified at seq 0, revoked by a recovery at seq 1 that
+    /// enrolled one new device: the log, the stored rows and the new device's id.
+    fn recovered(old: usize) -> (String, Vec<KeyLogEntry>, Vec<DeviceKey>, Uuid) {
+        let user_id = UserId::new();
+        let mut id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).expect("inception");
+        let recovered_at = Utc::now();
+        let mut devices: Vec<DeviceKey> = (0..old)
+            .map(|n| {
+                let device_id = Uuid::from_u128(n as u128 + 1);
+                let cert = id.device_cert(&state, device_id, &signing_key(20), "Old");
+                row(user_id, device_id, &cert, 0, Some(recovered_at))
+            })
+            .collect();
+        let recovery = id.recover(&state, 2);
+        let next = state.apply(&recovery).expect("recovery").0;
+        let new_id = Uuid::from_u128(1000);
+        let cert = id.device_cert(&next, new_id, &signing_key(21), "New");
+        devices.push(row(user_id, new_id, &cert, 1, None));
+        let log = vec![
+            log_entry(user_id, 0, &inception),
+            log_entry(user_id, 1, &recovery),
+        ];
+        (state.principal_id, log, devices, new_id)
+    }
+
+    #[test]
+    fn a_recovery_voids_certificates_signed_before_it() {
+        use RotationSigner::{Identity, Recovery};
+        let signers = [None, Some(Identity), Some(Recovery), Some(Identity)];
+        assert!(voided_by_recovery(&signers, 0));
+        assert!(voided_by_recovery(&signers, 1));
+        assert!(!voided_by_recovery(&signers, 2));
+        assert!(!voided_by_recovery(&signers, 3));
+        assert!(!voided_by_recovery(&[None, Some(Identity)], 0));
+    }
+
+    #[tokio::test]
+    async fn a_recovered_identity_exports_only_its_new_device_and_verifies() {
+        let (principal_id, log, devices, new_id) = recovered(1);
+        let doc = exported(&principal_id, log, devices).await;
+        assert_eq!(doc.devices.len(), 1);
+        assert_eq!(doc.devices[0].device_id, new_id);
+        assert!(doc.devices[0].mls_active);
+        let verified = verify_identity(&doc).expect("verify");
+        assert_eq!(verified.head.seq, 1);
+        assert_eq!(verified.devices.len(), 1);
+        assert_eq!(verified.devices[0].cert.device_id, new_id);
+    }
+
+    #[tokio::test]
+    async fn a_recovered_identity_keeps_its_new_device_past_the_device_cap() {
+        let (principal_id, log, devices, new_id) = recovered(MAX_DEVICES + 6);
+        let doc = exported(&principal_id, log, devices).await;
+        let ids: Vec<Uuid> = doc.devices.iter().map(|d| d.device_id).collect();
+        assert_eq!(ids, vec![new_id]);
+        assert!(verify_identity(&doc).is_ok());
+    }
+
+    #[test]
+    fn past_the_cap_unrevoked_devices_stay_then_the_most_recently_revoked() {
+        let user_id = UserId::new();
+        let id = TestIdentity::new(1);
+        let state = KeyState::from_inception(&id.inception()).expect("inception");
+        let cert = id.device_cert(&state, Uuid::from_u128(1), &signing_key(20), "Device");
+        let start = Utc::now();
+        let total = MAX_DEVICES + 6;
+        let devices: Vec<DeviceKey> = (0..total)
+            .map(|n| {
+                let revoked_at =
+                    (n != 0 && n != total - 1).then(|| start + Duration::minutes(n as i64));
+                row(user_id, Uuid::from_u128(n as u128), &cert, 0, revoked_at)
+            })
+            .collect();
+        let kept: Vec<u128> = listed_devices(&[None], devices)
+            .iter()
+            .map(|d| d.device_id.as_u128())
+            .collect();
+        let expected: Vec<u128> = std::iter::once(0).chain(7..total as u128).collect();
+        assert_eq!(kept, expected);
+    }
+
+    #[test]
+    fn a_voided_certificate_is_left_out_and_a_bad_signature_is_still_refused() {
+        let mut id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).expect("inception");
+        let old = id.device_cert(&state, Uuid::from_u128(1), &signing_key(20), "Old");
+        let recovery = id.recover(&state, 2);
+        let next = state.apply(&recovery).expect("recovery").0;
+        let new = id.device_cert(&next, Uuid::from_u128(2), &signing_key(21), "New");
+        let device = |device_id: u128, cert: &SignedStatement| IdentityDevice {
+            device_id: Uuid::from_u128(device_id),
+            certificate: signed(cert),
+            revocation: None,
+            mls_active: true,
+        };
+        let mut doc = IdentityDocument {
+            principal_id: next.principal_id.clone(),
+            key_log: vec![signed(&inception), signed(&recovery)],
+            devices: vec![device(1, &old), device(2, &new)],
+            card: None,
+        };
+        let verified = verify_identity(&doc).expect("verify");
+        let ids: Vec<Uuid> = verified.devices.iter().map(|d| d.cert.device_id).collect();
+        assert_eq!(ids, vec![Uuid::from_u128(2)]);
+
+        doc.devices[0].certificate.signature = new.signature.clone();
+        assert!(verify_identity(&doc).is_err());
+    }
 
     #[test]
     fn a_document_verifies_with_its_device_and_card() {

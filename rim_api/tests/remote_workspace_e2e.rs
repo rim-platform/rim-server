@@ -2,8 +2,8 @@
 //! through the relay with channel traffic both ways and every host event checked against the
 //! host's key, presence, a kick; a delegation expiring and renewed; the host's allow-list; a
 //! device revocation acknowledged through the relay and brought directly to a host the relay
-//! cannot reach; the direct sign-in of a remote member with its day-long session; `leaveRelay`;
-//! and the SDL.
+//! cannot reach; a recovery at the relay applied by the host; the direct sign-in of a remote
+//! member with its day-long session; `leaveRelay`; and the SDL.
 //!
 //! Run with:
 //! ```sh
@@ -92,6 +92,8 @@ query Status($d: ID!) {
 }"#;
 const APPLY_REVOCATION: &str = r#"
 mutation Apply($r: SignedStatementInput!) { applyRemoteRevocation(revocation: $r) { payload signature } }"#;
+const ROTATE: &str = r#"
+mutation Rotate($input: RotateIdentityKeyInput!) { rotateIdentityKey(input: $input) { keySeq } }"#;
 const LEAVE: &str = "mutation { leaveRelay }";
 const ITEMS: &str = r#"
 query Items($after: ID) {
@@ -1003,6 +1005,80 @@ async fn a_revocation_is_acknowledged_and_brought_directly_to_a_host_the_relay_c
         direct_ack,
         "a repeat gets the same acknowledgement"
     );
+
+    h.stop().await;
+    r.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_recovery_at_the_relay_reaches_the_host_and_revokes_the_old_devices() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let mut rita = sign_up(&r, "rita", 2).await;
+    let (ws, _, invite) = workspace(&h, &hannah).await;
+    rita.join(&h, &r, &ws, Some(&invite)).await;
+    let rita_on_h = user_id(&h, &rita.principal()).await;
+    let (phone, _) = rita.add_device(73).await;
+    eventually("the host to learn the phone", || async {
+        (scalar(
+            &h,
+            "SELECT count(*) AS n FROM device_key WHERE device_id = $1",
+            vec![phone.into()],
+        )
+        .await
+            == 1)
+            .then_some(())
+    })
+    .await;
+
+    // Every device lost: the recovery key signs a new identity key and a new laptop, without
+    // a session.
+    let recovery = rita.identity.recover(&rita.state, 74);
+    rita.state = rita.state.apply(&recovery).expect("recovery").0;
+    let laptop = Uuid::from_u128(0x3000 + 75);
+    let cert = rita
+        .identity
+        .device_cert(&rita.state, laptop, &signing_key(75), "Laptop");
+    let body: Value = reqwest::Client::new()
+        .post(format!("{}/api", r.origin))
+        .json(&json!({ "query": ROTATE, "variables": { "input": {
+            "entry": statement(&recovery),
+            "device": statement(&cert),
+        } } }))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    assert!(body.get("errors").is_none(), "recovery: {body}");
+
+    eventually("the host to apply the recovery", || async {
+        (scalar(
+            &h,
+            "SELECT count(*) AS n FROM key_log_entry WHERE user_id = $1",
+            vec![Uuid::from(rita_on_h).into()],
+        )
+        .await
+            == 2)
+            .then_some(())
+    })
+    .await;
+    let unrevoked = |device_id: Uuid| {
+        let h = &h;
+        async move {
+            scalar(
+                h,
+                "SELECT count(*) AS n FROM device_key \
+                 WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL",
+                vec![Uuid::from(rita_on_h).into(), device_id.into()],
+            )
+            .await
+        }
+    };
+    assert_eq!(unrevoked(rita.device_id).await, 0);
+    assert_eq!(unrevoked(phone).await, 0);
+    assert_eq!(unrevoked(laptop).await, 1);
 
     h.stop().await;
     r.stop().await;
