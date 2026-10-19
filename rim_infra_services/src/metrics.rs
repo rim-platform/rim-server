@@ -8,7 +8,7 @@ use rim_core::repository::error::RepoResult;
 
 /// Newly committed messages, labelled `encryption` (`plaintext` or `encrypted`).
 pub const MESSAGES_CREATED: &str = "rim_messages_created_total";
-/// Successful local human account registrations.
+/// Successful local account registrations.
 pub const REGISTRATIONS: &str = "rim_registrations_total";
 
 /// Requests a rate limiter or quota refused, labelled `limiter`.
@@ -40,7 +40,7 @@ pub fn describe() {
     describe_counter!(
         REGISTRATIONS,
         Unit::Count,
-        "Successful local human account registrations."
+        "Successful local account registrations."
     );
     counter!(REGISTRATIONS).absolute(0);
     for encryption in ["plaintext", "encrypted"] {
@@ -99,7 +99,7 @@ pub(crate) fn message_created(encrypted: bool) {
     counter!(MESSAGES_CREATED, "encryption" => encryption).increment(1);
 }
 
-/// Count one successfully committed human account registration.
+/// Count one successfully committed local account registration.
 pub(crate) fn registered() {
     counter!(REGISTRATIONS).increment(1);
 }
