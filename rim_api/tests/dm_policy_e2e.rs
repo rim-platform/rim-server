@@ -6,7 +6,8 @@
 //! a stranger's DM request past the daily limit is refused when it is started and reaches no
 //! one; a contact added on one's own still counts against the daily invites to other servers,
 //! while someone whose DM request was accepted does not; a partner server's people reach this
-//! one's while a server that is not a partner reads no identity.
+//! one's while a server that is not a partner reads no identity; a member who leaves a group
+//! they accepted keeps no accepted request for it.
 //!
 //! Run with:
 //! ```sh
@@ -23,7 +24,7 @@ use serde_json::{Value, json};
 
 use support::nodes::{Node, databases_with, start};
 use support::relay::{
-    CREATE, Person, REQUESTS, RESET, open_registration, sign_up, user_id, verify_item,
+    CREATE, Person, REQUESTS, RESET, eventually, open_registration, sign_up, user_id, verify_item,
 };
 
 const CREATE_SERVER: &str =
@@ -520,4 +521,52 @@ async fn a_partners_people_reach_this_server_and_a_server_that_is_no_partner_rea
 
     a.stop().await;
     b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_who_leaves_a_group_they_accepted_keeps_no_accepted_request() {
+    const LEAVE: &str =
+        "mutation($s: ID!, $c: ID!) { leaveConversation(serverId: $s, conversationId: $c) }";
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = direct_space(&alice).await;
+    let (bob_id, carol_id) = (
+        user_id(&a, &bob.principal()).await,
+        user_id(&a, &carol.principal()).await,
+    );
+    let group = alice
+        .ok(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "memberIds": [bob_id.to_string(), carol_id.to_string()],
+                "title": "group",
+            } }),
+        )
+        .await["createConversation"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let request = bob.pending_request(&alice).await;
+    assert_eq!(request["conversationId"], json!(group));
+    bob.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    let accepted = bob.ok(REQUESTS, json!({ "status": "ACCEPTED" })).await;
+    assert_eq!(accepted["dmRequests"][0]["conversationId"], json!(group));
+    assert!(listed(&bob, &direct).await.contains(&group));
+
+    bob.ok(LEAVE, json!({ "s": direct, "c": group })).await;
+    eventually("the accepted request to go", || async {
+        let accepted = bob.ok(REQUESTS, json!({ "status": "ACCEPTED" })).await;
+        (accepted["dmRequests"] == json!([])).then_some(())
+    })
+    .await;
+    assert!(!listed(&bob, &direct).await.contains(&group));
+
+    a.stop().await;
 }

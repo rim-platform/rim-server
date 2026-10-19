@@ -87,7 +87,7 @@ struct DroppedRow {
 const FILED: &str = "decided_at IS DISTINCT FROM created_at";
 
 const REQUEST_COLUMNS: &str = "id, user_id, from_principal_id, card_payload, card_signature, \
-     host_server_id, conversation_id, status, created_at, decided_at, expires_at";
+     host_server_id, conversation_id, status, created_at, decided_at, expires_at, host_user_id";
 
 #[derive(FromQueryResult)]
 struct RequestRow {
@@ -102,6 +102,7 @@ struct RequestRow {
     created_at: DateTimeWithTimeZone,
     decided_at: Option<DateTimeWithTimeZone>,
     expires_at: DateTimeWithTimeZone,
+    host_user_id: Option<Uuid>,
 }
 
 impl TryFrom<RequestRow> for DmRequest {
@@ -121,6 +122,7 @@ impl TryFrom<RequestRow> for DmRequest {
             created_at: row.created_at.into(),
             decided_at: row.decided_at.map(Into::into),
             expires_at: row.expires_at.into(),
+            host_user_id: row.host_user_id,
         })
     }
 }
@@ -710,6 +712,49 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.execute(
             "DELETE FROM relay_dm_request WHERE expires_at < $1",
             vec![now.into()],
+        )
+        .await
+    }
+
+    async fn count_accepted_requests(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+    ) -> RepoResult<i64> {
+        self.count(
+            "SELECT count(*) AS n FROM relay_dm_request \
+             WHERE user_id = $1 AND host_server_id = $2 AND status = 'accepted'",
+            vec![uuid(user_id), host_server_id.into()],
+        )
+        .await
+    }
+
+    async fn refresh_request(
+        &self,
+        id: DmRequestId,
+        expires_at: Option<DateTime<Utc>>,
+        host_user_id: Option<Uuid>,
+    ) -> RepoResult<()> {
+        self.execute(
+            "UPDATE relay_dm_request SET expires_at = COALESCE($2, expires_at), \
+                 host_user_id = COALESCE(host_user_id, $3) \
+             WHERE id = $1",
+            vec![uuid(id), expires_at.into(), host_user_id.into()],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_accepted_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        conversation_id: Uuid,
+    ) -> RepoResult<u64> {
+        self.execute(
+            "DELETE FROM relay_dm_request WHERE user_id = $1 AND host_server_id = $2 \
+             AND conversation_id = $3 AND status = 'accepted'",
+            vec![uuid(user_id), host_server_id.into(), conversation_id.into()],
         )
         .await
     }

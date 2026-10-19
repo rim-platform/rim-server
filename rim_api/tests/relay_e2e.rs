@@ -9,7 +9,8 @@
 //! key. The public relay: proof-of-work
 //! signups refused, accepted and replaced by an invite; a reported DM request listed and
 //! resolved by the operator; a principal blocked on its relay signed out and refused signup,
-//! login and delivery; and a peer blocked both ways.
+//! login and delivery; and a peer blocked both ways. A member who leaves a group hosted on
+//! another server loses their relay's accepted row for it.
 //!
 //! Run with:
 //! ```sh
@@ -2076,6 +2077,91 @@ async fn a_host_cannot_file_an_invite_in_the_name_of_someone_it_does_not_speak_f
         .ok(support::relay::ITEMS, json!({ "after": null }))
         .await;
     assert_eq!(items["relayItems"]["items"], json!([]));
+
+    a.stop().await;
+    b.stop().await;
+}
+
+/// Whether `node` holds an accepted row for `conversation`, and the host's id for its user.
+async fn accepted_row(node: &Node, conversation: &str) -> Option<Option<Uuid>> {
+    node.db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT host_user_id FROM relay_dm_request \
+             WHERE conversation_id = $1 AND status = 'accepted'",
+            [conversation.parse::<Uuid>().expect("uuid").into()],
+        ))
+        .await
+        .expect("query")
+        .map(|row| row.try_get::<Option<Uuid>>("", "host_user_id").expect("id"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_who_leaves_a_group_at_another_server_loses_the_accepted_row_there() {
+    const LEAVE: &str =
+        "mutation($s: ID!, $c: ID!) { leaveConversation(serverId: $s, conversationId: $c) }";
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = alice.direct_space().await;
+    let group = alice
+        .ok(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "memberIds": [],
+                "remoteMembers": [
+                    { "principalId": bob.principal(), "relayUrls": [b.origin] },
+                    { "principalId": carol.principal(), "relayUrls": [a.origin] },
+                ],
+                "title": "group",
+                "encrypted": true,
+            } }),
+        )
+        .await["createConversation"]["id"]
+        .as_str()
+        .expect("group id")
+        .to_string();
+    let request = bob.pending_request(&alice).await;
+    assert_eq!(request["conversationId"], json!(group));
+    bob.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    assert_eq!(
+        accepted_row(&b, &group).await,
+        Some(None),
+        "accepted, before the host named Bob"
+    );
+
+    // An event on Bob's own stream gives the row the id the host gives him.
+    bob.remote(
+        &a,
+        MARK_READ,
+        json!({ "input": { "workspaceId": direct, "conversationId": group, "readAt": chrono::Utc::now().to_rfc3339() } }),
+    )
+    .await;
+    let bob_at_a = user_id(&a, &bob.principal()).await;
+    eventually("the row to learn Bob's id at the host", || async {
+        (accepted_row(&b, &group).await == Some(Some(bob_at_a.into()))).then_some(())
+    })
+    .await;
+
+    // Leaving the group at its host deletes the row; Bob still gets the event that removes him.
+    bob.remote(&a, LEAVE, json!({ "s": direct, "c": group }))
+        .await;
+    let removed = bob
+        .item_of(&a, "MemberRemovedFromConversation", |i| {
+            i.event["conversation_id"] == json!(group)
+        })
+        .await;
+    assert_eq!(removed.event["user_id"], json!(bob_at_a.to_string()));
+    eventually("the accepted row to go", || async {
+        accepted_row(&b, &group).await.is_none().then_some(())
+    })
+    .await;
 
     a.stop().await;
     b.stop().await;

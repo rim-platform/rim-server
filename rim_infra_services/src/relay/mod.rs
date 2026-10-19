@@ -81,9 +81,16 @@ const MAX_CLAIM_DEVICES: usize = 64;
 const STRANGER_CLAIMS_PER_DAY: u32 = 20;
 /// Largest card a DM invite may carry.
 const MAX_CARD_BYTES: usize = 128 * 1024;
-/// How far an accepted conversation's row lives: as long as the relay does.
+/// How long an accepted conversation's row lives after the last item delivered for it: over a
+/// year, so a conversation whose members write once a year stays open, while one that went
+/// silent, or whose host is gone, is let go.
+const ACCEPTED_REQUEST_TTL: Duration = Duration::days(400);
+/// How far an accepted row's expiry may fall behind before an item moves it out again, so the
+/// row is not written for every item.
+const ACCEPTED_REFRESH_AFTER: Duration = Duration::days(1);
+/// When an accepted conversation's row expires if nothing is delivered for it from `now` on.
 fn accepted_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
-    now + Duration::days(365 * 100)
+    now + ACCEPTED_REQUEST_TTL
 }
 
 /// Why a pending `request` could not be decided: `NotFound` once it has expired, as for an
@@ -245,6 +252,10 @@ struct ReadEnvelope {
     local: bool,
     /// The delivering host's pinned origin; `None` for this server's own events.
     host_origin: Option<String>,
+    /// The event's `user_id`: the id its host gives the user the event is about.
+    user_id: Option<Uuid>,
+    /// The event removes `user_id` from its conversation (`MemberRemovedFromConversation`).
+    removes_member: bool,
 }
 
 /// The request inbox's decision for one recipient of an item.
@@ -496,22 +507,26 @@ fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadE
             .get("conversation_id")
             .and_then(|v| v.as_str())
             .and_then(|v| Uuid::parse_str(v).ok());
-        let invite =
-            (event.event.get("type").and_then(|v| v.as_str()) == Some("DmInvite")).then(|| {
-                Invite {
-                    from_principal_id: event
-                        .event
-                        .get("from_principal_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    card: event
-                        .event
-                        .get("from_card")
-                        .and_then(|v| serde_json::from_value::<SignedJson>(v.clone()).ok())
-                        .filter(|c| c.payload.len() <= MAX_CARD_BYTES),
-                }
-            });
+        let user_id = event
+            .event
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .and_then(|v| Uuid::parse_str(v).ok());
+        let event_type = event.event.get("type").and_then(|v| v.as_str());
+        let removes_member = event_type == Some("MemberRemovedFromConversation");
+        let invite = (event_type == Some("DmInvite")).then(|| Invite {
+            from_principal_id: event
+                .event
+                .get("from_principal_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            card: event
+                .event
+                .get("from_card")
+                .and_then(|v| serde_json::from_value::<SignedJson>(v.clone()).ok())
+                .filter(|c| c.payload.len() <= MAX_CARD_BYTES),
+        });
         Some(ReadEnvelope {
             workspace_id,
             stream: event.stream,
@@ -520,6 +535,8 @@ fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadE
             invite,
             local,
             host_origin: None,
+            user_id,
+            removes_member,
         })
     }
 }
@@ -673,7 +690,9 @@ impl DefaultRelayService {
             request_held_bytes: 0,
             user_held_bytes: 0,
             filed_by_host_today: 0,
+            accepted_from_host: 0,
         };
+        let mut found = None;
         if let Some(conversation_id) = read.conversation_id
             && let Some(request) = repos
                 .relay_repo
@@ -688,6 +707,7 @@ impl DefaultRelayService {
                 0
             };
             facts.request = Some((request.id, request.status, held));
+            found = Some(request);
         }
         if let Some(invite) = &read.invite {
             let from = invite.from_principal_id.as_str();
@@ -745,6 +765,12 @@ impl DefaultRelayService {
                         policy => policy,
                     }
                 };
+                if facts.policy == DmPolicy::Deliver {
+                    facts.accepted_from_host = repos
+                        .relay_repo
+                        .count_accepted_requests(user_id, peer_server_id)
+                        .await?;
+                }
                 facts.pending_for_user = repos.relay_repo.count_pending_requests(user_id).await?;
                 facts.user_held_bytes = repos.relay_repo.user_held_bytes(user_id).await?;
                 facts.filed_by_sender_today = repos
@@ -754,7 +780,19 @@ impl DefaultRelayService {
             }
         }
 
-        let request_id = match file(&facts) {
+        let filing = file(&facts);
+        if let Some(request) = &found {
+            Self::note_activity(
+                repos,
+                request,
+                read,
+                principal_id,
+                filing == Filing::Deliver,
+                now,
+            )
+            .await?;
+        }
+        let request_id = match filing {
             Filing::PeerLimited => {
                 crate::metrics::rate_limited("relay_peer_bytes");
                 return Ok(Filed::Done(Some("limited")));
@@ -806,6 +844,13 @@ impl DefaultRelayService {
                     return Ok(Filed::Done(Some("invalid_envelope")));
                 };
                 let pending = filing == Filing::FileRequest;
+                // Only a request is listed with its sender's card; a row accepted as it is
+                // filed is never read for one.
+                let (card_payload, card_signature) = if pending {
+                    (card.payload.clone(), card.signature.clone())
+                } else {
+                    (String::new(), String::new())
+                };
                 let request = repos
                     .relay_repo
                     .insert_request(NewDmRequest {
@@ -816,8 +861,8 @@ impl DefaultRelayService {
                         },
                         user_id,
                         from_principal_id: invite.from_principal_id.clone(),
-                        card_payload: card.payload.clone(),
-                        card_signature: card.signature.clone(),
+                        card_payload,
+                        card_signature,
                         host_server_id: peer_server_id.to_string(),
                         conversation_id,
                         expires_at: if pending {
@@ -948,6 +993,60 @@ impl DefaultRelayService {
         } else {
             INVALID
         })
+    }
+
+    /// Record what an item for `principal_id` says about their `request` for its conversation.
+    /// The host's removal of the user from the conversation deletes an accepted row; otherwise
+    /// an item the row `delivered` moves an accepted row's expiry out, and an event of the host
+    /// on the user's own stream gives the row the id the host gives them.
+    async fn note_activity(
+        repos: &RelayRepos,
+        request: &DmRequest,
+        read: &ReadEnvelope,
+        principal_id: &str,
+        delivered: bool,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        let accepted = request.status == DmRequestStatus::Accepted;
+        if accepted
+            && read.removes_member
+            && read.user_id.is_some()
+            && read.user_id == request.host_user_id
+        {
+            repos
+                .relay_repo
+                .delete_accepted_request(
+                    request.user_id,
+                    &request.host_server_id,
+                    request.conversation_id,
+                )
+                .await?;
+            info!(
+                user_id = %request.user_id,
+                host_server_id = %request.host_server_id,
+                conversation_id = %request.conversation_id,
+                "the host removed a user from an accepted conversation; its row is deleted"
+            );
+            return Ok(());
+        }
+        let expires_at = (accepted
+            && delivered
+            && request.expires_at < now + ACCEPTED_REQUEST_TTL - ACCEPTED_REFRESH_AFTER)
+            .then(|| accepted_expiry(now));
+        let host_user_id = if request.host_user_id.is_none()
+            && read.stream.strip_prefix("u:") == Some(principal_id)
+        {
+            read.user_id
+        } else {
+            None
+        };
+        if expires_at.is_some() || host_user_id.is_some() {
+            repos
+                .relay_repo
+                .refresh_request(request.id, expires_at, host_user_id)
+                .await?;
+        }
+        Ok(())
     }
 
     /// Drop a user's oldest queued items over the byte cap. Held items are neither counted nor
@@ -1927,6 +2026,7 @@ mod tests {
             created_at: Utc::now(),
             decided_at: None,
             expires_at,
+            host_user_id: None,
         };
         assert!(matches!(
             undecided(&request(Utc::now() - Duration::minutes(1))),

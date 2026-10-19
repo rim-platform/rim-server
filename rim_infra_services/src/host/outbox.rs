@@ -444,6 +444,16 @@ impl HostEventWriter {
             return Ok(0);
         };
         let workspace_id = ServerId::from(workspace_id);
+        if self.relay.is_some()
+            && let WorkspaceEvent::MemberRemovedFromConversation {
+                conversation_id,
+                user_id,
+                ..
+            } = event
+        {
+            self.forget_accepted(*user_id, (*conversation_id).into())
+                .await?;
+        }
         let in_direct_space = workspace_id == self.direct_space_id;
         let direct = in_direct_space && self.relay.is_some();
         // A workspace's DMs go through its local members' request inbox too.
@@ -665,6 +675,21 @@ impl HostEventWriter {
                 )
             })
             .collect())
+    }
+
+    /// Delete the accepted row of a local member removed from a conversation of this server, so
+    /// the request inbox keeps no row for a conversation they left.
+    async fn forget_accepted(&self, user_id: UserId, conversation_id: Uuid) -> ServiceResult<()> {
+        let own_id = self.identity.current().server_id().to_string();
+        let deleted = self
+            .repos
+            .relay_repo
+            .delete_accepted_request(user_id, &own_id, conversation_id)
+            .await?;
+        if deleted > 0 {
+            debug!(user_id = %user_id, conversation_id = %conversation_id, "deleted a removed member's accepted conversation");
+        }
+        Ok(())
     }
 
     /// Record the other party of a DM a local user created as their contact, so a DM back from

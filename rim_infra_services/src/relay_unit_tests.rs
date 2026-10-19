@@ -546,6 +546,10 @@ struct RelayInbox {
     filed_today: i64,
     /// Bytes the items of Bob's pending requests take.
     held_bytes: i64,
+    /// Bob's accepted conversations from `PEER`.
+    accepted: i64,
+    /// Every row filed, as filed.
+    rows: Arc<Mutex<Vec<rim_core::relay::model::NewDmRequest>>>,
 }
 
 impl Default for RelayInbox {
@@ -568,6 +572,8 @@ impl Default for RelayInbox {
             pending: 0,
             filed_today: 0,
             held_bytes: 0,
+            accepted: 0,
+            rows: Arc::default(),
         }
     }
 }
@@ -680,8 +686,15 @@ fn inbox_relay(
         Box::pin(async move { Ok(cached) })
     });
     relay.expect_store_identity().never();
+    let accepted = inbox.accepted;
+    relay
+        .expect_count_accepted_requests()
+        .withf(|_, host| host == PEER)
+        .returning(move |_, _| Box::pin(async move { Ok(accepted) }));
+    let rows = Arc::clone(&inbox.rows);
     relay.expect_insert_request().returning(move |new| {
         filed.lock().expect("lock").push(new.status);
+        rows.lock().expect("lock").push(new.clone());
         Box::pin(async move {
             Ok(DmRequest {
                 id: DmRequestId::new(),
@@ -695,6 +708,7 @@ fn inbox_relay(
                 created_at: Utc::now(),
                 decided_at: None,
                 expires_at: new.expires_at,
+                host_user_id: None,
             })
         })
     });
@@ -3029,4 +3043,396 @@ async fn a_workspace_dm_taken_as_a_request_meets_the_limits_and_groups_there_do_
     host.ensure_may_request(Actor::new(ada), acme, vec![requests, direct], false)
         .await
         .expect("a workspace group files no request");
+}
+
+// ── Accepted conversations ───────────────────────────────────────────────────────────────
+
+/// What the request inbox did to Bob's rows.
+#[derive(Debug, Clone, PartialEq)]
+enum RowCall {
+    Refreshed(Option<chrono::DateTime<Utc>>, Option<Uuid>),
+    Deleted(String, Uuid),
+}
+
+/// The conversation the accepted-row tests deliver for.
+const CONVERSATION: Uuid = Uuid::from_u128(9);
+/// The id `PEER` gives Bob.
+const BOB_AT_HOST: Uuid = Uuid::from_u128(77);
+
+/// Bob's row for `CONVERSATION` at `PEER`, accepted and expiring at `expires_at`, with the id
+/// the host gives Bob when `bound`.
+fn accepted_row(
+    user_id: UserId,
+    expires_at: chrono::DateTime<Utc>,
+    bound: bool,
+) -> rim_core::relay::model::DmRequest {
+    use rim_core::relay::model::{DmRequest, DmRequestId, DmRequestStatus};
+    DmRequest {
+        id: DmRequestId::new(),
+        user_id,
+        from_principal_id: ALICE.to_string(),
+        card_payload: String::new(),
+        card_signature: String::new(),
+        host_server_id: PEER.to_string(),
+        conversation_id: CONVERSATION,
+        status: DmRequestStatus::Accepted,
+        created_at: Utc::now(),
+        decided_at: Some(Utc::now()),
+        expires_at,
+        host_user_id: bound.then_some(BOB_AT_HOST),
+    }
+}
+
+/// Bob's relay, where `row` (made for Bob's user id) is his row for every conversation;
+/// `calls` records what it does to rows.
+fn accepted_relay(
+    row: impl Fn(UserId) -> Option<rim_core::relay::model::DmRequest> + Send + Sync + 'static,
+    calls: Arc<Mutex<Vec<RowCall>>>,
+) -> DefaultRelayService {
+    let bob = UserId::new();
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay.expect_find_request().returning(move |_, _, _| {
+        let found = row(bob);
+        Box::pin(async move { Ok(found) })
+    });
+    let log = Arc::clone(&calls);
+    relay
+        .expect_refresh_request()
+        .returning(move |_, expires_at, host_user_id| {
+            log.lock()
+                .expect("lock")
+                .push(RowCall::Refreshed(expires_at, host_user_id));
+            Box::pin(async { Ok(()) })
+        });
+    let log = Arc::clone(&calls);
+    relay
+        .expect_delete_accepted_request()
+        .returning(move |_, host, conversation_id| {
+            log.lock()
+                .expect("lock")
+                .push(RowCall::Deleted(host.to_string(), conversation_id));
+            Box::pin(async { Ok(1) })
+        });
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_insert_item()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_queued_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    let signer = host_signer(40);
+    relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&signer, 0), None),
+        MockS2sClient::new(),
+    )
+}
+
+/// An event of `CONVERSATION` from `PEER` for Bob on `stream`.
+fn conversation_item(stream: &str, event: serde_json::Value) -> DeliverItem {
+    let workspace_id = Uuid::from_u128(5).to_string();
+    let issued_at = timestamp(Utc::now());
+    let event = event.to_string();
+    let statement = sign_host_event(
+        &host_signer(40),
+        &HostEventFields {
+            host: PEER,
+            key_seq: 0,
+            workspace_id: &workspace_id,
+            stream,
+            seq: Some(2),
+            event_json: &event,
+            issued_at: &issued_at,
+        },
+    );
+    DeliverItem {
+        id: "2".to_string(),
+        envelope: SignedJson {
+            payload: statement.payload,
+            signature: statement.signature,
+        },
+        recipients: vec![BOB.to_string()],
+        device_id: None,
+    }
+}
+
+/// What Bob's relay, holding `row`, does with `item` from `PEER`: the refusal reasons and the
+/// calls on rows.
+async fn deliver_accepted(
+    row: impl Fn(UserId) -> Option<rim_core::relay::model::DmRequest> + Send + Sync + 'static,
+    item: DeliverItem,
+) -> (Vec<String>, Vec<RowCall>) {
+    let calls = Arc::default();
+    let svc = accepted_relay(row, Arc::clone(&calls));
+    let response = svc
+        .deliver(PEER.to_string(), vec![item])
+        .await
+        .expect("delivered");
+    let refused = response.refused.into_iter().map(|r| r.reason).collect();
+    let calls = calls.lock().expect("lock").clone();
+    (refused, calls)
+}
+
+#[tokio::test]
+async fn an_invite_from_a_contact_files_an_accepted_row_without_a_card_that_expires() {
+    use rim_core::relay::model::DmRequestStatus;
+    let before = Utc::now();
+    let inbox = RelayInbox {
+        contact: true,
+        ..RelayInbox::default()
+    };
+    let rows = Arc::clone(&inbox.rows);
+    assert_eq!(
+        file_invite(inbox, alice_invite(&sender_card(1, &[PEER_ORIGIN]))).await,
+        filed_as(DmRequestStatus::Accepted)
+    );
+    let rows = rows.lock().expect("lock").clone();
+    let [row] = rows.as_slice() else {
+        panic!("one row filed: {rows:?}");
+    };
+    assert_eq!(
+        (row.card_payload.as_str(), row.card_signature.as_str()),
+        ("", ""),
+        "a row accepted as it is filed keeps no card"
+    );
+    assert!(
+        row.expires_at >= before + Duration::days(400)
+            && row.expires_at <= Utc::now() + Duration::days(400),
+        "an accepted row expires 400 days out, not with the relay: {}",
+        row.expires_at
+    );
+}
+
+#[tokio::test]
+async fn an_invite_past_the_accepted_cap_for_its_host_is_refused_as_limited() {
+    use rim_core::relay::model::DmRequestStatus;
+
+    use crate::relay::inbox::MAX_ACCEPTED_PER_HOST;
+
+    let holding = |accepted| RelayInbox {
+        contact: true,
+        accepted,
+        ..RelayInbox::default()
+    };
+    let invite = alice_invite(&sender_card(1, &[PEER_ORIGIN]));
+    assert_eq!(
+        file_invite(holding(MAX_ACCEPTED_PER_HOST - 1), invite.clone()).await,
+        filed_as(DmRequestStatus::Accepted)
+    );
+    assert_eq!(
+        file_invite(holding(MAX_ACCEPTED_PER_HOST), invite).await,
+        refused_as("limited")
+    );
+}
+
+#[tokio::test]
+async fn an_item_moves_a_stale_accepted_row_out_and_a_fresh_one_is_left_alone() {
+    let message = || {
+        conversation_item(
+            &format!("c:{CONVERSATION}"),
+            serde_json::json!({ "type": "NewMessage", "conversation_id": CONVERSATION }),
+        )
+    };
+    let before = Utc::now();
+    let stale = Utc::now() + Duration::days(300);
+    let (refused, calls) =
+        deliver_accepted(move |bob| Some(accepted_row(bob, stale, true)), message()).await;
+    assert!(refused.is_empty());
+    let [RowCall::Refreshed(Some(expires_at), None)] = calls.as_slice() else {
+        panic!("the row's expiry moves: {calls:?}");
+    };
+    assert!(*expires_at >= before + Duration::days(400));
+
+    let fresh = Utc::now() + Duration::days(400);
+    assert_eq!(
+        deliver_accepted(move |bob| Some(accepted_row(bob, fresh, true)), message()).await,
+        (Vec::new(), Vec::new()),
+        "a row moved out within the day is not written again"
+    );
+}
+
+#[tokio::test]
+async fn an_event_on_the_users_own_stream_names_the_id_the_host_gives_them() {
+    let welcome = |stream: String| {
+        conversation_item(
+            &stream,
+            serde_json::json!({
+                "type": "MlsWelcomeAvailable",
+                "conversation_id": CONVERSATION,
+                "user_id": BOB_AT_HOST,
+                "device_id": Uuid::from_u128(1),
+            }),
+        )
+    };
+    let fresh = Utc::now() + Duration::days(400);
+    assert_eq!(
+        deliver_accepted(
+            move |bob| Some(accepted_row(bob, fresh, false)),
+            welcome(format!("u:{BOB}"))
+        )
+        .await,
+        (
+            Vec::new(),
+            vec![RowCall::Refreshed(None, Some(BOB_AT_HOST))]
+        )
+    );
+    assert_eq!(
+        deliver_accepted(
+            move |bob| Some(accepted_row(bob, fresh, false)),
+            welcome(format!("u:{ALICE}"))
+        )
+        .await,
+        (Vec::new(), Vec::new()),
+        "another user's stream names nobody for Bob"
+    );
+}
+
+#[tokio::test]
+async fn the_hosts_removal_of_the_user_deletes_their_accepted_row() {
+    let removed = |user_id: Uuid| {
+        conversation_item(
+            &format!("c:{CONVERSATION}"),
+            serde_json::json!({
+                "type": "MemberRemovedFromConversation",
+                "conversation_id": CONVERSATION,
+                "user_id": user_id,
+            }),
+        )
+    };
+    let fresh = Utc::now() + Duration::days(400);
+    assert_eq!(
+        deliver_accepted(
+            move |bob| Some(accepted_row(bob, fresh, true)),
+            removed(BOB_AT_HOST)
+        )
+        .await,
+        (
+            Vec::new(),
+            vec![RowCall::Deleted(PEER.to_string(), CONVERSATION)]
+        ),
+        "Bob still gets the event that removes him"
+    );
+    assert_eq!(
+        deliver_accepted(
+            move |bob| Some(accepted_row(bob, fresh, true)),
+            removed(Uuid::from_u128(78))
+        )
+        .await,
+        (Vec::new(), Vec::new()),
+        "another member's removal keeps Bob's row"
+    );
+    assert_eq!(
+        deliver_accepted(
+            move |bob| Some(accepted_row(bob, fresh, false)),
+            removed(BOB_AT_HOST)
+        )
+        .await,
+        (Vec::new(), Vec::new()),
+        "a row that never learnt Bob's id at the host is left to expire"
+    );
+}
+
+/// A writer for a server whose direct space is `direct` and whose relay deletes accepted rows
+/// into `deleted`.
+fn removal_writer(
+    direct: ServerId,
+    deleted: Arc<Mutex<Vec<(UserId, String, Uuid)>>>,
+) -> (crate::host::outbox::HostEventWriter, String) {
+    use crate::host::outbox::{HostEventWriter, PeerBacklogs, RefusalCache};
+
+    let shared = identity(30);
+    let own_id = shared.current().server_id().to_string();
+    let mut host = MockHostRepository::new();
+    host.expect_remote_members()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_delete_accepted_request()
+        .returning(move |user_id, host, conversation_id| {
+            deleted
+                .lock()
+                .expect("lock")
+                .push((user_id, host.to_string(), conversation_id));
+            Box::pin(async { Ok(1) })
+        });
+    let mut relay_side = MockRelayRepository::new();
+    relay_side
+        .expect_pending_holders()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    let relay_service = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay_side),
+            ..empty_repos()
+        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    );
+    let writer = HostEventWriter::new(
+        HostRepos {
+            host_repo: Arc::new(host),
+            relay_repo: Arc::new(relay),
+            key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
+            e2ee_repo: Arc::new(MockE2eeRepository::new()),
+            user_repo: Arc::new(MockUserRepository::new()),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            delegation_repo: Arc::new(MockDelegationRepository::new()),
+            session_repo: Arc::new(rim_core::auth::repository::MockSessionRepository::new()),
+            relay_abuse_repo: Arc::new(blocks(&[])),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
+        },
+        None,
+        shared,
+        direct,
+        Arc::new(RefusalCache::default()),
+        Arc::new(PeerBacklogs::new(Duration::hours(24))),
+        Arc::new(tokio::sync::Notify::new()),
+    )
+    .with_relay(Arc::new(relay_service));
+    (writer, own_id)
+}
+
+#[tokio::test]
+async fn a_local_member_removed_from_a_conversation_here_loses_its_accepted_row() {
+    use rim_core::conversation::model::ConversationId;
+    use rim_services::events::WorkspaceEvent;
+
+    let direct = ServerId::from(Uuid::from_u128(5));
+    let deleted = Arc::default();
+    let (writer, own_id) = removal_writer(direct, Arc::clone(&deleted));
+    let (bob, conversation) = (UserId::new(), Uuid::from_u128(9));
+    writer
+        .write(&WorkspaceEvent::MemberRemovedFromConversation {
+            workspace_id: direct,
+            conversation_id: ConversationId::from(conversation),
+            user_id: bob,
+            member_user_ids: vec![bob],
+        })
+        .await
+        .expect("written");
+    assert_eq!(
+        deleted.lock().expect("lock").as_slice(),
+        &[(bob, own_id, conversation)]
+    );
 }

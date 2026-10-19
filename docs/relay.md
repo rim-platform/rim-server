@@ -130,6 +130,17 @@ until it is accepted. Items of a conversation the relay has no invite for are re
 (`not_subscribed`), so a host cannot skip the inbox. A decided conversation keeps its decision
 when the settings change later.
 
+A conversation accepted as it arrives keeps no card. A recipient holds at most 5,000 accepted
+conversations per host; past them an invite their settings deliver is refused as `limited`, while
+accepting a request is never refused. An accepted conversation's row expires 400 days after the
+last item delivered for it, so a conversation that went silent for over a year, or whose host is
+gone, stops reaching the queue (its later items are refused `not_subscribed`; the members still
+read it from its host). The row goes at once when its user leaves the conversation or is removed
+from it: here when this server hosts it, and for a conversation hosted elsewhere when the host's
+`MemberRemovedFromConversation` names the user, which the relay recognizes once an event of that
+host on the user's own stream (a Welcome, a read state, a notification) told it the host's id
+for them.
+
 The same rule covers conversations of this server's own direct space whose creator is someone
 else (a person from another relay creating a DM with a local user through the forward path, or a
 local user), and DMs between members of a workspace this server hosts. The server files its own

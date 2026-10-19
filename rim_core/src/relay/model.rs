@@ -106,10 +106,14 @@ pub struct DmRequest {
     pub created_at: DateTime<Utc>,
     pub decided_at: Option<DateTime<Utc>>,
     pub expires_at: DateTime<Utc>,
+    /// The id the host gives the user, once an event of the host on the user's own stream named
+    /// it; the host's removal of that id from the conversation ends the row.
+    pub host_user_id: Option<Uuid>,
 }
 
 /// A request to file. A conversation from a contact is filed `Accepted` at once, so every
-/// conversation a relay delivers for has a row; such rows are not listed as requests.
+/// conversation a relay delivers for has a row; such rows are not listed as requests and keep
+/// no card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewDmRequest {
     pub status: DmRequestStatus,
