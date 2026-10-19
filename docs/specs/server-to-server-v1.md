@@ -470,14 +470,22 @@ POST /s2s/v1/deliver
   `deviceId` targets one device (`MlsWelcomeAvailable`).
 - The relay stores items before answering and ignores ids at or below its `received_through` for
   the peer, so redelivery is idempotent. It refuses items for non-local principals
-  (`unknown_principal`), items of a conversation it holds no invite or request for and workspace
-  items without an active subscription (`not_subscribed`), invites from a principal the recipient
-  blocked (`blocked`) or past the request limits (`limited`), invites whose sender the host does
-  not speak for (`invalid_invite`, see "The request inbox"), a device-targeted item for an unknown
-  device (`unknown_device`), and envelopes over 512 KiB, that do not verify under the delivering
-  host's key or that name another host (`invalid_envelope`). A refusal for one recipient carries
-  `principalId`. The host skips a (relay, principal) for 24 hours after `unknown_principal` only;
-  the other refusals are about one conversation or item.
+  (`unknown_principal`); items of a conversation it holds no invite or request for, and items
+  naming no conversation of a workspace the recipient holds no active subscription to
+  (`not_subscribed`); invites from a principal the recipient blocked (`blocked`) or past the
+  request limits (`limited`); invites whose sender the host does not speak for
+  (`invalid_invite`, see "The request inbox"); a device-targeted item for an unknown device
+  (`unknown_device`); envelopes over 512 KiB, that do not verify under the delivering host's key
+  or that name another host (`invalid_envelope`); and, past 2 GiB of items queued from the
+  delivering host in a day across all recipients, any further item the relay would queue
+  (`limited`; items of a workspace the recipient subscribed to are not counted). A direct space
+  sends items naming no conversation only on `e` (`PresenceChanged`) and on the recipient's own
+  `u:` stream (`MemberJoined`, `MemberLeft`, `MemberRoleChanged` about them): the relay queues
+  those for a recipient who holds an accepted request for a conversation that host homes, and
+  refuses everything else naming no conversation (`w`, another person's `u:`) without a
+  subscription. A refusal for one recipient carries `principalId`. The host skips a (relay,
+  principal) for 24 hours after `unknown_principal` only; the other refusals are about one
+  conversation or item.
 - Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days; a relay down longer
   gets nothing and its clients catch up from the change feed. A relay may pull what it missed:
   `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
@@ -1159,7 +1167,7 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 | S2S body / forward body / discovery fetch | 8 MiB / 32 MiB / 64 KiB |
 | Clock window; nonce retention | `created` ≤ 300 s ahead, `expires − created ≤ 300`; 600 s |
 | Deliver; outbox | 256 items and 8 MiB per request; 7 days |
-| Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay) |
+| Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay); 2 GiB of items per delivering host per day, across all recipients, those of subscribed workspaces not counted |
 | Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender and 1,000 per delivering host per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
