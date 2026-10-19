@@ -82,7 +82,9 @@ What remains: a container's inspection and its containerd record return its conf
 environment variables included, and other containers' environments hold secrets such as
 `DATABASE_URL` with the database password and `GRAFANA_CLOUD_METRICS_TOKEN`. A compromised
 cAdvisor could read them; it has no route to the internet itself, but it shares the internal
-network with the other services.
+network with the other services. The containerd proxy runs as root, the owner of containerd's
+socket, so a flaw in Envoy that cAdvisor could exploit would reach containerd's whole API, which
+is root on the host. Only cAdvisor can reach that proxy, and the proxy has no network.
 
 ## The metrics
 
