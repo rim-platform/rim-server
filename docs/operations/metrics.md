@@ -105,10 +105,14 @@ several fields still counts once; this is a request rate rather than a count of 
 
 A failed request containing an internal error is classified as `internal`; an unrecognized or
 missing error code is `unknown`; known authentication, authorization, validation and business
-errors are `client`. Internal takes precedence over unknown, then client. Alert on internal
+errors are `client`. Parsing and schema validation failures are also `client`, even without an
+error code. Internal takes precedence over unknown, then client. Alert on internal
 and unknown failures separately from expected client refusals. Subscription response errors are
 counted on the stream metrics instead of treating the socket's successful HTTP upgrade as proof
 that all its operations succeed.
+
+These metrics observe requests that reach the GraphQL schema. Transport refusals before schema
+execution, such as CSRF checks or edge rate limiting, appear in HTTP and refusal metrics.
 
 Connections are not people: one account may have several tabs or devices, and one connection
 may have several subscriptions. Connection and subscription gauges return to zero when their
@@ -229,7 +233,7 @@ or deleting an account, are not included in those removal counters.
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `rim_database_sample_success` | gauge | `sample` | `1` when the most recent sample succeeded, `0` when it failed or timed out. |
-| `rim_database_sample_last_success_timestamp_seconds` | gauge | `sample` | Unix time of the last successful sample; absent until the first success. |
+| `rim_database_sample_last_success_timestamp_seconds` | gauge | `sample` | Unix time of the last successful sample; zero until the first success. |
 | `rim_database_sample_failures_total` | counter | `sample` | Failed or timed-out samples. |
 
 `sample` is `usage`, `delivery`, `relay` (stored queue rows) or `migrations`.

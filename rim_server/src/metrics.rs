@@ -3,7 +3,7 @@
 //! listener that serves them on its own address.
 
 use std::net::SocketAddr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use actix_web::body::MessageBody;
@@ -15,7 +15,7 @@ use metrics::{
     Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
 };
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
-use rim_infra_db::sea_orm_impl::monitoring::SeaOrmMonitoringRepository;
+use rim_core::monitoring::MonitoringRepository;
 use rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository;
 use sea_orm::{DatabaseConnection, DbBackend};
 use tokio::sync::watch;
@@ -209,6 +209,8 @@ fn describe() {
     );
     rim_infra_services::metrics::describe();
     rim_infra_services::usage_metrics::describe();
+    rim_api::describe_metrics();
+    crate::ws::describe_metrics();
 }
 
 /// The exporter configuration: histogram buckets for the request duration.
@@ -268,7 +270,7 @@ fn sample_pool(db: &DatabaseConnection) {
 
 /// Read the relay queue and the pending migrations and set their gauges; a read that fails or
 /// takes too long leaves its gauge as it was.
-async fn sample_database(db: &DatabaseConnection) {
+async fn sample_database(db: &DatabaseConnection, monitoring_repo: &dyn MonitoringRepository) {
     let relay_repo = SeaOrmRelayRepository::new(db.clone().into());
     match tokio::time::timeout(
         SAMPLE_TIMEOUT,
@@ -292,12 +294,11 @@ async fn sample_database(db: &DatabaseConnection) {
             tracing::warn!(?result, "could not sample the pending migrations");
         }
     }
-    let repo = SeaOrmMonitoringRepository::new(db.clone().into());
     for sample in ["usage", "delivery"] {
         let result = tokio::time::timeout(SAMPLE_TIMEOUT, async {
             match sample {
-                "usage" => rim_infra_services::usage_metrics::sample_usage(&repo).await,
-                _ => rim_infra_services::usage_metrics::sample_delivery(&repo).await,
+                "usage" => rim_infra_services::usage_metrics::sample_usage(monitoring_repo).await,
+                _ => rim_infra_services::usage_metrics::sample_delivery(monitoring_repo).await,
             }
         })
         .await;
@@ -344,6 +345,7 @@ pub(crate) fn configure(state: MetricsState) -> impl FnOnce(&mut web::ServiceCon
 pub(crate) fn start(
     addr: SocketAddr,
     db: DatabaseConnection,
+    monitoring_repo: Arc<dyn MonitoringRepository>,
     shutdown: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let handle = install().map_err(std::io::Error::other)?;
@@ -369,7 +371,7 @@ pub(crate) fn start(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = tick.tick() => sample_database(&db).await,
+                _ = tick.tick() => sample_database(&db, monitoring_repo.as_ref()).await,
                 _ = shutdown_for_sampler.changed() => break,
             }
         }

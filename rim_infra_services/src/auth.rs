@@ -1114,8 +1114,8 @@ impl AuthService for DefaultAuthService {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
 
-        default_workspace::announce(joined_default, user.id, username, &self.observers);
         crate::metrics::registered();
+        default_workspace::announce(joined_default, user.id, username, &self.observers);
         // Audit: successful open-mode signup.
         tracing::info!(
             target: "audit",

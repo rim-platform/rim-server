@@ -2413,7 +2413,7 @@ mod tests {
         );
         assert_eq!(h.user_count(), 1);
         let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
-        assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 0);
+        assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 1);
     }
 
     #[tokio::test]

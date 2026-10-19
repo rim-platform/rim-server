@@ -7,7 +7,7 @@ use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use crate::DbHandle;
 use crate::error::map_db_err;
 
-/// Aggregate repository constructed by the metrics sampler in rim_server.
+/// Aggregate repository for local account activity and pending device delivery.
 pub struct SeaOrmMonitoringRepository {
     db: DbHandle,
 }

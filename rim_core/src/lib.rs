@@ -26,6 +26,8 @@ pub mod message_pin;
 pub mod message_reaction;
 pub mod message_thread;
 pub mod moderation;
+// Public for rim_infra_db aggregate repositories and rim_infra_services samplers.
+pub mod monitoring;
 pub mod notification;
 pub mod notification_preference;
 pub mod password_reset;
@@ -45,5 +47,3 @@ pub mod workspace_state;
 
 #[cfg(test)]
 mod tests;
-// Public for rim_infra_db aggregate repositories and rim_infra_services samplers.
-pub mod monitoring;
