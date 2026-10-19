@@ -307,5 +307,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A message's reactions, `reactedByMe` included, are read for the user who asked. Before, when
   several users' requests loaded reactions at the same moment, one of them could be shown
   another user's reaction state.
+- A `workspaceEvents` subscription that falls behind and misses events checks the subscriber's
+  membership and role again before it delivers the next event, and ends when they are no
+  longer a member of the workspace. Before, a member whose removal or demotion to guest was
+  among the missed events went on receiving the workspace's events as before.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master
