@@ -297,6 +297,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   (`UNAUTHENTICATED`) after a reset or an enrollment and with `FORBIDDEN` after a ban. Before,
   a sign-in with the old password that was already being checked could create a session after
   the reset or enrollment had ended all the others.
+- A workspace state key with non-ASCII characters, given to `setWorkspaceState` or to the
+  `state.incr` command, is refused with a `VALIDATION` error. Before, a key with a non-ASCII
+  character across its 64th byte made the request fail instead.
 - A message's reactions, `reactedByMe` included, are read for the user who asked. Before, when
   several users' requests loaded reactions at the same moment, one of them could be shown
   another user's reaction state.
