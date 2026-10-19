@@ -1,0 +1,57 @@
+# Envoy configuration for compose.monitoring-containers.yml's containerd-proxy: a containerd
+# API socket for cAdvisor that forwards one call, Containers.Get in Docker's `moby`
+# namespace, to the host's containerd and answers every other call with PermissionDenied.
+static_resources:
+  listeners:
+    - name: containerd
+      address:
+        pipe:
+          path: /run/containerd-proxy/containerd.sock
+          # 0666: cAdvisor connects as an unprivileged user.
+          mode: 438
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: containerd
+                codec_type: HTTP2
+                route_config:
+                  virtual_hosts:
+                    - name: containerd
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            path: /containerd.services.containers.v1.Containers/Get
+                            headers:
+                              - name: containerd-namespace
+                                string_match: { exact: moby }
+                          route: { cluster: containerd, timeout: 10s }
+                        - match: { prefix: / }
+                          direct_response: { status: 403 }
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: containerd
+      type: STATIC
+      connect_timeout: 5s
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: containerd
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    pipe: { path: /run/containerd/containerd.sock }
+overload_manager:
+  resource_monitors:
+    - name: envoy.resource_monitors.global_downstream_max_connections
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig
+        max_active_downstream_connections: 64

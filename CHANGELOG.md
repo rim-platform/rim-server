@@ -23,6 +23,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
+  `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
+  and memory use (job `cadvisor`). cAdvisor reaches the Docker and containerd sockets only
+  through proxies that allow it read-only calls alone; it needs the new `DOCKER_GID` in
+  `deploy/.env`, and a host on the overlay2 storage driver also adds
+  `compose.monitoring-containers-overlay2.yml`. "Container metrics" in
+  `docs/operations/metrics.md` describes it.
 - `deploy/compose.monitoring.yml`, an opt-in overlay that turns on the metrics listener and
   adds a Grafana Alloy collector: every 15 seconds it scrapes rim-server's metrics, probes
   `/readyz` and reads the host's metrics, and remote-writes them to Grafana Cloud with the new

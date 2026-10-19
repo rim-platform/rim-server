@@ -41,6 +41,7 @@ port, and every 15 seconds collects:
 | `rim-readyz` | `probe_success` of a GET of `http://rim:8080/readyz`: a `200` passes, a redirect fails. `instance` is that URL. |
 | `node` | The host's CPU, memory, filesystem and network metrics (`node_*`), read from `/proc`, `/sys` and `/` mounted read-only. `instance` is `RIM_DOMAIN`. |
 | `alloy` | The collector's own metrics, such as its remote-write queue. |
+| `cadvisor` | With `deploy/compose.monitoring-containers.yml` only: each compose service's CPU and memory use (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`), labelled `container_label_com_docker_compose_project` and `container_label_com_docker_compose_service`. |
 
 It remote-writes them to `GRAFANA_CLOUD_METRICS_URL` with `GRAFANA_CLOUD_METRICS_USER` and
 `GRAFANA_CLOUD_METRICS_TOKEN` from `deploy/.env` (`deploy/.env.example` says where Grafana Cloud
@@ -48,6 +49,42 @@ shows them); any Prometheus remote-write endpoint with basic authentication work
 Samples the endpoint does not accept are kept in Alloy's volume and retried for up to two
 hours. The dashboards and alert rules that read these series are in the
 [rim-monitoring](https://github.com/rim-platform/rim-monitoring) repository.
+
+### Container metrics
+
+`deploy/compose.monitoring-containers.yml`, on top of the files above, adds cAdvisor, a Docker
+socket proxy and a containerd socket proxy, and `deploy/monitoring-containers.alloy` to Alloy's
+configuration directory. It needs rootful Docker on Linux, with containerd's socket at
+`/run/containerd/containerd.sock` as Docker's own packages install it, and `DOCKER_GID` in
+`deploy/.env`, the group of `/var/run/docker.sock` (`stat -c %g /var/run/docker.sock`). It
+covers the containerd image store, the default of a new Docker 29 install (`docker info
+--format '{{.Driver}}'` says `overlayfs`). On the older `overlay2` storage driver add
+`deploy/compose.monitoring-containers-overlay2.yml` after it, which mounts Docker's layer
+database read-only; without it cAdvisor logs "failed to identify the read-write layer ID" and
+sends no container series. A missing host path stops the container from starting rather than
+being created empty.
+
+cAdvisor reaches neither socket itself:
+
+- The Docker socket proxy (`wollomatic/socket-proxy`) answers cAdvisor alone, on a network of
+  the two with no way out, and only `HEAD /_ping`, `GET /version`, `GET /info` and
+  `GET /containers/<id>/json`. Any other path or method is refused, so nothing can create,
+  start, stop or remove a container, exec into one, read its logs or copy files out of it.
+- The containerd proxy (Envoy, `deploy/containerd-proxy.yaml`) has no network. It gives cAdvisor
+  a socket that forwards one call, `Containers.Get` in Docker's `moby` namespace, which cAdvisor
+  needs on the containerd image store; every other call, tasks and exec included, is refused.
+
+cAdvisor runs unprivileged without capabilities, reads the host's cgroups in the host cgroup
+namespace, and has no way out; Alloy scrapes it on the internal network and forwards only the
+two series above.
+
+What remains: a container's inspection and its containerd record return its configuration,
+environment variables included, and other containers' environments hold secrets such as
+`DATABASE_URL` with the database password and `GRAFANA_CLOUD_METRICS_TOKEN`. A compromised
+cAdvisor could read them; it has no route to the internet itself, but it shares the internal
+network with the other services. The containerd proxy runs as root, the owner of containerd's
+socket, so a flaw in Envoy that cAdvisor could exploit would reach containerd's whole API, which
+is root on the host. Only cAdvisor can reach that proxy, and the proxy has no network.
 
 ## The metrics
 
