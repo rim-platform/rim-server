@@ -1351,6 +1351,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         if revoked_devices > 0 {
             self.devices_changed(user_id).await;
         }
+        self.identity_changed(user_id);
 
         info!(
             target: "audit",

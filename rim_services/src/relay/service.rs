@@ -162,7 +162,8 @@ pub trait RelayService: Send + Sync {
     /// were taken.
     async fn pull_outbox(&self, peer_server_id: String) -> ServiceResult<u64>;
 
-    /// Push a local user's identity to the hosts that know them, after a card or device change.
+    /// Push a local user's identity to the hosts that know them, after a change to their card,
+    /// devices or key log.
     async fn identity_changed(&self, user_id: UserId) -> ServiceResult<()>;
 
     /// Delete acked and expired items, orphaned envelopes and expired requests.

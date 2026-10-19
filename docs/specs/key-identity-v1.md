@@ -361,6 +361,11 @@ mutation, because an identity rotation is accepted on the strength of that sessi
 - A rotation that does not extend the current head (wrong `seq` or `prev`) is a `VALIDATION`
   error. Two rotations racing for the same `seq` are serialized by the row lock below, so the
   second one sees the new head and fails the same way; fetch `myKeyIdentity` and sign again.
+- After either rotation, the server pushes the account's identity document to every host that
+  holds the person as a remote user, as it does after a device or card change
+  (`server-to-server-v1.md`, "Profile cards and contacts"). The document leaves out the devices
+  a recovery revoked: their certificates are void, and a host revokes them when it applies the
+  recovery entry.
 
 Every write that depends on the log (enroll, add, revoke, rotate, publish) runs in one
 transaction with the user row locked (`SELECT … FOR UPDATE`), so two of them for one account
