@@ -532,7 +532,11 @@ event (`c:` its conversation, `u:` the app's principal). Then per stream:
   JSON; the receiver applies it only for principals it holds as remote: a log extending its
   copy, new devices with valid certificates, revocations, a card of higher version. A receiver
   ignores a listed device whose certificate a recovery voided, after checking its signature like
-  any other; a recovery entry new to the receiver revokes every device it held for the person.
+  any other; a recovery entry new to the receiver revokes every device it held for the person
+  and ends all of the person's direct sessions and the delegations of those devices, and a
+  revocation new to it ends that device's delegations and direct sessions, as
+  `/s2s/v1/revocations` does. Live connections of the ended sessions close. The same applies to
+  a document the receiver fetches.
   It applies it only from a relay that speaks for the principal: their newest stored card lists
   the relay's origin; the pushed card, verifying against the pushed log's head and of a higher
   version than the stored one, lists it; it is their `home_relay` and no card is stored; or it
@@ -830,8 +834,11 @@ another origin).
 - **How.** It fetches the host's discovery document directly and checks it against the pin, then
   calls `keyLoginChallenge` and `loginWithKey` on the host with `audience` = the host's server id.
   The host finds the remote user and device (refreshing its copy from the person's relays first,
-  carrying on if they are down) and issues a device-bound session valid **24 hours** for a remote
-  user (the host waits up to 10 seconds for the relays). The app then uses the host's `/api` and
+  carrying on with the stored copy if none answers within 10 seconds) and issues a device-bound
+  session valid **24 hours** for a remote user. When a relay answers with a document the host
+  refuses (it does not verify, or its key log does not extend the stored one) and no relay's is
+  stored, the sign-in is `UNAUTHENTICATED`: the stored copy may predate a recovery or revocation
+  the relay could not deliver. The app then uses the host's `/api` and
   `/api/ws` as a local client would, under a banner "Connected directly to <host>". The account
   mutations a remote user may not run are refused on that session too (`FORBIDDEN`).
 - **Meanwhile.** Events from the host's `workspaceEvents` carry no `seq`, so the app holds the
@@ -1128,6 +1135,7 @@ Rate limits are the in-memory per-node limiters; nonces, `seq` windows and curso
 database, so correctness never depends on one node. Audit (ids only):
 `s2s.peer_pinned`, `s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked`,
 `s2s.peer_unblocked`, `host.remote_join`, `host.delegation_accepted`, `host.revocation_applied`,
+`host.recovery_applied`, `host.identity_revocations_applied`,
 `relay.principal_blocked` (`scope` `user` for `blockPrincipal`, `server` for the operator's),
 `relay.principal_unblocked`, `relay.blocked_principal_refused`, `relay.dm_request_reported`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `relay.registration_pow`,

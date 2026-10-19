@@ -5,10 +5,13 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use chrono::Utc;
+use rim_core::auth::repository::SessionRepository;
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::model::{NewRemoteUser, UserKind};
-use rim_core::host::repository::HostRepository;
-use rim_core::key_identity::model::{DeviceKey, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry};
+use rim_core::host::repository::{DelegationRepository, HostRepository};
+use rim_core::key_identity::model::{
+    DeviceKey, DeviceKeyId, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry,
+};
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::user::model::UserId;
 use rim_identity::{
@@ -282,6 +285,10 @@ pub(crate) async fn local_document(
 pub(crate) struct IdentityStore<'a> {
     pub host_repo: &'a dyn HostRepository,
     pub key_identity_repo: &'a dyn KeyIdentityRepository,
+    /// Ends the sessions of a recovered user or a revoked device.
+    pub session_repo: &'a dyn SessionRepository,
+    /// Ends the delegations of a recovered user's devices or a revoked device.
+    pub delegation_repo: &'a dyn DelegationRepository,
 }
 
 /// What storing a remote identity did.
@@ -291,11 +298,24 @@ pub(crate) struct Stored {
     pub created: bool,
     /// Whether devices were added or revoked, so encrypted groups refresh.
     pub devices_changed: bool,
+    /// Whether a recovery entry new here was applied, which revoked every device and ended
+    /// every session of the user.
+    pub recovered: bool,
+    /// Devices a revocation in the document newly revoked; their sessions ended.
+    pub revoked_devices: Vec<DeviceKeyId>,
+    /// How many sessions the recovery and the revocations ended.
+    pub ended_sessions: u64,
+    /// How many delegations the recovery and the revocations ended.
+    pub ended_delegations: u64,
 }
 
 /// Store a verified identity as a remote user: create the user, or extend their log, add new
 /// devices, apply revocations and take a newer card. `None` when the principal is a local
 /// user here, whose identity is never replaced from outside.
+///
+/// A recovery entry new here revokes every device of the user, ends every session of the user
+/// and every delegation of their devices; a revocation new here ends the sessions and
+/// delegations of its device.
 ///
 /// # Errors
 /// `Validation` when the log does not extend the stored one.
@@ -353,16 +373,20 @@ pub(crate) async fn store_remote(
         return Err(ServiceError::NotFound);
     }
 
-    let mut devices_changed = false;
+    let mut result = Stored {
+        user_id,
+        created,
+        devices_changed: false,
+        recovered: false,
+        revoked_devices: Vec::new(),
+        ended_sessions: 0,
+        ended_delegations: 0,
+    };
     if !created {
         let stored = store.key_identity_repo.list_key_log(user_id).await?;
         if stored.len() > verified.entries.len() {
             // The relay serves an older view; keep what is stored.
-            return Ok(Some(Stored {
-                user_id,
-                created,
-                devices_changed,
-            }));
+            return Ok(Some(result));
         }
         let extends = stored
             .iter()
@@ -384,7 +408,13 @@ pub(crate) async fn store_remote(
                 .await?;
         }
         if recovered {
-            devices_changed |= store.key_identity_repo.revoke_all_devices(user_id).await? > 0;
+            result.recovered = true;
+            result.devices_changed |=
+                store.key_identity_repo.revoke_all_devices(user_id).await? > 0;
+            for device in store.key_identity_repo.list_devices(user_id).await? {
+                result.ended_delegations += store.delegation_repo.end_for_device(device.id).await?;
+            }
+            result.ended_sessions += store.session_repo.revoke_all_for_user(user_id).await?;
         }
         store
             .host_repo
@@ -404,7 +434,7 @@ pub(crate) async fn store_remote(
         {
             Some(row) => row,
             None => {
-                devices_changed = true;
+                result.devices_changed = true;
                 store
                     .key_identity_repo
                     .add_device(NewDeviceKey {
@@ -422,10 +452,18 @@ pub(crate) async fn store_remote(
         };
         let revoked = match &device.revocation {
             Some(revocation) if row.revoked_at.is_none() => {
-                devices_changed |= store
+                if store
                     .key_identity_repo
                     .revoke_device(row.id, &revocation.payload, &revocation.signature)
-                    .await?;
+                    .await?
+                {
+                    result.devices_changed = true;
+                    result.revoked_devices.push(row.id);
+                    result.ended_delegations +=
+                        store.delegation_repo.end_for_device(row.id).await?;
+                    result.ended_sessions +=
+                        store.session_repo.revoke_all_for_device(row.id).await?;
+                }
                 true
             }
             _ => row.revoked_at.is_some(),
@@ -445,11 +483,7 @@ pub(crate) async fn store_remote(
             .upsert_profile_card(user_id, version, &signed.payload, &signed.signature)
             .await?;
     }
-    Ok(Some(Stored {
-        user_id,
-        created,
-        devices_changed,
-    }))
+    Ok(Some(result))
 }
 
 /// The tagged key of a stored device, for verifying what it signed.
@@ -496,9 +530,13 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use chrono::{DateTime, Duration};
+    use rim_core::auth::repository::MockSessionRepository;
     use rim_core::e2ee::repository::MockE2eeRepository;
-    use rim_core::key_identity::model::{DeviceKeyId, KeyLogEntry};
+    use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
+    use rim_core::key_identity::model::KeyLogEntry;
     use rim_core::key_identity::repository::MockKeyIdentityRepository;
     use rim_identity::testing::{TestIdentity, signing_key};
     use uuid::Uuid;
@@ -744,6 +782,227 @@ mod tests {
             &other.revoke_device(&other_state, Uuid::from_u128(1)),
         ));
         assert!(verify_identity(&doc).is_err());
+    }
+
+    /// What storing ended: the users whose sessions all ended, the devices whose sessions
+    /// ended, and the devices whose delegations ended.
+    #[derive(Default)]
+    struct Ended {
+        user_sessions: Mutex<Vec<UserId>>,
+        device_sessions: Mutex<Vec<DeviceKeyId>>,
+        delegations: Mutex<Vec<DeviceKeyId>>,
+    }
+
+    impl Ended {
+        fn user_sessions(&self) -> Vec<UserId> {
+            self.user_sessions.lock().expect("lock").clone()
+        }
+
+        fn device_sessions(&self) -> Vec<DeviceKeyId> {
+            self.device_sessions.lock().expect("lock").clone()
+        }
+
+        fn delegations(&self) -> Vec<DeviceKeyId> {
+            self.delegations.lock().expect("lock").clone()
+        }
+    }
+
+    /// Store `doc` for the remote user `user_id`, held here with `log` and the device rows
+    /// `devices`. Every session query ends one session, every delegation query one delegation.
+    async fn store_held(
+        user_id: UserId,
+        log: &[SignedStatement],
+        devices: Vec<DeviceKey>,
+        doc: &IdentityDocument,
+    ) -> (Stored, Arc<Ended>) {
+        let verified = verify_identity(doc).expect("verify");
+        let ended = Arc::new(Ended::default());
+
+        let mut host = MockHostRepository::new();
+        host.expect_find_user()
+            .returning(move |_| Box::pin(async move { Ok(Some((user_id, UserKind::Remote))) }));
+        host.expect_update_remote_user()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        host.expect_set_device_mls_active()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let mut keys = MockKeyIdentityRepository::new();
+        keys.expect_lock_user()
+            .returning(|_| Box::pin(async { Ok(true) }));
+        let stored_log: Vec<KeyLogEntry> = log
+            .iter()
+            .zip(0..)
+            .map(|(entry, seq)| log_entry(user_id, seq, entry))
+            .collect();
+        keys.expect_list_key_log().returning(move |_| {
+            let log = stored_log.clone();
+            Box::pin(async move { Ok(log) })
+        });
+        keys.expect_append_rotation()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        let unrevoked = devices.iter().filter(|d| d.revoked_at.is_none()).count() as u64;
+        keys.expect_revoke_all_devices()
+            .returning(move |_| Box::pin(async move { Ok(unrevoked) }));
+        let rows = devices.clone();
+        keys.expect_list_devices().returning(move |_| {
+            let rows = rows.clone();
+            Box::pin(async move { Ok(rows) })
+        });
+        keys.expect_get_device().returning(move |_, device_id| {
+            let row = devices.iter().find(|d| d.device_id == device_id).cloned();
+            Box::pin(async move { Ok(row) })
+        });
+        keys.expect_add_device().returning(move |new| {
+            let cert = SignedStatement {
+                payload: new.cert_payload.clone(),
+                signature: new.cert_signature.clone(),
+            };
+            let added = row(user_id, new.device_id, &cert, new.key_seq, None);
+            Box::pin(async move { Ok(added) })
+        });
+        keys.expect_revoke_device()
+            .returning(|_, _, _| Box::pin(async { Ok(true) }));
+        keys.expect_upsert_profile_card()
+            .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+
+        let mut sessions = MockSessionRepository::new();
+        let e = Arc::clone(&ended);
+        sessions
+            .expect_revoke_all_for_user()
+            .returning(move |user| {
+                e.user_sessions.lock().expect("lock").push(user);
+                Ok(1)
+            });
+        let e = Arc::clone(&ended);
+        sessions
+            .expect_revoke_all_for_device()
+            .returning(move |device| {
+                e.device_sessions.lock().expect("lock").push(device);
+                Ok(1)
+            });
+        let mut delegations = MockDelegationRepository::new();
+        let e = Arc::clone(&ended);
+        delegations
+            .expect_end_for_device()
+            .returning(move |device| {
+                e.delegations.lock().expect("lock").push(device);
+                Box::pin(async { Ok(1) })
+            });
+
+        let stored = store_remote(
+            &IdentityStore {
+                host_repo: &host,
+                key_identity_repo: &keys,
+                session_repo: &sessions,
+                delegation_repo: &delegations,
+            },
+            &verified,
+            None,
+        )
+        .await
+        .expect("store")
+        .expect("a remote user");
+        (stored, ended)
+    }
+
+    #[tokio::test]
+    async fn a_recovery_new_here_ends_every_session_and_delegation_of_the_user() {
+        let user_id = UserId::new();
+        let mut id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).expect("inception");
+        let laptop = id.device_cert(&state, Uuid::from_u128(1), &signing_key(20), "Laptop");
+        let phone = id.device_cert(&state, Uuid::from_u128(2), &signing_key(21), "Phone");
+        let rows = vec![
+            row(user_id, Uuid::from_u128(1), &laptop, 0, None),
+            row(user_id, Uuid::from_u128(2), &phone, 0, None),
+        ];
+        let old: Vec<DeviceKeyId> = rows.iter().map(|d| d.id).collect();
+        let recovery = id.recover(&state, 2);
+        let next = state.apply(&recovery).expect("recovery").0;
+        let new = id.device_cert(&next, Uuid::from_u128(3), &signing_key(22), "New");
+        let doc = IdentityDocument {
+            principal_id: next.principal_id.clone(),
+            key_log: vec![signed(&inception), signed(&recovery)],
+            devices: vec![IdentityDevice {
+                device_id: Uuid::from_u128(3),
+                certificate: signed(&new),
+                revocation: None,
+                mls_active: true,
+            }],
+            card: None,
+        };
+
+        let (stored, ended) = store_held(user_id, &[inception], rows, &doc).await;
+        assert!(stored.recovered);
+        assert!(stored.devices_changed);
+        assert!(stored.revoked_devices.is_empty());
+        assert_eq!(ended.user_sessions(), vec![user_id]);
+        assert_eq!(ended.delegations(), old);
+        assert!(ended.device_sessions().is_empty());
+        assert_eq!(stored.ended_sessions, 1);
+        assert_eq!(stored.ended_delegations, 2);
+    }
+
+    #[tokio::test]
+    async fn a_revocation_new_here_ends_only_its_devices_sessions_and_delegations() {
+        let user_id = UserId::new();
+        let id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).expect("inception");
+        let laptop = id.device_cert(&state, Uuid::from_u128(1), &signing_key(20), "Laptop");
+        let phone = id.device_cert(&state, Uuid::from_u128(2), &signing_key(21), "Phone");
+        let rows = vec![
+            row(user_id, Uuid::from_u128(1), &laptop, 0, None),
+            row(user_id, Uuid::from_u128(2), &phone, 0, None),
+        ];
+        let phone_row = rows[1].id;
+        let mut doc = document(&id, &state);
+        doc.devices.push(IdentityDevice {
+            device_id: Uuid::from_u128(2),
+            certificate: signed(&phone),
+            revocation: Some(signed(&id.revoke_device(&state, Uuid::from_u128(2)))),
+            mls_active: false,
+        });
+
+        let (stored, ended) = store_held(user_id, &[inception], rows, &doc).await;
+        assert!(!stored.recovered);
+        assert!(stored.devices_changed);
+        assert_eq!(stored.revoked_devices, vec![phone_row]);
+        assert_eq!(ended.device_sessions(), vec![phone_row]);
+        assert_eq!(ended.delegations(), vec![phone_row]);
+        assert!(ended.user_sessions().is_empty());
+        assert_eq!((stored.ended_sessions, stored.ended_delegations), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn an_identity_with_nothing_new_ends_nothing() {
+        let user_id = UserId::new();
+        let id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).expect("inception");
+        let laptop = id.device_cert(&state, Uuid::from_u128(1), &signing_key(20), "Laptop");
+        let phone = id.device_cert(&state, Uuid::from_u128(2), &signing_key(21), "Phone");
+        let rows = vec![
+            row(user_id, Uuid::from_u128(1), &laptop, 0, None),
+            row(user_id, Uuid::from_u128(2), &phone, 0, Some(Utc::now())),
+        ];
+        let mut doc = document(&id, &state);
+        doc.devices.push(IdentityDevice {
+            device_id: Uuid::from_u128(2),
+            certificate: signed(&phone),
+            revocation: Some(signed(&id.revoke_device(&state, Uuid::from_u128(2)))),
+            mls_active: false,
+        });
+
+        let (stored, ended) = store_held(user_id, &[inception], rows, &doc).await;
+        assert!(!stored.recovered);
+        assert!(!stored.devices_changed);
+        assert!(stored.revoked_devices.is_empty());
+        assert!(ended.user_sessions().is_empty());
+        assert!(ended.device_sessions().is_empty());
+        assert!(ended.delegations().is_empty());
+        assert_eq!((stored.ended_sessions, stored.ended_delegations), (0, 0));
     }
 
     #[test]

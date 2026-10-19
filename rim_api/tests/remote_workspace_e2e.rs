@@ -2,8 +2,9 @@
 //! through the relay with channel traffic both ways and every host event checked against the
 //! host's key, presence, a kick; a delegation expiring and renewed; the host's allow-list; a
 //! device revocation acknowledged through the relay and brought directly to a host the relay
-//! cannot reach; a recovery at the relay applied by the host; the direct sign-in of a remote
-//! member with its day-long session; `leaveRelay`; and the SDL.
+//! cannot reach; a recovery at the relay applied by the host, ending the old devices' direct
+//! sessions and delegations there; the direct sign-in of a remote member with its day-long
+//! session; `leaveRelay`; and the SDL.
 //!
 //! Run with:
 //! ```sh
@@ -196,6 +197,73 @@ async fn active_delegations(host: &Node, principal_id: &str) -> i64 {
         vec![principal_id.into()],
     )
     .await
+}
+
+/// A direct sign-in at a host that succeeded.
+struct DirectSignIn {
+    http: reqwest::Client,
+    session: String,
+    csrf: String,
+    /// The `loginWithKey` answer.
+    login: Value,
+}
+
+/// Sign in to `host` directly with a device of the identity at `state`; the answer when it is
+/// refused.
+async fn sign_in_directly(
+    host: &Node,
+    device_id: Uuid,
+    device_key: &SigningKey,
+    state: &KeyState,
+) -> Result<DirectSignIn, Value> {
+    let http = reqwest::Client::new();
+    let challenge: Value = http
+        .post(format!("{}/api", host.origin))
+        .json(&json!({ "query": CHALLENGE }))
+        .send()
+        .await
+        .expect("challenge")
+        .json()
+        .await
+        .expect("json");
+    let challenge = &challenge["data"]["keyLoginChallenge"];
+    let proof = device_login(
+        device_key,
+        state,
+        device_id,
+        challenge["challengeId"]
+            .as_str()
+            .expect("id")
+            .parse()
+            .expect("uuid"),
+        challenge["nonce"].as_str().expect("nonce"),
+        &host.id(),
+    );
+    let response = http
+        .post(format!("{}/api", host.origin))
+        .json(&json!({ "query": LOGIN, "variables": { "proof": statement(&proof) } }))
+        .send()
+        .await
+        .expect("login");
+    let has_session = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .any(|v| v.to_str().is_ok_and(|t| t.starts_with("rim_session=")));
+    if !has_session {
+        return Err(response.json().await.expect("json"));
+    }
+    let (session, csrf) = cookies(&response);
+    let body: Value = response.json().await.expect("json");
+    if body.get("errors").is_some() {
+        return Err(body);
+    }
+    Ok(DirectSignIn {
+        http,
+        session,
+        csrf,
+        login: body["data"]["loginWithKey"].clone(),
+    })
 }
 
 /// A queued item whose envelope verified under its host's key.
@@ -1085,6 +1153,94 @@ async fn a_recovery_at_the_relay_reaches_the_host_and_revokes_the_old_devices() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_recovery_ends_the_old_devices_direct_sessions_and_delegations_at_the_host() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let mut rita = sign_up(&r, "rita", 2).await;
+    let (ws, _, invite) = workspace(&h, &hannah).await;
+    rita.join(&h, &r, &ws, Some(&invite)).await;
+    assert_eq!(active_delegations(&h, &rita.principal()).await, 1);
+
+    // The old device signs in to the host directly while the relay is up.
+    let signed_in = sign_in_directly(&h, rita.device_id, &rita.device_key, &rita.state)
+        .await
+        .unwrap_or_else(|body| panic!("{body}"));
+    let direct = Person {
+        origin: h.origin.clone(),
+        session: signed_in.session,
+        csrf: signed_in.csrf,
+        http: signed_in.http,
+        device_id: rita.device_id,
+        device_key: rita.device_key.clone(),
+        identity: TestIdentity::with_version(2, StatementVersion::V2),
+        state: rita.state.clone(),
+        seq: 0,
+    };
+    direct.ok(HEADS, json!({ "s": ws, "streams": ["w"] })).await;
+
+    // The device is lost: the recovery key signs a new identity key and a new laptop.
+    let old_state = rita.state.clone();
+    let recovery = rita.identity.recover(&rita.state, 76);
+    rita.state = rita.state.apply(&recovery).expect("recovery").0;
+    let laptop = Uuid::from_u128(0x3000 + 77);
+    let cert = rita
+        .identity
+        .device_cert(&rita.state, laptop, &signing_key(77), "Laptop");
+    let body: Value = reqwest::Client::new()
+        .post(format!("{}/api", r.origin))
+        .json(&json!({ "query": ROTATE, "variables": { "input": {
+            "entry": statement(&recovery),
+            "device": statement(&cert),
+        } } }))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    assert!(body.get("errors").is_none(), "recovery: {body}");
+
+    let rita_on_h = user_id(&h, &rita.principal()).await;
+    eventually("the host to apply the recovery", || async {
+        (scalar(
+            &h,
+            "SELECT count(*) AS n FROM key_log_entry WHERE user_id = $1",
+            vec![Uuid::from(rita_on_h).into()],
+        )
+        .await
+            == 2)
+            .then_some(())
+    })
+    .await;
+
+    assert_eq!(
+        direct
+            .err(HEADS, json!({ "s": ws, "streams": ["w"] }))
+            .await,
+        "UNAUTHENTICATED",
+        "the old device's direct session ended"
+    );
+    assert_eq!(
+        scalar(
+            &h,
+            "SELECT count(*) AS n FROM session WHERE user_id = $1 AND revoked_at IS NULL",
+            vec![Uuid::from(rita_on_h).into()],
+        )
+        .await,
+        0
+    );
+    assert_eq!(active_delegations(&h, &rita.principal()).await, 0);
+    let refused = sign_in_directly(&h, rita.device_id, &rita.device_key, &old_state)
+        .await
+        .err()
+        .expect("the old device is refused");
+    assert!(refused.get("errors").is_some(), "{refused}");
+
+    h.stop().await;
+    r.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_remote_member_signs_in_to_the_host_directly_for_a_day() {
     let (h, r) = nodes().await;
     let hannah = sign_up(&h, "hannah", 1).await;
@@ -1094,44 +1250,12 @@ async fn a_remote_member_signs_in_to_the_host_directly_for_a_day() {
 
     // The relay is down; the app signs in to the host directly.
     r.stop().await;
-    let http = reqwest::Client::new();
-    let challenge: Value = http
-        .post(format!("{}/api", h.origin))
-        .json(&json!({ "query": CHALLENGE }))
-        .send()
+    let signed_in = sign_in_directly(&h, rita.device_id, &rita.device_key, &rita.state)
         .await
-        .expect("challenge")
-        .json()
-        .await
-        .expect("json");
-    let challenge = &challenge["data"]["keyLoginChallenge"];
-    let proof = device_login(
-        &rita.device_key,
-        &rita.state,
-        rita.device_id,
-        challenge["challengeId"]
-            .as_str()
-            .expect("id")
-            .parse()
-            .expect("uuid"),
-        challenge["nonce"].as_str().expect("nonce"),
-        &h.id(),
-    );
-    let response = http
-        .post(format!("{}/api", h.origin))
-        .json(&json!({ "query": LOGIN, "variables": { "proof": statement(&proof) } }))
-        .send()
-        .await
-        .expect("login");
-    let (session, csrf) = cookies(&response);
-    let body: Value = response.json().await.expect("json");
-    assert!(body.get("errors").is_none(), "{body}");
+        .unwrap_or_else(|body| panic!("{body}"));
     let rita_on_h = user_id(&h, &rita.principal()).await;
-    assert_eq!(
-        body["data"]["loginWithKey"]["userId"],
-        json!(rita_on_h.to_string())
-    );
-    assert_eq!(body["data"]["loginWithKey"]["csrfToken"], json!(csrf));
+    assert_eq!(signed_in.login["userId"], json!(rita_on_h.to_string()));
+    assert_eq!(signed_in.login["csrfToken"], json!(signed_in.csrf));
     let hours = scalar(
         &h,
         "SELECT (extract(epoch FROM (expires_at - now())) / 60)::bigint AS n FROM session \
@@ -1143,9 +1267,9 @@ async fn a_remote_member_signs_in_to_the_host_directly_for_a_day() {
 
     let direct = Person {
         origin: h.origin.clone(),
-        session,
-        csrf,
-        http,
+        session: signed_in.session,
+        csrf: signed_in.csrf,
+        http: signed_in.http,
         device_id: rita.device_id,
         device_key: rita.device_key.clone(),
         identity: TestIdentity::with_version(2, StatementVersion::V2),

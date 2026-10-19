@@ -384,6 +384,7 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
             delegation_repo: Arc::clone(&self.delegation_repo),
+            session_repo: Arc::clone(&self.session_repo),
             dm_policy_repo: Arc::clone(&self.dm_policy_repo),
         }
     }

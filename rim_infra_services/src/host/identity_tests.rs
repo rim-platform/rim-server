@@ -1,10 +1,13 @@
 //! Which relays a host takes a remote user's identity from: pushes from relays that speak for
-//! the user and refusals of all others, the relay a refresh goes to, and the device activity
-//! and home relay each source may change.
+//! the user and refusals of all others, the relay a refresh goes to, the device activity and
+//! home relay each source may change, what a refresh reports, and the live connections a
+//! stored recovery or revocation closes.
 
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
+use rim_core::auth::model::SessionId;
+use rim_core::auth::repository::MockSessionRepository;
 use rim_core::conversation::repository::MockConversationRepository;
 use rim_core::conversation_member::repository::MockConversationMemberRepository;
 use rim_core::dm_policy::repository::MockDmPolicyRepository;
@@ -28,15 +31,17 @@ use rim_s2s::{
     ServerKeyState, ServerSigner, SharedIdentity, sign_descriptor, sign_inception, timestamp,
 };
 use rim_services::Actor;
-use rim_services::host::dto::{IdentityPush, RemoteMemberRef};
+use rim_services::host::dto::{IdentityPush, IdentityRefresh, RemoteMemberRef};
 use rim_services::host::service::HostService;
-use rim_services::relay::dto::IdentityDocument;
-use rim_services::s2s::dto::{PeerDto, PeerKeysDto, PeerLookup, S2sResponse};
+use rim_services::relay::dto::{IdentityDevice, IdentityDocument, SignedJson};
+use rim_services::s2s::dto::{PeerDto, PeerKeysDto, PeerLookup, S2sClientError, S2sResponse};
 use rim_services::s2s::service::{MockPeerService, MockS2sClient};
+use rim_services::session_revocation::{SessionRevocations, WatchedSession};
 use uuid::Uuid;
 
 use crate::host::{DefaultHostService, HostRepos};
 use crate::relay::identity::testing::{document, signed};
+use crate::session_revocation::InProcessSessionRevocations;
 
 /// The relay the user's first card lists (`https://relay.example`, as in `document`).
 const RELAY: &str = "rims1_card_relay";
@@ -108,6 +113,8 @@ struct Facts {
     delegated_relay: Option<&'static str>,
     /// The relay the cached copy names as its source, cached two hours ago.
     cached_from: Option<&'static str>,
+    /// Whether every relay fails to answer.
+    relays_down: bool,
 }
 
 const FACTS: Facts = Facts {
@@ -115,6 +122,7 @@ const FACTS: Facts = Facts {
     home_relay: Some(RELAY),
     delegated_relay: None,
     cached_from: None,
+    relays_down: false,
 };
 
 /// What the host wrote.
@@ -188,11 +196,27 @@ impl Alice {
     }
 }
 
+/// The remote user a test host holds, and the row of every device it holds for them.
+struct Held {
+    user_id: UserId,
+    device_key_id: DeviceKeyId,
+}
+
 /// A host holding Alice as a remote user per `facts`, whose relays serve `served`.
 fn host(facts: Facts, served: &IdentityDocument) -> (DefaultHostService, Arc<Writes>) {
+    let (service, writes, _) = host_with(facts, served, served.key_log.clone());
+    (service, writes)
+}
+
+/// [`host`] with `key_log` stored for Alice.
+fn host_with(
+    facts: Facts,
+    served: &IdentityDocument,
+    key_log: Vec<SignedJson>,
+) -> (DefaultHostService, Arc<Writes>, Held) {
     let user = UserId::new();
+    let device_key_id = DeviceKeyId::new();
     let writes = Arc::new(Writes::default());
-    let key_log = served.key_log.clone();
 
     let mut host = MockHostRepository::new();
     host.expect_find_user()
@@ -248,27 +272,42 @@ fn host(facts: Facts, served: &IdentityDocument) -> (DefaultHostService, Arc<Wri
             .collect();
         Box::pin(async move { Ok(entries) })
     });
-    keys.expect_get_device().returning(|user_id, device_id| {
-        Box::pin(async move {
-            Ok(Some(DeviceKey {
-                id: DeviceKeyId::new(),
-                user_id,
-                device_id,
-                public_key: "ed25519:x".to_string(),
-                name: "Laptop".to_string(),
-                cert_payload: "{}".to_string(),
-                cert_signature: "ed25519:x".to_string(),
-                key_seq: 0,
-                added_at: Utc::now(),
-                last_used_at: None,
-                revoked_at: None,
-                revocation_payload: None,
-                revocation_signature: None,
-            }))
-        })
+    let held_row = move |user_id, device_id| DeviceKey {
+        id: device_key_id,
+        user_id,
+        device_id,
+        public_key: "ed25519:x".to_string(),
+        name: "Laptop".to_string(),
+        cert_payload: "{}".to_string(),
+        cert_signature: "ed25519:x".to_string(),
+        key_seq: 0,
+        added_at: Utc::now(),
+        last_used_at: None,
+        revoked_at: None,
+        revocation_payload: None,
+        revocation_signature: None,
+    };
+    keys.expect_get_device()
+        .returning(move |user_id, device_id| {
+            let row = held_row(user_id, device_id);
+            Box::pin(async move { Ok(Some(row)) })
+        });
+    keys.expect_list_devices().returning(move |user_id| {
+        let rows = vec![held_row(user_id, Uuid::from_u128(1))];
+        Box::pin(async move { Ok(rows) })
     });
     keys.expect_upsert_profile_card()
         .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+    keys.expect_append_rotation()
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+    keys.expect_revoke_all_devices()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    keys.expect_revoke_device()
+        .returning(|_, _, _| Box::pin(async { Ok(true) }));
+
+    let mut sessions = MockSessionRepository::new();
+    sessions.expect_revoke_all_for_user().returning(|_| Ok(1));
+    sessions.expect_revoke_all_for_device().returning(|_| Ok(1));
 
     let mut delegations = MockDelegationRepository::new();
     delegations
@@ -277,6 +316,9 @@ fn host(facts: Facts, served: &IdentityDocument) -> (DefaultHostService, Arc<Wri
             let held = facts.delegated_relay == Some(relay);
             Box::pin(async move { Ok(if held { vec![ServerId::new()] } else { vec![] }) })
         });
+    delegations
+        .expect_end_for_device()
+        .returning(|_| Box::pin(async { Ok(1) }));
 
     let mut relay = MockRelayRepository::new();
     let w = Arc::clone(&writes);
@@ -348,7 +390,12 @@ fn host(facts: Facts, served: &IdentityDocument) -> (DefaultHostService, Arc<Wri
             key_seq: 0,
             headers: Vec::new(),
         };
-        Box::pin(async move { Ok(response) })
+        let answer = if facts.relays_down {
+            Err(S2sClientError::Transport("connection refused".to_string()))
+        } else {
+            Ok(response)
+        };
+        Box::pin(async move { answer })
     });
 
     let service = DefaultHostService::new(
@@ -362,6 +409,7 @@ fn host(facts: Facts, served: &IdentityDocument) -> (DefaultHostService, Arc<Wri
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             delegation_repo: Arc::new(delegations),
+            session_repo: Arc::new(sessions),
             relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
             dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
         },
@@ -372,7 +420,11 @@ fn host(facts: Facts, served: &IdentityDocument) -> (DefaultHostService, Arc<Wri
         ServerId::new(),
         120,
     );
-    (service, writes)
+    let held = Held {
+        user_id: user,
+        device_key_id,
+    };
+    (service, writes, held)
 }
 
 async fn push(facts: Facts, from: &str, doc: IdentityDocument) -> (IdentityPush, Arc<Writes>) {
@@ -484,21 +536,134 @@ async fn a_presenting_relay_that_does_not_speak_for_the_user_is_not_stored() {
     let alice = Alice::new();
     let doc = alice.document(false);
     let (svc, writes) = host(FACTS, &doc);
-    let stored = svc
+    let outcome = svc
         .refresh_identity(doc.principal_id.clone(), Some(STRANGER.to_string()))
         .await
         .expect("refresh");
-    assert!(!stored);
+    assert_eq!(outcome, IdentityRefresh::Refused);
     assert_eq!(writes.fetched_from(), vec![STRANGER.to_string()]);
     assert!(writes.mls_active().is_empty());
     assert!(writes.cached_from().is_empty());
 
-    let stored = svc
+    let outcome = svc
         .refresh_identity(doc.principal_id.clone(), Some(RELAY.to_string()))
         .await
         .expect("refresh");
-    assert!(stored);
+    assert_eq!(outcome, IdentityRefresh::Applied(true));
     assert_eq!(writes.mls_active(), vec![false]);
+}
+
+#[tokio::test]
+async fn a_refresh_tells_a_refused_identity_from_relays_that_do_not_answer() {
+    let alice = Alice::new();
+    let doc = alice.document(true);
+    let refresh = |svc: DefaultHostService, principal_id: String| async move {
+        svc.refresh_identity(principal_id, None)
+            .await
+            .expect("refresh")
+    };
+
+    let down = Facts {
+        relays_down: true,
+        ..FACTS
+    };
+    let (svc, writes) = host(down, &doc);
+    assert_eq!(
+        refresh(svc, doc.principal_id.clone()).await,
+        IdentityRefresh::Unreachable
+    );
+    assert_eq!(writes.fetched_from(), vec![RELAY.to_string()]);
+    assert!(writes.cached_from().is_empty());
+
+    let mut forged = doc.clone();
+    forged.devices[0].certificate.signature = forged.key_log[0].signature.clone();
+    let (svc, writes) = host(FACTS, &forged);
+    assert_eq!(
+        refresh(svc, doc.principal_id.clone()).await,
+        IdentityRefresh::Refused
+    );
+    assert!(writes.cached_from().is_empty());
+
+    // The host holds another log for the principal: what the relay serves does not extend it.
+    let other = TestIdentity::new(2);
+    let (svc, writes, _) = host_with(FACTS, &doc, vec![signed(&other.inception())]);
+    assert_eq!(
+        refresh(svc, doc.principal_id.clone()).await,
+        IdentityRefresh::Refused
+    );
+    assert!(writes.mls_active().is_empty());
+    assert!(writes.cached_from().is_empty());
+
+    let (svc, _) = host(FACTS, &doc);
+    assert_eq!(
+        refresh(svc, doc.principal_id.clone()).await,
+        IdentityRefresh::Applied(true)
+    );
+}
+
+/// A watch on a session of `user_id`, bound to `device_key_id` when given.
+fn watched(user_id: UserId, device_key_id: Option<DeviceKeyId>) -> WatchedSession {
+    WatchedSession {
+        session_id: SessionId::new(),
+        user_id,
+        device_key_id,
+    }
+}
+
+#[tokio::test]
+async fn a_pushed_recovery_closes_every_live_connection_of_the_user() {
+    let alice = Alice::new();
+    let inception = alice.id.inception();
+    let mut id = TestIdentity::new(1);
+    let recovery = id.recover(&alice.state, 2);
+    let next = alice.state.apply(&recovery).expect("recovery").0;
+    let cert = id.device_cert(&next, Uuid::from_u128(3), &signing_key(22), "New");
+    let doc = IdentityDocument {
+        principal_id: next.principal_id.clone(),
+        key_log: vec![signed(&inception), signed(&recovery)],
+        devices: vec![IdentityDevice {
+            device_id: Uuid::from_u128(3),
+            certificate: signed(&cert),
+            revocation: None,
+            mls_active: true,
+        }],
+        card: None,
+    };
+    let (svc, _, held) = host_with(FACTS, &doc, vec![signed(&inception)]);
+    let revocations = Arc::new(InProcessSessionRevocations::default());
+    svc.set_session_revocations(Arc::clone(&revocations) as _);
+    let mut direct = revocations.watch(watched(held.user_id, Some(held.device_key_id)));
+    let mut someone_else = revocations.watch(watched(UserId::new(), None));
+
+    let outcome = svc
+        .apply_identity(RELAY.to_string(), RELAY_ORIGIN.to_string(), doc)
+        .await
+        .expect("push");
+    assert_eq!(outcome, IdentityPush::Applied(true));
+    assert!(direct.has_ended());
+    assert!(!someone_else.has_ended());
+}
+
+#[tokio::test]
+async fn a_pushed_revocation_closes_the_live_connections_of_its_device() {
+    let alice = Alice::new();
+    let mut doc = alice.document(false);
+    doc.devices[0].revocation = Some(signed(
+        &alice.id.revoke_device(&alice.state, Uuid::from_u128(1)),
+    ));
+    let (svc, _, held) = host_with(FACTS, &doc, doc.key_log.clone());
+    let revocations = Arc::new(InProcessSessionRevocations::default());
+    svc.set_session_revocations(Arc::clone(&revocations) as _);
+    let mut revoked = revocations.watch(watched(held.user_id, Some(held.device_key_id)));
+    let mut password = revocations.watch(watched(held.user_id, None));
+
+    let outcome = svc
+        .apply_identity(RELAY.to_string(), RELAY_ORIGIN.to_string(), doc)
+        .await
+        .expect("push");
+    assert_eq!(outcome, IdentityPush::Applied(true));
+    assert!(revoked.has_ended());
+    assert!(!password.has_ended());
 }
 
 #[tokio::test]

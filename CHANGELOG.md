@@ -345,5 +345,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   (`NOT_FOUND`). Before, a few small user commands naming each other many times made one lookup
   or run do work that grew exponentially ("User Commands And Macros" in
   `docs/command_model.md`).
+- When a host applies a recovery or a device revocation that arrives in someone's identity
+  (pushed by their relay or fetched from it), it ends their direct sign-in sessions and the
+  delegations of the revoked devices, as it does for a revocation sent to
+  `/s2s/v1/revocations`, and closes those sessions' live connections. Before, a device lost and
+  recovered from kept its direct session at the host and stayed listed as delegated there. A
+  direct sign-in of someone from another server is now refused (`UNAUTHENTICATED`) when their
+  relay answers with an identity the host refuses; it still falls back to the stored copy when
+  no relay answers (`server-to-server-v1.md` "Profile cards and contacts", "Direct
+  connection").
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

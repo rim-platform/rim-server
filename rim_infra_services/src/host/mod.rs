@@ -18,6 +18,7 @@ use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
+use rim_core::auth::repository::SessionRepository;
 use rim_core::conversation::model::ConversationId;
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
@@ -40,8 +41,8 @@ use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::dto::{
     ConversationPredecessorDto, ForwardAuth, ForwardOutcome, ForwardRefusal, ForwardRequest,
-    HostCleanup, IdentityPush, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember,
-    StreamHeadDto,
+    HostCleanup, IdentityPush, IdentityRefresh, RemoteClaim, RemoteKeyPackage, RemoteMemberRef,
+    ResolvedMember, StreamHeadDto,
 };
 use rim_services::host::service::{DelegationCheck, HostService, RemoteKeyPackages};
 use rim_services::limits::InstanceLimits;
@@ -51,6 +52,7 @@ use rim_services::relay::dto::{
 };
 use rim_services::s2s::dto::{PeerLookup, S2sMethod, S2sRequest};
 use rim_services::s2s::service::{PeerService, S2sClient};
+use rim_services::session_revocation::SessionRevocations;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::clock::Clock;
@@ -90,6 +92,9 @@ pub struct HostRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub server_member_repo: Arc<dyn ServerMemberRepository>,
     pub delegation_repo: Arc<dyn DelegationRepository>,
+    /// Remote users' direct sign-in sessions, ended when their identity recovers or a device
+    /// is revoked.
+    pub session_repo: Arc<dyn SessionRepository>,
     /// Principals this server refuses.
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
     /// Workspaces' DM rules and each user's choices.
@@ -107,6 +112,8 @@ pub struct DefaultHostService {
     device_limiter: RegistrationRateLimiter,
     /// Told when a remote user's devices change. Set once the provider exists.
     e2ee_service: OnceLock<Arc<dyn E2eeService>>,
+    /// Told about the sessions a stored identity ended. Set once the provider exists.
+    session_revocations: OnceLock<Arc<dyn SessionRevocations>>,
     /// Delegations of workspace spaces; without one only the direct-space rule applies.
     delegations: Option<Arc<dyn DelegationCheck>>,
     /// Invites each user sends to people on other servers who are not their contacts, per
@@ -175,6 +182,7 @@ impl DefaultHostService {
             direct_space_id,
             device_limiter: RegistrationRateLimiter::new(60, device_rate_per_min),
             e2ee_service: OnceLock::new(),
+            session_revocations: OnceLock::new(),
             delegations: None,
             dm_invites: DailyCounter::per_day(Quotas::default().dm_requests_per_day),
             limits: InstanceLimits::default(),
@@ -331,6 +339,12 @@ impl DefaultHostService {
         let _ = self.e2ee_service.set(e2ee_service);
     }
 
+    /// Report the sessions a stored recovery or device revocation ends to `revocations`, so
+    /// their live connections close.
+    pub fn set_session_revocations(&self, revocations: Arc<dyn SessionRevocations>) {
+        let _ = self.session_revocations.set(revocations);
+    }
+
     async fn begin(&self) -> ServiceResult<(Option<TransactionScope>, HostRepos)> {
         let scope = match &self.db {
             Some(db) => Some(
@@ -386,12 +400,17 @@ impl DefaultHostService {
             &IdentityStore {
                 host_repo: repos.host_repo.as_ref(),
                 key_identity_repo: repos.key_identity_repo.as_ref(),
+                session_repo: repos.session_repo.as_ref(),
+                delegation_repo: repos.delegation_repo.as_ref(),
             },
             verified,
             home_relay.as_deref(),
         )
         .await?;
         Self::commit(scope).await?;
+        if let Some(stored) = &stored {
+            self.sessions_ended(stored, served_by);
+        }
         if stored.is_some() {
             let text = serde_json::to_string(document).map_err(ServiceError::internal)?;
             self.repos
@@ -408,6 +427,41 @@ impl DefaultHostService {
             warn!(error = %e, user_id = %stored.user_id, "could not announce a remote user's device change");
         }
         Ok(stored)
+    }
+
+    /// Close the live connections of the sessions a committed identity ended, and record the
+    /// recovery or revocations in the audit log.
+    fn sessions_ended(&self, stored: &Stored, served_by: &str) {
+        if let Some(revocations) = self.session_revocations.get() {
+            if stored.recovered {
+                revocations.revoke_user(stored.user_id);
+            }
+            for device in &stored.revoked_devices {
+                revocations.revoke_device(*device);
+            }
+        }
+        if stored.recovered {
+            info!(
+                target: "audit",
+                event = "host.recovery_applied",
+                user_id = %stored.user_id,
+                peer_server_id = %served_by,
+                ended_delegations = stored.ended_delegations,
+                ended_sessions = stored.ended_sessions,
+                "applied an identity recovery from another server"
+            );
+        } else if !stored.revoked_devices.is_empty() {
+            info!(
+                target: "audit",
+                event = "host.identity_revocations_applied",
+                user_id = %stored.user_id,
+                peer_server_id = %served_by,
+                devices = stored.revoked_devices.len(),
+                ended_delegations = stored.ended_delegations,
+                ended_sessions = stored.ended_sessions,
+                "applied device revocations in an identity from another server"
+            );
+        }
     }
 
     /// Pin the relays a document's card lists, so events can be addressed to them. Returns the
@@ -998,17 +1052,18 @@ impl HostService for DefaultHostService {
         &self,
         principal_id: String,
         from_relay: Option<String>,
-    ) -> ServiceResult<bool> {
+    ) -> ServiceResult<IdentityRefresh> {
         let Some((user_id, UserKind::Remote)) =
             self.repos.host_repo.find_user(&principal_id).await?
         else {
-            return Ok(false);
+            return Ok(IdentityRefresh::Applied(false));
         };
         let presented = from_relay.is_some();
         let relays = match from_relay {
             Some(relay) => vec![relay],
             None => self.chosen_relays(user_id).await?,
         };
+        let mut refused = false;
         for relay in relays {
             let Some(document) = self.fetch_document(&relay, &principal_id).await else {
                 warn!(user_id = %user_id, peer_server_id = %relay, "could not refresh a remote identity");
@@ -1018,6 +1073,7 @@ impl HostService for DefaultHostService {
                 Ok(verified) => verified,
                 Err(e) => {
                     warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "a refreshed identity was refused");
+                    refused = true;
                     continue;
                 }
             };
@@ -1030,16 +1086,25 @@ impl HostService for DefaultHostService {
                 IdentitySource::Authorized(relay.clone())
             } else {
                 warn!(user_id = %user_id, peer_server_id = %relay, "refused an identity from a relay that does not speak for the user");
+                refused = true;
                 continue;
             };
             match self.store_verified(&document, &verified, source).await {
-                Ok(stored) => return Ok(stored.is_some()),
+                Ok(stored) => return Ok(IdentityRefresh::Applied(stored.is_some())),
+                Err(e @ ServiceError::Validation(_)) => {
+                    warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "a refreshed identity was refused");
+                    refused = true;
+                }
                 Err(e) => {
-                    warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "a refreshed identity was refused")
+                    warn!(error = %e, user_id = %user_id, peer_server_id = %relay, "could not store a refreshed identity")
                 }
             }
         }
-        Ok(false)
+        Ok(if refused {
+            IdentityRefresh::Refused
+        } else {
+            IdentityRefresh::Unreachable
+        })
     }
 
     async fn authenticate_forward(&self, request: ForwardRequest) -> ForwardOutcome {

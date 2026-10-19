@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::host::dto::{
     ConversationPredecessorDto, ForwardOutcome, ForwardRequest, HostCleanup, IdentityPush,
-    RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
+    IdentityRefresh, RemoteClaim, RemoteKeyPackage, RemoteMemberRef, ResolvedMember, StreamHeadDto,
 };
 use crate::relay::dto::{IdentityDocument, OutboxPage};
 use crate::{Actor, ServiceResult};
@@ -74,12 +74,13 @@ pub trait HostService: Send + Sync {
     /// Fetch a principal held here as remote from `from_relay`, or else from the relays their
     /// newest card lists and then their home relay, and store what verifies. What `from_relay`
     /// serves is stored only when it speaks for the principal, as for `apply_identity`. Returns
-    /// whether an identity was stored; a relay that is down keeps the stored copy.
+    /// whether an identity was stored, a relay's document was refused, or no relay answered;
+    /// only a stored document changes the stored copy.
     async fn refresh_identity(
         &self,
         principal_id: String,
         from_relay: Option<String>,
-    ) -> ServiceResult<bool>;
+    ) -> ServiceResult<IdentityRefresh>;
 
     /// Check a forwarded request: the device request and its `seq`, and that the relay may
     /// carry the user's traffic.

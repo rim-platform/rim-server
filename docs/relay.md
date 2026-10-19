@@ -200,7 +200,9 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
 (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
 `server` for an operator's), `relay.principal_unblocked`, `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
-`blocked_email_refused` (`action` `signup` or `login`), `relay.registration_pow`, `relay.left`, `key_identity_adopted` and `host.revocation_applied`; `host.remote_join` and
+`blocked_email_refused` (`action` `signup` or `login`), `relay.registration_pow`, `relay.left`, `key_identity_adopted`, `host.revocation_applied`,
+`host.recovery_applied` and `host.identity_revocations_applied` (a recovery or revocations
+applied from a person's identity, with the sessions and delegations they ended); `host.remote_join` and
 `host.delegation_accepted` are also written to `command_audit_log` (initiator `s2s`).
 
 ### The public relay
