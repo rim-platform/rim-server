@@ -4883,7 +4883,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "ed25519-dalek",
- "hkdf 0.12.4",
+ "hkdf 0.13.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",
