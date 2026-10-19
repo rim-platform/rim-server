@@ -56,16 +56,19 @@ impl ConversationMutations {
             ids.extend(remote_ids);
             rim_services::conversation::types::ConversationParticipants::Group { member_ids: ids }
         };
-        let others = match &participants {
+        let (others, direct_message) = match &participants {
             rim_services::conversation::types::ConversationParticipants::DirectMessage {
                 other_user_id,
-            } => vec![*other_user_id],
+            } => (vec![*other_user_id], true),
             rim_services::conversation::types::ConversationParticipants::Group { member_ids } => {
-                member_ids.clone()
+                (member_ids.clone(), false)
             }
-            rim_services::conversation::types::ConversationParticipants::Channel => Vec::new(),
+            rim_services::conversation::types::ConversationParticipants::Channel => {
+                (Vec::new(), false)
+            }
         };
-        crate::federation::ensure_may_request(ctx, actor, server_id, others).await?;
+        crate::federation::ensure_may_request(ctx, actor, server_id, others, direct_message)
+            .await?;
 
         let conv = svc
             .create_conversation(CreateConversationCmd {
@@ -185,7 +188,7 @@ impl ConversationMutations {
         for id in &user_ids {
             ids.push(parse_uuid_id::<rim_core::user::model::UserId>(id)?);
         }
-        crate::federation::ensure_may_request(ctx, actor, server_id, ids.clone()).await?;
+        crate::federation::ensure_may_request(ctx, actor, server_id, ids.clone(), false).await?;
 
         let conv = svc
             .add_conversation_members(AddConversationMembersCmd {

@@ -37,6 +37,11 @@ struct QueueStatsRow {
 }
 
 #[derive(FromQueryResult)]
+struct TimeRow {
+    at: Option<DateTimeWithTimeZone>,
+}
+
+#[derive(FromQueryResult)]
 struct FlagRow {
     flag: bool,
 }
@@ -76,8 +81,9 @@ struct DroppedRow {
     workspace_id: Uuid,
 }
 
-/// Rows filed as requests, leaving out conversations accepted at once (from contacts), whose
-/// `decided_at` is their `created_at`.
+/// Rows filed as requests, leaving out conversations decided as they arrived, whose
+/// `decided_at` is their `created_at`: accepted at once (from contacts), or refused for a local
+/// member and kept as ignored.
 const FILED: &str = "decided_at IS DISTINCT FROM created_at";
 
 const REQUEST_COLUMNS: &str = "id, user_id, from_principal_id, card_payload, card_signature, \
@@ -560,6 +566,24 @@ impl RelayRepository for SeaOrmRelayRepository {
             vec![principal_id.into(), since.into()],
         )
         .await
+    }
+
+    async fn oldest_request_from(
+        &self,
+        principal_id: &str,
+        since: DateTime<Utc>,
+    ) -> RepoResult<Option<DateTime<Utc>>> {
+        Ok(self
+            .one::<TimeRow>(
+                &format!(
+                    "SELECT min(created_at) AS at FROM relay_dm_request \
+                     WHERE from_principal_id = $1 AND created_at >= $2 AND {FILED}"
+                ),
+                vec![principal_id.into(), since.into()],
+            )
+            .await?
+            .and_then(|row| row.at)
+            .map(Into::into))
     }
 
     async fn decide_request(

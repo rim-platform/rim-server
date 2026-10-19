@@ -61,6 +61,7 @@ use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::relay::identity::{
     IdentityStore, Stored, VerifiedIdentity, store_remote, verify_identity,
 };
+use crate::relay::inbox::{RequestLimit, SENDER_WINDOW, request_limit};
 use crate::relay::policy::{DmPolicy, PolicySource, outbound_refused};
 use crate::relay::{
     MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, card_relays, check_relay_urls, fetch_from_relays,
@@ -119,6 +120,8 @@ pub struct DefaultHostService {
     /// Invites each user sends to people on other servers who are not their contacts, per
     /// day.
     dm_invites: DailyCounter,
+    /// DM requests one sender principal files on this relay per day.
+    dm_requests_per_day: u32,
     /// The probation of new accounts, during which they send no DM request to a stranger.
     limits: InstanceLimits,
     clock: Clock,
@@ -185,6 +188,7 @@ impl DefaultHostService {
             session_revocations: OnceLock::new(),
             delegations: None,
             dm_invites: DailyCounter::per_day(Quotas::default().dm_requests_per_day),
+            dm_requests_per_day: Quotas::default().dm_requests_per_day,
             limits: InstanceLimits::default(),
             clock: Clock::default(),
             dm_policy: DmOperatorPolicy::default(),
@@ -226,16 +230,19 @@ impl DefaultHostService {
         }
     }
 
-    /// `Forbidden` when a local recipient's DM settings refuse a DM from `sender`.
-    async fn ensure_recipient_takes(&self, sender: UserId, recipient: UserId) -> ServiceResult<()> {
-        let Some(principal_id) = self
-            .repos
-            .user_repo
-            .get_by_id(sender)
-            .await?
-            .and_then(|u| u.principal_id)
-        else {
-            return Ok(());
+    /// How a local recipient's DM settings take a DM from `sender`: `Deliver` for a sender
+    /// without a principal id, who files no request.
+    ///
+    /// # Errors
+    ///
+    /// `Forbidden` when the settings refuse it.
+    async fn ensure_recipient_takes(
+        &self,
+        sender: UserId,
+        recipient: UserId,
+    ) -> ServiceResult<DmPolicy> {
+        let Some(principal_id) = self.principal_of(sender).await? else {
+            return Ok(DmPolicy::Deliver);
         };
         let own_id = self.own_id();
         let sender_server = match self.repos.host_repo.user_kind(sender).await? {
@@ -260,12 +267,99 @@ impl DefaultHostService {
                 "they do not take direct messages from you".to_string(),
             ));
         }
+        Ok(policy)
+    }
+
+    /// The principal id of `user_id`; `None` for a user without one or an unknown user.
+    async fn principal_of(&self, user_id: UserId) -> ServiceResult<Option<String>> {
+        Ok(self
+            .repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .and_then(|u| u.principal_id))
+    }
+
+    /// Refuse a conversation by `actor` that files a DM request with each of the local users
+    /// `requested` when the request inbox would refuse one: a recipient holding their most
+    /// pending requests, or more requests than `actor` may file today on this relay.
+    ///
+    /// # Errors
+    ///
+    /// `Forbidden` naming the full inbox; `RateLimited` until the oldest of `actor`'s requests
+    /// of the window leaves it.
+    async fn refuse_requests_over_limits(
+        &self,
+        actor: Actor,
+        requested: &[UserId],
+    ) -> ServiceResult<()> {
+        if requested.is_empty() {
+            return Ok(());
+        }
+        let Some(principal_id) = self.principal_of(actor.user_id).await? else {
+            return Ok(());
+        };
+        let since = self.clock.now() - SENDER_WINDOW;
+        let filed = self
+            .repos
+            .relay_repo
+            .count_requests_from(&principal_id, since)
+            .await?;
+        for (more, recipient) in (0_i64..).zip(requested) {
+            let pending = self
+                .repos
+                .relay_repo
+                .count_pending_requests(*recipient)
+                .await?;
+            match request_limit(pending, filed + more, i64::from(self.dm_requests_per_day)) {
+                None => {}
+                Some(RequestLimit::RecipientFull) => {
+                    crate::metrics::rate_limited("dm_requests");
+                    return Err(ServiceError::Forbidden(
+                        "their request inbox is full".to_string(),
+                    ));
+                }
+                Some(RequestLimit::SenderDaily) => {
+                    crate::metrics::rate_limited("dm_requests");
+                    let oldest = self
+                        .repos
+                        .relay_repo
+                        .oldest_request_from(&principal_id, since)
+                        .await?;
+                    let retry =
+                        oldest.map_or(SENDER_WINDOW.num_seconds(), |at| (at - since).num_seconds());
+                    return Err(ServiceError::RateLimited {
+                        retry_after_seconds: u64::try_from(retry.max(1)).unwrap_or(1),
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
-    /// Apply the per-user quotas: invites to people on other servers per day.
+    /// The local users among `user_ids`, but `actor`, whose DM settings take a DM from `actor`
+    /// as a request.
+    ///
+    /// # Errors
+    ///
+    /// `Forbidden` when one's settings refuse it.
+    async fn requested_of(&self, actor: Actor, user_ids: &[UserId]) -> ServiceResult<Vec<UserId>> {
+        let mut requested = Vec::new();
+        for other in user_ids.iter().filter(|id| **id != actor.user_id) {
+            if self.repos.host_repo.user_kind(*other).await? == Some(UserKind::Local)
+                && self.ensure_recipient_takes(actor.user_id, *other).await? == DmPolicy::Request
+            {
+                requested.push(*other);
+            }
+        }
+        Ok(requested)
+    }
+
+    /// Apply the per-user quotas: invites to people on other servers, and DM requests filed
+    /// here, per day.
     pub fn with_quotas(mut self, quotas: Quotas) -> Self {
         self.dm_invites = DailyCounter::per_day(quotas.dm_requests_per_day);
+        self.dm_requests_per_day = quotas.dm_requests_per_day;
         self
     }
 
@@ -1233,19 +1327,42 @@ impl HostService for DefaultHostService {
         })
     }
 
-    async fn ensure_may_request(&self, actor: Actor, user_ids: Vec<UserId>) -> ServiceResult<()> {
+    async fn ensure_may_request(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        user_ids: Vec<UserId>,
+        direct_message: bool,
+    ) -> ServiceResult<()> {
+        let in_direct_space = server_id == self.direct_space_id;
+        if !in_direct_space && !direct_message {
+            return Ok(());
+        }
         let others: Vec<UserId> = user_ids
             .into_iter()
             .filter(|id| *id != actor.user_id)
             .collect();
-        for other in &others {
-            match self.repos.host_repo.user_kind(*other).await? {
-                Some(UserKind::Remote) => self.ensure_outbound_to(*other).await?,
-                Some(UserKind::Local) => self.ensure_recipient_takes(actor.user_id, *other).await?,
-                None => {}
+        if in_direct_space {
+            for other in &others {
+                if self.repos.host_repo.user_kind(*other).await? == Some(UserKind::Remote) {
+                    self.ensure_outbound_to(*other).await?;
+                }
             }
         }
-        if self.limits.probation_hours.is_none() {
+        let requested = self.requested_of(actor, &others).await?;
+        let reopened = match others.as_slice() {
+            [other] if direct_message => self
+                .repos
+                .conversation_repo
+                .find_direct_between_users(server_id, actor.user_id, *other)
+                .await?
+                .is_some(),
+            _ => false,
+        };
+        if !reopened {
+            self.refuse_requests_over_limits(actor, &requested).await?;
+        }
+        if !in_direct_space || self.limits.probation_hours.is_none() {
             return Ok(());
         }
         let principal_ids: Vec<String> = self

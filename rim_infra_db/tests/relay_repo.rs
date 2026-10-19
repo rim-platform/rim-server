@@ -503,6 +503,38 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
         "conversations from contacts are not requests"
     );
     assert_eq!(repo.count_pending_requests(user.id).await.unwrap(), 1);
+    let refused = Uuid::now_v7();
+    repo.insert_request(new(DmRequestStatus::Ignored, refused))
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.list_requests(user.id, None).await.unwrap().len(),
+        1,
+        "a refused conversation is no request"
+    );
+    let since = Utc::now() - Duration::days(1);
+    assert_eq!(
+        repo.count_requests_from("rimp1_alice", since)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        repo.conversation_hidden(user.id, refused).await.unwrap(),
+        "a refused conversation stays hidden"
+    );
+    assert_eq!(
+        repo.oldest_request_from("rimp1_alice", since)
+            .await
+            .unwrap(),
+        Some(request.created_at)
+    );
+    assert_eq!(
+        repo.oldest_request_from("rimp1_carol", since)
+            .await
+            .unwrap(),
+        None
+    );
 
     let env = repo
         .insert_envelope(envelope(Some(1), Uuid::now_v7()))
@@ -599,8 +631,8 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
         repo.delete_expired_requests(Utc::now() + Duration::days(31))
             .await
             .unwrap(),
-        1,
-        "the ignored request expires; the accepted ones stay"
+        2,
+        "the ignored requests expire, the refused conversation's too; the accepted ones stay"
     );
 }
 
