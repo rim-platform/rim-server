@@ -103,11 +103,50 @@ pub struct StoredProfileCard {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A single-use key login challenge.
+/// What a key challenge was issued for, stored in `key_challenge.purpose` and
+/// `key_challenge.relay_server_id`. A challenge is consumed only for the purpose it was issued
+/// for, so a proof over a join challenge never signs anyone in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyChallengePurpose {
+    /// Signing in, signing up or enrolling a key identity on this server.
+    Login,
+    /// Joining a workspace hosted here through the relay with this server id.
+    Join { relay_server_id: String },
+}
+
+impl KeyChallengePurpose {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Login => "login",
+            Self::Join { .. } => "join",
+        }
+    }
+
+    /// The relay a join challenge is bound to; `None` for a login challenge.
+    pub fn relay_server_id(&self) -> Option<&str> {
+        match self {
+            Self::Login => None,
+            Self::Join { relay_server_id } => Some(relay_server_id),
+        }
+    }
+
+    /// The purpose stored as `purpose` and `relay_server_id`; `None` for a combination that
+    /// names no purpose.
+    pub fn parse(purpose: &str, relay_server_id: Option<String>) -> Option<Self> {
+        match (purpose, relay_server_id) {
+            ("login", None) => Some(Self::Login),
+            ("join", Some(relay_server_id)) => Some(Self::Join { relay_server_id }),
+            _ => None,
+        }
+    }
+}
+
+/// A single-use key challenge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyChallenge {
     pub id: KeyChallengeId,
     pub nonce: String,
+    pub purpose: KeyChallengePurpose,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub used_at: Option<DateTime<Utc>>,

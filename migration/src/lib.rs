@@ -113,6 +113,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261017_195237_add_reaction_notification_fields::Migration),
             Box::new(m20261019_143809_add_user_username_lower_unique::Migration),
             Box::new(m20261019_182336_user_activity::Migration),
+            Box::new(m20261019_194441_add_key_challenge_purpose::Migration),
         ]
     }
 }
@@ -213,3 +214,4 @@ mod m20261017_195236_add_reaction_notification_reason;
 mod m20261017_195237_add_reaction_notification_fields;
 mod m20261019_143809_add_user_username_lower_unique;
 mod m20261019_182336_user_activity;
+mod m20261019_194441_add_key_challenge_purpose;

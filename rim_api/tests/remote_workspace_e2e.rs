@@ -4,7 +4,7 @@
 //! device revocation acknowledged through the relay and brought directly to a host the relay
 //! cannot reach; a recovery at the relay applied by the host, ending the old devices' direct
 //! sessions and delegations there; the direct sign-in of a remote member with its day-long
-//! session; `leaveRelay`; and the SDL.
+//! session; join and login challenges kept apart; `leaveRelay`; and the SDL.
 //!
 //! Run with:
 //! ```sh
@@ -1294,6 +1294,136 @@ async fn a_remote_member_signs_in_to_the_host_directly_for_a_day() {
     );
 
     h.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_join_proof_does_not_sign_in_at_the_host_nor_a_login_proof_join() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let rita = sign_up(&r, "rita", 2).await;
+    let (ws, _, invite) = workspace(&h, &hannah).await;
+    rita.join(&h, &r, &ws, Some(&invite)).await;
+
+    // The app signs a proof over a join challenge the relay fetched; the relay presents it to
+    // the host as a login instead of joining.
+    let challenge = rita
+        .ok(REMOTE_CHALLENGE, json!({ "h": h.id(), "o": h.origin }))
+        .await["remoteJoinChallenge"]
+        .clone();
+    let proof = device_login(
+        &rita.device_key,
+        &rita.state,
+        rita.device_id,
+        challenge["challengeId"]
+            .as_str()
+            .expect("id")
+            .parse()
+            .expect("uuid"),
+        challenge["nonce"].as_str().expect("nonce"),
+        &h.id(),
+    );
+    let body: Value = reqwest::Client::new()
+        .post(format!("{}/api", h.origin))
+        .json(&json!({ "query": LOGIN, "variables": { "proof": statement(&proof) } }))
+        .send()
+        .await
+        .expect("login")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+        "{body}"
+    );
+    assert_eq!(
+        scalar(
+            &h,
+            "SELECT count(*) AS n FROM key_challenge WHERE id = $1 AND used_at IS NULL",
+            vec![
+                challenge["challengeId"]
+                    .as_str()
+                    .expect("id")
+                    .parse::<Uuid>()
+                    .expect("uuid")
+                    .into()
+            ],
+        )
+        .await,
+        1,
+        "the refused login leaves the join challenge unused"
+    );
+
+    // Nor does a login challenge, or one the host issued for another relay, join.
+    let login: Value = reqwest::Client::new()
+        .post(format!("{}/api", h.origin))
+        .json(&json!({ "query": CHALLENGE }))
+        .send()
+        .await
+        .expect("challenge")
+        .json()
+        .await
+        .expect("json");
+    let login = &login["data"]["keyLoginChallenge"];
+    let other_relay = h
+        .s2s
+        .workspace_host
+        .join_challenge(
+            "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c".to_string(),
+            None,
+        )
+        .await
+        .expect("join challenge");
+    let join_over = |challenge_id: Uuid, nonce: &str| {
+        let proof = device_login(
+            &rita.device_key,
+            &rita.state,
+            rita.device_id,
+            challenge_id,
+            nonce,
+            &h.id(),
+        );
+        json!({ "input": {
+            "hostServerId": h.id(),
+            "hostOrigin": h.origin,
+            "proof": statement(&proof),
+            "delegation": statement(&rita.delegation(&h, &r, &ws, 12)),
+        } })
+    };
+    for (challenge_id, nonce) in [
+        (
+            login["challengeId"]
+                .as_str()
+                .expect("id")
+                .parse()
+                .expect("uuid"),
+            login["nonce"].as_str().expect("nonce"),
+        ),
+        (other_relay.challenge_id, other_relay.nonce.as_str()),
+    ] {
+        let body = rita
+            .post_to(&rita.origin, JOIN, join_over(challenge_id, nonce))
+            .await;
+        assert_eq!(
+            body["errors"][0]["message"], "the challenge is unknown, already used or expired",
+            "{body}"
+        );
+    }
+    // The join challenge the relay asked for still joins.
+    rita.ok(
+        JOIN,
+        join_over(
+            challenge["challengeId"]
+                .as_str()
+                .expect("id")
+                .parse()
+                .expect("uuid"),
+            challenge["nonce"].as_str().expect("nonce"),
+        ),
+    )
+    .await;
+
+    h.stop().await;
+    r.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

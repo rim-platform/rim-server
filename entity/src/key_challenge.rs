@@ -12,6 +12,10 @@ pub struct Model {
     pub created_at: DateTimeWithTimeZone,
     pub expires_at: DateTimeWithTimeZone,
     pub used_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text")]
+    pub purpose: String,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub relay_server_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

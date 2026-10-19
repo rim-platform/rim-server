@@ -6,7 +6,7 @@ use chrono::{Duration, Utc};
 use rim_core::auth::model::NewSession;
 use rim_core::auth::repository::SessionRepository;
 use rim_core::key_identity::model::{
-    KeyChallengeId, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry,
+    KeyChallengeId, KeyChallengePurpose, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry,
 };
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
 use rim_core::repository::error::RepoErrorKind;
@@ -264,27 +264,71 @@ async fn profile_card_keeps_the_newest_version() {
 async fn challenge_is_consumed_once_and_only_with_its_nonce() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmKeyChallengeRepository::new(ctx.db.clone());
+    let login = KeyChallengePurpose::Login;
 
     let c = repo
-        .create("nonce-1", Utc::now() + Duration::minutes(2))
+        .create("nonce-1", Utc::now() + Duration::minutes(2), &login)
         .await
         .unwrap();
-    assert!(!repo.consume(c.id, "wrong").await.unwrap());
+    assert_eq!(c.purpose, login);
+    assert!(!repo.consume(c.id, "wrong", &login).await.unwrap());
     assert!(
         !repo
-            .consume(KeyChallengeId::new(), "nonce-1")
+            .consume(KeyChallengeId::new(), "nonce-1", &login)
             .await
             .unwrap()
     );
-    assert!(repo.consume(c.id, "nonce-1").await.unwrap());
-    assert!(!repo.consume(c.id, "nonce-1").await.unwrap());
+    assert!(repo.consume(c.id, "nonce-1", &login).await.unwrap());
+    assert!(!repo.consume(c.id, "nonce-1", &login).await.unwrap());
 
     let expired = repo
-        .create("nonce-2", Utc::now() - Duration::seconds(1))
+        .create("nonce-2", Utc::now() - Duration::seconds(1), &login)
         .await
         .unwrap();
-    assert!(!repo.consume(expired.id, "nonce-2").await.unwrap());
+    assert!(!repo.consume(expired.id, "nonce-2", &login).await.unwrap());
     assert_eq!(repo.delete_expired(Utc::now()).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn challenge_is_consumed_only_for_its_purpose_and_relay() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmKeyChallengeRepository::new(ctx.db.clone());
+    let login = KeyChallengePurpose::Login;
+    let join = |relay: &str| KeyChallengePurpose::Join {
+        relay_server_id: relay.to_string(),
+    };
+    let expires_at = Utc::now() + Duration::minutes(2);
+
+    let joining = repo
+        .create("nonce-j", expires_at, &join("rims1_relay"))
+        .await
+        .unwrap();
+    assert_eq!(joining.purpose, join("rims1_relay"));
+    assert!(!repo.consume(joining.id, "nonce-j", &login).await.unwrap());
+    assert!(
+        !repo
+            .consume(joining.id, "nonce-j", &join("rims1_other"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        repo.consume(joining.id, "nonce-j", &join("rims1_relay"))
+            .await
+            .unwrap()
+    );
+
+    let signing_in = repo.create("nonce-l", expires_at, &login).await.unwrap();
+    assert!(
+        !repo
+            .consume(signing_in.id, "nonce-l", &join("rims1_relay"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        repo.consume(signing_in.id, "nonce-l", &login)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

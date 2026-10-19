@@ -14,7 +14,7 @@ use rim_core::auth::repository::{InviteRepository, SessionRepository};
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::host::model::{DelegationStored, NewDelegation, UserKind};
 use rim_core::host::repository::{DelegationRepository, HostRepository};
-use rim_core::key_identity::model::{DeviceKey, DeviceKeyId};
+use rim_core::key_identity::model::{DeviceKey, DeviceKeyId, KeyChallengePurpose};
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::server::model::ServerId;
@@ -493,7 +493,13 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
         let challenge = self
             .repos
             .key_challenge_repo
-            .create(&generate_challenge_nonce(), now + JOIN_CHALLENGE_TTL)
+            .create(
+                &generate_challenge_nonce(),
+                now + JOIN_CHALLENGE_TTL,
+                &KeyChallengePurpose::Join {
+                    relay_server_id: peer_server_id,
+                },
+            )
             .await?;
         Ok(JoinChallengeDto {
             challenge_id: challenge.id.into(),
@@ -568,7 +574,13 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
         if !self
             .repos
             .key_challenge_repo
-            .consume(proof.challenge_id.into(), &proof.nonce)
+            .consume(
+                proof.challenge_id.into(),
+                &proof.nonce,
+                &KeyChallengePurpose::Join {
+                    relay_server_id: peer_server_id.clone(),
+                },
+            )
             .await?
         {
             return Err(ServiceError::Validation(

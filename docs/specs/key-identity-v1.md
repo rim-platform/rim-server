@@ -228,6 +228,12 @@ Signed by the device key. `challengeId` and `nonce` come from `keyLoginChallenge
 the `host[:port]` the client connects to (lowercase is safest; servers compare it
 case-insensitively), so a server that receives a proof cannot relay it to another server.
 
+Each challenge serves one purpose. One from `keyLoginChallenge` is a login challenge, consumed by
+`loginWithKey`, `signupWithKey` or `enrollIdentityKey`. One a host issues for joining a workspace
+through a relay (`server-to-server-v1.md` §Joining) is a join challenge, bound to that relay and
+consumed only by its join; the three mutations refuse it, although the proof over it has the
+same format, so a relay never turns a person's join proof into a session.
+
 ## Server rules
 
 ### Enrollment
@@ -309,7 +315,7 @@ identity alone: no password, and no email unless an email-bound invite gives one
 2. The client signs a login proof with its device key and calls `loginWithKey(proof)`.
 3. The server finds the account by `principalId` and the device by `deviceId`, verifies the
    signature with that device's key, checks the audience against its accepted audiences, and
-   claims the challenge atomically (unused, unexpired, same nonce).
+   claims the challenge atomically (a login challenge, unused, unexpired, same nonce).
 4. On success it locks the user row, reads the device again (a revocation that committed in the
    meantime refuses the login), creates a session bound to the device, records the device's
    `lastUsedAt`, and sets the same session and CSRF cookies as `login`.
@@ -383,7 +389,7 @@ never interleave.
 | `key_log_entry` | `(user_id, seq)` primary key, `entry_type` inception or rotate, payload, signature |
 | `device_key` | `public_key` in tagged form, `key_hash` = SHA-256 of that text (32 bytes), certificate as signed, `key_seq`, `added_at`, `last_used_at`, `revoked_at` and the signed revocation; unique `(user_id, device_id)` and `(user_id, key_hash)` |
 | `profile_card` | One row per user, the newest card as signed |
-| `key_challenge` | Nonce, expiry, `used_at`; expired rows are deleted when new challenges are issued |
+| `key_challenge` | Nonce, expiry, `used_at`, `purpose` (`login`, or `join` with the relay's server id in `relay_server_id`); expired rows are deleted when new challenges are issued |
 | `session.device_key_id` | The device a session belongs to; null for password sessions not bound to a device |
 
 The plan called the log table `key_rotation`; it is `key_log_entry` because it also holds the

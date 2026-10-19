@@ -5,8 +5,8 @@ use mockall::automock;
 use uuid::Uuid;
 
 use crate::key_identity::model::{
-    DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyLogEntry, NewDeviceKey,
-    NewKeyLogEntry, StoredProfileCard,
+    DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyChallengePurpose, KeyLogEntry,
+    NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
 };
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
@@ -103,15 +103,26 @@ pub trait KeyIdentityRepository: Send + Sync {
     ) -> RepoResult<bool>;
 }
 
-/// Single-use key login challenges.
+/// Single-use key challenges, each issued for one purpose.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait KeyChallengeRepository: Send + Sync {
-    async fn create(&self, nonce: &str, expires_at: DateTime<Utc>) -> RepoResult<KeyChallenge>;
+    async fn create(
+        &self,
+        nonce: &str,
+        expires_at: DateTime<Utc>,
+        purpose: &KeyChallengePurpose,
+    ) -> RepoResult<KeyChallenge>;
 
-    /// Atomically mark the challenge used if it exists, carries `nonce`, is unused and has not
-    /// expired. Returns `true` only for the one caller that claimed it.
-    async fn consume(&self, id: KeyChallengeId, nonce: &str) -> RepoResult<bool>;
+    /// Atomically mark the challenge used if it exists, carries `nonce`, was issued for
+    /// `purpose` (a join challenge for the same relay), is unused and has not expired. Returns
+    /// `true` only for the one caller that claimed it.
+    async fn consume(
+        &self,
+        id: KeyChallengeId,
+        nonce: &str,
+        purpose: &KeyChallengePurpose,
+    ) -> RepoResult<bool>;
 
     /// Delete challenges that expired before `before`. Returns how many were deleted.
     async fn delete_expired(&self, before: DateTime<Utc>) -> RepoResult<u64>;

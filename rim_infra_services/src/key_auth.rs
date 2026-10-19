@@ -15,8 +15,8 @@ use rim_core::auth::repository::SessionRepository;
 use rim_core::host::model::UserKind;
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::{
-    DeviceKey, DeviceKeyId, KeyLogEntry, KeyLogEntryType, NewDeviceKey, NewKeyLogEntry,
-    StoredProfileCard,
+    DeviceKey, DeviceKeyId, KeyChallengePurpose, KeyLogEntry, KeyLogEntryType, NewDeviceKey,
+    NewKeyLogEntry, StoredProfileCard,
 };
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
 use rim_core::relay::repository::RelayAbuseRepository;
@@ -630,7 +630,11 @@ impl DefaultKeyAuthService {
     ) -> ServiceResult<()> {
         if !repos
             .key_challenge_repo
-            .consume(proof.challenge_id.into(), &proof.nonce)
+            .consume(
+                proof.challenge_id.into(),
+                &proof.nonce,
+                &KeyChallengePurpose::Login,
+            )
             .await?
         {
             return Err(ServiceError::Validation(
@@ -806,7 +810,11 @@ impl DefaultKeyAuthService {
         if !self
             .repos
             .key_challenge_repo
-            .consume(login.challenge_id.into(), &login.nonce)
+            .consume(
+                login.challenge_id.into(),
+                &login.nonce,
+                &KeyChallengePurpose::Login,
+            )
             .await?
         {
             return Err(fail("challenge_invalid"));
@@ -852,7 +860,11 @@ impl KeyAuthService for DefaultKeyAuthService {
         let challenge = self
             .repos
             .key_challenge_repo
-            .create(&nonce, now + Duration::seconds(CHALLENGE_TTL_SECONDS))
+            .create(
+                &nonce,
+                now + Duration::seconds(CHALLENGE_TTL_SECONDS),
+                &KeyChallengePurpose::Login,
+            )
             .await?;
         Ok(KeyChallengeDto {
             challenge_id: challenge.id,

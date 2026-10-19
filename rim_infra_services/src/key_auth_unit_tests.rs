@@ -17,8 +17,8 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::key_identity::model::{
-        DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyLogEntry, KeyLogEntryType,
-        NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
+        DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyChallengePurpose, KeyLogEntry,
+        KeyLogEntryType, NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
     };
     use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
     use rim_core::moderation::repository::MockModerationRepository;
@@ -328,10 +328,16 @@ mod tests {
 
     #[async_trait]
     impl KeyChallengeRepository for FakeChallenges {
-        async fn create(&self, nonce: &str, expires_at: DateTime<Utc>) -> RepoResult<KeyChallenge> {
+        async fn create(
+            &self,
+            nonce: &str,
+            expires_at: DateTime<Utc>,
+            purpose: &KeyChallengePurpose,
+        ) -> RepoResult<KeyChallenge> {
             let c = KeyChallenge {
                 id: KeyChallengeId::new(),
                 nonce: nonce.to_string(),
+                purpose: purpose.clone(),
                 created_at: Utc::now(),
                 expires_at,
                 used_at: None,
@@ -340,11 +346,20 @@ mod tests {
             Ok(c)
         }
 
-        async fn consume(&self, id: KeyChallengeId, nonce: &str) -> RepoResult<bool> {
+        async fn consume(
+            &self,
+            id: KeyChallengeId,
+            nonce: &str,
+            purpose: &KeyChallengePurpose,
+        ) -> RepoResult<bool> {
             let mut s = self.0.lock().unwrap();
             let now = Utc::now();
             let Some(c) = s.challenges.iter_mut().find(|c| {
-                c.id == id && c.nonce == nonce && c.used_at.is_none() && c.expires_at > now
+                c.id == id
+                    && c.nonce == nonce
+                    && c.purpose == *purpose
+                    && c.used_at.is_none()
+                    && c.expires_at > now
             }) else {
                 return Ok(false);
             };
@@ -796,6 +811,35 @@ mod tests {
             ))
         }
 
+        /// A `login` statement by `device`, naming this server's id, over a challenge this
+        /// server issued for a join through `relay`, as a relay's join request carries it.
+        async fn join_proof(
+            &self,
+            device: &SigningKey,
+            state: &KeyState,
+            device_id: Uuid,
+            relay: &str,
+        ) -> SignedPayload {
+            let challenge = FakeChallenges(Arc::clone(&self.state))
+                .create(
+                    "am9pbi1ub25jZQ",
+                    Utc::now() + Duration::minutes(5),
+                    &KeyChallengePurpose::Join {
+                        relay_server_id: relay.to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+            payload(device_login(
+                device,
+                state,
+                device_id,
+                challenge.id.into(),
+                &challenge.nonce,
+                SERVER_ID,
+            ))
+        }
+
         async fn enroll(&self, seed: u8) -> Enrolled {
             self.enroll_with(seed, StatementVersion::V1).await
         }
@@ -1140,6 +1184,17 @@ mod tests {
         assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
         assert!(h.state.lock().unwrap().principals.is_empty());
 
+        // A proof over a challenge issued for joining through a relay.
+        let joining = h
+            .join_proof(&device, &state, device_id, "rims1_relay")
+            .await;
+        let err = h.svc.enroll(enroll(joining)).await.unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("challenge")),
+            "{err:?}"
+        );
+        assert!(h.state.lock().unwrap().principals.is_empty());
+
         let good = h.proof(&device, &state, device_id).await;
         h.svc.enroll(enroll(good.clone())).await.unwrap();
         // The challenge is spent.
@@ -1259,6 +1314,33 @@ mod tests {
         assert!(h.svc.login_with_key(cmd()).await.is_ok());
         let err = h.svc.login_with_key(cmd()).await.unwrap_err();
         assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn key_login_refuses_a_proof_over_a_join_challenge() {
+        let h = harness();
+        let e = h.enroll(1).await;
+        let proof = h
+            .join_proof(&e.device, &e.state, e.device_id, "rims1_relay")
+            .await;
+        let err = h
+            .svc
+            .login_with_key(LoginWithKeyCmd {
+                proof,
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+        assert!(
+            h.state
+                .lock()
+                .unwrap()
+                .challenges
+                .iter()
+                .all(|c| c.used_at.is_none() || c.purpose == KeyChallengePurpose::Login),
+            "the join challenge stays unused"
+        );
     }
 
     #[tokio::test]
@@ -2377,6 +2459,28 @@ mod tests {
             matches!(&err, ServiceError::Validation(m) if m.contains("challenge")),
             "{err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn signup_with_key_refuses_a_proof_over_a_join_challenge() {
+        let h = harness();
+        let p = h.present(1).await;
+        let proof = h
+            .join_proof(&p.device, &p.state, p.device_id, "rims1_relay")
+            .await;
+        let err = h
+            .svc
+            .signup_with_key(SignupWithKeyCmd {
+                proof,
+                ..open_cmd(&p, "ada")
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("challenge")),
+            "{err:?}"
+        );
+        assert_eq!(h.user_count(), 0);
     }
 
     #[tokio::test]
