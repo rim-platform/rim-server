@@ -291,5 +291,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   pipeline fires or is suspended, and `PipelineGql.lastFiredAt` reads null for everyone else.
   Before, any member could build a pipeline with a text or author filter and learn from its
   firing when a private conversation they were not in received a matching message.
+- A password sign-in that finishes while the account's password is reset, a key is enrolled or
+  an operator bans the account no longer leaves a working session behind: its session either
+  ends with the others or is never created, the sign-in refused like a wrong password
+  (`UNAUTHENTICATED`) after a reset or an enrollment and with `FORBIDDEN` after a ban. Before,
+  a sign-in with the old password that was already being checked could create a session after
+  the reset or enrollment had ended all the others.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

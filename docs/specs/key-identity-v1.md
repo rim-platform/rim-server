@@ -250,7 +250,9 @@ case-insensitively), so a server that receives a proof cannot relay it to anothe
    password they signed in with no longer signs in (rule 5).
 5. From then on the password no longer signs in (`login` answers `UNAUTHENTICATED`, with the
    same timing as a wrong password), `requestPasswordReset` sends nothing, and an outstanding
-   reset link is refused with `FORBIDDEN`.
+   reset link is refused with `FORBIDDEN`. A `login` still checking the password while the
+   enrollment commits is refused the same way: it creates its session under the user row lock
+   the enrollment holds, after reading the account again.
 
 `logoutOtherSessions` stays for every account: it ends every session of the account but the
 caller's and answers how many.

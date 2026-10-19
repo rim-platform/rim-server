@@ -253,18 +253,6 @@ impl PasswordResetService for DefaultPasswordResetService {
             return Err(ServiceError::PermissionDenied);
         }
 
-        // A link sent before the account enrolled a key must not reset anything: the password
-        // no longer signs in, and the reset would end every session.
-        let user = self
-            .repos
-            .user_repo
-            .get_by_id(record.user_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-        if user.principal_id.is_some() {
-            return Err(ServiceError::PermissionDenied);
-        }
-
         // Validate new password.
         if cmd.new_password.len() < 8 {
             return Err(ServiceError::Validation(
@@ -288,6 +276,22 @@ impl PasswordResetService for DefaultPasswordResetService {
             Some(s) => AppRepos::with_handle(&s.handle()).for_password_reset(),
             None => self.repos.clone(),
         };
+
+        // A key enrollment and a password login commit under the same user row lock, so the
+        // account read below is the one the reset changes and no sign-in finishes in between.
+        if !repos.user_repo.lock_user(record.user_id).await? {
+            return Err(ServiceError::NotFound);
+        }
+        // A link sent before the account enrolled a key must not reset anything: the password
+        // no longer signs in, and the reset would end every session.
+        let user = repos
+            .user_repo
+            .get_by_id(record.user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if user.principal_id.is_some() {
+            return Err(ServiceError::PermissionDenied);
+        }
 
         // Atomic claim: a concurrent redemption of the same token gets `false` here and the
         // transaction rolls back on drop.
@@ -697,17 +701,27 @@ mod tests {
             .times(1)
             .returning(|_| Ok(2));
 
+        // The account is locked before it is read and changed.
+        let mut seq = mockall::Sequence::new();
         let mut user_repo = MockUserRepository::new();
         user_repo
-            .expect_update_password()
-            .withf(move |id, _| *id == user_id)
+            .expect_lock_user()
+            .withf(move |id| *id == user_id)
             .times(1)
-            .returning(|_, _| Ok(()));
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(true));
         user_repo
             .expect_get_by_id()
             .withf(move |id| *id == user_id)
             .times(1)
+            .in_sequence(&mut seq)
             .returning(move |id| Ok(Some(make_user(id, "alice", "alice@example.com"))));
+        user_repo
+            .expect_update_password()
+            .withf(move |id, _| *id == user_id)
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
 
         let mut session_repo = MockSessionRepository::new();
         session_repo
@@ -768,6 +782,7 @@ mod tests {
         token_repo.expect_invalidate_unused_for_user().never();
 
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_lock_user().returning(|_| Ok(true));
         user_repo
             .expect_get_by_id()
             .returning(move |id| Ok(Some(make_user(id, "alice", "alice@example.com"))));
@@ -825,6 +840,10 @@ mod tests {
         token_repo.expect_try_mark_used().never();
 
         let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_lock_user()
+            .times(1)
+            .returning(|_| Ok(true));
         user_repo.expect_get_by_id().returning(move |id| {
             Ok(Some(User {
                 principal_id: Some("rimp1_key".to_string()),
@@ -909,6 +928,7 @@ mod tests {
             .returning(move |_| Ok(Some(record.clone())));
         token_repo.expect_try_mark_used().never();
         let mut user_repo = MockUserRepository::new();
+        user_repo.expect_lock_user().returning(|_| Ok(true));
         user_repo
             .expect_get_by_id()
             .returning(move |id| Ok(Some(key_only_user(id, "alice"))));
