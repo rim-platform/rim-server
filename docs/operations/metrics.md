@@ -222,6 +222,11 @@ Label these panels as relay items rather than messages. Acknowledgement means th
 has processed an item, not that its user has read a message. Items remain subject to the relay's
 retention period and byte cap; see [Relay delivery](../relay.md).
 
+For conversations hosted here, accepted local members fetch persisted conversation history
+when they reconnect. Their messages do not become relay queue rows merely because a local
+device is offline. Pending relay delivery therefore does not count every message an offline
+client could fetch, nor the messages its user has not read.
+
 The acknowledgement request rate is not a delivered-item rate: one request can acknowledge
 many items or repeat a previous cursor. A row removed as acknowledged has completed delivery
 to all its eligible devices. Cleanup and overflow counters describe rows actually removed,
