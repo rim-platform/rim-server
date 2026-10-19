@@ -99,6 +99,60 @@ async fn reaction_loader_batches_one_viewers_messages_into_one_call() {
     assert!(loaded[1].is_empty());
 }
 
+/// One batch holding two viewers' loads makes one service call per viewer with that viewer's
+/// message ids, and each viewer gets `reacted_by_me` computed for themselves.
+#[tokio::test]
+async fn reaction_loader_answers_each_viewer_for_themselves() {
+    let [reactor, onlooker] = [UserId::new(), UserId::new()];
+    let [shared, other] = [MessageId::new(), MessageId::new()];
+    let mut service = MockMessageReactionService::new();
+    service
+        .expect_get_reactions_for_messages()
+        .withf(move |q| {
+            let mut ids = q.message_ids.clone();
+            ids.sort_by_key(|id| id.to_string());
+            let mut want = vec![shared, other];
+            want.sort_by_key(|id| id.to_string());
+            q.actor.user_id == reactor && ids == want
+        })
+        .times(1)
+        .returning(move |_| {
+            Box::pin(async move { Ok(HashMap::from([(shared, vec![reaction("👍")])])) })
+        });
+    service
+        .expect_get_reactions_for_messages()
+        .withf(move |q| q.actor.user_id == onlooker && q.message_ids == [shared])
+        .times(1)
+        .returning(move |_| {
+            let seen_by_onlooker = ReactionGroupDto {
+                reacted_by_me: false,
+                ..reaction("👍")
+            };
+            Box::pin(async move { Ok(HashMap::from([(shared, vec![seen_by_onlooker])])) })
+        });
+
+    let keys = [(shared, reactor), (other, reactor), (shared, onlooker)].map(
+        |(message_id, actor_user_id)| ReactionLoaderKey {
+            message_id,
+            actor_user_id,
+        },
+    );
+    let loaded: Vec<_> = load_each(ReactionLoader::new(Arc::new(service)), &keys)
+        .await
+        .into_iter()
+        .map(|r| r.expect("loaded").expect("present"))
+        .collect();
+    assert!(
+        loaded[0][0].reacted_by_me,
+        "the reactor sees their reaction"
+    );
+    assert!(loaded[1].is_empty());
+    assert!(
+        !loaded[2][0].reacted_by_me,
+        "the onlooker does not see it as theirs"
+    );
+}
+
 /// The reaction loader asked for no keys answers nothing without calling the service.
 #[tokio::test]
 async fn reaction_loader_makes_no_call_for_no_keys() {
