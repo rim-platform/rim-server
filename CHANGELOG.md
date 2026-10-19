@@ -307,6 +307,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A message's reactions, `reactedByMe` included, are read for the user who asked. Before, when
   several users' requests loaded reactions at the same moment, one of them could be shown
   another user's reaction state.
+- A `workspaceEvents` subscription that falls behind and misses events checks the subscriber's
+  membership and role again before it delivers the next event, and ends when they are no
+  longer a member of the workspace. Before, a member whose removal or demotion to guest was
+  among the missed events went on receiving the workspace's events as before.
 - An identity recovered with the recovery phrase reaches other servers again. The identity
   document a relay serves and pushes (`GET /s2s/v1/principals/<id>`) leaves out the devices
   the recovery revoked, so hosts accept it, apply the recovery and revoke those devices; before,

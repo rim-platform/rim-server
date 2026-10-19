@@ -74,6 +74,12 @@ impl<S> Drop for RelayStreamPresence<S> {
 impl Subscription {
     /// Subscribe to all real-time events for a workspace.
     /// Returns events as JSON strings — the client parses the `type` field to determine the event kind.
+    ///
+    /// The subscriber's membership is checked when the subscription starts. Afterwards their
+    /// guest status follows their `MemberRoleChanged` events, and the stream ends after their
+    /// `MemberLeft`. When the subscriber falls behind and events are dropped, their membership
+    /// and role are loaded again before any further event is delivered; the stream ends when
+    /// that load fails, including when they are no longer a member.
     async fn workspace_events(
         &self,
         ctx: &Context<'_>,
@@ -97,6 +103,7 @@ impl Subscription {
             .await
             .map_err(crate::errors::map_service_error)?;
         let initially_guest = me.member_role.is_guest();
+        let members = Arc::clone(svc);
 
         let presence = ctx.data::<Arc<dyn PresenceService>>()?;
         let broadcaster = ctx.data::<InMemoryBroadcaster>()?;
@@ -111,13 +118,14 @@ impl Subscription {
             federation.is_some_and(|f| f.info.direct_space_id.to_string() == ws_id);
         let inbox = federation.map(|f| Arc::clone(&f.relay));
 
-        // Use async_stream to handle Lagged errors gracefully without ending the stream.
-        // BroadcastStream ends on Lagged, so the raw receiver is used directly.
+        // The raw receiver is read directly so a lag can recheck the membership and keep the
+        // stream open for a subscriber who is still a member.
         let inner = async_stream::stream! {
             let mut rx = rx;
             // The subscriber's guest status follows their role changes, and the
             // stream ends once they are removed from the workspace (kick/ban), after delivering
-            // the `MemberLeft` that tells their client.
+            // the `MemberLeft` that tells their client. Dropped events may have carried either
+            // change, so after a lag both are read from the membership again.
             let mut is_guest = initially_guest;
             loop {
                 match rx.recv().await {
@@ -165,7 +173,20 @@ impl Subscription {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!("WS subscriber lagged, skipped {n} events");
-                        // Continue — don't end the stream
+                        let reloaded = members
+                            .get_member(rim_services::server_member::command::GetServerMemberQuery {
+                                actor: rim_services::Actor::new(actor),
+                                server_id,
+                                user_id: actor,
+                            })
+                            .await;
+                        match reloaded {
+                            Ok(me) => is_guest = me.member_role.is_guest(),
+                            Err(e) => {
+                                tracing::info!(error = %e, user_id = %actor, "lagged WS subscriber's membership not confirmed, ending stream");
+                                break;
+                            }
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         break; // Channel closed, end stream
