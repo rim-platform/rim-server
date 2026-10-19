@@ -180,7 +180,7 @@ impl InstanceInviteRepository for SeaOrmInstanceInviteRepository {
     ///
     /// Idempotent: a no-op when the row is already revoked or does not exist.
     /// Both outcomes are folded into `Ok(())` to keep the trait contract stable
-    /// (matches `InviteRepository::revoke_invite` semantics). Test coverage uses
+    /// (as `InviteRepository::revoke` does for workspace invites). Test coverage uses
     /// the private [`Self::revoke_returning_affected`] helper to observe the
     /// "did revoke / already revoked" distinction.
     ///

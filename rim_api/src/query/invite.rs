@@ -1,7 +1,20 @@
 use async_graphql::*;
+use rim_services::Actor;
+use rim_services::auth::command::ListInvitesQuery;
 use rim_services::auth::service::AuthService;
 
-use crate::types::{InviteTokenPreviewGql, RegistrationModeGql};
+use crate::auth_context::require_actor;
+use crate::errors::map_service_error;
+use crate::ids::parse_uuid_id;
+use crate::pagination::PageDir;
+use crate::types::{
+    InviteTokenPreviewGql, RegistrationModeGql, WorkspaceInviteCursorInput, WorkspaceInvitePage,
+};
+
+/// Page size of `workspaceInvites` when `limit` is omitted.
+const DEFAULT_LIMIT: i32 = 50;
+/// Largest page `workspaceInvites` returns.
+const MAX_LIMIT: u32 = 100;
 
 #[derive(Default)]
 pub(crate) struct RegistrationQueries;
@@ -40,5 +53,41 @@ impl RegistrationQueries {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(InviteTokenPreviewGql::from(preview))
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct WorkspaceInviteQueries;
+
+#[Object]
+impl WorkspaceInviteQueries {
+    /// The workspace's invites, newest first (`createdAt DESC, id DESC`), revoked, expired and
+    /// used-up ones included. `AFTER` pages go to older invites. Defaults: `dir` `AFTER`,
+    /// `limit` 50 (clamped to 1..=100). Owner only: anyone else gets `FORBIDDEN`. An invite's
+    /// token is never listed.
+    async fn workspace_invites(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        dir: Option<PageDir>,
+        cursor: Option<WorkspaceInviteCursorInput>,
+        limit: Option<i32>,
+    ) -> Result<WorkspaceInvitePage> {
+        let actor = require_actor(ctx)?;
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        let limit = u32::try_from(limit.unwrap_or(DEFAULT_LIMIT).max(1))
+            .unwrap_or(1)
+            .min(MAX_LIMIT);
+        let page = auth
+            .list_invites(ListInvitesQuery {
+                actor: Actor::new(actor),
+                server_id: parse_uuid_id(&server_id)?,
+                dir: dir.unwrap_or(PageDir::After).into(),
+                cursor: cursor.map(TryFrom::try_from).transpose()?,
+                limit,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(WorkspaceInvitePage::from_page(page))
     }
 }

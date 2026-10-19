@@ -2,8 +2,8 @@ use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
-    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, SignupOpenCmd, SignupToken,
-    SignupWithInstanceInviteCmd,
+    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, RevokeInviteCmd, SignupOpenCmd,
+    SignupToken, SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::auth::service::AuthService;
@@ -12,7 +12,7 @@ use crate::auth_context::require_actor;
 use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
-use crate::types::SignupWithInvitePayloadGql;
+use crate::types::{SignupWithInvitePayloadGql, WorkspaceInvite};
 
 #[derive(Default)]
 pub(crate) struct InviteMutations;
@@ -208,9 +208,34 @@ impl InviteMutations {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct WorkspaceInviteMutations;
+
+#[Object]
+impl WorkspaceInviteMutations {
+    /// Revoke a workspace invite: from now on it admits nobody, and members who joined with it
+    /// stay. Owner of the invite's workspace only (`FORBIDDEN` for its other members);
+    /// `NOT_FOUND` for an unknown invite or one of a workspace the caller is not in. Revoking a
+    /// revoked invite returns it unchanged.
+    async fn revoke_invite(&self, ctx: &Context<'_>, invite_id: ID) -> Result<WorkspaceInvite> {
+        let actor = require_actor(ctx)?;
+        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
+        let invite = auth
+            .revoke_invite(RevokeInviteCmd {
+                actor: Actor::new(actor),
+                invite_id: parse_uuid_id(&invite_id)?,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(invite.into())
+    }
+}
+
 #[derive(InputObject)]
 pub struct CreateInviteInput {
     pub server_id: ID,
+    /// When the invite stops admitting anyone: in the future and at most 30 days from now
+    /// (`VALIDATION` otherwise). Seven days from now when omitted.
     pub expires_at: Option<DateTime<Utc>>,
     pub max_uses: Option<i32>,
     /// Optional recipient to email the invite link to. Validated server-side;

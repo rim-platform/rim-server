@@ -63,3 +63,6 @@ If `items` is empty, both cursors are `None`.
 - Channels:
   - `ORDER BY created_at ASC, id ASC` (stable, oldest-first)
   - cursor: `(created_at, conversation_id)`
+- Workspace invites (`workspaceInvites`):
+  - `ORDER BY created_at DESC, id DESC` (newest first)
+  - cursor: `(created_at, invite_id)`
