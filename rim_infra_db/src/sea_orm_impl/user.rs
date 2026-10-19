@@ -13,6 +13,7 @@ use sea_orm::{
 
 use crate::DbHandle;
 use crate::error::map_db_err;
+use crate::sea_orm_impl::user_lock::lock_user_row;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 
 fn statement(sql: &str, values: Vec<Value>) -> Statement {
@@ -73,6 +74,10 @@ impl UserRepository for SeaOrmUserRepository {
             .map_err(map_db_err)?;
 
         Ok(models.into_iter().map(Into::into).collect())
+    }
+
+    async fn lock_user(&self, id: UserId) -> RepoResult<bool> {
+        lock_user_row(&self.db, id).await
     }
 
     async fn create_user(&self, user_data: NewUser) -> RepoResult<User> {

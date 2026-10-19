@@ -155,6 +155,9 @@ impl DefaultRelayAbuseService {
             invitees: Vec::new(),
         };
         if let Some(user) = user {
+            // A password login creates its session under the same user row lock, so it either
+            // commits before the sweep below or waits and sees the blocked email.
+            repos.user_repo.lock_user(user.id).await?;
             outcome.ended_sessions = repos.session_repo.revoke_all_for_user(user.id).await?;
             outcome.revoked_invites = repos.user_repo.revoke_invites_created_by(user.id).await?;
             if let Some(email) = &user.email {
@@ -798,6 +801,12 @@ mod tests {
                 .returning(move |id| Ok(tree.get(&id).cloned().unwrap_or_default()));
             let log = Arc::clone(&self.log);
             let n = name.clone();
+            user_repo.expect_lock_user().returning(move |id| {
+                log.lock().unwrap().push(format!("lock {}", n(id)));
+                Ok(true)
+            });
+            let log = Arc::clone(&self.log);
+            let n = name.clone();
             user_repo
                 .expect_revoke_invites_created_by()
                 .returning(move |id| {
@@ -877,6 +886,7 @@ mod tests {
             w.calls(),
             vec![
                 format!("block {ADA}: spam wave"),
+                "lock ada".to_string(),
                 "end sessions ada".to_string(),
                 "revoke invites ada".to_string(),
                 "block email ada@example.com: spam wave".to_string(),

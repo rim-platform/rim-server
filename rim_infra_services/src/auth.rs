@@ -412,9 +412,45 @@ impl DefaultAuthService {
             return Err(ServiceError::Unauthenticated);
         }
 
+        // A password reset, a key enrollment and a ban commit under the user row lock. Taking
+        // the same lock and reading the account again means a change that raced the checks
+        // above either ends this session too or is seen here; it never leaves a session the
+        // change should have ended.
+        let scope = match &self.db {
+            Some(db) => Some(
+                begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            ),
+            None => None,
+        };
+        let repos = match &scope {
+            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
+            None => self.repos.clone(),
+        };
+        let current = if repos.user_repo.lock_user(user.id).await? {
+            repos.user_repo.get_by_id(user.id).await?
+        } else {
+            None
+        };
+        let Some(current) = current.filter(|current| {
+            current.password_hash.as_deref() == Some(password_hash)
+                && current.principal_id.is_none()
+        }) else {
+            tracing::info!(
+                target: "audit",
+                event = "login_failure",
+                user_id = %user.id,
+                username = %username,
+                reason = "credentials_changed",
+                "login attempt failed: the account's credentials changed during sign-in"
+            );
+            return Err(ServiceError::Unauthenticated);
+        };
+
         // An operator's complete ban blocks the account's address.
-        if let Some(email) = &user.email
-            && self.repos.user_repo.is_email_blocked(email).await?
+        if let Some(email) = &current.email
+            && repos.user_repo.is_email_blocked(email).await?
         {
             tracing::info!(
                 target: "audit",
@@ -428,7 +464,11 @@ impl DefaultAuthService {
             ));
         }
 
-        let (sess, raw_token, csrf) = self.create_session_for_user(user.id, None, None).await?;
+        let (sess, raw_token, csrf) =
+            Self::create_session_in_txn(&repos, self.session_ttl, user.id, None, None).await?;
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
 
         // Audit: successful login.
         tracing::info!(
@@ -447,23 +487,14 @@ impl DefaultAuthService {
         })
     }
 
-    async fn create_session_for_user(
-        &self,
-        user_id: rim_core::user::model::UserId,
-        user_agent: Option<String>,
-        ip: Option<String>,
-    ) -> ServiceResult<(rim_core::auth::model::Session, String, String)> {
-        Self::create_session_in_txn(&self.repos, self.session_ttl, user_id, user_agent, ip).await
-    }
-
     /// Insert a session row using the supplied `repos` handle.
     ///
-    /// Unlike [`create_session_for_user`], this method takes an explicit
-    /// [`AuthRepos`] reference so that callers can pass transactional repos.
-    /// Every signup path that creates the user inside a transaction **must** use
-    /// this variant for the session insert; otherwise the session INSERT runs on
-    /// a separate connection that cannot see the uncommitted user row, causing
-    /// an `fk-session-user` FK violation.
+    /// The method takes an explicit [`AuthRepos`] reference so that callers can
+    /// pass transactional repos. Every signup path that creates the user inside a
+    /// transaction **must** pass them for the session insert; otherwise the
+    /// session INSERT runs on a separate connection that cannot see the
+    /// uncommitted user row, causing an `fk-session-user` FK violation. A password
+    /// login passes the repos of the transaction that holds the user row lock.
     ///
     /// # Transaction contract
     /// The `repos` argument **must** share the same database transaction as the

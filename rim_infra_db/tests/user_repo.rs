@@ -124,6 +124,21 @@ async fn a_username_differing_only_in_case_is_conflict() {
 }
 
 #[tokio::test]
+async fn lock_user_reports_whether_the_user_exists() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
+    let alice = ctx.create_user("u_test_lock").await;
+
+    assert!(repo.lock_user(alice.id).await.unwrap());
+    assert!(
+        !repo
+            .lock_user(rim_core::user::model::UserId::new())
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn record_terms_acceptance_stores_the_url_and_time() {
     use sea_orm::EntityTrait;
 

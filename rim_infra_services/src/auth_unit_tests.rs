@@ -2370,6 +2370,16 @@ mod tests {
         }
     }
 
+    /// Let `user_repo` lock any of `users` and read it back unchanged, as the reload a password
+    /// login makes under the user row lock does.
+    fn expect_unchanged_on_reload(user_repo: &mut MockUserRepository, users: &[User]) {
+        let users = users.to_vec();
+        user_repo.expect_lock_user().returning(|_| Ok(true));
+        user_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(users.iter().find(|u| u.id == id).cloned()));
+    }
+
     #[tokio::test]
     async fn login_succeeds_and_successes_do_not_count_against_account_limit() {
         let user_id = UserId::new();
@@ -2377,6 +2387,7 @@ mod tests {
         user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
 
         let mut user_repo = MockUserRepository::new();
+        expect_unchanged_on_reload(&mut user_repo, std::slice::from_ref(&user));
         user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo
             .expect_find_by_username()
@@ -2433,6 +2444,7 @@ mod tests {
         let mut user = make_user(user_id, "banned");
         user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
         let mut user_repo = MockUserRepository::new();
+        expect_unchanged_on_reload(&mut user_repo, std::slice::from_ref(&user));
         user_repo
             .expect_find_by_username()
             .returning(move |_| Ok(Some(user.clone())));
@@ -2493,6 +2505,94 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::RateLimited { .. }), "{err:?}");
+    }
+
+    /// Sign in to `alice` / `correct-horse`, whose account reads back as `reloaded` (or is
+    /// gone, for `None`) once the login holds the user row lock; the service has a
+    /// per-(IP, username) failure limit of 1.
+    async fn login_with_reload(
+        reloaded: impl Fn(User) -> Option<User> + Send + Sync + 'static,
+    ) -> (ServiceError, ServiceError) {
+        let user_id = UserId::new();
+        let mut user = make_user(user_id, "alice");
+        user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
+        let mut user_repo = MockUserRepository::new();
+        let found = user.clone();
+        user_repo
+            .expect_find_by_username()
+            .times(1)
+            .returning(move |_| Ok(Some(found.clone())));
+        let exists = reloaded(user.clone()).is_some();
+        user_repo
+            .expect_lock_user()
+            .withf(move |id| *id == user_id)
+            .times(1)
+            .returning(move |_| Ok(exists));
+        user_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(reloaded(user.clone())));
+        user_repo.expect_is_email_blocked().never();
+        let mut session_repo = MockSessionRepository::new();
+        session_repo.expect_create_session().never();
+        let svc = login_svc(
+            user_repo,
+            session_repo,
+            RegistrationRateLimiter::new(300, 10),
+            RegistrationRateLimiter::new(900, 1),
+            RegistrationRateLimiter::new(3600, 10),
+        );
+        let first = svc
+            .login(login_cmd("alice", "correct-horse", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        let second = svc
+            .login(login_cmd("alice", "correct-horse", "1.1.1.1"))
+            .await
+            .unwrap_err();
+        (first, second)
+    }
+
+    #[tokio::test]
+    async fn login_whose_password_changed_during_sign_in_is_refused_like_a_wrong_password() {
+        let (first, second) = login_with_reload(|user| {
+            Some(User {
+                password_hash: Some("a-newer-hash".to_string()),
+                ..user
+            })
+        })
+        .await;
+        assert!(matches!(first, ServiceError::Unauthenticated), "{first:?}");
+        // Counted as a failed login: the next attempt is throttled before any lookup.
+        assert!(
+            matches!(second, ServiceError::RateLimited { .. }),
+            "{second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_to_an_account_that_enrolled_a_key_during_sign_in_is_refused() {
+        let (first, second) = login_with_reload(|user| {
+            Some(User {
+                principal_id: Some("rimp1_enrolled".to_string()),
+                ..user
+            })
+        })
+        .await;
+        assert!(matches!(first, ServiceError::Unauthenticated), "{first:?}");
+        assert!(
+            matches!(second, ServiceError::RateLimited { .. }),
+            "{second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_to_an_account_purged_during_sign_in_is_refused() {
+        let (first, second) = login_with_reload(|_| None).await;
+        assert!(matches!(first, ServiceError::Unauthenticated), "{first:?}");
+        assert!(
+            matches!(second, ServiceError::RateLimited { .. }),
+            "{second:?}"
+        );
     }
 
     #[tokio::test]
@@ -2614,6 +2714,7 @@ mod tests {
         user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
 
         let mut user_repo = MockUserRepository::new();
+        expect_unchanged_on_reload(&mut user_repo, std::slice::from_ref(&user));
         // Two guesses from the attacker, one attempt on another account from the same
         // address, then the owner's login; the throttled third guess never reaches the
         // repository.
@@ -2763,6 +2864,7 @@ mod tests {
         let mut user = make_user(user_id, "victim");
         user.password_hash = Some(rim_auth::password::hash_password("correct-horse").unwrap());
         let mut user_repo = MockUserRepository::new();
+        expect_unchanged_on_reload(&mut user_repo, std::slice::from_ref(&user));
         // Folded, like the real repository: usernames are compared without regard to case.
         user_repo.expect_is_email_blocked().returning(|_| Ok(false));
         user_repo

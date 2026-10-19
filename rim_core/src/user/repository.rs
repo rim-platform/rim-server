@@ -15,6 +15,11 @@ pub trait UserRepository: Send + Sync {
 
     async fn get_by_ids(&self, ids: &[UserId]) -> RepoResult<Vec<User>>;
 
+    /// Lock the user's row until the surrounding transaction ends, so sign-ins and credential
+    /// changes on the account run one after another. Returns `false` when the user does not
+    /// exist.
+    async fn lock_user(&self, id: UserId) -> RepoResult<bool>;
+
     /// Insert a user. With `key_identity` set, the row also carries its `principal_id` and
     /// `identity_key` (key-only signup); the key log goes through
     /// `KeyIdentityRepository::insert_key_log`.
