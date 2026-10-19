@@ -61,6 +61,7 @@ mod message;
 mod presence;
 mod profile;
 mod schema;
+mod subscription;
 mod thread;
 mod workspace;
 
@@ -149,6 +150,15 @@ fn schema_with_server_mocks(
     server: MockServerService,
     server_member: MockServerMemberService,
 ) -> crate::AppSchema {
+    schema_with_server_mocks_on(server, server_member, InMemoryBroadcaster::new(16))
+}
+
+/// [`schema_with_server_mocks`] publishing events through `broadcaster`.
+fn schema_with_server_mocks_on(
+    server: MockServerService,
+    server_member: MockServerMemberService,
+    broadcaster: InMemoryBroadcaster,
+) -> crate::AppSchema {
     build_schema(
         Arc::new(TestAppServiceProvider {
             audit_log: Arc::new(rim_services::audit::service::MockAuditLogService::new()),
@@ -181,7 +191,7 @@ fn schema_with_server_mocks(
             ),
             pipeline: Arc::new(MockPipelineService::new()),
         }),
-        InMemoryBroadcaster::new(16),
+        broadcaster,
         test_presence_manager(),
         test_typing_tracker(),
         test_observers(),

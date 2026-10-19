@@ -225,6 +225,10 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
 
+A subscription that falls behind loses events, possibly these two. Before it delivers another
+event it reads the subscriber's membership and role again: it ends when they are no longer a
+member (or the read fails), and otherwise goes on with the visibility of their current role.
+
 ## Notification Rules
 
 The server decides, once per message, who is told about it, and tells a message's author when
