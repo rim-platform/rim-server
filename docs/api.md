@@ -383,12 +383,13 @@ as the quota answered before.
 `RIM_PROBATION_HOURS` puts new accounts on probation for that many hours after their creation;
 unset or 0 turns it off, and an account older than the setting is judged by its age like any
 other. During probation an account cannot create a workspace or send a DM request to a stranger,
-someone neither its contact nor in a workspace with it, and both answer `VALIDATION` saying when
-it can, in minutes rounded up ("a new account can create a workspace in 42 minutes"). Its
-messages follow `RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a burst of the same size, instead
-of `RIM_RATE_MESSAGES_PER_MIN_PER_USER`; unset, the normal rate applies. The `probationHours`
-of `serverInfo.limits` reports the setting, null when off, and `me { probationEndsAt }` tells
-the signed-in caller when theirs ends, null once it has.
+someone it does not know (a contact who lists it too, or someone either of them accepted a DM
+request from: "Who May Start A DM" in `docs/messaging.md`) and shares no workspace with, and
+both answer `VALIDATION` saying when it can, in minutes rounded up ("a new account can create a
+workspace in 42 minutes"). Its messages follow `RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a
+burst of the same size, instead of `RIM_RATE_MESSAGES_PER_MIN_PER_USER`; unset, the normal rate
+applies. The `probationHours` of `serverInfo.limits` reports the setting, null when off, and
+`me { probationEndsAt }` tells the signed-in caller when theirs ends, null once it has.
 
 An operator can also block an address or range (`rim_server ip block`). A blocked address is
 answered 403 with `{"error":"blocked"}` and nothing else on every route but `/healthz`: the API,

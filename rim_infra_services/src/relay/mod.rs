@@ -63,6 +63,8 @@ pub(crate) const MAX_DELIVER_ITEMS: usize = 256;
 pub(crate) const MAX_DELIVER_BYTES: i64 = 8 * 1024 * 1024;
 /// Most relay URLs a contact carries.
 const MAX_CONTACT_RELAYS: usize = 8;
+/// Most contacts one user holds.
+pub(crate) const MAX_CONTACTS_PER_USER: i64 = 1000;
 /// Longest relay URL, in bytes.
 const MAX_RELAY_URL_LEN: usize = 256;
 /// Longest report reason, in characters.
@@ -1060,6 +1062,14 @@ impl RelayService for DefaultRelayService {
             return Err(ServiceError::Validation(
                 "cannot add yourself as a contact".to_string(),
             ));
+        }
+        let relay_repo = &self.repos.relay_repo;
+        if relay_repo.count_contacts(actor.user_id).await? >= MAX_CONTACTS_PER_USER
+            && !relay_repo.is_contact(actor.user_id, &principal_id).await?
+        {
+            return Err(ServiceError::Validation(format!(
+                "a user holds at most {MAX_CONTACTS_PER_USER} contacts; remove one first"
+            )));
         }
         let contact = self
             .repos

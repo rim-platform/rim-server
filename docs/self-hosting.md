@@ -311,9 +311,10 @@ conversations one person holds, so nobody can be buried in them.
 
 `RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
 an account cannot create a workspace or send a DM request to someone it shares no workspace
-with and has not added as a contact, and with `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends
-messages at that lower rate. Existing accounts are judged by their age, so turning it on does
-not hold back anyone older than the setting.
+with and does not know (a contact who lists it too, or someone either of them accepted a DM
+request from; adding someone as a contact alone is not enough), and with
+`RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
+are judged by their age, so turning it on does not hold back anyone older than the setting.
 
 ## Optional features
 

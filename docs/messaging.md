@@ -79,12 +79,27 @@ decide, and each may only tighten the one above it:
   works as `REQUESTS`.
 - **A contact** is someone the recipient added (`addContact`), accepted, or messaged first:
   creating a DM records the other person as the creator's contact, so their DM back is never a
-  request.
+  request. A user holds at most 1,000 contacts: `addContact` for someone new past that answers
+  `VALIDATION` ("a user holds at most 1000 contacts; remove one first"), and a DM records no
+  further contact for its creator.
+- **Who the sender knows.** The sender's own limits on DMs to strangers, the daily invites to
+  people on other servers and a new account's probation (below), skip only people the sender
+  knows: a contact who lists the sender as a contact too (only people on this server have a list
+  here), or someone either of the two accepted a DM request from on this server (an invite
+  delivered directly from a contact is recorded as accepted). A contact the sender added on their
+  own, or that a DM they started recorded, counts as a stranger. These limits are the sender's;
+  the recipient's request inbox still applies its own rules.
 - **Outbound.** A DM with someone on another server needs `RIM_DM_OUTBOUND` to admit their
   relay: `createConversation` with `remoteMembers` answers `FORBIDDEN` ("this server starts no
   direct messages with that server") otherwise, before their relay is asked anything, and so do
   key package claims for their devices. With `NONE` nothing of the direct space reaches another
-  server; with `PARTNERS` it goes to the listed servers only.
+  server; with `PARTNERS` it goes to the listed servers only. A conversation that invites someone
+  on another server the sender does not know counts against the sender's daily invites
+  (`RIM_RELAY_DM_REQUESTS_PER_DAY`, 20): past them it answers `RATE_LIMITED` with
+  `retryAfterSeconds`.
+- **Probation.** During `RIM_PROBATION_HOURS` a new account sends no DM request to a stranger,
+  someone it does not know (above) who is in none of its workspaces here: `VALIDATION` saying when
+  it can (`docs/api.md`).
 - **Refused here.** A DM in the direct space that a recipient here refuses answers `FORBIDDEN`
   when it is started (`createConversation`, `addConversationMembers`). A refused DM from another
   server is answered as for a block, so its server stops addressing the recipient.

@@ -22,7 +22,7 @@ pub struct Quotas {
     /// Requests a user sends through `/api/remote/…` per day.
     pub forwards_per_user_per_day: u32,
     /// DM requests: those one sender principal files on this relay per day, and invites a
-    /// local user sends to people on other servers who are not their contacts per day.
+    /// local user sends to people on other servers they do not know per day.
     pub dm_requests_per_day: u32,
     /// Messages a user sends per minute, with their burst; `None` sets no limit.
     pub messages: Option<crate::token_bucket::BucketRate>,

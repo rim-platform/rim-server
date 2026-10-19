@@ -1643,6 +1643,9 @@ async fn the_callers_own_principal_is_not_a_contact() {
     let stored = other.clone();
     let mut relay = MockRelayRepository::new();
     relay
+        .expect_count_contacts()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
         .expect_upsert_contact()
         .withf(move |_, principal, _| principal == stored)
         .times(1)
@@ -1680,6 +1683,67 @@ async fn the_callers_own_principal_is_not_a_contact() {
         .await
         .expect("another principal");
     assert_eq!(contact.principal_id, other);
+}
+
+/// A caller holding the most contacts adds no new one, but may still change one they hold.
+#[tokio::test]
+async fn a_caller_holding_the_most_contacts_adds_no_new_one() {
+    let caller = UserId::new();
+    let held = TestIdentity::new(71).principal_id();
+    let new = TestIdentity::new(72).principal_id();
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_count_contacts()
+        .returning(|_| Box::pin(async { Ok(crate::relay::MAX_CONTACTS_PER_USER) }));
+    let listed = held.clone();
+    relay.expect_is_contact().returning(move |_, principal| {
+        let contact = principal == listed;
+        Box::pin(async move { Ok(contact) })
+    });
+    let stored = held.clone();
+    relay
+        .expect_upsert_contact()
+        .withf(move |_, principal, _| principal == stored)
+        .times(1)
+        .returning(|_, principal, relay_urls| {
+            let contact = Contact {
+                principal_id: principal.to_string(),
+                relay_urls,
+                added_at: Utc::now(),
+            };
+            Box::pin(async move { Ok(contact) })
+        });
+    let svc = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            user_repo: Arc::new(crate::probation_fixtures::users(vec![
+                crate::probation_fixtures::account(
+                    caller,
+                    Utc::now(),
+                    Some(&TestIdentity::new(70).principal_id()),
+                ),
+            ])),
+            ..empty_repos()
+        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    );
+    let relays = vec![PEER_ORIGIN.to_string()];
+
+    let err = svc
+        .add_contact(Actor::new(caller), new, relays.clone())
+        .await
+        .expect_err("past the cap");
+    assert!(
+        matches!(&err, ServiceError::Validation(m)
+            if m == "a user holds at most 1000 contacts; remove one first"),
+        "{err:?}"
+    );
+    let contact = svc
+        .add_contact(Actor::new(caller), held.clone(), relays)
+        .await
+        .expect("a contact already held");
+    assert_eq!(contact.principal_id, held);
 }
 
 // ── Identity fetches ─────────────────────────────────────────────────────────────────────
@@ -2247,20 +2311,36 @@ async fn forwarded_requests_are_limited_per_device() {
 
 // ── Probation of new accounts ────────────────────────────────────────────────────────────
 
-/// A host with a one-hour probation, read at `now`, where `ada` holds `CONTACT_ID` as a
-/// contact and shares a workspace with the holder of `COWORKER_ID`; `accounts` are the users
-/// it knows.
+/// A host with a one-hour probation, read at `now`, where `ada` knows the holder of
+/// identity 61 (a mutual contact or an accepted request), holds the holder of identity 65 as a
+/// contact on her own, and shares a workspace with the holder of identity 62; `accounts` are
+/// the users it knows.
 fn probation_host(
     ada: UserId,
     accounts: Vec<rim_core::user::model::User>,
     now: chrono::DateTime<Utc>,
 ) -> DefaultHostService {
-    let contact = TestIdentity::new(61).principal_id();
+    knowing_host(ada, accounts, now, MockPeerService::new())
+}
+
+/// [`probation_host`] pinning other servers through `peers`.
+fn knowing_host(
+    ada: UserId,
+    accounts: Vec<rim_core::user::model::User>,
+    now: chrono::DateTime<Utc>,
+    peers: MockPeerService,
+) -> DefaultHostService {
+    let known = TestIdentity::new(61).principal_id();
+    let one_sided = TestIdentity::new(65).principal_id();
     let coworker = TestIdentity::new(62).principal_id();
     let mut relay = MockRelayRepository::new();
+    relay.expect_knows().returning(move |user, principal| {
+        let knows = user == ada && principal == known;
+        Box::pin(async move { Ok(knows) })
+    });
     relay.expect_is_contact().returning(move |user, principal| {
-        let known = user == ada && principal == contact;
-        Box::pin(async move { Ok(known) })
+        let contact = user == ada && principal == one_sided;
+        Box::pin(async move { Ok(contact) })
     });
     let mut host = MockHostRepository::new();
     host.expect_find_user()
@@ -2290,7 +2370,7 @@ fn probation_host(
         },
         None,
         identity(41),
-        Arc::new(MockPeerService::new()),
+        Arc::new(peers),
         Arc::new(MockS2sClient::new()),
         ServerId::new(),
         120,
@@ -2307,22 +2387,28 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
     use crate::probation_fixtures::account;
     let created = Utc::now();
     let in_probation = created + Duration::minutes(20);
-    let (ada, contact, coworker, stranger) =
-        (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+    let (ada, known, coworker, stranger, one_sided) = (
+        UserId::new(),
+        UserId::new(),
+        UserId::new(),
+        UserId::new(),
+        UserId::new(),
+    );
     let stranger_principal = TestIdentity::new(63).principal_id();
     let accounts = vec![
         account(ada, created, Some(&TestIdentity::new(60).principal_id())),
-        account(
-            contact,
-            created,
-            Some(&TestIdentity::new(61).principal_id()),
-        ),
+        account(known, created, Some(&TestIdentity::new(61).principal_id())),
         account(
             coworker,
             created,
             Some(&TestIdentity::new(62).principal_id()),
         ),
         account(stranger, created, Some(&stranger_principal)),
+        account(
+            one_sided,
+            created,
+            Some(&TestIdentity::new(65).principal_id()),
+        ),
     ];
     let refusal = "a new account can send a DM request to a stranger in 40 minutes";
     let refused = |result: Result<(), ServiceError>| match result {
@@ -2332,24 +2418,30 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
 
     let host = probation_host(ada, accounts.clone(), in_probation);
     let direct = host.direct_space_id();
-    host.ensure_may_request(Actor::new(ada), direct, vec![ada, contact, coworker], false)
+    host.ensure_may_request(Actor::new(ada), direct, vec![ada, known, coworker], false)
         .await
-        .expect("contacts and coworkers are no strangers");
+        .expect("people she knows and coworkers are no strangers");
     refused(
-        host.ensure_may_request(Actor::new(ada), direct, vec![contact, stranger], false)
+        host.ensure_may_request(Actor::new(ada), direct, vec![known, stranger], false)
             .await,
     );
     refused(
-        host.ensure_remote_member(
-            Actor::new(ada),
-            rim_services::host::dto::RemoteMemberRef {
-                principal_id: TestIdentity::new(64).principal_id(),
-                relay_urls: vec!["https://relay.example".to_string()],
-            },
-        )
-        .await
-        .map(|_| ()),
+        host.ensure_may_request(Actor::new(ada), direct, vec![one_sided], false)
+            .await,
     );
+    for seed in [64, 65] {
+        refused(
+            host.ensure_remote_member(
+                Actor::new(ada),
+                rim_services::host::dto::RemoteMemberRef {
+                    principal_id: TestIdentity::new(seed).principal_id(),
+                    relay_urls: vec!["https://relay.example".to_string()],
+                },
+            )
+            .await
+            .map(|_| ()),
+        );
+    }
 
     let later = probation_host(ada, accounts.clone(), created + Duration::hours(1));
     later
@@ -2371,6 +2463,48 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
     )
     .await
     .expect("no probation on this instance");
+}
+
+#[tokio::test]
+async fn only_people_a_user_knows_skip_the_daily_invites_to_other_servers() {
+    let ada = UserId::new();
+    let mut peers = MockPeerService::new();
+    peers
+        .expect_pin()
+        .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+    let host = knowing_host(ada, Vec::new(), Utc::now(), peers)
+        .with_limits(rim_services::limits::InstanceLimits::default())
+        .with_quotas(Quotas {
+            dm_requests_per_day: 1,
+            ..Quotas::default()
+        });
+    let invite = |seed: u8| {
+        host.ensure_remote_member(
+            Actor::new(ada),
+            rim_services::host::dto::RemoteMemberRef {
+                principal_id: TestIdentity::new(seed).principal_id(),
+                relay_urls: vec!["https://relay.example".to_string()],
+            },
+        )
+    };
+    let limited =
+        |result: &Result<_, ServiceError>| matches!(result, Err(ServiceError::RateLimited { .. }));
+
+    // The day's one invite goes to a stranger, whose relay does not answer.
+    assert!(
+        !limited(&invite(64).await),
+        "the first invite is within the quota"
+    );
+    // A contact Ada added on her own is counted like a stranger.
+    assert!(
+        limited(&invite(65).await),
+        "a one-sided contact is over the quota"
+    );
+    // Someone she knows is not counted.
+    assert!(
+        !limited(&invite(61).await),
+        "someone she knows is no invite"
+    );
 }
 
 #[tokio::test]

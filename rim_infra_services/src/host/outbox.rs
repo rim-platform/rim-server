@@ -34,7 +34,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::host::{DefaultHostService, HostRepos};
 use crate::relay::policy::{DmPolicy, outbound};
-use crate::relay::{MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, contact_relays};
+use crate::relay::{MAX_CONTACTS_PER_USER, MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, contact_relays};
 use crate::repos::AppRepos;
 
 /// Largest host event payload.
@@ -519,7 +519,8 @@ impl HostEventWriter {
     }
 
     /// Record the other party of a DM a local user created as their contact, so a DM back from
-    /// them is no request. An existing contact keeps its relay URLs.
+    /// them is no request. An existing contact keeps its relay URLs, and none is added once
+    /// the creator holds the most contacts a user may.
     async fn record_contacts(&self, creator: UserId, invitees: &[Invitee]) -> ServiceResult<()> {
         if self.repos.host_repo.user_kind(creator).await? != Some(UserKind::Local) {
             return Ok(());
@@ -540,11 +541,9 @@ impl HostEventWriter {
                     (principal_id, card)
                 }
             };
-            if self
-                .repos
-                .relay_repo
-                .is_contact(creator, principal_id)
-                .await?
+            let relay_repo = &self.repos.relay_repo;
+            if relay_repo.is_contact(creator, principal_id).await?
+                || relay_repo.count_contacts(creator).await? >= MAX_CONTACTS_PER_USER
             {
                 continue;
             }
