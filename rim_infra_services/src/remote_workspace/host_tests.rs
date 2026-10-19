@@ -1,6 +1,6 @@
 //! The host's rules for delegations a relay presents: the relay and host it names, the relay
 //! key, expiry, the device, membership and bans, the per-relay limit, and the lifetime the host
-//! grants.
+//! grants; and the join challenge, bound to the relay that asked for it.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +12,9 @@ use rim_core::dm_policy::repository::MockDmPolicyRepository;
 use rim_core::e2ee::repository::MockE2eeRepository;
 use rim_core::host::model::{DelegationStored, UserKind};
 use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
-use rim_core::key_identity::model::{DeviceKey, DeviceKeyId};
+use rim_core::key_identity::model::{
+    DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyChallengePurpose,
+};
 use rim_core::key_identity::repository::{MockKeyChallengeRepository, MockKeyIdentityRepository};
 use rim_core::moderation::model::ServerBan;
 use rim_core::moderation::repository::MockModerationRepository;
@@ -116,6 +118,8 @@ struct Setup {
     relay_key_hash: String,
     workspace: ServerId,
     stored: Arc<Mutex<Vec<DateTime<Utc>>>>,
+    /// The purpose of every key challenge the host created, in order.
+    challenges: Arc<Mutex<Vec<KeyChallengePurpose>>>,
 }
 
 fn setup(facts: Facts) -> Setup {
@@ -260,12 +264,32 @@ fn setup(facts: Facts) -> Setup {
         ServerId::new(),
         120,
     ));
+    let challenges = Arc::new(Mutex::new(Vec::new()));
+    let mut challenge_repo = MockKeyChallengeRepository::new();
+    challenge_repo
+        .expect_delete_expired()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    let created = Arc::clone(&challenges);
+    challenge_repo
+        .expect_create()
+        .returning(move |nonce, expires_at, purpose| {
+            created.lock().expect("lock").push(purpose.clone());
+            let challenge = KeyChallenge {
+                id: KeyChallengeId::new(),
+                nonce: nonce.to_string(),
+                purpose: purpose.clone(),
+                created_at: Utc::now(),
+                expires_at,
+                used_at: None,
+            };
+            Box::pin(async move { Ok(challenge) })
+        });
     let host = DefaultWorkspaceHost::new(
         WorkspaceHostRepos {
             host_repo: Arc::new(host_repo),
             delegation_repo: Arc::new(delegations),
             key_identity_repo: Arc::new(keys),
-            key_challenge_repo: Arc::new(MockKeyChallengeRepository::new()),
+            key_challenge_repo: Arc::new(challenge_repo),
             invite_repo: Arc::new(MockInviteRepository::new()),
             moderation_repo: Arc::new(moderation),
             server_member_repo: Arc::new(members),
@@ -284,6 +308,7 @@ fn setup(facts: Facts) -> Setup {
         relay_key_hash,
         workspace,
         stored,
+        challenges,
     }
 }
 
@@ -324,6 +349,21 @@ impl Setup {
 
 fn refused(reason: &str) -> (String, Option<String>) {
     ("refused".to_string(), Some(reason.to_string()))
+}
+
+#[tokio::test]
+async fn a_join_challenge_is_bound_to_the_relay_that_asked() {
+    let s = setup(Facts::default());
+    s.host
+        .join_challenge(s.relay_id.clone(), None)
+        .await
+        .expect("challenge");
+    assert_eq!(
+        *s.challenges.lock().expect("lock"),
+        vec![KeyChallengePurpose::Join {
+            relay_server_id: s.relay_id.clone()
+        }]
+    );
 }
 
 #[tokio::test]

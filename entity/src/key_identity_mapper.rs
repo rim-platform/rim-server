@@ -1,5 +1,5 @@
 use rim_core::key_identity::model::{
-    DeviceKey, KeyChallenge, KeyLogEntry, KeyLogEntryType, StoredProfileCard,
+    DeviceKey, KeyChallenge, KeyChallengePurpose, KeyLogEntry, KeyLogEntryType, StoredProfileCard,
 };
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 
@@ -64,14 +64,18 @@ impl TryFrom<profile_card::Model> for StoredProfileCard {
     }
 }
 
-impl From<key_challenge::Model> for KeyChallenge {
-    fn from(m: key_challenge::Model) -> Self {
-        Self {
+impl TryFrom<key_challenge::Model> for KeyChallenge {
+    type Error = RepoError;
+
+    fn try_from(m: key_challenge::Model) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: m.id.into(),
             nonce: m.nonce,
+            purpose: KeyChallengePurpose::parse(&m.purpose, m.relay_server_id)
+                .ok_or_else(invalid_data)?,
             created_at: m.created_at.into(),
             expires_at: m.expires_at.into(),
             used_at: m.used_at.map(Into::into),
-        }
+        })
     }
 }

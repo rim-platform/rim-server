@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::{device_key, key_challenge, key_log_entry, profile_card, user};
 use rim_core::key_identity::model::{
-    DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyLogEntry, NewDeviceKey,
-    NewKeyLogEntry, StoredProfileCard,
+    DeviceKey, DeviceKeyId, KeyChallenge, KeyChallengeId, KeyChallengePurpose, KeyLogEntry,
+    NewDeviceKey, NewKeyLogEntry, StoredProfileCard,
 };
 use rim_core::key_identity::repository::{KeyChallengeRepository, KeyIdentityRepository};
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
@@ -281,26 +281,44 @@ impl SeaOrmKeyChallengeRepository {
 
 #[async_trait]
 impl KeyChallengeRepository for SeaOrmKeyChallengeRepository {
-    async fn create(&self, nonce: &str, expires_at: DateTime<Utc>) -> RepoResult<KeyChallenge> {
+    async fn create(
+        &self,
+        nonce: &str,
+        expires_at: DateTime<Utc>,
+        purpose: &KeyChallengePurpose,
+    ) -> RepoResult<KeyChallenge> {
         let model = key_challenge::ActiveModel {
             id: Set(KeyChallengeId::new().into()),
             nonce: Set(nonce.to_string()),
             expires_at: Set(expires_at.into()),
+            purpose: Set(purpose.as_str().to_string()),
+            relay_server_id: Set(purpose.relay_server_id().map(str::to_string)),
             ..Default::default()
         };
         let res = key_challenge::Entity::insert(model)
             .exec_with_returning(&self.db)
             .await
             .map_err(map_db_err)?;
-        Ok(res.into())
+        res.try_into()
     }
 
-    async fn consume(&self, id: KeyChallengeId, nonce: &str) -> RepoResult<bool> {
+    async fn consume(
+        &self,
+        id: KeyChallengeId,
+        nonce: &str,
+        purpose: &KeyChallengePurpose,
+    ) -> RepoResult<bool> {
         let now = Utc::now();
+        let relay = match purpose.relay_server_id() {
+            Some(relay) => key_challenge::Column::RelayServerId.eq(relay),
+            None => key_challenge::Column::RelayServerId.is_null(),
+        };
         let res = key_challenge::Entity::update_many()
             .col_expr(key_challenge::Column::UsedAt, Expr::value(now))
             .filter(key_challenge::Column::Id.eq(Uuid::from(id)))
             .filter(key_challenge::Column::Nonce.eq(nonce))
+            .filter(key_challenge::Column::Purpose.eq(purpose.as_str()))
+            .filter(relay)
             .filter(key_challenge::Column::UsedAt.is_null())
             .filter(key_challenge::Column::ExpiresAt.gt(now))
             .exec(&self.db)

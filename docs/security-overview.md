@@ -30,7 +30,9 @@ checked with strict Ed25519 ([key identity](specs/key-identity-v1.md)).
   sign in.
 - **Challenge login.** The server issues a single-use challenge valid for 120 seconds. The device
   signs a proof naming the challenge, the principal and this server's audience, so a proof works
-  once and only on the server it was made for. A server bound to a public address refuses to
+  once and only on the server it was made for. A challenge a host issues for joining a workspace
+  is bound to the relay that asked for it and never signs anyone in, so a relay cannot turn a
+  join proof into a session at the host. A server bound to a public address refuses to
   start without an audience. Sessions are cookies whose tokens the server stores hashed, and a
   mutation made with a session needs a CSRF token.
 - **Passwords.** New accounts sign up with a key by default. Once an account has a key, its

@@ -360,5 +360,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   `RIM_RELAY_QUEUE_BYTES_PER_USER`. Before, they counted toward it but could not be dropped,
   so requests from strangers could make the relay drop every item queued for that user's
   devices (`server-to-server-v1.md` "Relay queues", "The request inbox", "Limits and audit").
+- A host keeps the challenges it issues for joining a workspace apart from login challenges.
+  A join challenge is bound to the relay that asked for it and is accepted only by that relay's
+  join; `loginWithKey`, `signupWithKey` and `enrollIdentityKey` refuse it, and the join refuses a
+  login challenge. Before, a relay could present the proof a person's device signed for joining
+  to the host's `loginWithKey` and get a session there as that person. Clients and relays change
+  nothing: the proof keeps its format (`server-to-server-v1.md` §Joining, `key-identity-v1.md`).
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

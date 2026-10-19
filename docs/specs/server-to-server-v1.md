@@ -712,18 +712,25 @@ relayStream                  ◄─── POST /s2s/v1/deliver         (events)
 
 1. The invite link is read like a device-link code: whitespace removed, at most 400 characters,
    split at the first four `:` after the scheme (the origin keeps its colons). The app pins H.
-2. The challenge is today's `keyLoginChallenge` (120 s, single use) over S2S:
+2. The challenge has `keyLoginChallenge`'s shape (120 s, single use) and comes over S2S:
    `POST /s2s/v1/join/challenge {"inviteToken"}` → `{"challengeId","nonce","expiresAt","workspaceId"}`.
+   It is a join challenge, bound to the relay that asked for it: H consumes it only in that
+   relay's `POST /s2s/v1/join`, and `loginWithKey`, `signupWithKey` and `enrollIdentityKey` refuse
+   it, as the join refuses a challenge from `keyLoginChallenge` or one issued to another relay.
+   So the relay cannot redeem the person's proof as a session at H.
    The invite link carries no workspace id, and the delegation must name one, so H answers the
    workspace the invite names, checked as `previewInviteToken` checks it and not used
    (`404 not_found` for an unknown invite, `403 forbidden` for one revoked, used up or expired);
    `workspaceId` is null without an invite. The device signs a `login` statement with
    `audience` = H's server id, so the proof is good only at H and the relay never vouches for the
-   person.
+   person. The proof keeps the `login` format, so what it may be used for lives with the
+   challenge H issued; a distinct join statement naming the relay would harden this further and
+   is not part of v1.
 3. The device signs a delegation. R sends H `{"inviteToken","keyLog":[…],"devices":[{"certificate","revocation"}],"card","proof","delegation"}`.
-4. H verifies log, certificates, proof (claiming the challenge) and invite token (the rules of
-   `joinServerByInvite`, bans included), creates or updates the remote user, adds the membership
-   with the invite's role, stores devices and card, accepts the delegation, and answers
+4. H verifies log, certificates, proof (claiming the join challenge it issued to R) and invite
+   token (the rules of `joinServerByInvite`, bans included), creates or updates the remote user,
+   adds the membership with the invite's role, stores devices and card, accepts the delegation,
+   and answers
    `{"workspaceId","userId","role","streamHeads":{"w":17,"u:rimp1_…":0}}`. R records the
    subscription; the app loads the space through the forward path. The join carries no
    `mlsActive`, so H marks devices it did not know inactive for encryption; R pushes the full
