@@ -300,5 +300,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A workspace state key with non-ASCII characters, given to `setWorkspaceState` or to the
   `state.incr` command, is refused with a `VALIDATION` error. Before, a key with a non-ASCII
   character across its 64th byte made the request fail instead.
+- A message's reactions, `reactedByMe` included, are read for the user who asked. Before, when
+  several users' requests loaded reactions at the same moment, one of them could be shown
+  another user's reaction state.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master
