@@ -1,0 +1,106 @@
+# =============================================================================
+# RIM — container metrics: compose.monitoring.yml plus cAdvisor, so Alloy also
+# sends each compose service's CPU and memory use. Rootful Docker on Linux,
+# with containerd's socket at /run/containerd/containerd.sock (Docker's
+# packages). This file covers the containerd image store, the default of a new
+# Docker 29 install; a host on the older overlay2 storage driver adds
+# compose.monitoring-containers-overlay2.yml after it.
+#
+#   docker compose -f deploy/compose.yml -f deploy/compose.monitoring.yml \
+#     -f deploy/compose.monitoring-containers.yml up -d
+#   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml \
+#     -f deploy/compose.monitoring.yml \
+#     -f deploy/compose.monitoring-containers.yml up -d
+#
+# cAdvisor reaches neither socket itself. docker-proxy answers it alone, on the
+# `docker-api` network, for the daemon's version and info and the inspection
+# of one container by id; containerd-proxy (containerd-proxy.yaml) gives it a
+# socket of its own that answers one call, a container's record in Docker's
+# containerd namespace. DOCKER_GID in deploy/.env is the Docker socket's group.
+# monitoring-containers.alloy is the scrape configuration. Nothing is
+# published and none of the three has a way out.
+# =============================================================================
+
+services:
+  alloy:
+    volumes:
+      - ./monitoring-containers.alloy:/etc/alloy/config.d/monitoring-containers.alloy:ro
+
+  # Every method but GET and HEAD is refused, and every path but these: HEAD /_ping,
+  # GET /version, /info and /containers/<64-hex id>/json, with or without an API version.
+  # The watchdog exits when the socket stops answering, so a restart binds the new one.
+  docker-proxy:
+    image: wollomatic/socket-proxy:1.13.1
+    command:
+      - -listenip=0.0.0.0
+      - -allowfrom=cadvisor
+      - -allowHEAD=/_ping
+      - -allowGET=(/v1\.[0-9]+)?/(version|info|containers/[0-9a-f]{64}/json)
+      - -watchdoginterval=30
+      - -stoponwatchdog
+    # The image's unprivileged user, with the socket's group to reach the socket.
+    group_add:
+      - ${DOCKER_GID:?set DOCKER_GID in deploy/.env to the group of /var/run/docker.sock}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker-api]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # Envoy in front of containerd's API, with no network. It mounts containerd's directory,
+  # without the mounts below it, so it still finds the socket after containerd restarts;
+  # it runs as root, the socket's owner, without capabilities.
+  containerd-proxy:
+    image: envoyproxy/envoy:distroless-v1.39.4
+    user: "0:0"
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    volumes:
+      - ./containerd-proxy.yaml:/etc/envoy/envoy.yaml:ro
+      - type: bind
+        source: /run/containerd
+        target: /run/containerd
+        read_only: true
+        bind:
+          create_host_path: false
+          recursive: disabled
+      - containerd_api:/run/containerd-proxy
+    network_mode: none
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # CPU and memory per container, labelled with its compose project and service, read from
+  # the host's cgroup tree (the host cgroup namespace); unprivileged, without capabilities.
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.60.6
+    user: "65534:65534"
+    command:
+      - --docker=tcp://docker-proxy:2375
+      - --containerd=/run/containerd-proxy/containerd.sock
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.service,com.docker.compose.project
+      - --enable_metrics=cpu,memory
+    cgroup: host
+    volumes:
+      - containerd_api:/run/containerd-proxy:ro
+    # `internal` for Alloy's scrapes on port 8080, `docker-api` for docker-proxy.
+    networks: [internal, docker-api]
+    depends_on: [docker-proxy, containerd-proxy]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  # docker-proxy and cAdvisor only, with no way out.
+  docker-api:
+    internal: true
+
+volumes:
+  # containerd-proxy's socket, shared with cAdvisor.
+  containerd_api:

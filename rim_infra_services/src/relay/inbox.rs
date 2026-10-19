@@ -1,5 +1,5 @@
-//! How a relay files a delivered item for one recipient: into the queue, held by a DM request,
-//! dropped, or refused.
+//! How a relay files a delivered item for one recipient who holds no subscription to its
+//! workspace: into the queue, held by a DM request, dropped, or refused.
 
 use chrono::Duration;
 use rim_core::relay::model::{DmRequestId, DmRequestStatus};
@@ -57,6 +57,14 @@ pub(crate) struct InboxFacts {
     pub is_invite: bool,
     /// The item names a conversation (`conversation_id`).
     pub conversation_scoped: bool,
+    /// The item names no conversation and is on a stream a direct space sends such items to its
+    /// members on: `e`, or the recipient's own `u:`.
+    pub direct_stream: bool,
+    /// The recipient holds an accepted request for a conversation the delivering host homes,
+    /// so takes part in its direct space.
+    pub accepted_at_host: bool,
+    /// Bytes the delivering host may still have queued here today.
+    pub peer_bytes_left: i64,
     /// The recipient blocked the invite's sender.
     pub blocked: bool,
     /// How the recipient's effective DM setting takes the invite's sender.
@@ -94,13 +102,31 @@ pub(crate) enum Filing {
     Drop,
     /// Refused with a reason the host sees.
     Refuse(&'static str),
+    /// Refused (`limited`): queueing it takes the delivering host past its daily bytes.
+    PeerLimited,
     /// Record the conversation as accepted (an invite the policy delivers) and deliver.
     FileAccepted,
     /// File a pending request and hold the invite.
     FileRequest,
 }
 
+/// Where an item goes for one recipient: as the request inbox files it, unless queueing it
+/// takes the delivering host past its daily bytes.
 pub(crate) fn file(facts: &InboxFacts) -> Filing {
+    let filing = place(facts);
+    let queues = matches!(
+        filing,
+        Filing::Deliver | Filing::Hold(_) | Filing::FileAccepted | Filing::FileRequest
+    );
+    if queues && facts.item_bytes > facts.peer_bytes_left {
+        Filing::PeerLimited
+    } else {
+        filing
+    }
+}
+
+/// Where the request inbox files an item for one recipient, whatever the host's daily bytes.
+fn place(facts: &InboxFacts) -> Filing {
     if facts.is_invite && facts.blocked {
         return Filing::Refuse("blocked");
     }
@@ -115,10 +141,10 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
             }
         }
         None if !facts.is_invite => {
-            if facts.conversation_scoped {
-                Filing::Refuse("not_subscribed")
-            } else {
+            if !facts.conversation_scoped && facts.direct_stream && facts.accepted_at_host {
                 Filing::Deliver
+            } else {
+                Filing::Refuse("not_subscribed")
             }
         }
         None if facts.policy == DmPolicy::Deliver => Filing::FileAccepted,
@@ -148,6 +174,9 @@ mod tests {
         InboxFacts {
             is_invite: true,
             conversation_scoped: true,
+            direct_stream: false,
+            accepted_at_host: false,
+            peer_bytes_left: i64::MAX,
             blocked: false,
             policy: DmPolicy::Request,
             request: None,
@@ -361,10 +390,88 @@ mod tests {
         assert_eq!(file(&message(None)), Filing::Refuse("not_subscribed"));
         assert_eq!(
             file(&InboxFacts {
-                conversation_scoped: false,
+                accepted_at_host: true,
                 ..message(None)
             }),
-            Filing::Deliver
+            Filing::Refuse("not_subscribed"),
+            "another conversation of the host's direct space"
+        );
+    }
+
+    /// An item without a conversation: on `w`, or on `e` or the recipient's own `u:` stream.
+    fn unscoped(direct_stream: bool, accepted_at_host: bool) -> InboxFacts {
+        InboxFacts {
+            conversation_scoped: false,
+            direct_stream,
+            accepted_at_host,
+            ..message(None)
+        }
+    }
+
+    #[test]
+    fn workspace_items_are_refused_without_a_subscription() {
+        assert_eq!(
+            file(&unscoped(false, false)),
+            Filing::Refuse("not_subscribed")
+        );
+        assert_eq!(
+            file(&unscoped(false, true)),
+            Filing::Refuse("not_subscribed"),
+            "a direct space sends nothing on `w` or another person's stream"
+        );
+    }
+
+    #[test]
+    fn direct_space_items_flow_once_the_recipient_accepted_a_conversation_there() {
+        assert_eq!(file(&unscoped(true, true)), Filing::Deliver);
+        assert_eq!(
+            file(&unscoped(true, false)),
+            Filing::Refuse("not_subscribed"),
+            "no accepted conversation at the host"
+        );
+    }
+
+    #[test]
+    fn an_item_past_the_hosts_daily_bytes_is_refused_and_a_refusal_stays_one() {
+        let id = DmRequestId::new();
+        let left = |facts: InboxFacts, peer_bytes_left| InboxFacts {
+            peer_bytes_left,
+            ..facts
+        };
+        for (what, facts) in [
+            (
+                "an accepted conversation's item",
+                message(Some((id, DmRequestStatus::Accepted, 0))),
+            ),
+            (
+                "a held item",
+                message(Some((id, DmRequestStatus::Pending, 0))),
+            ),
+            ("an invite filed as a request", invite()),
+            (
+                "an invite the policy delivers",
+                InboxFacts {
+                    policy: DmPolicy::Deliver,
+                    ..invite()
+                },
+            ),
+            ("a direct space item", unscoped(true, true)),
+        ] {
+            let placed = file(&facts);
+            assert_eq!(file(&left(facts.clone(), 1000)), placed, "{what} fits");
+            assert_eq!(
+                file(&left(facts, 999)),
+                Filing::PeerLimited,
+                "{what} past the bytes"
+            );
+        }
+        assert_eq!(
+            file(&left(message(Some((id, DmRequestStatus::Ignored, 0))), 0)),
+            Filing::Drop
+        );
+        assert_eq!(
+            file(&left(unscoped(false, false), 0)),
+            Filing::Refuse("not_subscribed")
         );
     }
 }

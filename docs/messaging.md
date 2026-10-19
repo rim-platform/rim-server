@@ -169,6 +169,11 @@ decide, and each may only tighten the one above it:
   days from now and must be in the future and at most 30 days away, else `VALIDATION`; the
   same bounds as instance invites. `maxUses` defaults to 1 and is capped by
   `RIM_LIMIT_INVITE_MAX_USES` when the operator sets it. The token is returned once and never shown again.
+- `recipientEmail` emails the link to that address, and nothing more: the invite is not bound to
+  it, and whoever holds the link can use it. One user creates at most
+  `RIM_LIMIT_INVITES_PER_USER_PER_DAY` invites (default 50, 0 turns it off) and sends at most as
+  many invite emails in 24 hours; past either a `createInvite` is `VALIDATION` and creates
+  nothing.
 - `workspaceInvites(serverId, dir, cursor, limit)` lists the workspace's invites for its Owner
   (`FORBIDDEN` for everyone else): every invite, revoked, expired and used-up ones included,
   ordered `createdAt DESC, id DESC` with the standard cursor rules (`dir` defaults to `AFTER`,

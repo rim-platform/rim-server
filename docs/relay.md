@@ -78,6 +78,15 @@ from 1 second to 5 minutes. Outbox rows are kept 7 days. A relay that refuses a 
 is not sent their events for 24 hours. Each server process keeps that refusal in memory: a restart
 forgets it, and with several nodes each node learns it from the relay on its own.
 
+A relay queues an item that names no conversation (a `w` event, presence on `e`, a person's
+directory events on their `u:` stream) for a recipient who holds an active subscription to its
+workspace. A host's direct space sends such items too, presence and the recipient's own directory
+events: those are queued for a recipient who accepted a conversation that host homes. Anything
+else naming no conversation is refused (`not_subscribed`). Items queued from
+one host take at most 2 GiB a day across all recipients, those of workspaces the recipient
+subscribed to not counted; past it the host's items are refused (`limited`) until its day ends.
+The count is in memory, per node.
+
 A relay stores each envelope once and one item per recipient. Each device reads its user's items
 above its cursor; a device added later starts at the newest item queued before it. An item is
 deleted once every non-revoked device of its user has acknowledged it, and after the retention
@@ -127,7 +136,7 @@ once.
 | `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days |
 | `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused |
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored |
-| Nothing | Expires after the retention period |
+| Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request |
 
 Limits: 100 pending requests per recipient, `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
 principal per day on this relay, 1,000 per delivering host per day whichever principals it names,

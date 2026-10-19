@@ -6,9 +6,9 @@ use rim_core::e2ee::model::MlsPurged;
 
 use crate::ServiceResult;
 use crate::e2ee::command::{
-    AckMlsWelcomesCmd, ClaimMlsKeyPackagesCmd, GetMlsGroupQuery, ListMlsCommitsQuery, MlsCaller,
-    PrincipalDevicesQuery, ReportEncryptedMessageCmd, RequestMlsReaddCmd, SubmitMlsCommitCmd,
-    UploadMlsKeyPackagesCmd,
+    AckMlsWelcomesCmd, ClaimMlsKeyPackagesCmd, GetMlsGroupQuery, ListMlsCommitsQuery,
+    ListMlsWelcomesQuery, MlsCaller, PrincipalDevicesQuery, ReportEncryptedMessageCmd,
+    RequestMlsReaddCmd, SubmitMlsCommitCmd, UploadMlsKeyPackagesCmd,
 };
 use crate::e2ee::dto::{
     ClaimedKeyPackageDto, MlsCommitDto, MlsCommitPageDto, MlsGroupDto, MlsKeyPackageStatusDto,
@@ -53,8 +53,11 @@ pub trait E2eeService: Send + Sync {
 
     async fn list_commits(&self, query: ListMlsCommitsQuery) -> ServiceResult<MlsCommitPageDto>;
 
-    /// The session device's unacknowledged Welcomes, oldest first.
-    async fn pending_welcomes(&self, caller: MlsCaller) -> ServiceResult<Vec<MlsWelcomeDto>>;
+    /// A page of the session device's pending Welcomes, oldest first.
+    async fn pending_welcomes(
+        &self,
+        query: ListMlsWelcomesQuery,
+    ) -> ServiceResult<Vec<MlsWelcomeDto>>;
 
     /// Acknowledge Welcomes of the session's device. Returns how many were acknowledged now.
     async fn ack_welcomes(&self, cmd: AckMlsWelcomesCmd) -> ServiceResult<u64>;

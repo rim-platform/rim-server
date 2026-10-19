@@ -23,6 +23,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
+  `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
+  and memory use (job `cadvisor`). cAdvisor reaches the Docker and containerd sockets only
+  through proxies that allow it read-only calls alone; it needs the new `DOCKER_GID` in
+  `deploy/.env`, and a host on the overlay2 storage driver also adds
+  `compose.monitoring-containers-overlay2.yml`. "Container metrics" in
+  `docs/operations/metrics.md` describes it.
 - `deploy/compose.monitoring.yml`, an opt-in overlay that turns on the metrics listener and
   adds a Grafana Alloy collector: every 15 seconds it scrapes rim-server's metrics, probes
   `/readyz` and reads the host's metrics, and remote-writes them to Grafana Cloud with the new
@@ -266,6 +273,23 @@ tag `v<version>`, the version every crate in the workspace carries.
   this server. A user holds at most 1,000 contacts; `addContact` for someone new past that
   answers `VALIDATION`. "Who May Start A DM" in `docs/messaging.md` and "Public relay" in
   `docs/specs/server-to-server-v1.md` describe both.
+- A device holds at most 256 pending MLS Welcomes and 64 MiB of them. A Commit whose Welcome
+  would take an added device past either is refused (`VALIDATION`), and `claimMlsKeyPackages`
+  leaves out a device without room for one more, so clients do not add it until it has read and
+  acknowledged its Welcomes. Before, Welcomes for one device piled up for 30 days without limit.
+  `myMlsWelcomes` answers a page at a time: the new optional `after: MlsWelcomeCursorInput` and
+  `limit` (1 to 100, 100 by default) arguments, and the new `MlsWelcome.createdAt` that with
+  `id` makes the cursor. A client that asks with no arguments gets the oldest 100
+  (`docs/specs/e2ee-mls-v1.md`, "Welcome delivery and joining").
+- **Upgrade:** `RIM_LIMIT_INVITES_PER_USER_PER_DAY` is on by default, at 50, and also caps the
+  invite emails (`createInvite` with `recipientEmail`) one user sends in 24 hours. Emails are
+  counted apart from the invites, so deleting a workspace does not give them back. Past either
+  count `createInvite` is `VALIDATION` and creates nothing. Before, the cap was off unless set,
+  and any workspace owner could have the server email any number of addresses. Set a higher
+  number if your owners invite more people a day, or 0 to turn the cap off (`docs/email.md`).
+- Accepting, ignoring or reporting a DM request whose expiry has passed is `NOT_FOUND`, as for
+  an unknown request; the decision checks the expiry in the same update that records it.
+  Before, an expired request not yet purged could still be accepted.
 - A relay files a DM invite another server delivers only when that server speaks for the
   sender it names: the sender's card must be signed by their key, and their newest card must
   list the delivering server (or the sender is a local user subscribed there). Anything else is
@@ -409,5 +433,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   limit from someone on this server, or from someone elsewhere through the forward path,
   skipped the request inbox and reached the recipient's conversations and notifications
   directly. Workspace DMs a member takes as requests meet the same limits.
+- A relay queues a host's items that name no conversation (workspace events, presence,
+  directory events) only for recipients subscribed to that workspace, or, for presence and a
+  recipient's own directory events from a host's direct space, for recipients who accepted a
+  conversation that host homes; it refuses the rest `not_subscribed`. It also queues at most
+  2 GiB of items from one host a day across all its users, items of subscribed workspaces not
+  counted, and refuses that host's further items `limited` (metric limiter
+  `relay_peer_bytes`). Before, any server could queue such items for every user of the relay,
+  for any workspace, up to each user's queue cap, and keep them there for the retention period
+  (`server-to-server-v1.md` "Outbox and deliver", "Limits and audit").
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

@@ -46,6 +46,12 @@ use crate::util::{add_workspace_member, ensure_not_banned, ensure_server_owner};
 /// Fixed "IP" slot for the per-account login limiter, whose buckets are keyed by username alone.
 const LOGIN_ACCOUNT_SCOPE: &str = "account";
 
+/// Fixed "IP" slot for the invite email limiter, whose buckets are keyed by user id alone.
+const INVITE_EMAIL_SCOPE: &str = "invite_email";
+
+/// The window of the invite email limiter: one day.
+const INVITE_EMAIL_WINDOW_SECS: u64 = 86_400;
+
 #[derive(Clone)]
 pub struct DefaultAuthService {
     repos: AuthRepos,
@@ -65,6 +71,9 @@ pub struct DefaultAuthService {
     public_base_url: Option<String>,
     /// Caps on invites and on workspace members.
     limits: InstanceLimits,
+    /// Invite emails one user sends per day, at the invites-per-day cap; `None` when that cap is
+    /// off. Counted apart from the invites, which go when their workspace is deleted.
+    invite_email_rate_limiter: Option<RegistrationRateLimiter>,
     /// Usernames and display names signups may not take.
     reserved_names: ReservedNames,
     /// Runs the Argon2 work of signups and logins.
@@ -110,6 +119,7 @@ impl DefaultAuthService {
             email_sender,
             public_base_url,
             limits: InstanceLimits::default(),
+            invite_email_rate_limiter: None,
             reserved_names: ReservedNames::default(),
             password_hashing: PasswordHashing::default(),
             session_revocations: crate::session_revocation::unshared(),
@@ -160,6 +170,9 @@ impl DefaultAuthService {
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
+        self.invite_email_rate_limiter = limits
+            .invites_per_user_per_day
+            .map(|cap| RegistrationRateLimiter::new(INVITE_EMAIL_WINDOW_SECS, cap));
         self
     }
 
@@ -184,6 +197,32 @@ impl DefaultAuthService {
             )?;
         }
         Ok(())
+    }
+
+    /// Count one invite email from `user_id` against the instance's invites-per-day cap.
+    /// Returns when it was counted, so a failed invite can give it back; `None` when there is no
+    /// cap.
+    ///
+    /// # Errors
+    /// `Validation` naming the cap when `user_id` sent that many invite emails in the last 24
+    /// hours.
+    fn reserve_invite_email(
+        &self,
+        user_id: UserId,
+    ) -> ServiceResult<Option<chrono::DateTime<Utc>>> {
+        let (Some(limiter), Some(cap)) = (
+            &self.invite_email_rate_limiter,
+            self.limits.invites_per_user_per_day,
+        ) else {
+            return Ok(None);
+        };
+        let now = Utc::now();
+        match limiter.check_and_record(INVITE_EMAIL_SCOPE, &user_id.to_string(), now) {
+            RateLimitDecision::Allowed => Ok(Some(now)),
+            RateLimitDecision::Limited { .. } => {
+                Err(limit_reached(cap, "invite emails per user per day"))
+            }
+        }
     }
 
     pub(crate) fn with_reserved_names(mut self, reserved_names: ReservedNames) -> Self {
@@ -277,6 +316,7 @@ impl DefaultAuthService {
             email_sender,
             public_base_url,
             limits: InstanceLimits::default(),
+            invite_email_rate_limiter: None,
             reserved_names: ReservedNames::default(),
             password_hashing: PasswordHashing::default(),
             session_revocations: crate::session_revocation::unshared(),
@@ -726,11 +766,16 @@ impl AuthService for DefaultAuthService {
             actor.user_id,
         )
         .await?;
+        let email_slot = if recipient_email.is_some() {
+            self.reserve_invite_email(actor.user_id)?
+        } else {
+            None
+        };
 
         let raw_token = generate_token("rim_inv_");
         let token_hash = hash_token(&raw_token);
 
-        let inv = self
+        let created = self
             .repos
             .invite_repo
             .create_invite(NewInvite {
@@ -741,7 +786,16 @@ impl AuthService for DefaultAuthService {
                 max_uses,
                 role,
             })
-            .await?;
+            .await;
+        let inv = match created {
+            Ok(inv) => inv,
+            Err(e) => {
+                if let (Some(limiter), Some(at)) = (&self.invite_email_rate_limiter, email_slot) {
+                    limiter.refund(INVITE_EMAIL_SCOPE, &actor.user_id.to_string(), at);
+                }
+                return Err(e.into());
+            }
+        };
         info!(
             target: "audit",
             event = "workspace_invite_created",

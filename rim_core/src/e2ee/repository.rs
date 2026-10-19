@@ -8,9 +8,9 @@ use crate::conversation::model::ConversationId;
 use crate::e2ee::model::{
     ClaimedKeyPackage, E2eeDevice, FrankingRevision, MlsCommit, MlsDesiredDevice, MlsGroup,
     MlsGroupDevice, MlsKeyPackage, MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged,
-    MlsReaddRequest, MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage,
-    NewFrankingRevision, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest,
-    NewMlsWelcome,
+    MlsReaddRequest, MlsRetention, MlsWelcome, MlsWelcomeBacklog, MlsWelcomeCursor, MlsWelcomeId,
+    NewEncryptedMessage, NewFrankingRevision, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage,
+    NewMlsReaddRequest, NewMlsWelcome,
 };
 use crate::key_identity::model::DeviceKeyId;
 use crate::message::model::{Message, MessageEncryption, MessageId};
@@ -268,9 +268,21 @@ pub trait E2eeRepository: Send + Sync {
 
     async fn insert_welcome(&self, welcome: NewMlsWelcome) -> RepoResult<MlsWelcomeId>;
 
-    /// The device's unacknowledged, unexpired Welcomes to conversations its user is still a
-    /// member of, oldest first.
-    async fn pending_welcomes(&self, device_key_id: DeviceKeyId) -> RepoResult<Vec<MlsWelcome>>;
+    /// The device's pending Welcomes (unacknowledged, unexpired, to conversations its user is
+    /// still a member of) after `after`, oldest first by `(created_at, id)`, at most `limit`.
+    async fn pending_welcomes(
+        &self,
+        device_key_id: DeviceKeyId,
+        after: Option<MlsWelcomeCursor>,
+        limit: u32,
+    ) -> RepoResult<Vec<MlsWelcome>>;
+
+    /// The count and total size of each device's pending Welcomes, as
+    /// [`E2eeRepository::pending_welcomes`] counts them. Devices with none are left out.
+    async fn welcome_backlog(
+        &self,
+        device_key_ids: &[DeviceKeyId],
+    ) -> RepoResult<Vec<MlsWelcomeBacklog>>;
 
     /// Acknowledge the device's Welcomes among `ids`. Returns how many were newly acknowledged.
     async fn ack_welcomes(
