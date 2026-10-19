@@ -586,6 +586,21 @@ impl RelayRepository for SeaOrmRelayRepository {
             .map(Into::into))
     }
 
+    async fn count_requests_via_host(
+        &self,
+        host_server_id: &str,
+        since: DateTime<Utc>,
+    ) -> RepoResult<i64> {
+        self.count(
+            &format!(
+                "SELECT count(*) AS n FROM relay_dm_request \
+                 WHERE host_server_id = $1 AND created_at >= $2 AND {FILED}"
+            ),
+            vec![host_server_id.into(), since.into()],
+        )
+        .await
+    }
+
     async fn decide_request(
         &self,
         id: DmRequestId,

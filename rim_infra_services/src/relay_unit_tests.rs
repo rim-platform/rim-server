@@ -50,7 +50,7 @@ use uuid::Uuid;
 
 use crate::host::{DefaultHostService, HostRepos};
 use crate::quota::Quotas;
-use crate::relay::identity::testing::document;
+use crate::relay::identity::testing::{document, signed};
 use crate::relay::{DefaultRelayService, RelayRepos, RelaySettings};
 
 const PEER: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
@@ -432,17 +432,50 @@ async fn a_server_the_operator_does_not_admit_reads_no_identity() {
     );
 }
 
-/// A `DmInvite` from `PEER` to Bob from Alice, signed by `signer`.
-fn invite_item(signer: &ServerSigner) -> DeliverItem {
+/// Alice, who sends Bob invites: her identity and the head of her key log.
+fn sender() -> (TestIdentity, KeyState) {
+    let id = TestIdentity::new(1);
+    let state = KeyState::from_inception(&id.inception()).expect("inception");
+    (id, state)
+}
+
+fn sender_id() -> String {
+    sender().0.principal_id()
+}
+
+/// A card of `id` at `version`, listing `relays`.
+fn card_of(id: &TestIdentity, version: u64, relays: &[&str]) -> SignedJson {
+    let state = KeyState::from_inception(&id.inception()).expect("inception");
+    signed(&id.profile_card(&state, version, "Alice", relays, &[]))
+}
+
+/// Alice's card at `version`, listing `relays`.
+fn sender_card(version: u64, relays: &[&str]) -> SignedJson {
+    card_of(&sender().0, version, relays)
+}
+
+/// Alice's identity as a relay serves it, with `card`.
+fn sender_document(card: Option<SignedJson>) -> IdentityDocument {
+    let (id, _) = sender();
+    IdentityDocument {
+        principal_id: id.principal_id(),
+        key_log: vec![signed(&id.inception())],
+        devices: Vec::new(),
+        card,
+    }
+}
+
+/// A `DmInvite` from `PEER` to Bob naming `from` and carrying `card`, signed by `signer`.
+fn invite_item(signer: &ServerSigner, from: &str, card: serde_json::Value) -> DeliverItem {
     let workspace_id = Uuid::from_u128(5).to_string();
     let issued_at = timestamp(Utc::now());
     let event = serde_json::json!({
         "type": "DmInvite",
         "workspace_id": workspace_id,
         "conversation_id": Uuid::from_u128(9),
-        "from_principal_id": ALICE,
-        "from_card": { "payload": "{}", "signature": "ed25519:c" },
-        "member_principal_ids": [ALICE, BOB],
+        "from_principal_id": from,
+        "from_card": card,
+        "member_principal_ids": [from, BOB],
     })
     .to_string();
     let stream = format!("u:{BOB}");
@@ -469,25 +502,129 @@ fn invite_item(signer: &ServerSigner) -> DeliverItem {
     }
 }
 
-/// A relay under `policy` where Alice is a stranger to Bob with default settings, Bob holds
-/// `pending` pending requests whose items take `held_bytes`, and Alice filed `filed_today` in
-/// the last day; `filed` records the status of each request it files.
-fn inbox_relay(
+/// Alice's invite to Bob from `PEER`, carrying `card`.
+fn alice_invite(card: &SignedJson) -> DeliverItem {
+    invite_item(
+        &host_signer(40),
+        &sender_id(),
+        serde_json::to_value(card).expect("json"),
+    )
+}
+
+/// What Bob's relay holds about Alice when her invite arrives from `PEER`.
+#[derive(Clone)]
+struct RelayInbox {
     policy: DmOperatorPolicy,
-    (pending, filed_today): (i64, i64),
+    /// How Alice is held here, with her stored card; she is unknown when `None`.
+    held: Option<(UserKind, Option<SignedJson>)>,
+    /// Alice is Bob's contact.
+    contact: bool,
+    cached: Option<CachedIdentity>,
+    /// What `PEER` answers when asked for Alice's identity; asking fails the test when `None`.
+    served: Option<FetchAnswer>,
+    /// Requests `PEER` filed here in the last day.
+    by_host_today: i64,
+    /// Hosts where Alice, when local, holds an active subscription.
+    subscribed_at: Vec<&'static str>,
+    /// Bob's choice for DMs from outside his workspaces.
+    outside: rim_core::dm_policy::model::OutsideDm,
+    /// Bob's pending requests.
+    pending: i64,
+    /// Requests Alice filed here in the last day.
+    filed_today: i64,
+    /// Bytes the items of Bob's pending requests take.
     held_bytes: i64,
+}
+
+impl Default for RelayInbox {
+    /// Alice unknown here, a stranger to Bob with default settings, whose identity `PEER`
+    /// serves with a card naming it.
+    fn default() -> Self {
+        Self {
+            policy: DmOperatorPolicy::default(),
+            held: None,
+            contact: false,
+            cached: None,
+            served: Some(Ok((
+                200,
+                serde_json::to_vec(&sender_document(Some(sender_card(1, &[PEER_ORIGIN]))))
+                    .expect("json"),
+            ))),
+            by_host_today: 0,
+            subscribed_at: Vec::new(),
+            outside: rim_core::dm_policy::model::OutsideDm::Requests,
+            pending: 0,
+            filed_today: 0,
+            held_bytes: 0,
+        }
+    }
+}
+
+/// Bob's relay as `inbox` says; `filed` records the status of each request it files.
+fn inbox_relay(
+    inbox: RelayInbox,
     filed: Arc<Mutex<Vec<rim_core::relay::model::DmRequestStatus>>>,
 ) -> DefaultRelayService {
+    use rim_core::key_identity::model::{KeyLogEntry, KeyLogEntryType};
     use rim_core::relay::model::{DmRequest, DmRequestId};
 
     let bob = UserId::new();
+    let alice = UserId::new();
+    let alice_principal = sender_id();
+    let held = inbox.held.clone();
     let mut host = MockHostRepository::new();
-    host.expect_find_user()
-        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    host.expect_find_user().returning(move |principal| {
+        let found = if principal == BOB {
+            Some((bob, UserKind::Local))
+        } else if principal == alice_principal {
+            held.as_ref().map(|(kind, _)| (alice, *kind))
+        } else {
+            None
+        };
+        Box::pin(async move { Ok(found) })
+    });
+    let mut keys = MockKeyIdentityRepository::new();
+    keys.expect_list_key_log().returning(move |user_id| {
+        let inception = sender().0.inception();
+        let log = vec![KeyLogEntry {
+            user_id,
+            seq: 0,
+            entry_type: KeyLogEntryType::Inception,
+            payload: inception.payload,
+            signature: inception.signature,
+            created_at: Utc::now(),
+        }];
+        Box::pin(async move { Ok(log) })
+    });
+    let stored = inbox.held.and_then(|(_, card)| card);
+    keys.expect_get_profile_card().returning(move |user_id| {
+        let card = stored.clone().map(|card| {
+            let version =
+                serde_json::from_str::<serde_json::Value>(&card.payload).expect("card")["version"]
+                    .as_u64()
+                    .expect("version");
+            StoredProfileCard {
+                user_id,
+                version: u32::try_from(version).expect("version"),
+                payload: card.payload,
+                signature: card.signature,
+                updated_at: Utc::now(),
+            }
+        });
+        Box::pin(async move { Ok(card) })
+    });
     let mut subscriptions = MockSubscriptionRepository::new();
     subscriptions
         .expect_is_subscribed()
         .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+    let subscribed_at: Vec<String> = inbox.subscribed_at.iter().map(|h| h.to_string()).collect();
+    subscriptions
+        .expect_subscribed_hosts()
+        .returning(move |user_id, _| {
+            assert_eq!(user_id, alice, "only the sender's subscriptions are read");
+            let hosts = subscribed_at.clone();
+            Box::pin(async move { Ok(hosts) })
+        });
     let mut relay = MockRelayRepository::new();
     relay
         .expect_received_through()
@@ -501,21 +638,36 @@ fn inbox_relay(
     relay
         .expect_is_blocked()
         .returning(|_, _| Box::pin(async { Ok(false) }));
+    let contact = inbox.contact;
     relay
         .expect_is_contact()
-        .returning(|_, _| Box::pin(async { Ok(false) }));
+        .returning(move |_, _| Box::pin(async move { Ok(contact) }));
     relay
         .expect_accepted_from()
         .returning(|_, _| Box::pin(async { Ok(false) }));
+    let pending = inbox.pending;
     relay
         .expect_count_pending_requests()
         .returning(move |_| Box::pin(async move { Ok(pending) }));
+    let filed_today = inbox.filed_today;
     relay
         .expect_count_requests_from()
         .returning(move |_, _| Box::pin(async move { Ok(filed_today) }));
+    let held_bytes = inbox.held_bytes;
     relay
         .expect_user_held_bytes()
         .returning(move |_| Box::pin(async move { Ok(held_bytes) }));
+    let by_host_today = inbox.by_host_today;
+    relay
+        .expect_count_requests_via_host()
+        .withf(|host, _| host == PEER)
+        .returning(move |_, _| Box::pin(async move { Ok(by_host_today) }));
+    let cached = inbox.cached.clone();
+    relay.expect_cached_identity().returning(move |_| {
+        let cached = cached.clone();
+        Box::pin(async move { Ok(cached) })
+    });
+    relay.expect_store_identity().never();
     relay.expect_insert_request().returning(move |new| {
         filed.lock().expect("lock").push(new.status);
         Box::pin(async move {
@@ -548,33 +700,58 @@ fn inbox_relay(
         .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
     dm.expect_user_workspaces()
         .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    let outside = inbox.outside;
     dm.expect_outside()
-        .returning(|_| Box::pin(async { Ok(rim_core::dm_policy::model::OutsideDm::Requests) }));
+        .returning(move |_| Box::pin(async move { Ok(outside) }));
+    let mut client = MockS2sClient::new();
+    let path = format!("/principals/{}", sender_id());
+    match inbox.served {
+        Some(answer) => {
+            client
+                .expect_send()
+                .withf(move |request| request.peer_server_id == PEER && request.path == path)
+                .times(1)
+                .returning(move |_| {
+                    let answer = answer.clone().map(|(status, body)| S2sResponse {
+                        status,
+                        content_type: "application/json".to_string(),
+                        body,
+                        key_seq: 0,
+                        headers: Vec::new(),
+                    });
+                    Box::pin(async move { answer })
+                });
+        }
+        None => {
+            client.expect_send().never();
+        }
+    }
     let signer = host_signer(40);
     relay_service(
         RelayRepos {
             relay_repo: Arc::new(relay),
             host_repo: Arc::new(host),
+            key_identity_repo: Arc::new(keys),
             subscription_repo: Arc::new(subscriptions),
             dm_policy_repo: Arc::new(dm),
             ..empty_repos()
         },
         peers_resolving(peer_keys(&signer, 0), None),
-        MockS2sClient::new(),
+        client,
     )
-    .with_dm_policy(policy)
+    .with_dm_policy(inbox.policy)
 }
 
-/// What Bob's relay does with Alice's invite from `PEER` under `policy` while his pending
-/// requests hold `held_bytes`: the refusal reasons and the requests filed.
-async fn file_invite_holding(
-    policy: DmOperatorPolicy,
-    held_bytes: i64,
+/// What Bob's relay as `inbox` says does with `item` from `PEER`: the refusal reasons and the
+/// requests filed.
+async fn file_invite(
+    inbox: RelayInbox,
+    item: DeliverItem,
 ) -> (Vec<String>, Vec<rim_core::relay::model::DmRequestStatus>) {
     let filed = Arc::default();
-    let svc = inbox_relay(policy, (0, 0), held_bytes, Arc::clone(&filed));
+    let svc = inbox_relay(inbox, Arc::clone(&filed));
     let response = svc
-        .deliver(PEER.to_string(), vec![invite_item(&host_signer(40))])
+        .deliver(PEER.to_string(), vec![item])
         .await
         .expect("delivered");
     let refused = response.refused.into_iter().map(|r| r.reason).collect();
@@ -582,11 +759,15 @@ async fn file_invite_holding(
     (refused, filed)
 }
 
-/// What Bob's relay does with Alice's invite from `PEER` under `policy`.
-async fn file_invite(
-    policy: DmOperatorPolicy,
+/// Refused as `reason`, with nothing filed.
+fn refused_as(reason: &str) -> (Vec<String>, Vec<rim_core::relay::model::DmRequestStatus>) {
+    (vec![reason.to_string()], Vec::new())
+}
+
+fn filed_as(
+    status: rim_core::relay::model::DmRequestStatus,
 ) -> (Vec<String>, Vec<rim_core::relay::model::DmRequestStatus>) {
-    file_invite_holding(policy, 0).await
+    (Vec::new(), vec![status])
 }
 
 /// An invite that would take Bob's held bytes past their cap is refused as `limited` and files
@@ -597,20 +778,20 @@ async fn an_invite_past_the_recipients_held_bytes_is_refused_as_limited() {
 
     use crate::relay::inbox::MAX_HELD_BYTES_PER_USER;
 
-    let invite = invite_item(&host_signer(40));
+    let invite = alice_invite(&sender_card(1, &[PEER_ORIGIN]));
     let size = i64::try_from(invite.envelope.payload.len() + invite.envelope.signature.len())
         .expect("size");
+    let holding = |held_bytes| RelayInbox {
+        held_bytes,
+        ..RelayInbox::default()
+    };
     assert_eq!(
-        file_invite_holding(DmOperatorPolicy::default(), MAX_HELD_BYTES_PER_USER - size).await,
-        (Vec::new(), vec![DmRequestStatus::Pending])
+        file_invite(holding(MAX_HELD_BYTES_PER_USER - size), invite.clone()).await,
+        filed_as(DmRequestStatus::Pending)
     );
     assert_eq!(
-        file_invite_holding(
-            DmOperatorPolicy::default(),
-            MAX_HELD_BYTES_PER_USER - size + 1
-        )
-        .await,
-        (vec!["limited".to_string()], Vec::new())
+        file_invite(holding(MAX_HELD_BYTES_PER_USER - size + 1), invite).await,
+        refused_as("limited")
     );
 }
 
@@ -622,9 +803,13 @@ async fn an_invite_from_a_server_the_operator_admits_files_a_request() {
         inbound(DmInbound::Open, &[]),
         inbound(DmInbound::Partners, &[PEER]),
     ] {
+        let inbox = RelayInbox {
+            policy,
+            ..RelayInbox::default()
+        };
         assert_eq!(
-            file_invite(policy).await,
-            (Vec::new(), vec![DmRequestStatus::Pending])
+            file_invite(inbox, alice_invite(&sender_card(1, &[PEER_ORIGIN]))).await,
+            filed_as(DmRequestStatus::Pending)
         );
     }
 }
@@ -635,9 +820,137 @@ async fn an_invite_from_a_server_the_operator_refuses_is_refused_as_blocked() {
         inbound(DmInbound::None, &[PEER]),
         inbound(DmInbound::Partners, &[OTHER]),
     ] {
+        let inbox = RelayInbox {
+            policy,
+            ..RelayInbox::default()
+        };
         assert_eq!(
-            file_invite(policy).await,
-            (vec!["blocked".to_string()], Vec::new())
+            file_invite(inbox, alice_invite(&sender_card(1, &[PEER_ORIGIN]))).await,
+            refused_as("blocked")
+        );
+    }
+}
+
+/// An invite whose card is not the named sender's, signed by their key, is refused and filed
+/// nowhere, even when the sender it names is Bob's contact.
+#[tokio::test]
+async fn an_invite_whose_card_does_not_verify_for_its_sender_is_refused() {
+    let alice = sender_card(1, &[PEER_ORIGIN]);
+    let mallory = TestIdentity::new(2);
+    let mallorys_card = card_of(&mallory, 1, &[PEER_ORIGIN]);
+    let cases = [
+        (
+            "a card signed by another key",
+            serde_json::to_value(SignedJson {
+                payload: alice.payload.clone(),
+                signature: mallorys_card.signature.clone(),
+            })
+            .expect("json"),
+        ),
+        (
+            "another principal's card",
+            serde_json::to_value(&mallorys_card).expect("json"),
+        ),
+        (
+            "an unsigned card",
+            serde_json::json!({ "payload": "{}", "signature": "ed25519:c" }),
+        ),
+        ("no card", serde_json::Value::Null),
+    ];
+    for contact in [false, true] {
+        for (what, card) in cases.clone() {
+            let inbox = RelayInbox {
+                contact,
+                served: (!card.is_null())
+                    .then(|| RelayInbox::default().served)
+                    .flatten(),
+                ..RelayInbox::default()
+            };
+            assert_eq!(
+                file_invite(inbox, invite_item(&host_signer(40), &sender_id(), card)).await,
+                refused_as("invalid_invite"),
+                "{what}, contact {contact}"
+            );
+        }
+    }
+    let served = RelayInbox {
+        served: None,
+        ..RelayInbox::default()
+    };
+    assert_eq!(
+        file_invite(
+            served,
+            invite_item(
+                &host_signer(40),
+                "rimp1_alice",
+                serde_json::to_value(&alice).expect("json"),
+            ),
+        )
+        .await,
+        refused_as("invalid_invite"),
+        "a sender that is no principal id"
+    );
+}
+
+/// What `PEER` may answer when it serves no usable identity for Alice: not found, a
+/// transport failure, or a document that does not verify.
+fn unserved() -> Vec<FetchAnswer> {
+    vec![
+        Ok((404, Vec::new())),
+        Err(S2sClientError::Transport("down".to_string())),
+        Ok((
+            200,
+            serde_json::to_vec(&IdentityDocument {
+                principal_id: sender_id(),
+                ..alice_document_of(&TestIdentity::new(2))
+            })
+            .expect("json"),
+        )),
+    ]
+}
+
+/// An invite from a sender held and cached nowhere here, whose identity the host does not
+/// serve, cannot be checked: it is filed as a stranger's request, whatever standing the name
+/// it carries has with Bob, and is refused where a stranger's would be.
+#[tokio::test]
+async fn an_invite_whose_sender_cannot_be_verified_is_a_strangers_request() {
+    use rim_core::dm_policy::model::OutsideDm;
+    use rim_core::relay::model::DmRequestStatus;
+    let card = sender_card(1, &[PEER_ORIGIN]);
+    for answer in unserved() {
+        for contact in [false, true] {
+            let inbox = RelayInbox {
+                served: Some(answer.clone()),
+                contact,
+                ..RelayInbox::default()
+            };
+            assert_eq!(
+                file_invite(inbox, alice_invite(&card)).await,
+                filed_as(DmRequestStatus::Pending),
+                "{answer:?}, contact {contact}"
+            );
+        }
+        let closed = RelayInbox {
+            served: Some(answer.clone()),
+            contact: true,
+            outside: OutsideDm::None,
+            ..RelayInbox::default()
+        };
+        assert_eq!(
+            file_invite(closed, alice_invite(&card)).await,
+            refused_as("blocked"),
+            "{answer:?}: Bob takes no DMs from strangers"
+        );
+        let open = RelayInbox {
+            served: Some(answer.clone()),
+            contact: true,
+            policy: inbound(DmInbound::Open, &[]),
+            ..RelayInbox::default()
+        };
+        assert_eq!(
+            file_invite(open, alice_invite(&card)).await,
+            filed_as(DmRequestStatus::Pending),
+            "{answer:?}: an open server still files a request"
         );
     }
 }
@@ -648,7 +961,13 @@ async fn file_own_invite(
     counts: (i64, i64),
 ) -> (Vec<rim_core::relay::model::DmRequestStatus>, usize) {
     let filed = Arc::default();
-    let svc = inbox_relay(DmOperatorPolicy::default(), counts, 0, Arc::clone(&filed));
+    let inbox = RelayInbox {
+        pending: counts.0,
+        filed_today: counts.1,
+        served: None,
+        ..RelayInbox::default()
+    };
+    let svc = inbox_relay(inbox, Arc::clone(&filed));
     let mut notices = svc.subscribe();
     let workspace_id = Uuid::from_u128(5).to_string();
     let issued_at = timestamp(Utc::now());
@@ -708,6 +1027,270 @@ async fn an_own_invite_past_a_limit_is_kept_as_ignored_and_raises_no_notice() {
             "past {counts:?} the conversation stays hidden"
         );
     }
+}
+
+/// An unverified sender's request counts against the host's daily requests and Bob's pending
+/// ones; past the host's, its identity is not even fetched.
+#[tokio::test]
+async fn an_unverified_senders_request_is_counted_per_host_and_per_recipient() {
+    use crate::relay::inbox::{MAX_PENDING_PER_USER, MAX_REQUESTS_PER_HOST_PER_DAY};
+    use rim_core::relay::model::DmRequestStatus;
+    let card = sender_card(1, &[PEER_ORIGIN]);
+    let unserved = || Some(Ok((404, Vec::new())));
+    assert_eq!(
+        file_invite(
+            RelayInbox {
+                served: unserved(),
+                by_host_today: MAX_REQUESTS_PER_HOST_PER_DAY - 1,
+                ..RelayInbox::default()
+            },
+            alice_invite(&card)
+        )
+        .await,
+        filed_as(DmRequestStatus::Pending)
+    );
+    assert_eq!(
+        file_invite(
+            RelayInbox {
+                served: None,
+                by_host_today: MAX_REQUESTS_PER_HOST_PER_DAY,
+                ..RelayInbox::default()
+            },
+            alice_invite(&card)
+        )
+        .await,
+        refused_as("limited"),
+        "past the host's limit"
+    );
+    assert_eq!(
+        file_invite(
+            RelayInbox {
+                served: unserved(),
+                pending: MAX_PENDING_PER_USER,
+                ..RelayInbox::default()
+            },
+            alice_invite(&card)
+        )
+        .await,
+        refused_as("limited"),
+        "past Bob's pending requests"
+    );
+}
+
+/// A sender held here whose card fails against the held log is refused when the host serves
+/// no newer identity for them.
+#[tokio::test]
+async fn a_card_failing_the_held_log_is_refused_when_the_host_serves_none() {
+    let mallory = card_of(&TestIdentity::new(2), 1, &[PEER_ORIGIN]);
+    let forged = SignedJson {
+        payload: sender_card(1, &[PEER_ORIGIN]).payload,
+        signature: mallory.signature,
+    };
+    for kind in [UserKind::Remote, UserKind::Local] {
+        let fetched = kind == UserKind::Remote;
+        for answer in unserved() {
+            let inbox = RelayInbox {
+                held: Some((kind, Some(sender_card(1, &[PEER_ORIGIN])))),
+                contact: true,
+                served: fetched.then(|| answer.clone()),
+                ..RelayInbox::default()
+            };
+            assert_eq!(
+                file_invite(inbox, alice_invite(&forged)).await,
+                refused_as("invalid_invite"),
+                "{kind:?}, {answer:?}"
+            );
+        }
+    }
+}
+
+/// Another identity's document, served under its own principal id.
+fn alice_document_of(id: &TestIdentity) -> IdentityDocument {
+    IdentityDocument {
+        principal_id: id.principal_id(),
+        key_log: vec![signed(&id.inception())],
+        devices: Vec::new(),
+        card: None,
+    }
+}
+
+/// A host the sender's newest card does not list is refused, whether the sender is unknown
+/// here, held as a remote user with a newer card, or local; the invite's own older card
+/// listing the host does not help.
+#[tokio::test]
+async fn a_host_the_senders_newest_card_does_not_name_is_refused() {
+    const ELSEWHERE: &str = "https://elsewhere.example";
+    let cases = [
+        (
+            "unknown sender",
+            RelayInbox {
+                served: Some(Ok((
+                    200,
+                    serde_json::to_vec(&sender_document(Some(sender_card(1, &[ELSEWHERE]))))
+                        .expect("json"),
+                ))),
+                ..RelayInbox::default()
+            },
+            sender_card(1, &[ELSEWHERE]),
+        ),
+        (
+            "a newer card served",
+            RelayInbox {
+                served: Some(Ok((
+                    200,
+                    serde_json::to_vec(&sender_document(Some(sender_card(2, &[ELSEWHERE]))))
+                        .expect("json"),
+                ))),
+                ..RelayInbox::default()
+            },
+            sender_card(1, &[PEER_ORIGIN]),
+        ),
+        (
+            "a newer card stored",
+            RelayInbox {
+                held: Some((UserKind::Remote, Some(sender_card(2, &[ELSEWHERE])))),
+                served: None,
+                contact: true,
+                ..RelayInbox::default()
+            },
+            sender_card(1, &[PEER_ORIGIN]),
+        ),
+        (
+            "a local sender",
+            RelayInbox {
+                held: Some((UserKind::Local, Some(sender_card(1, &[ELSEWHERE])))),
+                served: None,
+                contact: true,
+                subscribed_at: vec![OTHER],
+                ..RelayInbox::default()
+            },
+            sender_card(1, &[ELSEWHERE]),
+        ),
+    ];
+    for (what, inbox, card) in cases {
+        assert_eq!(
+            file_invite(inbox, alice_invite(&card)).await,
+            refused_as("invalid_invite"),
+            "{what}"
+        );
+    }
+}
+
+/// A valid invite is filed as before: from a stranger as a request, from a contact as
+/// accepted, checked against the identity held or cached here without a fetch; a local sender
+/// subscribed at the host is spoken for by it.
+#[tokio::test]
+async fn a_valid_invite_is_filed_by_the_policy() {
+    use rim_core::relay::model::DmRequestStatus;
+    let card = sender_card(1, &[PEER_ORIGIN]);
+    let cases = [
+        (
+            "held as remote, a contact",
+            RelayInbox {
+                held: Some((UserKind::Remote, Some(card.clone()))),
+                contact: true,
+                served: None,
+                ..RelayInbox::default()
+            },
+            DmRequestStatus::Accepted,
+        ),
+        (
+            "cached",
+            RelayInbox {
+                cached: cached(&sender_document(Some(card.clone())), Duration::hours(1)),
+                served: None,
+                ..RelayInbox::default()
+            },
+            DmRequestStatus::Pending,
+        ),
+        (
+            "local, subscribed at the host",
+            RelayInbox {
+                held: Some((
+                    UserKind::Local,
+                    Some(sender_card(1, &["https://elsewhere.example"])),
+                )),
+                served: None,
+                subscribed_at: vec![PEER],
+                ..RelayInbox::default()
+            },
+            DmRequestStatus::Pending,
+        ),
+    ];
+    for (what, inbox, status) in cases {
+        assert_eq!(
+            file_invite(inbox, alice_invite(&card)).await,
+            filed_as(status),
+            "{what}"
+        );
+    }
+    let local = sender_card(1, &["https://elsewhere.example"]);
+    assert_eq!(
+        file_invite(
+            RelayInbox {
+                held: Some((UserKind::Local, Some(local.clone()))),
+                served: None,
+                subscribed_at: vec![PEER],
+                ..RelayInbox::default()
+            },
+            alice_invite(&local),
+        )
+        .await,
+        filed_as(DmRequestStatus::Pending),
+        "a local sender's card need not name a host they are subscribed at"
+    );
+}
+
+/// A host past its daily requests is refused `limited` whichever principal it names, without
+/// fetching an identity; an invite the policy delivers is still recorded.
+#[tokio::test]
+async fn a_host_past_its_daily_requests_is_limited() {
+    use crate::relay::inbox::MAX_REQUESTS_PER_HOST_PER_DAY;
+    use rim_core::relay::model::DmRequestStatus;
+    let card = sender_card(1, &[PEER_ORIGIN]);
+    let past = |inbox: RelayInbox| RelayInbox {
+        by_host_today: MAX_REQUESTS_PER_HOST_PER_DAY,
+        served: None,
+        ..inbox
+    };
+    assert_eq!(
+        file_invite(past(RelayInbox::default()), alice_invite(&card)).await,
+        refused_as("limited"),
+        "unknown sender"
+    );
+    let held = RelayInbox {
+        held: Some((UserKind::Remote, Some(card.clone()))),
+        ..RelayInbox::default()
+    };
+    assert_eq!(
+        file_invite(past(held.clone()), alice_invite(&card)).await,
+        refused_as("limited"),
+        "held sender"
+    );
+    assert_eq!(
+        file_invite(
+            past(RelayInbox {
+                contact: true,
+                ..held
+            }),
+            alice_invite(&card)
+        )
+        .await,
+        filed_as(DmRequestStatus::Accepted),
+        "a contact"
+    );
+    assert_eq!(
+        file_invite(
+            RelayInbox {
+                by_host_today: MAX_REQUESTS_PER_HOST_PER_DAY - 1,
+                ..RelayInbox::default()
+            },
+            alice_invite(&card)
+        )
+        .await,
+        filed_as(DmRequestStatus::Pending),
+        "below the limit"
+    );
 }
 
 // ── The relay queue ──────────────────────────────────────────────────────────────────────

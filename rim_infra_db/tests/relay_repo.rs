@@ -502,6 +502,19 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
         1,
         "conversations from contacts are not requests"
     );
+    assert_eq!(
+        repo.count_requests_via_host(HOST, Utc::now() - Duration::days(1))
+            .await
+            .unwrap(),
+        1,
+        "a host's conversations from contacts are not requests"
+    );
+    assert_eq!(
+        repo.count_requests_via_host("rims1_other", Utc::now() - Duration::days(1))
+            .await
+            .unwrap(),
+        0
+    );
     assert_eq!(repo.count_pending_requests(user.id).await.unwrap(), 1);
     let refused = Uuid::now_v7();
     repo.insert_request(new(DmRequestStatus::Ignored, refused))

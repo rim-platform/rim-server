@@ -46,6 +46,9 @@ pub(crate) fn request_limit(
         None
     }
 }
+/// Most requests one delivering host files on this relay per day, whichever principals they
+/// come from.
+pub(crate) const MAX_REQUESTS_PER_HOST_PER_DAY: i64 = 1000;
 
 /// What the relay knows about an item and its recipient.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +73,9 @@ pub(crate) struct InboxFacts {
     pub filed_by_sender_today: i64,
     /// Most requests one sender principal files on this relay per day.
     pub sender_daily_limit: i64,
+    /// Requests the delivering host filed on this relay in the last day; 0 for this server's
+    /// own events.
+    pub filed_by_host_today: i64,
 }
 
 impl InboxFacts {
@@ -123,6 +129,7 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
             facts.sender_daily_limit,
         )
         .is_some()
+            || facts.filed_by_host_today >= MAX_REQUESTS_PER_HOST_PER_DAY
             || !facts.holding_fits() =>
         {
             Filing::Refuse("limited")
@@ -150,6 +157,7 @@ mod tests {
             item_bytes: 1000,
             request_held_bytes: 0,
             user_held_bytes: 0,
+            filed_by_host_today: 0,
         }
     }
 
@@ -244,6 +252,33 @@ mod tests {
         assert_eq!(
             request_limit(0, SENDER_LIMIT, SENDER_LIMIT),
             Some(RequestLimit::SenderDaily)
+        );
+    }
+
+    #[test]
+    fn a_host_files_a_limited_number_of_requests_a_day_from_any_senders() {
+        assert_eq!(
+            file(&InboxFacts {
+                filed_by_host_today: MAX_REQUESTS_PER_HOST_PER_DAY,
+                ..invite()
+            }),
+            Filing::Refuse("limited")
+        );
+        assert_eq!(
+            file(&InboxFacts {
+                filed_by_host_today: MAX_REQUESTS_PER_HOST_PER_DAY - 1,
+                ..invite()
+            }),
+            Filing::FileRequest
+        );
+        assert_eq!(
+            file(&InboxFacts {
+                filed_by_host_today: MAX_REQUESTS_PER_HOST_PER_DAY,
+                policy: DmPolicy::Deliver,
+                ..invite()
+            }),
+            Filing::FileAccepted,
+            "an invite the policy delivers is no request"
         );
     }
 

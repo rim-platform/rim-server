@@ -1777,3 +1777,163 @@ async fn a_blocked_peer_gets_403_both_ways_until_unblocked() {
     a.stop().await;
     b.stop().await;
 }
+
+/// Signs `event` as `host`'s own event on Bob's stream at `seq`, delivers it to `relay` as item
+/// `id`, and returns the refusal reasons.
+async fn deliver_as(host: &Node, relay: &Node, bob: &Person, id: u64, event: Value) -> Vec<String> {
+    use rim_s2s::host::{HostEventFields, sign_host_event};
+    use rim_services::s2s::dto::{S2sMethod, S2sRequest};
+
+    let identity = host.identity();
+    let workspace_id = anonymous_direct_space(host).await;
+    let stream = format!("u:{}", bob.principal());
+    let issued_at = rim_s2s::timestamp(chrono::Utc::now());
+    let event = event.to_string();
+    let envelope = sign_host_event(
+        &identity.signer,
+        &HostEventFields {
+            host: identity.server_id(),
+            key_seq: identity.state.seq,
+            workspace_id: &workspace_id,
+            stream: &stream,
+            seq: Some(id),
+            event_json: &event,
+            issued_at: &issued_at,
+        },
+    );
+    let body = json!({ "items": [{
+        "id": id.to_string(),
+        "envelope": statement(&envelope),
+        "recipients": [bob.principal()],
+        "deviceId": null,
+    }] });
+    let response = host
+        .s2s
+        .client
+        .send(S2sRequest {
+            peer_server_id: relay.id(),
+            method: S2sMethod::Post,
+            path: "/deliver".to_string(),
+            body: serde_json::to_vec(&body).expect("json"),
+            content_type: None,
+            headers: Vec::new(),
+        })
+        .await
+        .expect("delivered");
+    assert_eq!(response.status, 200);
+    let answer: Value = serde_json::from_slice(&response.body).expect("json");
+    answer["refused"]
+        .as_array()
+        .expect("refused")
+        .iter()
+        .map(|r| r["reason"].as_str().expect("reason").to_string())
+        .collect()
+}
+
+/// A host that names someone whose card does not list it, or forges their card, is refused
+/// `invalid_invite`, so it borrows no contact's standing; a sender nobody can check is a
+/// stranger's request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_host_cannot_file_an_invite_in_the_name_of_someone_it_does_not_speak_for() {
+    let (a, b) = relays().await;
+    let bob = sign_up(&b, "bob", 2).await;
+    let erin = sign_up(&b, "erin", 3).await;
+    a.s2s
+        .state
+        .peers
+        .pin(&b.origin, Some(&b.id()))
+        .await
+        .expect("pin");
+    b.s2s
+        .state
+        .peers
+        .pin(&a.origin, Some(&a.id()))
+        .await
+        .expect("pin");
+    bob.ok(
+        "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+        json!({ "p": erin.principal(), "r": [b.origin] }),
+    )
+    .await;
+    let invite = |from: &str, card: Value| {
+        json!({
+            "type": "DmInvite",
+            "workspace_id": Uuid::now_v7(),
+            "conversation_id": Uuid::now_v7(),
+            "from_principal_id": from,
+            "from_card": card,
+            "member_principal_ids": [from, bob.principal()],
+        })
+    };
+
+    // A names Erin, Bob's contact on B, with her own card, which lists B only.
+    let erins_card = erin
+        .identity
+        .profile_card(&erin.state, 2, "Erin", &[b.origin.as_str()], &[]);
+    assert_eq!(
+        deliver_as(
+            &a,
+            &b,
+            &bob,
+            1,
+            invite(&erin.principal(), statement(&erins_card))
+        )
+        .await,
+        vec!["invalid_invite"],
+        "the card does not list the host"
+    );
+
+    // A card that names A but is not signed by Erin's key.
+    let mallory = support::relay::keys(9);
+    let forged =
+        mallory
+            .identity
+            .profile_card(&mallory.state, 3, "Erin", &[a.origin.as_str()], &[]);
+    let forged = json!({ "payload": erins_card.payload, "signature": forged.signature });
+    assert_eq!(
+        deliver_as(&a, &b, &bob, 2, invite(&erin.principal(), forged)).await,
+        vec!["invalid_invite"],
+        "a card Erin did not sign"
+    );
+
+    // A principal A does not serve, named as Bob's contact: nobody can check the card, so it
+    // is a stranger's request, not a live conversation.
+    let minted =
+        mallory
+            .identity
+            .profile_card(&mallory.state, 1, "Mallory", &[a.origin.as_str()], &[]);
+    bob.ok(
+        "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+        json!({ "p": mallory.identity.principal_id(), "r": [a.origin] }),
+    )
+    .await;
+    assert_eq!(
+        deliver_as(
+            &a,
+            &b,
+            &bob,
+            3,
+            invite(&mallory.identity.principal_id(), statement(&minted))
+        )
+        .await,
+        Vec::<String>::new(),
+        "a principal the host does not serve"
+    );
+
+    // Only that request was filed, pending, and nothing reached Bob's queue.
+    let requests = bob.ok(REQUESTS, json!({ "status": null })).await["dmRequests"].clone();
+    let requests = requests.as_array().expect("requests");
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(
+        requests[0]["fromPrincipalId"],
+        json!(mallory.identity.principal_id())
+    );
+    assert_eq!(requests[0]["status"], "PENDING");
+    let items = bob
+        .ok(support::relay::ITEMS, json!({ "after": null }))
+        .await;
+    assert_eq!(items["relayItems"]["items"], json!([]));
+
+    a.stop().await;
+    b.stop().await;
+}
