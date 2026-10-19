@@ -67,7 +67,7 @@ impl DefaultWorkspaceStateService {
         if !KEY_REGEX.is_match(key) {
             return Err(ServiceError::Validation(format!(
                 "invalid key format: must match ^[a-z][a-z0-9_.:-]{{0,510}}[a-z0-9]$, got `{}`",
-                &key[..key.len().min(64)]
+                key.chars().take(64).collect::<String>()
             )));
         }
 
@@ -728,6 +728,65 @@ mod tests {
                 value: serde_json::json!("val"),
                 scope: WorkspaceStateScopeDto::Server,
                 ttl_seconds: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    /// 63 ASCII bytes followed by `é`, whose two bytes straddle byte 64.
+    fn key_split_at_preview_boundary() -> String {
+        format!("{}é", "a".repeat(63))
+    }
+
+    #[test]
+    fn key_validation_previews_whole_characters() {
+        for key in [
+            key_split_at_preview_boundary(),
+            format!("{}€", "a".repeat(62)),
+            format!("{}😀", "a".repeat(61)),
+            "é".repeat(100),
+        ] {
+            let err = DefaultWorkspaceStateService::validate_key(&key).unwrap_err();
+            let ServiceError::Validation(message) = err else {
+                panic!("expected a validation error for {key:?}, got {err:?}");
+            };
+            let preview: String = key.chars().take(64).collect();
+            assert!(message.ends_with(&format!("got `{preview}`")), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn set_rejects_non_ascii_key_at_preview_boundary() {
+        let svc = make_service(MockWorkspaceStateRepository::new());
+
+        let err = svc
+            .set(SetWorkspaceStateCmd {
+                actor: Actor::new(UserId::new()),
+                server_id: ServerId::new(),
+                key: key_split_at_preview_boundary(),
+                value: serde_json::json!("val"),
+                scope: WorkspaceStateScopeDto::Server,
+                ttl_seconds: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn increment_rejects_non_ascii_key_at_preview_boundary() {
+        let svc = make_service(MockWorkspaceStateRepository::new());
+
+        let err = svc
+            .increment(IncrementWorkspaceStateCmd {
+                actor: Actor::new(UserId::new()),
+                server_id: ServerId::new(),
+                key: key_split_at_preview_boundary(),
+                scope: WorkspaceStateScopeDto::Server,
+                delta: 1,
             })
             .await
             .unwrap_err();
