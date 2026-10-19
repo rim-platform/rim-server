@@ -16,8 +16,9 @@ use rim_core::e2ee::model::{
     ClaimedKeyPackage, E2eeDevice, FrankingRevision, KEY_PACKAGE_MIN_REMAINING_DAYS, MlsCommit,
     MlsCommitId, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
     MlsKeyPackageId, MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsReaddRequestId,
-    MlsRetention, MlsWelcome, MlsWelcomeId, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit,
-    NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, MlsWelcome, MlsWelcomeBacklog, MlsWelcomeCursor, MlsWelcomeId,
+    NewEncryptedMessage, NewFrankingRevision, NewMlsCommit, NewMlsGroup, NewMlsKeyPackage,
+    NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -46,7 +47,12 @@ pub(crate) struct StoredPackage {
     pub(crate) claims: i32,
 }
 
-pub(crate) type Welcomes = Vec<(MlsWelcomeId, NewMlsWelcome, HashSet<DeviceKeyId>)>;
+pub(crate) type Welcomes = Vec<(
+    MlsWelcomeId,
+    NewMlsWelcome,
+    HashSet<DeviceKeyId>,
+    DateTime<Utc>,
+)>;
 
 #[derive(Default)]
 pub(crate) struct State {
@@ -733,28 +739,70 @@ impl E2eeRepository for FakeE2ee {
 
     async fn insert_welcome(&self, welcome: NewMlsWelcome) -> RepoResult<MlsWelcomeId> {
         let id = MlsWelcomeId::new();
-        self.state().welcomes.push((id, welcome, HashSet::new()));
+        self.state()
+            .welcomes
+            .push((id, welcome, HashSet::new(), Utc::now()));
         Ok(id)
     }
 
-    async fn pending_welcomes(&self, device_key_id: DeviceKeyId) -> RepoResult<Vec<MlsWelcome>> {
-        Ok(self
+    async fn pending_welcomes(
+        &self,
+        device_key_id: DeviceKeyId,
+        after: Option<MlsWelcomeCursor>,
+        limit: u32,
+    ) -> RepoResult<Vec<MlsWelcome>> {
+        let mut pending: Vec<MlsWelcome> = self
             .state()
             .welcomes
             .iter()
-            .filter(|(_, w, acked)| {
+            .filter(|(_, w, acked, _)| {
                 w.recipients.iter().any(|(d, _)| *d == device_key_id)
                     && !acked.contains(&device_key_id)
             })
-            .map(|(id, w, _)| MlsWelcome {
+            .map(|(id, w, _, created_at)| MlsWelcome {
                 id: *id,
                 server_id: ServerId::new(),
                 conversation_id: w.conversation_id,
                 incarnation: w.incarnation,
                 epoch: w.epoch,
                 message: w.message.clone(),
-                created_at: Utc::now(),
+                created_at: *created_at,
                 expires_at: w.expires_at,
+            })
+            .filter(|w| {
+                after.is_none_or(|c| {
+                    (w.created_at, Uuid::from(w.id)) > (c.created_at, Uuid::from(c.id))
+                })
+            })
+            .collect();
+        pending.sort_by_key(|w| (w.created_at, Uuid::from(w.id)));
+        pending.truncate(limit as usize);
+        Ok(pending)
+    }
+
+    async fn welcome_backlog(
+        &self,
+        device_key_ids: &[DeviceKeyId],
+    ) -> RepoResult<Vec<MlsWelcomeBacklog>> {
+        let state = self.state();
+        Ok(device_key_ids
+            .iter()
+            .filter_map(|device| {
+                let pending: Vec<_> = state
+                    .welcomes
+                    .iter()
+                    .filter(|(_, w, acked, _)| {
+                        w.recipients.iter().any(|(d, _)| d == device) && !acked.contains(device)
+                    })
+                    .collect();
+                (!pending.is_empty()).then(|| MlsWelcomeBacklog {
+                    device_key_id: *device,
+                    count: pending.len() as i64,
+                    bytes: pending
+                        .iter()
+                        .map(|(_, w, _, _)| w.message.len() as i64)
+                        .sum(),
+                })
             })
             .collect())
     }
@@ -765,7 +813,7 @@ impl E2eeRepository for FakeE2ee {
         ids: &[MlsWelcomeId],
     ) -> RepoResult<u64> {
         let mut acked = 0;
-        for (id, w, done) in &mut self.state().welcomes {
+        for (id, w, done, _) in &mut self.state().welcomes {
             if ids.contains(id)
                 && w.recipients.iter().any(|(d, _)| *d == device_key_id)
                 && done.insert(device_key_id)

@@ -27,8 +27,8 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::e2ee::model::{
     E2eeDevice, MlsCommit, MlsDesiredDevice, MlsDevice, MlsGroup, MlsGroupDevice, MlsKeyPackage,
-    MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsRetention, NewMlsCommit, NewMlsGroup,
-    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    MlsKeyPackageStatus, MlsPurged, MlsReaddRequest, MlsRetention, MlsWelcomeBacklog, NewMlsCommit,
+    NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::key_identity::model::DeviceKeyId;
@@ -44,9 +44,9 @@ use rim_services::audit::service::AuditLogService;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::command::verb::TypedVerb;
 use rim_services::e2ee::command::{
-    AckMlsWelcomesCmd, ClaimMlsKeyPackagesCmd, GetMlsGroupQuery, ListMlsCommitsQuery, MlsCaller,
-    PrincipalDevicesQuery, ReportEncryptedMessageCmd, RequestMlsReaddCmd, SubmitMlsCommitCmd,
-    UploadMlsKeyPackagesCmd,
+    AckMlsWelcomesCmd, ClaimMlsKeyPackagesCmd, GetMlsGroupQuery, ListMlsCommitsQuery,
+    ListMlsWelcomesQuery, MlsCaller, PrincipalDevicesQuery, ReportEncryptedMessageCmd,
+    RequestMlsReaddCmd, SubmitMlsCommitCmd, UploadMlsKeyPackagesCmd,
 };
 use rim_services::e2ee::dto::{
     ClaimedKeyPackageDto, MlsCommitDto, MlsCommitPageDto, MlsDeviceDto, MlsGroupDto,
@@ -58,7 +58,8 @@ use rim_services::e2ee::wire::{MlsContentType, MlsWire, PrivateMessageInfo};
 use rim_services::e2ee::{
     ACCEPTED_CIPHER_SUITES, MAX_AVAILABLE_KEY_PACKAGES, MAX_COMMIT_BYTES, MAX_CONTENT_BYTES,
     MAX_ENCRYPTED_MEMBERS, MAX_GROUP_DEVICES, MAX_KEY_PACKAGE_BYTES, MAX_KEY_PACKAGES_PER_UPLOAD,
-    MAX_WELCOME_BYTES, MLS_ACTIVE_DAYS, PREFERRED_CIPHER_SUITE, mls_group_id, parse_mls_group_id,
+    MAX_PENDING_WELCOME_BYTES, MAX_PENDING_WELCOMES, MAX_WELCOME_BYTES, MLS_ACTIVE_DAYS,
+    PREFERRED_CIPHER_SUITE, mls_group_id, parse_mls_group_id,
 };
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::host::dto::RemoteClaim;
@@ -104,6 +105,9 @@ const MAX_REPORT_REASON_CHARS: usize = 1000;
 /// Commit pages: default and largest size.
 const DEFAULT_COMMIT_PAGE: i32 = 50;
 const MAX_COMMIT_PAGE: i32 = 100;
+/// Largest page of pending Welcomes, and the size of a page that names none; one page fits one
+/// acknowledgement.
+const MAX_WELCOME_PAGE: i32 = 100;
 
 /// Audit command ids.
 const AUDIT_ENABLE: &str = "e2ee.enable";
@@ -158,6 +162,15 @@ pub(crate) fn decode_b64(field: &str, text: &str, max: usize) -> ServiceResult<V
 }
 
 /// Exactly `N` bytes of unpadded base64url.
+/// Whether a device whose pending Welcomes are `backlog` (`None`: it has none) has room for one
+/// more of `size` bytes.
+fn welcome_fits(backlog: Option<&MlsWelcomeBacklog>, size: usize) -> bool {
+    let size = i64::try_from(size).unwrap_or(i64::MAX);
+    backlog.is_none_or(|b| {
+        b.count < MAX_PENDING_WELCOMES && b.bytes.saturating_add(size) <= MAX_PENDING_WELCOME_BYTES
+    })
+}
+
 pub(crate) fn decode_fixed<const N: usize>(field: &str, text: &str) -> ServiceResult<[u8; N]> {
     URL_SAFE_NO_PAD
         .decode(text)
@@ -1109,6 +1122,20 @@ impl DefaultE2eeService {
             }
             (None, true) => {}
         }
+        if let Some((message, _, _)) = &welcome {
+            let ids: Vec<DeviceKeyId> = added.iter().map(|(d, _)| d.device_key_id).collect();
+            let backlog = repos.e2ee_repo.welcome_backlog(&ids).await?;
+            let full = added.iter().find(|(d, _)| {
+                let pending = backlog.iter().find(|b| b.device_key_id == d.device_key_id);
+                !welcome_fits(pending, message.len())
+            });
+            if let Some((device, _)) = full {
+                return Err(ServiceError::Validation(format!(
+                    "device {} of {} has too many pending Welcomes",
+                    device.device_id, device.principal_id
+                )));
+            }
+        }
 
         // Writes.
         let stale_after_conflict = |e: rim_core::repository::error::RepoError| {
@@ -1451,6 +1478,14 @@ impl E2eeService for DefaultE2eeService {
                 })?;
             targets.push(device_ref.device.clone());
         }
+        // A device without room for one more Welcome of the largest size gets no package, so
+        // the claimer leaves it out of its Commit.
+        let target_ids: Vec<DeviceKeyId> = targets.iter().map(|t| t.device_key_id).collect();
+        let backlog = self.repos.e2ee_repo.welcome_backlog(&target_ids).await?;
+        targets.retain(|t| {
+            let pending = backlog.iter().find(|b| b.device_key_id == t.device_key_id);
+            welcome_fits(pending, MAX_WELCOME_BYTES)
+        });
 
         let mut claimed = Vec::with_capacity(targets.len());
         let mut remote_packages = Vec::new();
@@ -1722,12 +1757,21 @@ impl E2eeService for DefaultE2eeService {
         })
     }
 
-    async fn pending_welcomes(&self, caller: MlsCaller) -> ServiceResult<Vec<MlsWelcomeDto>> {
-        let device = session_device(self.repos.e2ee_repo.as_ref(), &caller).await?;
+    async fn pending_welcomes(
+        &self,
+        query: ListMlsWelcomesQuery,
+    ) -> ServiceResult<Vec<MlsWelcomeDto>> {
+        let device = session_device(self.repos.e2ee_repo.as_ref(), &query.caller).await?;
+        let limit = query.limit.unwrap_or(MAX_WELCOME_PAGE);
+        if !(1..=MAX_WELCOME_PAGE).contains(&limit) {
+            return Err(ServiceError::Validation(format!(
+                "limit must be 1 to {MAX_WELCOME_PAGE}"
+            )));
+        }
         Ok(self
             .repos
             .e2ee_repo
-            .pending_welcomes(device.device_key_id)
+            .pending_welcomes(device.device_key_id, query.after, limit.unsigned_abs())
             .await?
             .into_iter()
             .map(|w| MlsWelcomeDto {
@@ -1737,6 +1781,7 @@ impl E2eeService for DefaultE2eeService {
                 incarnation: w.incarnation,
                 epoch: w.epoch,
                 message: w.message,
+                created_at: w.created_at,
                 expires_at: w.expires_at,
             })
             .collect())

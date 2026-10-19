@@ -192,6 +192,22 @@ pub struct MlsWelcome {
     pub expires_at: DateTime<Utc>,
 }
 
+/// Where a page of a device's pending Welcomes starts: after this Welcome, in
+/// `(created_at, id)` order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MlsWelcomeCursor {
+    pub created_at: DateTime<Utc>,
+    pub id: MlsWelcomeId,
+}
+
+/// How many pending Welcomes a device holds, and their total size in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MlsWelcomeBacklog {
+    pub device_key_id: DeviceKeyId,
+    pub count: i64,
+    pub bytes: i64,
+}
+
 /// A device's signed request to be removed and added again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MlsReaddRequest {

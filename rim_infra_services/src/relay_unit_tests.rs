@@ -1,8 +1,9 @@
 //! The relay's key package claims for hosts (the stranger rule, blocks, the claim's host), the
 //! operator's DM settings at its claims, identities and request inbox, its held bytes, its
-//! queue cap, oversized envelopes, contacts, identity fetches and remote server lookups, and
-//! the host's checks of forwarded device requests (the device, its signature, the forwarded
-//! body, the `seq` window, and which relay may carry a user's traffic).
+//! queue cap, oversized envelopes, items without a conversation and each peer's daily bytes,
+//! contacts, identity fetches and remote server lookups, and the host's checks of forwarded
+//! device requests (the device, its signature, the forwarded body, the `seq` window, and which
+//! relay may carry a user's traffic).
 
 use std::sync::{Arc, Mutex};
 
@@ -51,7 +52,7 @@ use uuid::Uuid;
 use crate::host::{DefaultHostService, HostRepos};
 use crate::quota::Quotas;
 use crate::relay::identity::testing::{document, signed};
-use crate::relay::{DefaultRelayService, RelayRepos, RelaySettings};
+use crate::relay::{DefaultRelayService, QUEUED_BYTES_PER_PEER_PER_DAY, RelayRepos, RelaySettings};
 
 const PEER: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
 const PEER_ORIGIN: &str = "https://relay.example";
@@ -145,6 +146,16 @@ fn relay_service(
     peers: MockPeerService,
     client: MockS2sClient,
 ) -> DefaultRelayService {
+    relay_with_peer_bytes(repos, peers, client, QUEUED_BYTES_PER_PEER_PER_DAY)
+}
+
+/// [`relay_service`] queueing `peer_bytes` from each peer per day.
+fn relay_with_peer_bytes(
+    repos: RelayRepos,
+    peers: MockPeerService,
+    client: MockS2sClient,
+    peer_bytes: u64,
+) -> DefaultRelayService {
     DefaultRelayService::new(
         repos,
         None,
@@ -155,6 +166,7 @@ fn relay_service(
             queue_bytes_per_user: QUEUE_CAP,
             retention: Duration::days(30),
             quotas: Quotas::default(),
+            queued_bytes_per_peer_per_day: peer_bytes,
         },
     )
 }
@@ -1632,6 +1644,242 @@ async fn an_envelope_over_the_host_event_size_is_refused() {
     assert_eq!(response.acked_through, "1");
 }
 
+// ── Items without a conversation ─────────────────────────────────────────────────────────
+
+/// An item from `PEER` for Bob with id `id` on `stream` of workspace 5, carrying `event`.
+fn stream_item(id: u32, stream: &str, event: serde_json::Value) -> DeliverItem {
+    let workspace_id = Uuid::from_u128(5).to_string();
+    let issued_at = timestamp(Utc::now());
+    let event = event.to_string();
+    let statement = sign_host_event(
+        &host_signer(40),
+        &HostEventFields {
+            host: PEER,
+            key_seq: 0,
+            workspace_id: &workspace_id,
+            stream,
+            seq: (stream != "e").then_some(u64::from(id)),
+            event_json: &event,
+            issued_at: &issued_at,
+        },
+    );
+    DeliverItem {
+        id: id.to_string(),
+        envelope: SignedJson {
+            payload: statement.payload,
+            signature: statement.signature,
+        },
+        recipients: vec![BOB.to_string()],
+        device_id: None,
+    }
+}
+
+/// A relay holding Bob, subscribed to workspace 5 at `PEER` or not, who accepted a conversation
+/// `PEER` homes or not; `queued` records the size of each item it queues.
+fn subscription_relay(
+    subscribed: bool,
+    accepted_at_host: bool,
+    queued: Arc<Mutex<Vec<i32>>>,
+) -> DefaultRelayService {
+    peer_limited_relay(
+        subscribed,
+        accepted_at_host,
+        queued,
+        QUEUED_BYTES_PER_PEER_PER_DAY,
+    )
+}
+
+/// [`subscription_relay`] queueing `peer_bytes` from each peer per day.
+fn peer_limited_relay(
+    subscribed: bool,
+    accepted_at_host: bool,
+    queued: Arc<Mutex<Vec<i32>>>,
+    peer_bytes: u64,
+) -> DefaultRelayService {
+    let bob = UserId::new();
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(move |_, host, workspace, _| {
+            let found = subscribed && host == PEER && workspace == Uuid::from_u128(5);
+            Box::pin(async move { Ok(found) })
+        });
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay
+        .expect_accepted_at_host()
+        .returning(move |user, host| {
+            let found = accepted_at_host && user == bob && host == PEER;
+            Box::pin(async move { Ok(found) })
+        });
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay.expect_insert_item().returning(move |item| {
+        queued.lock().expect("lock").push(item.size_bytes);
+        Box::pin(async { Ok(1) })
+    });
+    relay
+        .expect_queued_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay_with_peer_bytes(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&host_signer(40), 0), None),
+        MockS2sClient::new(),
+        peer_bytes,
+    )
+}
+
+/// The refusal reasons, with the principal each names, of one delivery of `items`.
+async fn refusals(svc: &DefaultRelayService, items: Vec<DeliverItem>) -> Vec<(String, String)> {
+    svc.deliver(PEER.to_string(), items)
+        .await
+        .expect("answered")
+        .refused
+        .into_iter()
+        .map(|r| (r.reason, r.principal_id.unwrap_or_default()))
+        .collect()
+}
+
+/// The items a workspace sends without a conversation, and those of the direct space.
+fn items_without_a_conversation() -> Vec<(&'static str, DeliverItem)> {
+    let bob_stream = format!("u:{BOB}");
+    let alice_stream = format!("u:{ALICE}");
+    vec![
+        (
+            "a workspace event",
+            stream_item(
+                1,
+                "w",
+                serde_json::json!({ "type": "WorkspacePluginChanged", "plugin_id": "p", "change": "added" }),
+            ),
+        ),
+        (
+            "presence",
+            stream_item(
+                2,
+                "e",
+                serde_json::json!({ "type": "PresenceChanged", "status": "online" }),
+            ),
+        ),
+        (
+            "a directory event about Bob",
+            stream_item(
+                3,
+                &bob_stream,
+                serde_json::json!({ "type": "MemberRoleChanged", "role": "guest" }),
+            ),
+        ),
+        (
+            "an event on another person's stream",
+            stream_item(
+                4,
+                &alice_stream,
+                serde_json::json!({ "type": "MemberLeft" }),
+            ),
+        ),
+    ]
+}
+
+/// With a subscription to its workspace, every item without a conversation is queued.
+#[tokio::test]
+async fn items_without_a_conversation_are_queued_for_a_subscriber() {
+    for (kind, item) in items_without_a_conversation() {
+        let queued = Arc::default();
+        let svc = subscription_relay(true, false, Arc::clone(&queued));
+        assert_eq!(refusals(&svc, vec![item]).await, vec![], "{kind}");
+        assert_eq!(queued.lock().expect("lock").len(), 1, "{kind}");
+    }
+}
+
+/// Without a subscription, an item without a conversation is refused as `not_subscribed` for
+/// its recipient, and nothing is queued.
+#[tokio::test]
+async fn items_without_a_conversation_are_refused_without_a_subscription() {
+    for (kind, item) in items_without_a_conversation() {
+        let queued = Arc::default();
+        let svc = subscription_relay(false, false, Arc::clone(&queued));
+        assert_eq!(
+            refusals(&svc, vec![item]).await,
+            vec![("not_subscribed".to_string(), BOB.to_string())],
+            "{kind}"
+        );
+        assert!(queued.lock().expect("lock").is_empty(), "{kind}");
+    }
+}
+
+/// Once Bob accepted a conversation the host homes, the items its direct space sends without
+/// a conversation (presence on `e`, directory events on his own `u:` stream) are queued; a
+/// workspace event and another person's stream are still refused.
+#[tokio::test]
+async fn direct_space_items_are_queued_once_a_conversation_there_is_accepted() {
+    for (kind, item) in items_without_a_conversation() {
+        let queued = Arc::default();
+        let svc = subscription_relay(false, true, Arc::clone(&queued));
+        let refused = refusals(&svc, vec![item]).await;
+        let direct = kind == "presence" || kind == "a directory event about Bob";
+        if direct {
+            assert_eq!(refused, vec![], "{kind}");
+            assert_eq!(queued.lock().expect("lock").len(), 1, "{kind}");
+        } else {
+            assert_eq!(
+                refused,
+                vec![("not_subscribed".to_string(), BOB.to_string())],
+                "{kind}"
+            );
+            assert!(queued.lock().expect("lock").is_empty(), "{kind}");
+        }
+    }
+}
+
+/// A peer's items are queued up to its daily bytes across deliveries, then refused as
+/// `limited` per recipient; items of a subscribed workspace are neither counted nor refused.
+#[tokio::test]
+async fn a_peer_past_its_daily_bytes_is_refused_as_limited() {
+    let presence = |id| {
+        stream_item(
+            id,
+            "e",
+            serde_json::json!({ "type": "PresenceChanged", "status": "online" }),
+        )
+    };
+    let size = {
+        let item = presence(1);
+        u64::try_from(item.envelope.payload.len() + item.envelope.signature.len()).expect("size")
+    };
+    let queued = Arc::new(Mutex::new(Vec::new()));
+    let svc = peer_limited_relay(false, true, Arc::clone(&queued), 2 * size + size / 2);
+    assert_eq!(refusals(&svc, vec![presence(1), presence(2)]).await, vec![]);
+    assert_eq!(
+        refusals(&svc, vec![presence(3)]).await,
+        vec![("limited".to_string(), BOB.to_string())],
+        "a third item takes the peer past its bytes"
+    );
+    assert_eq!(queued.lock().expect("lock").len(), 2);
+
+    let subscribed = Arc::new(Mutex::new(Vec::new()));
+    let svc = peer_limited_relay(true, false, Arc::clone(&subscribed), size);
+    assert_eq!(
+        refusals(&svc, (1..=3).map(presence).collect()).await,
+        vec![],
+        "a subscriber's items are not counted"
+    );
+    assert_eq!(subscribed.lock().expect("lock").len(), 3);
+}
+
 // ── Contacts ─────────────────────────────────────────────────────────────────────────────
 
 /// A caller cannot add their own principal as a contact; another principal is stored.
@@ -1642,6 +1890,9 @@ async fn the_callers_own_principal_is_not_a_contact() {
     let other = TestIdentity::new(71).principal_id();
     let stored = other.clone();
     let mut relay = MockRelayRepository::new();
+    relay
+        .expect_count_contacts()
+        .returning(|_| Box::pin(async { Ok(0) }));
     relay
         .expect_upsert_contact()
         .withf(move |_, principal, _| principal == stored)
@@ -1680,6 +1931,67 @@ async fn the_callers_own_principal_is_not_a_contact() {
         .await
         .expect("another principal");
     assert_eq!(contact.principal_id, other);
+}
+
+/// A caller holding the most contacts adds no new one, but may still change one they hold.
+#[tokio::test]
+async fn a_caller_holding_the_most_contacts_adds_no_new_one() {
+    let caller = UserId::new();
+    let held = TestIdentity::new(71).principal_id();
+    let new = TestIdentity::new(72).principal_id();
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_count_contacts()
+        .returning(|_| Box::pin(async { Ok(crate::relay::MAX_CONTACTS_PER_USER) }));
+    let listed = held.clone();
+    relay.expect_is_contact().returning(move |_, principal| {
+        let contact = principal == listed;
+        Box::pin(async move { Ok(contact) })
+    });
+    let stored = held.clone();
+    relay
+        .expect_upsert_contact()
+        .withf(move |_, principal, _| principal == stored)
+        .times(1)
+        .returning(|_, principal, relay_urls| {
+            let contact = Contact {
+                principal_id: principal.to_string(),
+                relay_urls,
+                added_at: Utc::now(),
+            };
+            Box::pin(async move { Ok(contact) })
+        });
+    let svc = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            user_repo: Arc::new(crate::probation_fixtures::users(vec![
+                crate::probation_fixtures::account(
+                    caller,
+                    Utc::now(),
+                    Some(&TestIdentity::new(70).principal_id()),
+                ),
+            ])),
+            ..empty_repos()
+        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    );
+    let relays = vec![PEER_ORIGIN.to_string()];
+
+    let err = svc
+        .add_contact(Actor::new(caller), new, relays.clone())
+        .await
+        .expect_err("past the cap");
+    assert!(
+        matches!(&err, ServiceError::Validation(m)
+            if m == "a user holds at most 1000 contacts; remove one first"),
+        "{err:?}"
+    );
+    let contact = svc
+        .add_contact(Actor::new(caller), held.clone(), relays)
+        .await
+        .expect("a contact already held");
+    assert_eq!(contact.principal_id, held);
 }
 
 // ── Identity fetches ─────────────────────────────────────────────────────────────────────
@@ -2247,20 +2559,36 @@ async fn forwarded_requests_are_limited_per_device() {
 
 // ── Probation of new accounts ────────────────────────────────────────────────────────────
 
-/// A host with a one-hour probation, read at `now`, where `ada` holds `CONTACT_ID` as a
-/// contact and shares a workspace with the holder of `COWORKER_ID`; `accounts` are the users
-/// it knows.
+/// A host with a one-hour probation, read at `now`, where `ada` knows the holder of
+/// identity 61 (a mutual contact or an accepted request), holds the holder of identity 65 as a
+/// contact on her own, and shares a workspace with the holder of identity 62; `accounts` are
+/// the users it knows.
 fn probation_host(
     ada: UserId,
     accounts: Vec<rim_core::user::model::User>,
     now: chrono::DateTime<Utc>,
 ) -> DefaultHostService {
-    let contact = TestIdentity::new(61).principal_id();
+    knowing_host(ada, accounts, now, MockPeerService::new())
+}
+
+/// [`probation_host`] pinning other servers through `peers`.
+fn knowing_host(
+    ada: UserId,
+    accounts: Vec<rim_core::user::model::User>,
+    now: chrono::DateTime<Utc>,
+    peers: MockPeerService,
+) -> DefaultHostService {
+    let known = TestIdentity::new(61).principal_id();
+    let one_sided = TestIdentity::new(65).principal_id();
     let coworker = TestIdentity::new(62).principal_id();
     let mut relay = MockRelayRepository::new();
+    relay.expect_knows().returning(move |user, principal| {
+        let knows = user == ada && principal == known;
+        Box::pin(async move { Ok(knows) })
+    });
     relay.expect_is_contact().returning(move |user, principal| {
-        let known = user == ada && principal == contact;
-        Box::pin(async move { Ok(known) })
+        let contact = user == ada && principal == one_sided;
+        Box::pin(async move { Ok(contact) })
     });
     let mut host = MockHostRepository::new();
     host.expect_find_user()
@@ -2290,7 +2618,7 @@ fn probation_host(
         },
         None,
         identity(41),
-        Arc::new(MockPeerService::new()),
+        Arc::new(peers),
         Arc::new(MockS2sClient::new()),
         ServerId::new(),
         120,
@@ -2307,22 +2635,28 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
     use crate::probation_fixtures::account;
     let created = Utc::now();
     let in_probation = created + Duration::minutes(20);
-    let (ada, contact, coworker, stranger) =
-        (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+    let (ada, known, coworker, stranger, one_sided) = (
+        UserId::new(),
+        UserId::new(),
+        UserId::new(),
+        UserId::new(),
+        UserId::new(),
+    );
     let stranger_principal = TestIdentity::new(63).principal_id();
     let accounts = vec![
         account(ada, created, Some(&TestIdentity::new(60).principal_id())),
-        account(
-            contact,
-            created,
-            Some(&TestIdentity::new(61).principal_id()),
-        ),
+        account(known, created, Some(&TestIdentity::new(61).principal_id())),
         account(
             coworker,
             created,
             Some(&TestIdentity::new(62).principal_id()),
         ),
         account(stranger, created, Some(&stranger_principal)),
+        account(
+            one_sided,
+            created,
+            Some(&TestIdentity::new(65).principal_id()),
+        ),
     ];
     let refusal = "a new account can send a DM request to a stranger in 40 minutes";
     let refused = |result: Result<(), ServiceError>| match result {
@@ -2332,24 +2666,30 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
 
     let host = probation_host(ada, accounts.clone(), in_probation);
     let direct = host.direct_space_id();
-    host.ensure_may_request(Actor::new(ada), direct, vec![ada, contact, coworker], false)
+    host.ensure_may_request(Actor::new(ada), direct, vec![ada, known, coworker], false)
         .await
-        .expect("contacts and coworkers are no strangers");
+        .expect("people she knows and coworkers are no strangers");
     refused(
-        host.ensure_may_request(Actor::new(ada), direct, vec![contact, stranger], false)
+        host.ensure_may_request(Actor::new(ada), direct, vec![known, stranger], false)
             .await,
     );
     refused(
-        host.ensure_remote_member(
-            Actor::new(ada),
-            rim_services::host::dto::RemoteMemberRef {
-                principal_id: TestIdentity::new(64).principal_id(),
-                relay_urls: vec!["https://relay.example".to_string()],
-            },
-        )
-        .await
-        .map(|_| ()),
+        host.ensure_may_request(Actor::new(ada), direct, vec![one_sided], false)
+            .await,
     );
+    for seed in [64, 65] {
+        refused(
+            host.ensure_remote_member(
+                Actor::new(ada),
+                rim_services::host::dto::RemoteMemberRef {
+                    principal_id: TestIdentity::new(seed).principal_id(),
+                    relay_urls: vec!["https://relay.example".to_string()],
+                },
+            )
+            .await
+            .map(|_| ()),
+        );
+    }
 
     let later = probation_host(ada, accounts.clone(), created + Duration::hours(1));
     later
@@ -2371,6 +2711,48 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
     )
     .await
     .expect("no probation on this instance");
+}
+
+#[tokio::test]
+async fn only_people_a_user_knows_skip_the_daily_invites_to_other_servers() {
+    let ada = UserId::new();
+    let mut peers = MockPeerService::new();
+    peers
+        .expect_pin()
+        .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+    let host = knowing_host(ada, Vec::new(), Utc::now(), peers)
+        .with_limits(rim_services::limits::InstanceLimits::default())
+        .with_quotas(Quotas {
+            dm_requests_per_day: 1,
+            ..Quotas::default()
+        });
+    let invite = |seed: u8| {
+        host.ensure_remote_member(
+            Actor::new(ada),
+            rim_services::host::dto::RemoteMemberRef {
+                principal_id: TestIdentity::new(seed).principal_id(),
+                relay_urls: vec!["https://relay.example".to_string()],
+            },
+        )
+    };
+    let limited =
+        |result: &Result<_, ServiceError>| matches!(result, Err(ServiceError::RateLimited { .. }));
+
+    // The day's one invite goes to a stranger, whose relay does not answer.
+    assert!(
+        !limited(&invite(64).await),
+        "the first invite is within the quota"
+    );
+    // A contact Ada added on her own is counted like a stranger.
+    assert!(
+        limited(&invite(65).await),
+        "a one-sided contact is over the quota"
+    );
+    // Someone she knows is not counted.
+    assert!(
+        !limited(&invite(61).await),
+        "someone she knows is no invite"
+    );
 }
 
 #[tokio::test]

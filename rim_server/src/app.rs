@@ -27,7 +27,9 @@ use rim_infra_db::sea_orm_impl::s2s::{
 };
 use rim_infra_services::host::outbox::{HostEventWriter, OutboxSender, OutboxSink, RefusalCache};
 use rim_infra_services::host::{DIRECT_SPACE_NAME, DefaultHostService};
-use rim_infra_services::relay::{DefaultRelayService, RelaySettings};
+use rim_infra_services::relay::{
+    DefaultRelayService, QUEUED_BYTES_PER_PEER_PER_DAY, RelaySettings,
+};
 use rim_infra_services::remote_workspace::{
     DefaultWorkspaceHost, DefaultWorkspaceRelay, RepoDelegationCheck,
 };
@@ -257,6 +259,7 @@ pub(crate) async fn build_s2s(
                 queue_bytes_per_user: config.relay_queue_bytes_per_user(),
                 retention: chrono::Duration::days(i64::from(config.relay_retention_days())),
                 quotas: config.quotas(),
+                queued_bytes_per_peer_per_day: QUEUED_BYTES_PER_PEER_PER_DAY,
             },
         )
         .with_dm_policy(dm_policy.clone()),

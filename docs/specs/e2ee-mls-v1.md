@@ -191,7 +191,9 @@ commits pending changes first, without waiting (the server refuses its message o
   and returns one package per device, in one transaction: the oldest unclaimed one-time package
   (`FOR UPDATE SKIP LOCKED`), else the last-resort package (not consumed). A package with
   `not_after` less than 14 days away is never handed out and counts as absent; a device with no
-  package is left out of the answer. For a **re-add target** the claim takes the newest one-time
+  package is left out of the answer, and so is a device whose pending Welcomes leave no room for
+  one more of the largest size ("Welcome delivery and joining"), with its packages left unclaimed.
+  For a **re-add target** the claim takes the newest one-time
   package uploaded after the `created_at` of the device's latest open re-add request, never the
   last-resort package; with none, `VALIDATION` (`the device has not uploaded key packages since
   its re-add request`). The caller must be a session device that is a group device, or, while
@@ -258,8 +260,17 @@ otherwise).
 ### Welcome delivery and joining
 
 - A Welcome is stored once with one recipient row per added device, until the device acknowledges
-  it (`ackMlsWelcomes`) or for 30 days. `myMlsWelcomes` returns the session device's unacknowledged
-  Welcomes, oldest first.
+  it (`ackMlsWelcomes`) or for 30 days. `myMlsWelcomes` returns the session device's **pending**
+  Welcomes (unacknowledged, unexpired, to conversations its user is a member of), oldest first by
+  `(createdAt, id)`, a page at a time: 100 by default and at most, the most one `ackMlsWelcomes`
+  takes. `after` names the last Welcome of the previous page (exclusive); a page shorter than
+  `limit` is the last. A client that acknowledges every Welcome it read can instead ask for the
+  first page again until it is empty.
+- A device holds at most 256 pending Welcomes and 64 MiB of them. A Commit whose Welcome would take
+  an added device past either is refused (`VALIDATION`, `device … of … has too many pending
+  Welcomes`), whole, and nothing is evicted; the claim already leaves such a device out
+  ("Key packages"), so an honest committer meets this only in a race. The device gets room again
+  by acknowledging its Welcomes, as they expire, or when its user leaves their conversations.
 - The device joins (`StagedWelcome`), checks the group id, verifies every leaf ("Verifying a leaf"),
   fetches and processes the Commits created in its join epoch and later, then acknowledges. A Welcome
   it cannot open (the key package's private key is gone) leads to a re-add request.
@@ -942,7 +953,7 @@ type MlsKeyPackageStatus { cipherSuite: Int!  available: Int!  lastResortNotAfte
 type ClaimedKeyPackage { userId: ID!  principalId: String!  deviceId: ID!  keyPackage: String!  keyPackageRef: String!  lastResort: Boolean! }
 type MlsCommit { id: ID!  incarnation: Int!  epoch: Int!  senderPrincipalId: String  senderDeviceId: ID  message: String!  createdAt: DateTime! }
 type MlsCommitPage { commits: [MlsCommit!]!  hasMore: Boolean! }
-type MlsWelcome { id: ID!  serverId: ID!  conversationId: ID!  incarnation: Int!  epoch: Int!  message: String!  expiresAt: DateTime! }
+type MlsWelcome { id: ID!  serverId: ID!  conversationId: ID!  incarnation: Int!  epoch: Int!  message: String!  expiresAt: DateTime!  createdAt: DateTime! }
 type PrincipalDevice { deviceId: ID!  name: String!  certificate: SignedStatement!  revokedAt: DateTime  revocation: SignedStatement
                       mlsActive: Boolean! }  # not revoked, a key package uploaded in the last 60 days
 type PrincipalDevices { principalId: String!  devices: [PrincipalDevice!]! }
@@ -955,6 +966,7 @@ input CreateConversationInput { encrypted: Boolean }                   # additiv
 input SendMessageInput { forwardedFromMessageId: ID }                  # additive
 input CreateAttachmentInput { blobSha256: String }                     # additive
 input MlsDeviceRefInput { principalId: String!  deviceId: ID! }
+input MlsWelcomeCursorInput { createdAt: DateTime!  welcomeId: ID! }
 input ClaimMlsKeyPackagesInput { serverId: ID!  conversationId: ID!  devices: [MlsDeviceRefInput!]! }
 input SubmitMlsCommitInput {
   serverId: ID!  conversationId: ID!  incarnation: Int!  epoch: Int!
@@ -975,7 +987,7 @@ input ReportEncryptedMessageInput {
 
 type Query {
   myMlsKeyPackageStatus: [MlsKeyPackageStatus!]!                       # session device
-  myMlsWelcomes: [MlsWelcome!]!                                         # session device, unacknowledged
+  myMlsWelcomes(after: MlsWelcomeCursorInput, limit: Int): [MlsWelcome!]!   # session device, pending
   mlsCommits(serverId: ID!, conversationId: ID!, incarnation: Int!, afterEpoch: Int, limit: Int): MlsCommitPage!
   principalDevices(principalIds: [String!]!): [PrincipalDevices!]!     # principals sharing a workspace with the caller
   messageReport(serverId: ID!, reportId: ID!): MessageReport!           # Owner/Moderator
@@ -995,7 +1007,8 @@ type Mutation {
 - `mlsCommits`: `afterEpoch` exclusive (null from 0), `limit` 1 to 100 (default 50), oldest first;
   caller must be a conversation member. `principalDevices` answers one entry per distinct id asked,
   in order, with an empty device list for a principal who shares no workspace with the caller, at
-  most 100 ids per call.
+  most 100 ids per call. `myMlsWelcomes`: `after` exclusive (null from the oldest), `limit` 1 to
+  100 (default 100), oldest first by `(createdAt, id)`.
 - New objects `E2eeQueries` and `E2eeMutations` are appended to the last query and mutation groups.
   All mutations need the CSRF header. The GraphQL request body must allow at least 8 MiB (a 4 MiB
   Commit is 5.4 MiB of base64url); the server sets no limit of its own on `/api`, so a proxy in
@@ -1008,7 +1021,7 @@ type Mutation {
 | `STALE_EPOCH` (new) | A Commit or message for an epoch or incarnation that is not current | `incarnation`, `epoch` (current) |
 | `MLS_COMMIT_REQUIRED` (new) | A message while removals are pending, or into an encrypted conversation without a group | `reason`: `pendingRemovals` or `noGroup` |
 | `FORBIDDEN` | Session without a device; device not in the group; claim or commit by a non-member | — |
-| `VALIDATION` | Malformed bytes, wrong wire format or content type, authenticated data or summary rules, size caps, plaintext write into an encrypted conversation, unready members | reason text; JSON that does not parse into its shape gets a fixed reason, never the parser's message |
+| `VALIDATION` | Malformed bytes, wrong wire format or content type, authenticated data or summary rules, size caps, an added device's pending Welcome limits, plaintext write into an encrypted conversation, unready members | reason text; JSON that does not parse into its shape gets a fixed reason, never the parser's message |
 | `CONFLICT` | Message id reused with other bytes; second report; a re-add request sent again | — |
 | `TIMED_OUT`, `NOT_FOUND`, `RATE_LIMITED` | As for the plaintext equivalents | as today |
 
@@ -1039,6 +1052,7 @@ removes devices. `MlsWelcomeAvailable` goes to
 | Claims | 600 devices per user per hour; one-time packages of one device: 100 claims per day, then only its last-resort package |
 | Commit | 4 MiB; authenticated data 256 KiB |
 | Welcome | 4 MiB |
+| Pending Welcomes | 256 per device, 64 MiB per device |
 | Application envelope | 96 KiB; authenticated data 8 KiB; content 64 KiB |
 | Re-add requests | 3 per device per conversation per day |
 | Encrypted conversation | 100 members, 512 devices |

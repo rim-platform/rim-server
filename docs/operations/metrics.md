@@ -231,6 +231,7 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `dm_invites` | Invites a local user sends to people on other servers per day. |
 | `dm_requests` | DM requests filed here by one sender per day, or past the recipient's pending limit. |
 | `stranger_claim` | Key package claims by servers with no tie to the user. |
+| `relay_peer_bytes` | Items a host delivered past the bytes this relay queues from one host per day. |
 | `delegations_per_relay` | Active delegations one relay holds on this host (`RIM_S2S_SUBSCRIPTIONS_PER_PEER`). |
 | `direct_revocation` | Device revocations brought directly, per address. |
 | `api_ip` | Requests to `/api` routes per client address (`RIM_RATE_REQUESTS_PER_MIN_PER_IP`). |

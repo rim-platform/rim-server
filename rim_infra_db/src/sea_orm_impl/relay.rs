@@ -676,6 +676,15 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
+    async fn accepted_at_host(&self, user_id: UserId, host_server_id: &str) -> RepoResult<bool> {
+        self.flag(
+            "SELECT EXISTS (SELECT 1 FROM relay_dm_request \
+             WHERE user_id = $1 AND host_server_id = $2 AND status = 'accepted') AS flag",
+            vec![uuid(user_id), host_server_id.into()],
+        )
+        .await
+    }
+
     async fn ignore_pending_from(
         &self,
         user_id: UserId,
@@ -785,6 +794,34 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.flag(
             "SELECT EXISTS (SELECT 1 FROM relay_contact \
              WHERE user_id = $1 AND principal_id = $2) AS flag",
+            vec![uuid(user_id), principal_id.into()],
+        )
+        .await
+    }
+
+    async fn count_contacts(&self, user_id: UserId) -> RepoResult<i64> {
+        self.count(
+            "SELECT count(*) AS n FROM relay_contact WHERE user_id = $1",
+            vec![uuid(user_id)],
+        )
+        .await
+    }
+
+    async fn knows(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool> {
+        self.flag(
+            r#"SELECT EXISTS (SELECT 1 FROM relay_contact mine
+                   JOIN "user" me ON me.id = mine.user_id
+                   JOIN "user" them ON them.principal_id = mine.principal_id
+                   JOIN relay_contact theirs
+                     ON theirs.user_id = them.id AND theirs.principal_id = me.principal_id
+                   WHERE mine.user_id = $1 AND mine.principal_id = $2)
+               OR EXISTS (SELECT 1 FROM relay_dm_request
+                   WHERE user_id = $1 AND from_principal_id = $2 AND status = 'accepted')
+               OR EXISTS (SELECT 1 FROM "user" me
+                   JOIN "user" them ON them.principal_id = $2
+                   JOIN relay_dm_request r ON r.user_id = them.id
+                     AND r.from_principal_id = me.principal_id AND r.status = 'accepted'
+                   WHERE me.id = $1) AS flag"#,
             vec![uuid(user_id), principal_id.into()],
         )
         .await

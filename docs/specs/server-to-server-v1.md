@@ -330,7 +330,7 @@ Actix's request types.
 | `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | Unclaimed one-time key packages per device and suite |
 | `RIM_RELAY_DEVICES_PER_USER` | 32 | Devices per local user, revoked ones not counted |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Forwarded requests per local user per day; per device per minute is `RIM_S2S_DEVICE_RATE_PER_MIN`, on the relay as on the host |
-| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests per sender principal per day on this relay, and invites per local user per day to people on other servers who are not their contacts |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests per sender principal per day on this relay, and invites per local user per day to people on other servers they do not know (see "Public relay") |
 
 The existing `config` loader (`Environment::with_prefix("RIM")`) maps `RIM_ROLE` to the field
 `role`. From S5-1 on a login proof's audience may also be this server's id, compared exactly
@@ -492,14 +492,22 @@ POST /s2s/v1/deliver
   `deviceId` targets one device (`MlsWelcomeAvailable`).
 - The relay stores items before answering and ignores ids at or below its `received_through` for
   the peer, so redelivery is idempotent. It refuses items for non-local principals
-  (`unknown_principal`), items of a conversation it holds no invite or request for and workspace
-  items without an active subscription (`not_subscribed`), invites from a principal the recipient
-  blocked (`blocked`) or past the request limits (`limited`), invites whose sender the host does
-  not speak for (`invalid_invite`, see "The request inbox"), a device-targeted item for an unknown
-  device (`unknown_device`), and envelopes over 512 KiB, that do not verify under the delivering
-  host's key or that name another host (`invalid_envelope`). A refusal for one recipient carries
-  `principalId`. The host skips a (relay, principal) for 24 hours after `unknown_principal` only;
-  the other refusals are about one conversation or item.
+  (`unknown_principal`); items of a conversation it holds no invite or request for, and items
+  naming no conversation of a workspace the recipient holds no active subscription to
+  (`not_subscribed`); invites from a principal the recipient blocked (`blocked`) or past the
+  request limits (`limited`); invites whose sender the host does not speak for
+  (`invalid_invite`, see "The request inbox"); a device-targeted item for an unknown device
+  (`unknown_device`); envelopes over 512 KiB, that do not verify under the delivering host's key
+  or that name another host (`invalid_envelope`); and, past 2 GiB of items queued from the
+  delivering host in a day across all recipients, any further item the relay would queue
+  (`limited`; items of a workspace the recipient subscribed to are not counted). A direct space
+  sends items naming no conversation only on `e` (`PresenceChanged`) and on the recipient's own
+  `u:` stream (`MemberJoined`, `MemberLeft`, `MemberRoleChanged` about them): the relay queues
+  those for a recipient who holds an accepted request for a conversation that host homes, and
+  refuses everything else naming no conversation (`w`, another person's `u:`) without a
+  subscription. A refusal for one recipient carries `principalId`. The host skips a (relay,
+  principal) for 24 hours after `unknown_principal` only; the other refusals are about one
+  conversation or item.
 - Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days; a relay down longer
   gets nothing and its clients catch up from the change feed. A relay may pull what it missed:
   `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
@@ -584,7 +592,9 @@ event (`c:` its conversation, `u:` the app's principal). Then per stream:
   workspace member's card with `remoteIdentity(principalId)` (the relay answers its own principals
   directly) to offer "Add as contact". The contact list answers open decision 9 (readable names):
   the app shows the card's name or the person's alias for it; aliases stay on the device. The relay
-  keeps the list (`relay_contact`) because it filters DM requests by it.
+  keeps the list (`relay_contact`, at most 1,000 per user) because it filters DM requests by it.
+  Adding someone does not let the user skip their own limits on DMs to strangers; only a contact
+  who lists them too does ("Public relay").
 
 ## The direct space
 
@@ -949,13 +959,19 @@ WebCrypto support).
 | Card / key packages / devices | 1 card of 128 KiB / 100 unclaimed per device / 32 | `RIM_RELAY_CARD_MAX_BYTES`, `RIM_RELAY_KEY_PACKAGES_PER_DEVICE`, `RIM_RELAY_DEVICES_PER_USER` |
 | Forwarded requests | 120 per device per minute, 50,000 per user per day | `RIM_S2S_DEVICE_RATE_PER_MIN`, `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` |
 | DM requests sent | 20 per sender principal per day | `RIM_RELAY_DM_REQUESTS_PER_DAY` |
+| Contacts | 1,000 per user | fixed |
 
 Each is enforced where it applies: the card at `publishProfileCard`, key packages at
-`uploadMlsKeyPackages`, devices at `addDeviceKey` (all `VALIDATION`), forwarded requests at
+`uploadMlsKeyPackages`, devices at `addDeviceKey`, contacts at `addContact` (all `VALIDATION`;
+a DM records no further contact for a creator who holds 1,000), forwarded requests at
 `/api/remote/…` (`429`). The DM request limit counts on both sides: the relay of the recipients
 refuses a sender principal's invites past it (`limited`), and the sender's relay refuses a local
-user's invites past it to people on other servers who are not their contacts (`RATE_LIMITED`).
-Counters are in memory, per node.
+user's invites past it to people on other servers they do not know (`RATE_LIMITED`). Two people
+know each other when each lists the other as a contact (only the relay's own users have a list
+there) or when one accepted a DM request from the other on the relay, an invite recorded as
+accepted at once included; a contact added on one side only does not count. The same rule says
+who is a stranger to an account in probation (`RIM_PROBATION_HOURS`), which also knows the
+members of its workspaces. Counters are in memory, per node.
 
 **Abuse hooks** (S5-6), each audited: `rim_server principal block <principalId> --reason …`,
 `principal unblock`, `principal list` (`relay_principal_block`): the account's sessions are ended
@@ -1188,11 +1204,12 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 | S2S body / forward body / discovery fetch | 8 MiB / 32 MiB / 64 KiB |
 | Clock window; nonce retention | `created` ≤ 300 s ahead, `expires − created ≤ 300`; 600 s |
 | Deliver; outbox | 256 items and 8 MiB per request; 7 days |
-| Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay) |
+| Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay); 2 GiB of items per delivering host per day, across all recipients, those of subscribed workspaces not counted |
 | Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender and 1,000 per delivering host per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
 | Stranger claims | Last-resort packages only; 20 per claimer per day |
+| Contacts | 1,000 per user |
 | Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h, rows kept 30 days (a remote user's while the user exists) |
 | Peer pins | 4 per origin; an unreferenced `active` pin forgotten after 90 idle days, its head kept |
 | Remote user's direct session | 24 h |

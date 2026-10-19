@@ -142,6 +142,10 @@ pub trait RelayRepository: Send + Sync {
     /// Whether the user ever accepted a request from the principal.
     async fn accepted_from(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
+    /// Whether the user holds an accepted request for a conversation the host homes, so takes
+    /// part in its direct space.
+    async fn accepted_at_host(&self, user_id: UserId, host_server_id: &str) -> RepoResult<bool>;
+
     /// Ignore every pending request from a principal, deleting their held items but each
     /// request's invite. Returns how many requests.
     async fn ignore_pending_from(
@@ -179,6 +183,13 @@ pub trait RelayRepository: Send + Sync {
     async fn delete_contact(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
     async fn is_contact(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
+
+    async fn count_contacts(&self, user_id: UserId) -> RepoResult<i64>;
+
+    /// Whether a user and the holder of a principal know each other: each lists the other as
+    /// a contact (only a user of this server has a list here), or one accepted a DM request
+    /// from the other here. A contact listed by one side only does not count.
+    async fn knows(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
     /// Returns whether the block is new.
     async fn block(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;

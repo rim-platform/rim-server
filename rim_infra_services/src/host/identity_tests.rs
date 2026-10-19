@@ -344,7 +344,7 @@ fn host_with(
             Box::pin(async move { Ok(cached) })
         });
     relay
-        .expect_is_contact()
+        .expect_knows()
         .returning(|_, _| Box::pin(async { Ok(true) }));
 
     let mut peers = MockPeerService::new();

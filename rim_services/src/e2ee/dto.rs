@@ -52,6 +52,7 @@ pub struct MlsWelcomeDto {
     pub incarnation: i32,
     pub epoch: i64,
     pub message: Vec<u8>,
+    pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
 

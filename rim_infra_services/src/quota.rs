@@ -22,7 +22,7 @@ pub struct Quotas {
     /// Requests a user sends through `/api/remote/…` per day.
     pub forwards_per_user_per_day: u32,
     /// DM requests: those one sender principal files on this relay per day, and invites a
-    /// local user sends to people on other servers who are not their contacts per day.
+    /// local user sends to people on other servers they do not know per day.
     pub dm_requests_per_day: u32,
     /// Messages a user sends per minute, with their burst; `None` sets no limit.
     pub messages: Option<crate::token_bucket::BucketRate>,
@@ -54,18 +54,18 @@ impl Default for Quotas {
 /// node.
 #[derive(Debug)]
 pub struct DailyCounter {
-    counts: DashMap<String, (DateTime<Utc>, u32)>,
+    counts: DashMap<String, (DateTime<Utc>, u64)>,
     window: Duration,
-    limit: u32,
+    limit: u64,
 }
 
 impl DailyCounter {
     /// A counter of `limit` per day.
-    pub fn per_day(limit: u32) -> Self {
+    pub fn per_day(limit: u64) -> Self {
         Self::new(Duration::days(1), limit)
     }
 
-    pub fn new(window: Duration, limit: u32) -> Self {
+    pub fn new(window: Duration, limit: u64) -> Self {
         Self {
             counts: DashMap::new(),
             window,
@@ -73,12 +73,17 @@ impl DailyCounter {
         }
     }
 
-    /// Count one use of `key` at `now` unless the key used its limit in the current window.
-    pub fn check_and_record(&self, key: &str, now: DateTime<Utc>) -> RateLimitDecision {
+    /// Forget windows that ended once the counter holds `MAX_KEYS` keys.
+    fn trim(&self, now: DateTime<Utc>) {
         if self.counts.len() >= MAX_KEYS {
             let window = self.window;
             self.counts.retain(|_, (start, _)| now - *start < window);
         }
+    }
+
+    /// Count one use of `key` at `now` unless the key used its limit in the current window.
+    pub fn check_and_record(&self, key: &str, now: DateTime<Utc>) -> RateLimitDecision {
+        self.trim(now);
         let mut entry = self.counts.entry(key.to_string()).or_insert((now, 0));
         let (start, count) = entry.value_mut();
         if now - *start >= self.window {
@@ -93,6 +98,27 @@ impl DailyCounter {
         }
         *count += 1;
         RateLimitDecision::Allowed
+    }
+
+    /// What `key` may still count in its window at `now`: the whole limit once that window
+    /// ended or before the key's first use.
+    pub fn remaining(&self, key: &str, now: DateTime<Utc>) -> u64 {
+        match self.counts.get(key) {
+            Some(entry) if now - entry.0 < self.window => self.limit.saturating_sub(entry.1),
+            _ => self.limit,
+        }
+    }
+
+    /// Count `amount` for `key` at `now`, starting a window when the last one ended.
+    pub fn add(&self, key: &str, now: DateTime<Utc>, amount: u64) {
+        self.trim(now);
+        let mut entry = self.counts.entry(key.to_string()).or_insert((now, 0));
+        let (start, count) = entry.value_mut();
+        if now - *start >= self.window {
+            *start = now;
+            *count = 0;
+        }
+        *count = count.saturating_add(amount);
     }
 }
 
@@ -139,5 +165,21 @@ mod tests {
             counter.check_and_record("a", t0 + Duration::days(1)),
             RateLimitDecision::Allowed
         );
+    }
+
+    #[test]
+    fn a_daily_counter_adds_amounts_and_tells_what_remains_until_the_window_ends() {
+        let counter = DailyCounter::per_day(100);
+        let t0 = Utc::now();
+        assert_eq!(counter.remaining("a", t0), 100);
+        counter.add("a", t0, 60);
+        counter.add("a", t0 + Duration::hours(1), 30);
+        assert_eq!(counter.remaining("a", t0 + Duration::hours(2)), 10);
+        counter.add("a", t0 + Duration::hours(3), 30);
+        assert_eq!(counter.remaining("a", t0 + Duration::hours(3)), 0);
+        assert_eq!(counter.remaining("b", t0), 100);
+        assert_eq!(counter.remaining("a", t0 + Duration::days(1)), 100);
+        counter.add("a", t0 + Duration::days(1), 5);
+        assert_eq!(counter.remaining("a", t0 + Duration::days(1)), 95);
     }
 }

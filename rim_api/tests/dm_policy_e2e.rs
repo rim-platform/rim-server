@@ -4,8 +4,9 @@
 //! and a closing floor binds each member's choice; a server closed by its operator serves no
 //! identity, takes no DM from a stranger here or elsewhere and starts none with another server;
 //! a stranger's DM request past the daily limit is refused when it is started and reaches no
-//! one; a partner server's people reach this one's while a server that is not a partner reads
-//! no identity.
+//! one; a contact added on one's own still counts against the daily invites to other servers,
+//! while someone whose DM request was accepted does not; a partner server's people reach this
+//! one's while a server that is not a partner reads no identity.
 //!
 //! Run with:
 //! ```sh
@@ -426,6 +427,54 @@ async fn a_strangers_dm_request_past_the_daily_limit_is_refused_and_reaches_no_o
     assert!(listed(last, &direct).await.contains(&delivered));
 
     a.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_contact_added_on_ones_own_still_counts_against_the_daily_invites_to_other_servers() {
+    let (first, second) = databases_with(RESET).await;
+    let b = start(&second, open_registration).await;
+    let a = start(&first, |c| {
+        open_registration(c);
+        c.relay_dm_requests_per_day = Some(1);
+    })
+    .await;
+    let sam = sign_up(&a, "sam", 1).await;
+    let bob = sign_up(&b, "bob", 2).await;
+    let carol = sign_up(&b, "carol", 3).await;
+    let dave = sign_up(&b, "dave", 4).await;
+    let direct = direct_space(&sam).await;
+    let dm_with = |other: &Person| {
+        json!({ "input": {
+            "serverId": direct,
+            "encrypted": true,
+            "remoteMembers": [{ "principalId": other.principal(), "relayUrls": [b.origin] }],
+        } })
+    };
+
+    // Sam's one invite of the day to another server goes to Bob.
+    created(&sam.post(CREATE, dm_with(&bob)).await);
+
+    // Adding Carol as a contact does not make her known: the next invite is over the quota.
+    sam.ok(
+        "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+        json!({ "p": carol.principal(), "r": [b.origin] }),
+    )
+    .await;
+    let refused = sam.post(CREATE, dm_with(&carol)).await;
+    assert_eq!(code(&refused), "RATE_LIMITED", "{refused}");
+
+    // Once Sam accepted Dave's own DM request, a conversation with him is no invite to count.
+    dave.start_dm(&sam, &a, true).await;
+    let request = sam.pending_request(&dave).await;
+    sam.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    created(&sam.post(CREATE, dm_with(&dave)).await);
+
+    a.stop().await;
+    b.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

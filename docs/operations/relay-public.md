@@ -175,7 +175,7 @@ Per local user, set in `deploy/.env`; the compose file has the public relay's va
 | `RIM_RELAY_DEVICES_PER_USER` | 32 | `addDeviceKey` fails `VALIDATION`; revoked devices do not count |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | `/api/remote/…` answers `429` per device per minute (as a host, this server accepts as many forwarded requests per device) |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | `/api/remote/…` answers `429` |
-| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | A sender principal's further DM invites to people here are refused (`limited`); a local user's further invites to people on other servers who are not their contacts fail `RATE_LIMITED` |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | A sender principal's further DM invites to people here are refused (`limited`); a local user's further invites to people on other servers they do not know (a contact who lists them too, or someone either accepted a DM request from) fail `RATE_LIMITED` |
 | `RIM_RELAY_RETENTION_DAYS` | 30 | Queued items and DM requests are deleted |
 | `RIM_REGISTRATION_POW_BITS` | 24 | Signups without a registration token need a proof-of-work of that many leading zero bits (about 2^24 hashes); the open-signup limit of 20 per IP per 10 minutes applies too |
 
@@ -271,7 +271,9 @@ unblock each account a cascade blocked.
 ### A hostile peer
 
 Signs: one `peer_server_id` in many signature refusals, replays or rate limits; deliveries
-refused as `invalid_envelope`; reports naming one server.
+refused as `invalid_envelope`; `rim_rate_limit_rejections_total{limiter="relay_peer_bytes"}`
+climbing, one server past the 2 GiB of items a day this relay queues from a host; reports naming
+one server.
 
 1. `rim-relay peer block <serverId>`: refused both ways at once, its requests get
    `403 peer_not_allowed`, nothing is sent to it. Audited as `s2s.peer_blocked`.

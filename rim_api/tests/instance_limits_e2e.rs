@@ -1,8 +1,8 @@
 //! The instance limits on a real server: one node capping workspaces per user, channels per
 //! workspace, devices per user and message bytes refuses the write past each cap with
 //! `VALIDATION` naming it, and allows the writes within it. With a one-hour probation, a new
-//! account creates no workspace and sends no DM request to a stranger, and `me` says when its
-//! probation ends.
+//! account creates no workspace and sends no DM request to a stranger, a contact it added on
+//! its own included, and `me` says when its probation ends.
 //!
 //! Run with:
 //! ```sh
@@ -37,6 +37,8 @@ const CREATE_DM: &str = "mutation($s: ID!, $u: ID!) { createConversation(input: 
 const PROBATION_ENDS: &str = "{ me { probationEndsAt } }";
 const SEND: &str = "mutation($s: ID!, $c: ID!, $text: String!) { sendMessage(input: \
      { serverId: $s, conversationId: $c, text: $text }) { id } }";
+const ADD_CONTACT: &str = "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, \
+     relayUrls: $r) { principalId } }";
 const ADD_DEVICE: &str =
     "mutation($s: SignedStatementInput!) { addDeviceKey(certificate: $s) { deviceId } }";
 
@@ -170,14 +172,27 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
     let ended = exec_ok(schema, ada.caller.request(PROBATION_ENDS, json!({}))).await;
     assert!(ended["me"]["probationEndsAt"].is_null(), "{ended}");
 
-    // A DM in the direct space to Ada, a stranger, is refused; once both are in Ada's
-    // workspace she is no stranger and the DM is allowed.
+    // A DM in the direct space to Ada, a stranger, is refused, and so it stays once the
+    // newcomer adds her as a contact on their own; once both are in Ada's workspace she is no
+    // stranger and the DM is allowed.
     let dm = || {
         fresh.request(
             CREATE_DM,
             json!({ "s": node.s2s.direct_space_id.to_string(), "u": ada.user.id.to_string() }),
         )
     };
+    in_probation(
+        exec_err(schema, dm()).await,
+        "send a DM request to a stranger",
+    );
+    exec_ok(
+        schema,
+        fresh.request(
+            ADD_CONTACT,
+            json!({ "p": ada.identity.principal_id(), "r": ["https://relay.example"] }),
+        ),
+    )
+    .await;
     in_probation(
         exec_err(schema, dm()).await,
         "send a DM request to a stranger",

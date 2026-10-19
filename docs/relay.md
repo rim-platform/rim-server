@@ -25,7 +25,7 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it new delegations are refused as `limited`, while renewals of active ones still go through |
 | `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to push identities, join, subscribe, forward, report presence and bring revocations here |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Requests a local user sends through `/api/remote/…` per day |
-| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers who are not their contacts |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers they do not know (a contact who lists them too, or someone either accepted a DM request from here) |
 | `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest profile card a local user publishes |
 | `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | Unclaimed one-time key packages per device and cipher suite |
 | `RIM_RELAY_DEVICES_PER_USER` | 32 | Devices a local user keeps, revoked ones not counted |
@@ -77,6 +77,15 @@ identity) and a sender delivers each relay's rows in order (`POST /s2s/v1/delive
 from 1 second to 5 minutes. Outbox rows are kept 7 days. A relay that refuses a person as unknown
 is not sent their events for 24 hours. Each server process keeps that refusal in memory: a restart
 forgets it, and with several nodes each node learns it from the relay on its own.
+
+A relay queues an item that names no conversation (a `w` event, presence on `e`, a person's
+directory events on their `u:` stream) for a recipient who holds an active subscription to its
+workspace. A host's direct space sends such items too, presence and the recipient's own directory
+events: those are queued for a recipient who accepted a conversation that host homes. Anything
+else naming no conversation is refused (`not_subscribed`). Items queued from
+one host take at most 2 GiB a day across all recipients, those of workspaces the recipient
+subscribed to not counted; past it the host's items are refused (`limited`) until its day ends.
+The count is in memory, per node.
 
 A relay stores each envelope once and one item per recipient. Each device reads its user's items
 above its cursor; a device added later starts at the newest item queued before it. An item is
@@ -300,7 +309,10 @@ abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list`
 - `contacts`, `addContact(principalId, relayUrls)`, `removeContact(principalId)`: the contact list
   the request inbox filters by. Relay URLs are 1 to 8 of 1 to 256 bytes of printable ASCII
   without `?`, `#` or `@`. The caller's own principal is refused (`VALIDATION`, "cannot add
-  yourself as a contact").
+  yourself as a contact"), and so is someone new once the caller holds 1,000 contacts
+  (`VALIDATION`, "a user holds at most 1000 contacts; remove one first"). A contact added on one
+  side only does not exempt its holder from the daily invites to other servers or from
+  probation; one who lists the holder too does.
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
   group with people on other servers; people on this relay may be named the same way. A

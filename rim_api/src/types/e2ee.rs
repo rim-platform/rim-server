@@ -244,6 +244,8 @@ pub struct MlsWelcome {
     pub epoch: i32,
     pub message: String,
     pub expires_at: DateTime<Utc>,
+    /// When the Welcome was stored; with `id`, the cursor of the next page.
+    pub created_at: DateTime<Utc>,
 }
 
 impl From<MlsWelcomeDto> for MlsWelcome {
@@ -256,8 +258,16 @@ impl From<MlsWelcomeDto> for MlsWelcome {
             epoch: int(value.epoch),
             message: b64(&value.message),
             expires_at: value.expires_at,
+            created_at: value.created_at,
         }
     }
+}
+
+/// Where a page of pending Welcomes starts: after the Welcome with this `createdAt` and `id`.
+#[derive(InputObject, Clone, Debug)]
+pub struct MlsWelcomeCursorInput {
+    pub created_at: DateTime<Utc>,
+    pub welcome_id: ID,
 }
 
 /// A certified device of a principal, revoked or not.

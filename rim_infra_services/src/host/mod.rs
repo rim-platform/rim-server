@@ -117,8 +117,7 @@ pub struct DefaultHostService {
     session_revocations: OnceLock<Arc<dyn SessionRevocations>>,
     /// Delegations of workspace spaces; without one only the direct-space rule applies.
     delegations: Option<Arc<dyn DelegationCheck>>,
-    /// Invites each user sends to people on other servers who are not their contacts, per
-    /// day.
+    /// Invites each user sends to people on other servers they do not know, per day.
     dm_invites: DailyCounter,
     /// DM requests one sender principal files on this relay per day.
     dm_requests_per_day: u32,
@@ -179,7 +178,7 @@ impl DefaultHostService {
             e2ee_service: OnceLock::new(),
             session_revocations: OnceLock::new(),
             delegations: None,
-            dm_invites: DailyCounter::per_day(Quotas::default().dm_requests_per_day),
+            dm_invites: DailyCounter::per_day(u64::from(Quotas::default().dm_requests_per_day)),
             dm_requests_per_day: Quotas::default().dm_requests_per_day,
             limits: InstanceLimits::default(),
             clock: Clock::default(),
@@ -350,7 +349,7 @@ impl DefaultHostService {
     /// Apply the per-user quotas: invites to people on other servers, and DM requests filed
     /// here, per day.
     pub fn with_quotas(mut self, quotas: Quotas) -> Self {
-        self.dm_invites = DailyCounter::per_day(quotas.dm_requests_per_day);
+        self.dm_invites = DailyCounter::per_day(u64::from(quotas.dm_requests_per_day));
         self.dm_requests_per_day = quotas.dm_requests_per_day;
         self
     }
@@ -367,8 +366,8 @@ impl DefaultHostService {
     }
 
     /// `Validation` while `actor`'s account is in probation and the holder of one of
-    /// `principal_ids` is a stranger to them: neither their contact nor in a workspace with
-    /// them.
+    /// `principal_ids` is a stranger to them: someone they do not know (see
+    /// [`RelayRepository::knows`]) who is not in a workspace with them.
     async fn refuse_strangers_in_probation(
         &self,
         actor: Actor,
@@ -396,7 +395,7 @@ impl DefaultHostService {
                 || self
                     .repos
                     .relay_repo
-                    .is_contact(actor.user_id, principal_id)
+                    .knows(actor.user_id, principal_id)
                     .await?
                 || self
                     .repos
@@ -743,12 +742,12 @@ impl DefaultHostService {
     }
 
     /// Count an invite `actor` sends to someone on another server against their daily quota,
-    /// unless that person is their contact.
+    /// unless they know each other (see [`RelayRepository::knows`]).
     async fn count_dm_invite(&self, actor: Actor, principal_id: &str) -> ServiceResult<()> {
         if self
             .repos
             .relay_repo
-            .is_contact(actor.user_id, principal_id)
+            .knows(actor.user_id, principal_id)
             .await?
         {
             return Ok(());

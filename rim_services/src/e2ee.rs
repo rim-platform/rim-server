@@ -23,6 +23,11 @@ pub const MAX_AVAILABLE_KEY_PACKAGES: i64 = 100;
 /// Largest Commit and Welcome, in bytes.
 pub const MAX_COMMIT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_WELCOME_BYTES: usize = 4 * 1024 * 1024;
+/// Most pending Welcomes per device, and their total size in bytes. A Welcome is pending while
+/// the device has not acknowledged it, it has not expired and the device's user is a member of
+/// its conversation: the Welcomes `myMlsWelcomes` answers.
+pub const MAX_PENDING_WELCOMES: i64 = 256;
+pub const MAX_PENDING_WELCOME_BYTES: i64 = 64 * 1024 * 1024;
 /// Largest authenticated data of a Commit, in bytes.
 pub const MAX_COMMIT_AAD_BYTES: usize = 256 * 1024;
 /// Largest application message envelope, in bytes.
