@@ -318,7 +318,17 @@ impl RelayRepository for SeaOrmRelayRepository {
 
     async fn queued_bytes(&self, user_id: UserId) -> RepoResult<i64> {
         self.count(
-            "SELECT COALESCE(sum(size_bytes), 0)::bigint AS n FROM relay_item WHERE user_id = $1",
+            "SELECT COALESCE(sum(size_bytes), 0)::bigint AS n FROM relay_item \
+             WHERE user_id = $1 AND request_id IS NULL",
+            vec![uuid(user_id)],
+        )
+        .await
+    }
+
+    async fn user_held_bytes(&self, user_id: UserId) -> RepoResult<i64> {
+        self.count(
+            "SELECT COALESCE(sum(size_bytes), 0)::bigint AS n FROM relay_item \
+             WHERE user_id = $1 AND request_id IS NOT NULL",
             vec![uuid(user_id)],
         )
         .await
@@ -588,6 +598,14 @@ impl RelayRepository for SeaOrmRelayRepository {
     async fn count_held(&self, request_id: DmRequestId) -> RepoResult<i64> {
         self.count(
             "SELECT count(*) AS n FROM relay_item WHERE request_id = $1",
+            vec![uuid(request_id)],
+        )
+        .await
+    }
+
+    async fn request_held_bytes(&self, request_id: DmRequestId) -> RepoResult<i64> {
+        self.count(
+            "SELECT COALESCE(sum(size_bytes), 0)::bigint AS n FROM relay_item WHERE request_id = $1",
             vec![uuid(request_id)],
         )
         .await

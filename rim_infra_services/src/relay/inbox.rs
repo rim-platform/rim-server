@@ -9,6 +9,15 @@ use crate::relay::policy::DmPolicy;
 pub(crate) const MAX_PENDING_PER_USER: i64 = 100;
 /// Most items a pending request holds; later ones are dropped until it is accepted.
 pub(crate) const MAX_HELD_ITEMS: i64 = 3;
+/// Most bytes the items of one pending request take; a later item past it is dropped until the
+/// request is accepted. Larger than any one envelope, so an invite always fits.
+pub(crate) const MAX_HELD_BYTES_PER_REQUEST: i64 = 1024 * 1024;
+/// Most bytes all items held for a recipient take: those of pending requests and the invites
+/// ignored requests keep. Past it a new invite is refused (`limited`) and a later item is
+/// dropped. Held items are a pool apart from the queue's byte cap: they are not counted toward
+/// it and never dropped to make room in it, so this cap does not follow the configured queue
+/// cap; it is a quarter of the public relay's (64 MiB).
+pub(crate) const MAX_HELD_BYTES_PER_USER: i64 = 16 * 1024 * 1024;
 
 /// What the relay knows about an item and its recipient.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,10 +32,24 @@ pub(crate) struct InboxFacts {
     pub policy: DmPolicy,
     /// The recipient's request for the item's conversation, and how many items it holds.
     pub request: Option<(DmRequestId, DmRequestStatus, i64)>,
+    /// Bytes the item takes.
+    pub item_bytes: i64,
+    /// Bytes the items held by the recipient's request for the conversation take.
+    pub request_held_bytes: i64,
+    /// Bytes the items held for the recipient take, kept invites of ignored requests included.
+    pub user_held_bytes: i64,
     pub pending_for_user: i64,
     pub filed_by_sender_today: i64,
     /// Most requests one sender principal files on this relay per day.
     pub sender_daily_limit: i64,
+}
+
+impl InboxFacts {
+    /// Whether holding the item keeps its request and its recipient within the held byte caps.
+    fn holding_fits(&self) -> bool {
+        self.request_held_bytes + self.item_bytes <= MAX_HELD_BYTES_PER_REQUEST
+            && self.user_held_bytes + self.item_bytes <= MAX_HELD_BYTES_PER_USER
+    }
 }
 
 /// Where an item goes for one recipient.
@@ -51,7 +74,7 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
         Some((_, DmRequestStatus::Accepted, _)) => Filing::Deliver,
         Some((_, DmRequestStatus::Ignored, _)) => Filing::Drop,
         Some((id, DmRequestStatus::Pending, held)) => {
-            if held < MAX_HELD_ITEMS {
+            if held < MAX_HELD_ITEMS && facts.holding_fits() {
                 Filing::Hold(id)
             } else {
                 Filing::Drop
@@ -67,7 +90,8 @@ pub(crate) fn file(facts: &InboxFacts) -> Filing {
         None if facts.policy == DmPolicy::Deliver => Filing::FileAccepted,
         None if facts.policy == DmPolicy::Refuse => Filing::Refuse("blocked"),
         None if facts.pending_for_user >= MAX_PENDING_PER_USER
-            || facts.filed_by_sender_today >= facts.sender_daily_limit =>
+            || facts.filed_by_sender_today >= facts.sender_daily_limit
+            || !facts.holding_fits() =>
         {
             Filing::Refuse("limited")
         }
@@ -91,6 +115,9 @@ mod tests {
             pending_for_user: 0,
             filed_by_sender_today: 0,
             sender_daily_limit: SENDER_LIMIT,
+            item_bytes: 1000,
+            request_held_bytes: 0,
+            user_held_bytes: 0,
         }
     }
 
@@ -187,6 +214,48 @@ mod tests {
                 MAX_HELD_ITEMS
             )))),
             Filing::Drop
+        );
+    }
+
+    #[test]
+    fn a_pending_request_holds_items_within_its_byte_cap_then_drops() {
+        let id = DmRequestId::new();
+        let pending = |request_held_bytes, user_held_bytes| InboxFacts {
+            request_held_bytes,
+            user_held_bytes,
+            ..message(Some((id, DmRequestStatus::Pending, 1)))
+        };
+        let room = MAX_HELD_BYTES_PER_REQUEST - 1000;
+        assert_eq!(file(&pending(room, room)), Filing::Hold(id));
+        assert_eq!(file(&pending(room + 1, room + 1)), Filing::Drop);
+        assert_eq!(
+            file(&pending(0, MAX_HELD_BYTES_PER_USER - 999)),
+            Filing::Drop,
+            "the recipient's held bytes are full"
+        );
+    }
+
+    #[test]
+    fn an_invite_past_the_recipients_held_bytes_is_refused() {
+        let full = |user_held_bytes| InboxFacts {
+            user_held_bytes,
+            ..invite()
+        };
+        assert_eq!(
+            file(&full(MAX_HELD_BYTES_PER_USER - 1000)),
+            Filing::FileRequest
+        );
+        assert_eq!(
+            file(&full(MAX_HELD_BYTES_PER_USER - 999)),
+            Filing::Refuse("limited")
+        );
+        assert_eq!(
+            file(&InboxFacts {
+                policy: DmPolicy::Deliver,
+                ..full(MAX_HELD_BYTES_PER_USER)
+            }),
+            Filing::FileAccepted,
+            "a delivered invite is not held"
         );
     }
 

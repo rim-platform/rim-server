@@ -33,8 +33,12 @@ pub trait RelayRepository: Send + Sync {
 
     async fn insert_item(&self, item: NewRelayItem) -> RepoResult<i64>;
 
-    /// Bytes queued for a user, held items included.
+    /// Bytes queued for a user's devices; held items are not counted.
     async fn queued_bytes(&self, user_id: UserId) -> RepoResult<i64>;
+
+    /// Bytes of the items a user's requests hold, whatever their status: the invites kept with
+    /// ignored requests included.
+    async fn user_held_bytes(&self, user_id: UserId) -> RepoResult<i64>;
 
     /// Items and bytes queued for every user, split into waiting and held.
     async fn queue_stats(&self) -> RepoResult<RelayQueueStats>;
@@ -114,6 +118,9 @@ pub trait RelayRepository: Send + Sync {
     async fn delete_held(&self, request_id: DmRequestId) -> RepoResult<u64>;
 
     async fn count_held(&self, request_id: DmRequestId) -> RepoResult<i64>;
+
+    /// Bytes of the items a request holds.
+    async fn request_held_bytes(&self, request_id: DmRequestId) -> RepoResult<i64>;
 
     async fn held_items(&self, request_id: DmRequestId) -> RepoResult<Vec<RelayItemRecord>>;
 

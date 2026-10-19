@@ -498,6 +498,8 @@ impl DefaultRelayService {
             None => None,
         };
         let now = Utc::now();
+        let size =
+            i32::try_from(envelope.payload.len() + envelope.signature.len()).unwrap_or(i32::MAX);
         // A workspace the user subscribed to through a delegation is not a DM: its items are
         // queued as they come.
         let subscribed = !read.local
@@ -509,7 +511,7 @@ impl DefaultRelayService {
             None
         } else {
             match self
-                .inbox_filing(repos, peer_server_id, read, user_id, now, notices)
+                .inbox_filing(repos, peer_server_id, read, user_id, size, now, notices)
                 .await?
             {
                 Filed::Queue(request_id) => request_id,
@@ -535,8 +537,6 @@ impl DefaultRelayService {
                 id
             }
         };
-        let size =
-            i32::try_from(envelope.payload.len() + envelope.signature.len()).unwrap_or(i32::MAX);
         repos
             .relay_repo
             .insert_item(NewRelayItem {
@@ -552,47 +552,47 @@ impl DefaultRelayService {
         Ok(None)
     }
 
-    /// Where the request inbox files an item for one recipient: the queue, possibly held by a
-    /// request, or nowhere, with any refusal.
+    /// Where the request inbox files an item of `size` bytes for one recipient: the queue,
+    /// possibly held by a request, or nowhere, with any refusal.
+    #[allow(clippy::too_many_arguments)]
     async fn inbox_filing(
         &self,
         repos: &RelayRepos,
         peer_server_id: &str,
         read: &ReadEnvelope,
         user_id: UserId,
+        size: i32,
         now: DateTime<Utc>,
         notices: &mut Vec<RelayNotice>,
     ) -> ServiceResult<Filed> {
-        let request = match read.conversation_id {
-            Some(conversation_id) => {
-                match repos
-                    .relay_repo
-                    .find_request(user_id, peer_server_id, conversation_id)
-                    .await?
-                {
-                    Some(request) => {
-                        let held = if request.status == DmRequestStatus::Pending {
-                            repos.relay_repo.count_held(request.id).await?
-                        } else {
-                            0
-                        };
-                        Some((request.id, request.status, held))
-                    }
-                    None => None,
-                }
-            }
-            None => None,
-        };
         let mut facts = InboxFacts {
             is_invite: read.invite.is_some(),
             conversation_scoped: read.conversation_id.is_some(),
             blocked: false,
             policy: DmPolicy::Request,
-            request,
+            request: None,
             pending_for_user: 0,
             filed_by_sender_today: 0,
             sender_daily_limit: i64::from(self.settings.quotas.dm_requests_per_day),
+            item_bytes: i64::from(size),
+            request_held_bytes: 0,
+            user_held_bytes: 0,
         };
+        if let Some(conversation_id) = read.conversation_id
+            && let Some(request) = repos
+                .relay_repo
+                .find_request(user_id, peer_server_id, conversation_id)
+                .await?
+        {
+            let held = if request.status == DmRequestStatus::Pending {
+                facts.request_held_bytes = repos.relay_repo.request_held_bytes(request.id).await?;
+                facts.user_held_bytes = repos.relay_repo.user_held_bytes(user_id).await?;
+                repos.relay_repo.count_held(request.id).await?
+            } else {
+                0
+            };
+            facts.request = Some((request.id, request.status, held));
+        }
         if let Some(invite) = &read.invite {
             let from = invite.from_principal_id.as_str();
             facts.blocked = repos.relay_repo.is_blocked(user_id, from).await?
@@ -611,6 +611,7 @@ impl DefaultRelayService {
                 .inbound(user_id, from, &sender_server)
                 .await?;
                 facts.pending_for_user = repos.relay_repo.count_pending_requests(user_id).await?;
+                facts.user_held_bytes = repos.relay_repo.user_held_bytes(user_id).await?;
                 facts.filed_by_sender_today = repos
                     .relay_repo
                     .count_requests_from(from, now - Duration::days(1))
@@ -677,7 +678,8 @@ impl DefaultRelayService {
         Ok(Filed::Queue(request_id))
     }
 
-    /// Drop a user's oldest items over the byte cap.
+    /// Drop a user's oldest queued items over the byte cap. Held items are neither counted nor
+    /// dropped: their own caps bound them.
     async fn enforce_cap(
         &self,
         repos: &RelayRepos,
