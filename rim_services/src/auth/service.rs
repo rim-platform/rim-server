@@ -2,14 +2,18 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
+use rim_core::repository::pagination::Page;
+
 use crate::ServiceResult;
 use crate::auth::command::{
-    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
-    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithInstanceInviteCmd,
+    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery, LoginCmd, LogoutCmd,
+    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, RevokeInviteCmd, SignupOpenCmd,
+    SignupWithInstanceInviteCmd,
 };
 use crate::auth::dto::{
-    AcceptInviteResultDto, CreateInviteResultDto, InviteTokenPreviewDto,
-    JoinServerByInviteResultDto, LoginResultDto, RequestAuthResultDto, SignupResultDto,
+    AcceptInviteResultDto, CreateInviteResultDto, InviteDto, InvitePageCursor,
+    InviteTokenPreviewDto, JoinServerByInviteResultDto, LoginResultDto, RequestAuthResultDto,
+    SignupResultDto,
 };
 
 /// Password sign-in, sessions, invites and the password signups. A server whose signups need a
@@ -30,7 +34,32 @@ pub trait AuthService: Send + Sync {
     /// - `PermissionDenied` — the calling session belongs to another account.
     async fn logout_other_sessions(&self, cmd: LogoutOtherSessionsCmd) -> ServiceResult<u64>;
 
+    /// Create a workspace invite. Owner only. `expires_at` defaults to seven days from now and
+    /// may be at most thirty days out.
+    ///
+    /// # Errors
+    /// - `PermissionDenied` — the actor does not own the workspace.
+    /// - `Validation` — the expiry is not in the future or too far out, the uses or the role
+    ///   are out of range, or the recipient email is malformed.
     async fn create_invite(&self, cmd: CreateInviteCmd) -> ServiceResult<CreateInviteResultDto>;
+
+    /// Revoke a workspace invite, so it admits nobody from now on; members who joined with it
+    /// stay. Owner of the invite's workspace only. Returns the invite; revoking a revoked
+    /// invite returns it unchanged.
+    ///
+    /// # Errors
+    /// - `NotFound` — no such invite, or the actor is not a member of its workspace.
+    /// - `PermissionDenied` — the actor is a member of the invite's workspace but not its owner.
+    async fn revoke_invite(&self, cmd: RevokeInviteCmd) -> ServiceResult<InviteDto>;
+
+    /// The invites of a workspace, newest first, whatever their state. Owner only.
+    ///
+    /// # Errors
+    /// `PermissionDenied` — the actor does not own the workspace.
+    async fn list_invites(
+        &self,
+        query: ListInvitesQuery,
+    ) -> ServiceResult<Page<InviteDto, InvitePageCursor>>;
 
     async fn accept_invite(&self, cmd: AcceptInviteCmd) -> ServiceResult<AcceptInviteResultDto>;
 

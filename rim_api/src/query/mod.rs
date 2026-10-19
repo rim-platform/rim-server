@@ -123,4 +123,4 @@ pub(crate) struct QueryGroup8(
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct QueryGroup9(command::UserCommandQueries);
+pub(crate) struct QueryGroup9(command::UserCommandQueries, invite::WorkspaceInviteQueries);

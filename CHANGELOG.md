@@ -155,6 +155,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   settings form over the current view, leaving the panel in place. Values stay on the device
   and never reach the server, so the server does not change. Sections 15 to 20 of that spec are
   now 16 to 21. `docs/decisions/plugin-settings-2026-10-18.md` records why.
+- Workspace invites can be listed and revoked. The new `workspaceInvites(serverId, dir, cursor,
+  limit)` gives a workspace's Owner its invites newest first as a `WorkspaceInvitePage` of
+  `WorkspaceInvite` (role, uses, expiry, creator, revocation and a `WorkspaceInviteState` of
+  `ACTIVE`, `EXPIRED`, `USED_UP` or `REVOKED`), paged with `WorkspaceInviteCursorInput` and
+  `WorkspaceInviteCursorOutput`, never with their tokens; the new `revokeInvite(inviteId)`
+  stops an invite admitting anyone, while members who joined with it stay ("Workspace invites"
+  in `docs/messaging.md`).
 
 ### Changed
 
@@ -366,5 +373,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   login challenge. Before, a relay could present the proof a person's device signed for joining
   to the host's `loginWithKey` and get a session there as that person. Clients and relays change
   nothing: the proof keeps its format (`server-to-server-v1.md` §Joining, `key-identity-v1.md`).
+- Workspace invites expire: `createInvite` without `expiresAt` gives an invite that expires in
+  seven days, and `CreateInviteInput.expiresAt` must be in the future and at most 30 days away
+  (`VALIDATION` otherwise), as for instance invites. Invites created before keep their expiry,
+  or none; `revokeInvite` ends them. Redeeming a workspace invite now checks its revocation and
+  expiry in the same update that counts the use, so an invite revoked or expiring while a join
+  or signup runs admits nobody.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

@@ -41,6 +41,23 @@ pub struct CreateInviteCmd {
     pub role: rim_core::server_member::model::ServerMemberRole,
 }
 
+/// Revoke a workspace invite of a workspace the actor owns.
+#[derive(Debug, Clone)]
+pub struct RevokeInviteCmd {
+    pub actor: Actor,
+    pub invite_id: rim_core::auth::model::InviteId,
+}
+
+/// The invites of a workspace the actor owns, newest first.
+#[derive(Debug, Clone)]
+pub struct ListInvitesQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub dir: rim_core::repository::pagination::PageDir,
+    pub cursor: Option<crate::auth::dto::InvitePageCursor>,
+    pub limit: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct AcceptInviteCmd {
     pub invite_token: String,

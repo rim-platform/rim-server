@@ -87,6 +87,7 @@ mod tests {
                 id: rim_core::auth::model::InviteId::new(),
                 server_id: ws,
                 created_by_user_id: UserId::new(),
+                created_at: chrono::Utc::now(),
                 expires_at: None,
                 max_uses: 1,
                 use_count: 0,

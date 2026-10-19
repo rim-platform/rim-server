@@ -138,6 +138,31 @@ decide, and each may only tighten the one above it:
   anyone but themselves; a Moderator may move a `MEMBER` to `GUEST` and back; everyone else gets
   `FORBIDDEN`. Changing your own role is `VALIDATION`. Emits `MemberRoleChanged`.
 
+### Workspace invites
+
+- `createInvite` is owner-only (`FORBIDDEN` for everyone else). `expiresAt` defaults to seven
+  days from now and must be in the future and at most 30 days away, else `VALIDATION`; the
+  same bounds as instance invites. `maxUses` defaults to 1 and is capped by
+  `RIM_LIMIT_INVITE_MAX_USES` when the operator sets it. The token is returned once and never shown again.
+- `workspaceInvites(serverId, dir, cursor, limit)` lists the workspace's invites for its Owner
+  (`FORBIDDEN` for everyone else): every invite, revoked, expired and used-up ones included,
+  ordered `createdAt DESC, id DESC` with the standard cursor rules (`dir` defaults to `AFTER`,
+  towards older invites; `limit` defaults to 50, at most 100). Each `WorkspaceInvite` has its
+  role, `useCount`, `maxUses`, `expiresAt`, `createdAt`, `createdBy`, `revokedAt` and `state`:
+  `REVOKED` when revoked, else `EXPIRED` once `expiresAt` has passed, else `USED_UP` once
+  `useCount` reached `maxUses`, else `ACTIVE`. Neither the token nor its hash is listed.
+- `revokeInvite(inviteId)` ends an invite: it admits nobody from then on, and members who joined
+  with it stay. Owner-only: another member of the invite's workspace gets `FORBIDDEN`; an
+  unknown invite, or one of a workspace the caller is not a member of, is `NOT_FOUND`. Revoking
+  a revoked invite answers it unchanged. The revocation is audit-logged
+  (`workspace_invite_revoked`), as the creation is (`workspace_invite_created`).
+- An invite stored without an expiry, by a server from before invites had to expire, keeps
+  admitting until it is used up or revoked.
+- Redeeming an invite (`joinServerByInvite`, `signupWithInvite`, `signupWithKey`, a join through
+  another server) checks the revocation, the expiry and the uses in the same update that counts
+  the use. A revoked, expired or used-up invite is `FORBIDDEN` for `joinServerByInvite`; a signup
+  gets `INVALID_TOKEN` for a revoked or used-up invite and `EXPIRED_TOKEN` for an expired one.
+
 ### Guest restrictions (enforced in the services)
 
 - Creating a channel or a group, joining a channel, inviting into a conversation

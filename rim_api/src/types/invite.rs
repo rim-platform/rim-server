@@ -1,4 +1,8 @@
-use async_graphql::SimpleObject;
+use async_graphql::{ComplexObject, Context, Enum, InputObject, Result, SimpleObject};
+
+use super::{PageInfo, ServerMemberRoleGql, User};
+use crate::ids::parse_uuid_id;
+use crate::resolve::ResolveExt;
 
 // ── Registration types ─────────────────────────────────────────────────────
 
@@ -101,4 +105,139 @@ pub struct SignupWithInvitePayloadGql {
     /// The new session's CSRF token, the value of the `rim_csrf` cookie. A client that cannot
     /// read that cookie keeps it in memory and sends it in the `X-CSRF-Token` header.
     pub csrf_token: String,
+}
+
+// ── Workspace invites ──────────────────────────────────────────────────────
+
+/// Whether a workspace invite still admits anyone. A revocation wins over an expiry, and an
+/// expiry over the uses running out.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum WorkspaceInviteState {
+    /// Unrevoked, unexpired and with uses left.
+    Active,
+    /// Past `expiresAt`.
+    Expired,
+    /// `useCount` reached `maxUses`.
+    UsedUp,
+    /// Revoked by an owner (`revokeInvite`), or by the instance when its creator was blocked
+    /// or deleted.
+    Revoked,
+}
+
+impl From<rim_services::auth::dto::InviteState> for WorkspaceInviteState {
+    fn from(state: rim_services::auth::dto::InviteState) -> Self {
+        use rim_services::auth::dto::InviteState as D;
+        match state {
+            D::Active => Self::Active,
+            D::Expired => Self::Expired,
+            D::UsedUp => Self::UsedUp,
+            D::Revoked => Self::Revoked,
+        }
+    }
+}
+
+/// A workspace invite as its workspace's owner sees it. The token is shown once, by
+/// `createInvite`, and never again.
+#[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
+pub struct WorkspaceInvite {
+    pub id: async_graphql::ID,
+    pub server_id: async_graphql::ID,
+    /// The role a person joining with the invite gets.
+    pub role: ServerMemberRoleGql,
+    pub use_count: i32,
+    pub max_uses: i32,
+    /// Null for an invite stored without an expiry, which does not expire.
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_by_id: async_graphql::ID,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The invite's state when it was read.
+    pub state: WorkspaceInviteState,
+}
+
+#[ComplexObject]
+impl WorkspaceInvite {
+    /// The member who created the invite (null if the account no longer exists).
+    async fn created_by(&self, ctx: &Context<'_>) -> Result<Option<User>> {
+        ctx.load_user(&self.created_by_id).await
+    }
+}
+
+impl From<rim_services::auth::dto::InviteDto> for WorkspaceInvite {
+    fn from(dto: rim_services::auth::dto::InviteDto) -> Self {
+        let state = dto.state_at(chrono::Utc::now()).into();
+        Self {
+            id: dto.id.to_string().into(),
+            server_id: dto.server_id.to_string().into(),
+            role: dto.role.into(),
+            use_count: dto.use_count,
+            max_uses: dto.max_uses,
+            expires_at: dto.expires_at,
+            created_at: dto.created_at,
+            created_by_id: dto.created_by_user_id.to_string().into(),
+            revoked_at: dto.revoked_at,
+            state,
+        }
+    }
+}
+
+#[derive(InputObject, Clone, Debug)]
+pub struct WorkspaceInviteCursorInput {
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub invite_id: async_graphql::ID,
+}
+
+impl TryFrom<WorkspaceInviteCursorInput> for rim_services::auth::dto::InvitePageCursor {
+    type Error = async_graphql::Error;
+
+    fn try_from(value: WorkspaceInviteCursorInput) -> Result<Self> {
+        Ok(Self {
+            created_at: value.created_at,
+            invite_id: parse_uuid_id::<rim_core::auth::model::InviteId>(&value.invite_id)?,
+        })
+    }
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct WorkspaceInviteCursorOutput {
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub invite_id: async_graphql::ID,
+}
+
+impl From<rim_services::auth::dto::InvitePageCursor> for WorkspaceInviteCursorOutput {
+    fn from(value: rim_services::auth::dto::InvitePageCursor) -> Self {
+        Self {
+            created_at: value.created_at,
+            invite_id: async_graphql::ID(value.invite_id.to_string()),
+        }
+    }
+}
+
+/// Workspace invites ordered `createdAt DESC, id DESC` (newest first), with the standard cursor
+/// semantics: `AFTER` pages go to older invites.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct WorkspaceInvitePage {
+    pub items: Vec<WorkspaceInvite>,
+    pub next: Option<WorkspaceInviteCursorOutput>,
+    pub prev: Option<WorkspaceInviteCursorOutput>,
+    pub page_info: PageInfo,
+}
+
+impl WorkspaceInvitePage {
+    pub fn from_page(
+        page: rim_core::repository::pagination::Page<
+            rim_services::auth::dto::InviteDto,
+            rim_services::auth::dto::InvitePageCursor,
+        >,
+    ) -> Self {
+        let has_next = page.next.is_some();
+        let has_prev = page.prev.is_some();
+        Self {
+            items: page.items.into_iter().map(Into::into).collect(),
+            next: page.next.map(Into::into),
+            prev: page.prev.map(Into::into),
+            page_info: PageInfo { has_next, has_prev },
+        }
+    }
 }

@@ -8,7 +8,26 @@ use crate::auth::model::{
 };
 use crate::key_identity::model::DeviceKeyId;
 use crate::repository::error::RepoResult;
+use crate::repository::pagination::{Page, PageDir};
+use crate::server::model::ServerId;
 use crate::user::model::UserId;
+
+/// Cursor for [`InviteRepository::list_for_server`]: the standard `(created_at, id)` tuple,
+/// newest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InviteCursor {
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub invite_id: InviteId,
+}
+
+/// Parameters of [`InviteRepository::list_for_server`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListInvitesParams {
+    pub server_id: ServerId,
+    pub limit: u32,
+    pub dir: PageDir,
+    pub cursor: Option<InviteCursor>,
+}
 
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 #[async_trait]
@@ -37,11 +56,21 @@ pub trait InviteRepository: Send + Sync {
     async fn get_by_id(&self, id: InviteId) -> RepoResult<Option<Invite>>;
     async fn get_by_token_hash(&self, token_hash: &str) -> RepoResult<Option<Invite>>;
     async fn create_invite(&self, invite: NewInvite) -> RepoResult<Invite>;
-    /// Atomically consumes one invite use.
+    /// Atomically consumes one invite use, in one update that also requires the invite to be
+    /// unrevoked and unexpired (no expiry, or one after now).
     ///
     /// Returns `true` if the invite was consumed (use_count incremented), `false` if it was
-    /// already exhausted or missing.
+    /// missing, used up, revoked or expired.
     async fn try_consume(&self, id: InviteId) -> RepoResult<bool>;
+    /// Sets the invite's `revoked_at` to `at`. An invite already revoked keeps its first
+    /// revocation time; an unknown id changes nothing.
+    async fn revoke(&self, id: InviteId, at: chrono::DateTime<chrono::Utc>) -> RepoResult<()>;
+    /// The invites of one workspace, revoked, expired and used-up ones included, ordered
+    /// `created_at DESC, id DESC`, with the standard cursor semantics (DESC endpoint).
+    async fn list_for_server(
+        &self,
+        params: ListInvitesParams,
+    ) -> RepoResult<Page<Invite, InviteCursor>>;
     /// How many invites `user_id` created at or after `since`.
     async fn count_created_since(
         &self,

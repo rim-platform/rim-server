@@ -7,17 +7,20 @@ use tracing::{info, instrument, warn};
 
 use rim_auth::session_token::{generate_token, hash_token};
 use rim_core::auth::model::NewInvite;
+use rim_core::auth::repository::ListInvitesParams;
+use rim_core::repository::pagination::Page;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
-    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, LoginCmd, LogoutCmd,
-    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, SignupOpenCmd, SignupWithInstanceInviteCmd,
+    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery, LoginCmd, LogoutCmd,
+    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, RevokeInviteCmd, SignupOpenCmd,
+    SignupWithInstanceInviteCmd,
 };
 use rim_services::auth::dto::{
-    AcceptInviteResultDto, AuthSessionDto, CreateInviteResultDto, InviteDto, InviteTokenPreviewDto,
-    InviteTokenType, JoinServerByInviteResultDto, LoginResultDto, SignupResultDto,
-    WorkspaceInvitePreviewDto,
+    AcceptInviteResultDto, AuthSessionDto, CreateInviteResultDto, InviteDto, InvitePageCursor,
+    InviteTokenPreviewDto, InviteTokenType, JoinServerByInviteResultDto, LoginResultDto,
+    SignupResultDto, WorkspaceInvitePreviewDto,
 };
 use rim_services::auth::service::AuthService;
 use rim_services::auth::terms::accepted_terms;
@@ -331,6 +334,7 @@ impl DefaultAuthService {
             id: inv.id,
             server_id: inv.server_id,
             created_by_user_id: inv.created_by_user_id,
+            created_at: inv.created_at,
             expires_at: inv.expires_at,
             max_uses: inv.max_uses,
             use_count: inv.use_count,
@@ -714,6 +718,7 @@ impl AuthService for DefaultAuthService {
         let recipient_email = recipient_email
             .map(|email| Self::validate_email(&email))
             .transpose()?;
+        let expires_at = crate::instance_invite::expiry(expires_at, Utc::now())?;
 
         ensure_server_owner(
             self.repos.server_member_repo.as_ref(),
@@ -732,11 +737,19 @@ impl AuthService for DefaultAuthService {
                 server_id,
                 created_by_user_id: actor.user_id,
                 token_hash,
-                expires_at,
+                expires_at: Some(expires_at),
                 max_uses,
                 role,
             })
             .await?;
+        info!(
+            target: "audit",
+            event = "workspace_invite_created",
+            invite_id = %inv.id,
+            server_id = %inv.server_id,
+            actor_id = %actor.user_id,
+            "workspace invite created"
+        );
 
         if let Some(recipient_email) = recipient_email {
             let link = self.build_invite_link(&raw_token);
@@ -750,6 +763,81 @@ impl AuthService for DefaultAuthService {
             invite: Self::to_invite_dto(inv),
             invite_token: raw_token,
         })
+    }
+
+    #[instrument(name = "auth.revoke_invite", skip_all, fields(actor_id = %cmd.actor.user_id, invite_id = %cmd.invite_id))]
+    async fn revoke_invite(&self, cmd: RevokeInviteCmd) -> ServiceResult<InviteDto> {
+        let RevokeInviteCmd { actor, invite_id } = cmd;
+        let invite = self
+            .repos
+            .invite_repo
+            .get_by_id(invite_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        // Outside the invite's workspace the invite does not exist; inside, only its owner
+        // revokes.
+        if !self
+            .repos
+            .server_member_repo
+            .is_member(invite.server_id, actor.user_id)
+            .await?
+        {
+            return Err(ServiceError::NotFound);
+        }
+        ensure_server_owner(
+            self.repos.server_member_repo.as_ref(),
+            invite.server_id,
+            actor.user_id,
+        )
+        .await?;
+
+        if invite.revoked_at.is_some() {
+            return Ok(Self::to_invite_dto(invite));
+        }
+        self.repos.invite_repo.revoke(invite_id, Utc::now()).await?;
+        let revoked = self
+            .repos
+            .invite_repo
+            .get_by_id(invite_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        info!(
+            target: "audit",
+            event = "workspace_invite_revoked",
+            invite_id = %revoked.id,
+            server_id = %revoked.server_id,
+            actor_id = %actor.user_id,
+            "workspace invite revoked"
+        );
+        Ok(Self::to_invite_dto(revoked))
+    }
+
+    #[instrument(name = "auth.list_invites", skip_all, fields(actor_id = %query.actor.user_id, server_id = %query.server_id))]
+    async fn list_invites(
+        &self,
+        query: ListInvitesQuery,
+    ) -> ServiceResult<Page<InviteDto, InvitePageCursor>> {
+        ensure_server_owner(
+            self.repos.server_member_repo.as_ref(),
+            query.server_id,
+            query.actor.user_id,
+        )
+        .await?;
+        let page = self
+            .repos
+            .invite_repo
+            .list_for_server(ListInvitesParams {
+                server_id: query.server_id,
+                limit: query.limit,
+                dir: query.dir,
+                cursor: query.cursor.map(Into::into),
+            })
+            .await?;
+        Ok(Page::new(
+            page.items.into_iter().map(Self::to_invite_dto).collect(),
+            page.next.map(Into::into),
+            page.prev.map(Into::into),
+        ))
     }
 
     #[instrument(name = "auth.accept_invite", skip_all, fields(username = %cmd.username))]
