@@ -1,75 +1,57 @@
 use rim_services::command::dto::{CommandContextDto, CommandDefinitionDto};
-use rim_services::command::request::ExecuteCommandCmd;
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
-use super::pipe_parser;
+use super::dispatch::Dispatch;
 
-impl DefaultCommandService {
+impl Dispatch {
     /// Returns the de-duplicated union of `required_capabilities` declared
-    /// by every command the dispatch path will reach (top-level builtin or
-    /// user-command, plus all pipe stages).
-    pub(super) async fn dispatch_required_capabilities(
-        &self,
-        cmd: &ExecuteCommandCmd,
-    ) -> ServiceResult<Vec<String>> {
+    /// by every command the dispatch reaches (the single command, or every
+    /// pipe stage).
+    pub(super) fn required_capabilities(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        if cmd.is_pipe {
-            let segments = pipe_parser::parse_pipe_expression(&cmd.command_id)?;
-            for segment in &segments {
-                if let Some(def) = self
-                    .resolve_command_definition(cmd.actor, &segment.command_id)
-                    .await?
-                {
-                    for cap in &def.required_capabilities {
-                        if seen.insert(cap.clone()) {
-                            out.push(cap.clone());
-                        }
-                    }
-                }
-            }
-        } else if let Some(def) = self
-            .resolve_command_definition(cmd.actor, &cmd.command_id)
-            .await?
-        {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let definitions: Vec<&CommandDefinitionDto> = match self {
+            Self::Single(resolved) => resolved.iter().map(|r| &r.definition).collect(),
+            Self::Pipe(stages) => stages
+                .iter()
+                .filter_map(|(_, r)| r.as_ref().map(|r| &r.definition))
+                .collect(),
+        };
+        for def in definitions {
             for cap in &def.required_capabilities {
-                if seen.insert(cap.clone()) {
+                if seen.insert(cap) {
                     out.push(cap.clone());
                 }
             }
         }
-        Ok(out)
+        out
     }
 
-    /// Returns `true` if dispatching `cmd` requires a `ConfirmationProof`.
-    pub(super) async fn dispatch_requires_confirmation(
-        &self,
-        cmd: &ExecuteCommandCmd,
-    ) -> ServiceResult<bool> {
-        if cmd.is_pipe {
-            let segments = pipe_parser::parse_pipe_expression(&cmd.command_id)?;
-            for segment in &segments {
-                let Some(def) = self
-                    .resolve_command_definition(cmd.actor, &segment.command_id)
-                    .await?
-                else {
-                    return Ok(false);
-                };
-                if def.requires_confirmation_for_initiator(cmd.initiator) {
-                    return Ok(true);
+    /// Returns `true` if dispatching for `initiator` requires a `ConfirmationProof`. A pipe
+    /// is judged stage by stage up to its first unknown stage.
+    pub(super) fn requires_confirmation(&self, initiator: CommandInitiator) -> bool {
+        match self {
+            Self::Single(resolved) => resolved
+                .as_ref()
+                .is_some_and(|r| r.definition.requires_confirmation_for_initiator(initiator)),
+            Self::Pipe(stages) => {
+                for (_, resolved) in stages {
+                    let Some(resolved) = resolved else {
+                        return false;
+                    };
+                    if resolved
+                        .definition
+                        .requires_confirmation_for_initiator(initiator)
+                    {
+                        return true;
+                    }
                 }
+                false
             }
-            return Ok(false);
         }
-        let Some(def) = self
-            .resolve_command_definition(cmd.actor, &cmd.command_id)
-            .await?
-        else {
-            return Ok(false);
-        };
-        Ok(def.requires_confirmation_for_initiator(cmd.initiator))
     }
 }
 

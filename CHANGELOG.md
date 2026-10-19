@@ -331,5 +331,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   lists and then their home relay. `RIM_HOST_ALLOWED_RELAYS` now covers identity pushes too.
   `docs/specs/server-to-server-v1.md` ("Profile cards and contacts (7.4a)", "Remote users on a
   host", the threat model) states the rule.
+- User commands have limits: at most 20 steps each, at most 100 per user, at most eight nested,
+  and at most 100 built-in steps in one run, nested user commands and pipe stages included.
+  `createUserCommand` and `updateUserCommand` refuse a command over a limit with a `VALIDATION`
+  error naming it. A stored user command nested deeper than eight or expanding past 100 built-in
+  steps is refused when it runs, before any step runs, and `commands` leaves out a user command
+  that does not resolve instead of failing. A disabled user command no longer runs
+  (`NOT_FOUND`). Before, a few small user commands naming each other many times made one lookup
+  or run do work that grew exponentially ("User Commands And Macros" in
+  `docs/command_model.md`).
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

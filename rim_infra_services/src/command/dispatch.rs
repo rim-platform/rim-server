@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use async_recursion::async_recursion;
 use serde_json::Value;
 
@@ -11,15 +15,86 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
 use super::executor;
-use super::pipe_parser;
+use super::pipe_parser::{self, PipeSegment};
+use super::resolver::{CommandResolver, Resolved, expanded_steps_exceeded};
 use super::user_commands;
 
-/// The caller, context and user-command nesting depth of one dispatch.
+/// The caller, context and user-command nesting depth of one dispatch, and the run it is part of.
 #[derive(Clone)]
 pub(super) struct ExecutionContext {
     pub actor: Actor,
     pub context: Option<CommandContextDto>,
     pub depth: usize,
+    pub run: Arc<RunScope>,
+}
+
+/// One top-level run: the user commands its resolution read, which are the ones it runs, and
+/// the count of builtin steps it has started, every pipe stage included.
+pub(super) struct RunScope {
+    user_commands: HashMap<String, UserCommandDto>,
+    builtin_steps: AtomicUsize,
+}
+
+impl RunScope {
+    pub(super) fn new(user_commands: HashMap<String, UserCommandDto>) -> Self {
+        Self {
+            user_commands,
+            builtin_steps: AtomicUsize::new(0),
+        }
+    }
+
+    /// Counts one more builtin step of the run.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` once the run has started
+    /// [`DefaultCommandService::MAX_EXPANDED_STEPS`] builtin steps.
+    pub(super) fn start_builtin_step(&self) -> ServiceResult<()> {
+        if self.builtin_steps.fetch_add(1, Ordering::Relaxed)
+            >= DefaultCommandService::MAX_EXPANDED_STEPS
+        {
+            return Err(expanded_steps_exceeded("a command run"));
+        }
+        Ok(())
+    }
+}
+
+/// What one `execute_command` call dispatches, resolved once for every gate and the run.
+pub(super) enum Dispatch {
+    /// One command; `None` when its id names no command the caller may run.
+    Single(Option<Box<Resolved>>),
+    /// The stages of a pipe, each with its command, `None` when the id names none.
+    Pipe(Vec<(PipeSegment, Option<Resolved>)>),
+}
+
+impl Dispatch {
+    /// Refuses a dispatch whose user commands nest deeper than the executor runs or that
+    /// performs more than [`DefaultCommandService::MAX_EXPANDED_STEPS`] builtin steps, all
+    /// pipe stages together.
+    fn ensure_within_limits(&self) -> ServiceResult<()> {
+        let (subject, resolved): (&str, Vec<&Resolved>) = match self {
+            Self::Single(resolved) => ("a user command", resolved.as_deref().into_iter().collect()),
+            Self::Pipe(stages) => (
+                "a pipe",
+                stages.iter().filter_map(|(_, r)| r.as_ref()).collect(),
+            ),
+        };
+        if resolved
+            .iter()
+            .any(|r| r.depth > DefaultCommandService::MAX_RECURSION_DEPTH)
+        {
+            return Err(ServiceError::Validation(
+                RECURSION_DEPTH_EXCEEDED.to_string(),
+            ));
+        }
+        let expanded_steps = resolved
+            .iter()
+            .fold(0usize, |total, r| total.saturating_add(r.expanded_steps));
+        if expanded_steps > DefaultCommandService::MAX_EXPANDED_STEPS {
+            return Err(expanded_steps_exceeded(subject));
+        }
+        Ok(())
+    }
 }
 
 const RECURSION_DEPTH_EXCEEDED: &str = "user command recursion depth exceeded";
@@ -31,107 +106,11 @@ impl DefaultCommandService {
             .find(|definition| definition.id == command_id)
     }
 
-    #[async_recursion]
-    pub(super) async fn derive_user_command_definition(
+    /// The builtin `command_id`, or under test a definition injected in its place.
+    pub(super) fn builtin_or_test_definition(
         &self,
-        actor: Actor,
-        user_command: UserCommandDto,
-        seen: &mut std::collections::BTreeSet<String>,
-    ) -> ServiceResult<CommandDefinitionDto> {
-        if !seen.insert(user_command.command_key.clone()) {
-            return Err(ServiceError::Validation(
-                "user command recursion cycle detected".to_string(),
-            ));
-        }
-
-        let mut required_context = std::collections::BTreeSet::new();
-        let mut required_capabilities = std::collections::BTreeSet::new();
-        let mut keybind_capable = true;
-        let mut dangerous = false;
-        let mut step_sensitivities = Vec::with_capacity(user_command.steps.len());
-
-        for step in &user_command.steps {
-            let definition = self
-                .resolve_command_definition_within(actor, &step.command_id, seen)
-                .await?
-                .ok_or_else(|| {
-                    ServiceError::Validation(format!("unknown command step `{}`", step.command_id))
-                })?;
-
-            if definition.execution_target != CommandExecutionTargetDto::Backend {
-                return Err(ServiceError::Validation(
-                    "user commands may only compose backend commands in v1".to_string(),
-                ));
-            }
-
-            required_context.extend(definition.required_context);
-            required_capabilities.extend(definition.required_capabilities);
-            keybind_capable &= definition.keybind_capable;
-            dangerous |= definition.dangerous;
-            step_sensitivities.push(definition.sensitivity);
-        }
-
-        seen.remove(&user_command.command_key);
-
-        Ok(user_command.as_command_definition_with_metadata(
-            CommandExecutionTargetDto::Backend,
-            required_context.into_iter().collect(),
-            required_capabilities.into_iter().collect(),
-            keybind_capable,
-            dangerous,
-            &step_sensitivities,
-        ))
-    }
-
-    #[async_recursion]
-    async fn get_user_command_definition(
-        &self,
-        actor: Actor,
         command_id: &str,
-        seen: &mut std::collections::BTreeSet<String>,
-    ) -> ServiceResult<Option<CommandDefinitionDto>> {
-        let user_command = self
-            .repos
-            .user_command_repo
-            .get_by_key_for_user(actor.user_id, command_id)
-            .await?;
-
-        let Some(user_command) = user_command else {
-            return Ok(None);
-        };
-        let dto = Self::parse_user_command(user_command)?;
-        if !dto.is_enabled {
-            return Ok(None);
-        }
-
-        Ok(Some(
-            self.derive_user_command_definition(actor, dto, seen)
-                .await?,
-        ))
-    }
-
-    pub(super) async fn resolve_command_definition(
-        &self,
-        actor: Actor,
-        command_id: &str,
-    ) -> ServiceResult<Option<CommandDefinitionDto>> {
-        self.resolve_command_definition_within(
-            actor,
-            command_id,
-            &mut std::collections::BTreeSet::new(),
-        )
-        .await
-    }
-
-    /// Resolves `command_id` while the user commands in `seen` are being resolved above it;
-    /// reaching one of them again is a cycle.
-    #[async_recursion]
-    async fn resolve_command_definition_within(
-        &self,
-        actor: Actor,
-        command_id: &str,
-        seen: &mut std::collections::BTreeSet<String>,
-    ) -> ServiceResult<Option<CommandDefinitionDto>> {
+    ) -> Option<CommandDefinitionDto> {
         #[cfg(test)]
         if let Some(definition) = self
             .extra_builtins
@@ -139,82 +118,40 @@ impl DefaultCommandService {
             .find(|d| d.id == command_id)
             .cloned()
         {
-            return Ok(Some(definition));
+            return Some(definition);
         }
 
-        if let Some(definition) = Self::builtin_definition(command_id) {
-            return Ok(Some(definition));
-        }
-
-        self.get_user_command_definition(actor, command_id, seen)
-            .await
+        Self::builtin_definition(command_id)
     }
 
-    #[async_recursion]
-    pub(super) async fn validate_user_command_steps_for_actor(
+    /// Resolves `command_id` for `actor`: a builtin, or one of their enabled user commands.
+    pub(super) async fn resolve_command_definition(
+        &self,
+        actor: Actor,
+        command_id: &str,
+    ) -> ServiceResult<Option<CommandDefinitionDto>> {
+        Ok(CommandResolver::new(self, actor)
+            .resolve(command_id)
+            .await?
+            .map(|resolved| resolved.definition))
+    }
+
+    /// Refuses `steps` for the actor's user command `command_key` unless, with the actor's
+    /// stored user commands, no chain of user commands through it is deeper than the executor
+    /// runs, neither it nor a stored command calling it expands to more than
+    /// [`Self::MAX_EXPANDED_STEPS`] builtin steps, and each step resolves to a backend command
+    /// without a cycle. A new command (`creating`) is also refused once the actor has
+    /// [`Self::MAX_USER_COMMANDS_PER_USER`] user commands.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the limit or the step refused; a repository error.
+    pub(super) async fn validate_user_command_for_actor(
         &self,
         actor: Actor,
         command_key: &str,
         steps: &[UserCommandStepDto],
-        seen: &mut std::collections::BTreeSet<String>,
-    ) -> ServiceResult<()> {
-        user_commands::validate_user_command_step_shape(command_key, steps)?;
-
-        if !seen.insert(command_key.to_string()) {
-            return Err(ServiceError::Validation(
-                "user command recursion cycle detected".to_string(),
-            ));
-        }
-
-        for step in steps {
-            let definition = self
-                .resolve_command_definition(actor, &step.command_id)
-                .await?
-                .ok_or_else(|| {
-                    ServiceError::Validation(format!("unknown command step `{}`", step.command_id))
-                })?;
-
-            if definition.execution_target != CommandExecutionTargetDto::Backend {
-                return Err(ServiceError::Validation(
-                    "user commands may only compose backend commands in v1".to_string(),
-                ));
-            }
-
-            if step.command_id.starts_with("user.") {
-                let referenced = self
-                    .repos
-                    .user_command_repo
-                    .get_by_key_for_user(actor.user_id, &step.command_id)
-                    .await?
-                    .ok_or_else(|| {
-                        ServiceError::Validation(format!(
-                            "unknown command step `{}`",
-                            step.command_id
-                        ))
-                    })?;
-                let referenced = Self::parse_user_command(referenced)?;
-
-                self.validate_user_command_steps_for_actor(
-                    actor,
-                    &referenced.command_key,
-                    &referenced.steps,
-                    seen,
-                )
-                .await?;
-            }
-        }
-
-        seen.remove(command_key);
-        Ok(())
-    }
-
-    /// Refuses `steps` for `command_key` when, with the actor's stored user commands, they
-    /// would form a chain of user commands deeper than the executor runs.
-    pub(super) async fn ensure_user_command_chain_within_depth(
-        &self,
-        actor: Actor,
-        command_key: &str,
-        steps: &[UserCommandStepDto],
+        creating: bool,
     ) -> ServiceResult<()> {
         let stored = self
             .repos
@@ -224,6 +161,12 @@ impl DefaultCommandService {
             .into_iter()
             .map(Self::parse_user_command)
             .collect::<ServiceResult<Vec<_>>>()?;
+        if creating && stored.len() >= Self::MAX_USER_COMMANDS_PER_USER {
+            return Err(ServiceError::Validation(format!(
+                "a user may have at most {} user commands",
+                Self::MAX_USER_COMMANDS_PER_USER
+            )));
+        }
         if user_commands::longest_chain_through(&stored, command_key, steps)
             > Self::MAX_RECURSION_DEPTH
         {
@@ -231,7 +174,14 @@ impl DefaultCommandService {
                 RECURSION_DEPTH_EXCEEDED.to_string(),
             ));
         }
-        Ok(())
+        if user_commands::most_expanded_steps_through(&stored, command_key, steps)
+            > Self::MAX_EXPANDED_STEPS
+        {
+            return Err(expanded_steps_exceeded("a user command"));
+        }
+        CommandResolver::with_user_commands(self, actor, &stored)
+            .check_steps(command_key, steps)
+            .await
     }
 
     pub(super) async fn execute_builtin(
@@ -286,24 +236,23 @@ impl DefaultCommandService {
     pub(super) async fn execute_piped(
         &self,
         actor: Actor,
-        pipe_expression: &str,
+        stages: Vec<(PipeSegment, Option<Resolved>)>,
         context: Option<CommandContextDto>,
+        run: Arc<RunScope>,
     ) -> ServiceResult<CommandResultDto> {
         use rim_services::command::dto::PipeStageResultDto;
 
-        let segments = pipe_parser::parse_pipe_expression(pipe_expression)?;
-
-        for (i, segment) in segments.iter().enumerate() {
-            let definition = self
-                .resolve_command_definition(actor, &segment.command_id)
-                .await?
+        for (i, (segment, resolved)) in stages.iter().enumerate() {
+            let definition = &resolved
+                .as_ref()
                 .ok_or_else(|| {
                     ServiceError::Validation(format!(
                         "pipe stage {} ('{}') refers to an unknown command",
                         i + 1,
                         segment.command_id,
                     ))
-                })?;
+                })?
+                .definition;
 
             if definition.execution_target == CommandExecutionTargetDto::DesktopLocal {
                 return Err(ServiceError::Validation(format!(
@@ -314,6 +263,7 @@ impl DefaultCommandService {
                 )));
             }
         }
+        let segments: Vec<PipeSegment> = stages.into_iter().map(|(segment, _)| segment).collect();
 
         let mut previous_payload: Option<serde_json::Value> = None;
         let mut all_results = serde_json::Map::new();
@@ -337,6 +287,7 @@ impl DefaultCommandService {
                         actor,
                         context: context.clone(),
                         depth: 0,
+                        run: Arc::clone(&run),
                     },
                 )
                 .await;
@@ -433,6 +384,7 @@ impl DefaultCommandService {
     ) -> ServiceResult<CommandResultDto> {
         #[cfg(test)]
         if self.extra_builtins.iter().any(|d| d.id == command_id) {
+            ctx.run.start_builtin_step()?;
             return Ok(CommandResultDto {
                 status: CommandResultStatusDto::Success,
                 message: format!("stub: {command_id}"),
@@ -444,6 +396,7 @@ impl DefaultCommandService {
         }
 
         if let Some(definition) = Self::builtin_definition(command_id) {
+            ctx.run.start_builtin_step()?;
             // Role and timeout gates for nested dispatch: user-command steps and pipe stages
             // reach builtins here without passing the top-level gates in `execute_command_inner`.
             self.ensure_role_admits(&ctx.actor, command_id, args.as_ref(), ctx.context.as_ref())
@@ -455,23 +408,24 @@ impl DefaultCommandService {
                 .await;
         }
 
-        let user_command = self
-            .repos
-            .user_command_repo
-            .get_by_key_for_user(ctx.actor.user_id, command_id)
-            .await?
-            .map(Self::parse_user_command)
-            .transpose()?
+        let user_command = ctx
+            .run
+            .user_commands
+            .get(command_id)
+            .cloned()
             .ok_or(ServiceError::NotFound)?;
 
         self.execute_user_command_recursive(user_command, ctx).await
     }
 
-    /// Inner dispatch body for `execute_command`. The public trait method wraps
-    /// this with the audit emit so every branch gets exactly one audit line.
+    /// Inner dispatch body for `execute_command`, given `resolver` and, for a single command,
+    /// its resolution `top_level`. The public trait method wraps this with the audit emit so
+    /// every branch gets exactly one audit line.
     pub(super) async fn execute_command_inner(
         &self,
         cmd: ExecuteCommandCmd,
+        top_level: ServiceResult<Option<Resolved>>,
+        mut resolver: CommandResolver<'_>,
     ) -> ServiceResult<CommandResultDto> {
         if !cmd.is_pipe && cmd.command_id.contains('|') {
             return Err(ServiceError::Validation(
@@ -479,8 +433,22 @@ impl DefaultCommandService {
             ));
         }
 
+        let dispatch = if cmd.is_pipe {
+            let segments = pipe_parser::parse_pipe_expression(&cmd.command_id)?;
+            let mut stages = Vec::with_capacity(segments.len());
+            for segment in segments {
+                let resolved = resolver.resolve(&segment.command_id).await?;
+                stages.push((segment, resolved));
+            }
+            Dispatch::Pipe(stages)
+        } else {
+            Dispatch::Single(top_level?.map(Box::new))
+        };
+        dispatch.ensure_within_limits()?;
+        let run = Arc::new(RunScope::new(resolver.into_user_commands()));
+
         // ── Capability gate ─────────────────────────────────────────────
-        let required_caps = self.dispatch_required_capabilities(&cmd).await?;
+        let required_caps = dispatch.required_capabilities();
         if !required_caps.is_empty() {
             let workspace_id = cmd.context.as_ref().and_then(|c| c.workspace_id);
             for cap in &required_caps {
@@ -505,8 +473,7 @@ impl DefaultCommandService {
         }
 
         // ── Confirmation gate ────────────────────────────────────────────
-        let needs_confirmation = self.dispatch_requires_confirmation(&cmd).await?;
-        if needs_confirmation {
+        if dispatch.requires_confirmation(cmd.initiator) {
             match &cmd.confirmation {
                 None => {
                     let challenge = issue_in_band(
@@ -543,24 +510,20 @@ impl DefaultCommandService {
             }
         }
 
-        let top_level_def = if cmd.is_pipe {
-            None
-        } else {
-            self.resolve_command_definition(cmd.actor, &cmd.command_id)
-                .await
-                .ok()
-                .flatten()
+        let top_level_def = match &dispatch {
+            Dispatch::Single(resolved) => resolved.as_ref().map(|r| &r.definition),
+            Dispatch::Pipe(_) => None,
         };
         // ── Timeout gate ────────────────────────────────────────────────
         // A timed-out member cannot run Mutating commands in that workspace; reads still work.
         // Also before the rate limiter, so a refused command consumes no slot.
-        if let Some(def) = &top_level_def {
+        if let Some(def) = top_level_def {
             self.ensure_command_not_timed_out(def, &cmd.actor, cmd.context.as_ref())
                 .await?;
         }
 
         // ── Rate-limit gate (runs after capability + confirmation) ──────
-        if let Some(def) = &top_level_def
+        if let Some(def) = top_level_def
             && let Some(limit) = def.rate_limit_per_minute
         {
             let decision = self.rate_limiter.check_and_record(
@@ -588,21 +551,46 @@ impl DefaultCommandService {
             }
         }
 
-        if cmd.is_pipe {
-            return self
-                .execute_piped(cmd.actor, &cmd.command_id, cmd.context)
-                .await;
+        match dispatch {
+            Dispatch::Pipe(stages) => {
+                self.execute_piped(cmd.actor, stages, cmd.context, run)
+                    .await
+            }
+            Dispatch::Single(None) => Err(ServiceError::NotFound),
+            Dispatch::Single(Some(_)) => {
+                self.execute_resolved_command_recursive(
+                    &cmd.command_id,
+                    cmd.args,
+                    ExecutionContext {
+                        actor: cmd.actor,
+                        context: cmd.context,
+                        depth: 0,
+                        run,
+                    },
+                )
+                .await
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_refuses_the_builtin_step_past_the_limit() {
+        let run = RunScope::new(HashMap::new());
+        for _ in 0..DefaultCommandService::MAX_EXPANDED_STEPS {
+            run.start_builtin_step()
+                .expect("a step within the limit starts");
         }
 
-        self.execute_resolved_command_recursive(
-            &cmd.command_id,
-            cmd.args,
-            ExecutionContext {
-                actor: cmd.actor,
-                context: cmd.context,
-                depth: 0,
-            },
-        )
-        .await
+        let err = run.start_builtin_step().unwrap_err();
+
+        assert!(
+            matches!(&err, ServiceError::Validation(msg) if msg == "a command run expands to more than 100 steps"),
+            "{err:?}"
+        );
     }
 }

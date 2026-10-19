@@ -5,6 +5,7 @@ mod gates;
 mod pipe_parser;
 mod rate_limiter;
 pub(crate) mod registry;
+mod resolver;
 mod surface;
 mod user_commands;
 mod visibility;
@@ -37,6 +38,7 @@ use rim_services::message::service::MessageService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::CommandRepos;
+use crate::command::resolver::CommandResolver;
 use crate::command::user_commands::PersistedUserCommandStep;
 
 #[derive(Clone)]
@@ -100,7 +102,14 @@ pub struct DefaultCommandService {
 }
 
 impl DefaultCommandService {
+    /// User commands one chain of nested user commands may hold.
     pub(super) const MAX_RECURSION_DEPTH: usize = 8;
+    /// Steps one user command may list.
+    pub(super) const MAX_USER_COMMAND_STEPS: usize = 20;
+    /// User commands one user may keep.
+    pub(super) const MAX_USER_COMMANDS_PER_USER: usize = 100;
+    /// Builtin steps one run may perform, through every nested user command and pipe stage.
+    pub(super) const MAX_EXPANDED_STEPS: usize = 100;
 
     pub fn new(repos: CommandRepos, services: CommandServices) -> Self {
         Self::with_confirmation_store(repos, services, shared_in_memory_store())
@@ -220,16 +229,16 @@ impl CommandService for DefaultCommandService {
             })
             .collect();
 
-        for dto in user_commands {
-            if dto.is_enabled {
-                commands.push(
-                    self.derive_user_command_definition(
-                        query.actor,
-                        dto,
-                        &mut std::collections::BTreeSet::new(),
-                    )
-                    .await?,
-                );
+        let mut resolver = CommandResolver::with_user_commands(self, query.actor, &user_commands);
+        for dto in user_commands.iter().filter(|dto| dto.is_enabled) {
+            match resolver.resolve_user(dto).await {
+                Ok(resolved) => commands.push(resolved.definition),
+                Err(err) => tracing::warn!(
+                    event = "user_command_unlisted",
+                    command_id = %dto.command_key,
+                    error = %err,
+                    "user command left out of the listing"
+                ),
             }
         }
 
@@ -288,11 +297,17 @@ impl CommandService for DefaultCommandService {
         let sanitized_args =
             sanitize_args_for_audit(cmd.args.as_ref().unwrap_or(&serde_json::Value::Null));
 
-        let def_snapshot = self
-            .resolve_command_definition(cmd.actor, &cmd.command_id)
-            .await
+        let mut resolver = CommandResolver::new(self, cmd.actor);
+        let top_level = if cmd.is_pipe {
+            Ok(None)
+        } else {
+            resolver.resolve(&cmd.command_id).await
+        };
+        let def_snapshot = top_level
+            .as_ref()
             .ok()
-            .flatten();
+            .and_then(Option::as_ref)
+            .map(|resolved| resolved.definition.clone());
         let sensitivity_str = def_snapshot
             .as_ref()
             .map_or("safe", |d| match d.sensitivity {
@@ -307,7 +322,7 @@ impl CommandService for DefaultCommandService {
             Some(ConfirmationProof::InBandToken { .. }) => "in_band_token",
         };
 
-        let result = self.execute_command_inner(cmd).await;
+        let result = self.execute_command_inner(cmd, top_level, resolver).await;
 
         let (outcome, error_kind_str) = match &result {
             Ok(result_dto) => match result_dto.status {
@@ -403,11 +418,7 @@ impl CommandService for DefaultCommandService {
                 "user command title must be non-empty".to_string(),
             ));
         }
-        if cmd.steps.is_empty() {
-            return Err(ServiceError::Validation(
-                "user command must have at least one step".to_string(),
-            ));
-        }
+        Self::validate_user_command_steps(key, &cmd.steps)?;
         if self
             .repos
             .user_command_repo
@@ -419,15 +430,7 @@ impl CommandService for DefaultCommandService {
                 "user command already exists".to_string(),
             ));
         }
-        Self::validate_user_command_steps(key, &cmd.steps)?;
-        self.validate_user_command_steps_for_actor(
-            cmd.actor,
-            key,
-            &cmd.steps,
-            &mut std::collections::BTreeSet::new(),
-        )
-        .await?;
-        self.ensure_user_command_chain_within_depth(cmd.actor, key, &cmd.steps)
+        self.validate_user_command_for_actor(cmd.actor, key, &cmd.steps, true)
             .await?;
 
         let created = self
@@ -460,6 +463,7 @@ impl CommandService for DefaultCommandService {
         cmd: UpdateUserCommandCmd,
     ) -> ServiceResult<UserCommandDto> {
         let key = cmd.command_id.trim();
+        Self::validate_user_command_steps(key, &cmd.steps)?;
         let existing = self
             .repos
             .user_command_repo
@@ -472,15 +476,7 @@ impl CommandService for DefaultCommandService {
                 "user command title must be non-empty".to_string(),
             ));
         }
-        Self::validate_user_command_steps(key, &cmd.steps)?;
-        self.validate_user_command_steps_for_actor(
-            cmd.actor,
-            key,
-            &cmd.steps,
-            &mut std::collections::BTreeSet::new(),
-        )
-        .await?;
-        self.ensure_user_command_chain_within_depth(cmd.actor, key, &cmd.steps)
+        self.validate_user_command_for_actor(cmd.actor, key, &cmd.steps, false)
             .await?;
 
         let updated = self

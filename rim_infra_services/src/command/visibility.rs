@@ -50,29 +50,41 @@ pub(super) fn may_run(
         return capabilities_held;
     }
     membership.is_some_and(|membership| {
-        capabilities_held && role_admits(&definition.id, membership, user_steps, 0)
+        capabilities_held && role_admits(&definition.id, membership, user_steps)
     })
 }
 
 /// Whether `membership` meets the role `command_id` needs; for a user command, the role each of
 /// its steps needs. A chain deeper than the executor runs admits nobody.
-fn role_admits(
-    command_id: &str,
+fn role_admits(command_id: &str, membership: Membership, user_steps: &UserCommandSteps) -> bool {
+    role_admits_at(command_id, membership, user_steps, 0, &mut HashMap::new())
+}
+
+/// [`role_admits`] for `command_id` reached at `depth`, each answer kept in `memo` by command
+/// and depth.
+fn role_admits_at<'a>(
+    command_id: &'a str,
     membership: Membership,
-    user_steps: &UserCommandSteps,
+    user_steps: &'a UserCommandSteps,
     depth: usize,
+    memo: &mut HashMap<(&'a str, usize), bool>,
 ) -> bool {
-    match user_steps.get(command_id) {
+    if let Some(&admits) = memo.get(&(command_id, depth)) {
+        return admits;
+    }
+    let admits = match user_steps.get(command_id) {
         Some(steps) => {
             depth < DefaultCommandService::MAX_RECURSION_DEPTH
                 && steps
                     .iter()
-                    .all(|step| role_admits(step, membership, user_steps, depth + 1))
+                    .all(|step| role_admits_at(step, membership, user_steps, depth + 1, memo))
         }
         None => {
             registry::required_role(command_id).admits(membership.role, membership.direct_space)
         }
-    }
+    };
+    memo.insert((command_id, depth), admits);
+    admits
 }
 
 impl DefaultCommandService {
@@ -139,7 +151,7 @@ impl DefaultCommandService {
             .membership(actor, workspace_id)
             .await?
             .is_some_and(|membership| {
-                role_admits(command_id, membership, &UserCommandSteps::new(), 0)
+                role_admits(command_id, membership, &UserCommandSteps::new())
             });
         if admitted {
             Ok(())

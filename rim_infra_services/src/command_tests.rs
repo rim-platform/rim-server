@@ -2547,6 +2547,28 @@ mod tests {
         }
     }
 
+    /// A disabled user command does not run: it is NotFound, as an unknown id is.
+    #[tokio::test]
+    async fn disabled_user_command_does_not_run() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_increment().never();
+        let svc = state_service(
+            repo_with(vec![UserCommand {
+                is_enabled: false,
+                ..bump_command(actor.user_id, "user.off")
+            }]),
+            workspace_state,
+        );
+
+        let err = svc
+            .execute_command(palette_cmd(actor, "user.off"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ServiceError::NotFound), "{err:?}");
+    }
+
     /// A user command may compose another of the caller's user commands.
     #[tokio::test]
     async fn user_command_may_reference_another_user_command() {
@@ -2584,33 +2606,6 @@ mod tests {
                 format!("unknown command step `{step}`")
             );
         }
-    }
-
-    /// A referenced user command that disappears between its definition lookup and its
-    /// step validation is refused as unknown.
-    #[tokio::test]
-    async fn user_command_step_deleted_during_validation_is_refused() {
-        let actor = new_actor();
-        let inner = calling_command(actor.user_id, "user.inner", "state.list");
-        let lookups = std::sync::atomic::AtomicUsize::new(0);
-        let mut repo = MockUserCommandRepository::new();
-        repo.expect_get_by_key_for_user()
-            .returning(move |_, command_key| {
-                if command_key != "user.inner" {
-                    return Ok(None);
-                }
-                let n = lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok((n == 0).then(|| inner.clone()))
-            });
-        repo.expect_create_user_command().never();
-        let svc = validating_service(repo);
-
-        let err = svc
-            .create_user_command(create_cmd(actor, "user.outer", &["user.inner"]))
-            .await
-            .unwrap_err();
-
-        assert_eq!(validation_message(err), "unknown command step `user.inner`");
     }
 
     /// Updating a user command so that it closes a loop through other user commands
@@ -2826,8 +2821,8 @@ mod tests {
         assert_eq!(stages[0].message, "user command `user.bump` executed");
     }
 
-    /// A cycle stored in the repository is refused as a cycle wherever definitions are
-    /// resolved: execution, its capability gate, listing and lookup.
+    /// A cycle stored in the repository is refused as a cycle wherever a definition is
+    /// resolved, execution and lookup, and the listing leaves its commands out.
     #[tokio::test]
     async fn stored_user_command_cycle_is_refused_when_resolving_definitions() {
         let actor = new_actor();
@@ -2850,8 +2845,8 @@ mod tests {
                 surface: CommandSurfaceDto::Palette,
             })
             .await
-            .unwrap_err();
-        assert_eq!(validation_message(listed), cycle);
+            .expect("the listing leaves the cycle out");
+        assert!(listed.iter().all(|c| !c.id.starts_with("user.")));
 
         let looked_up = svc
             .get_command(GetCommandQuery {
@@ -2904,6 +2899,338 @@ mod tests {
                 .await;
             assert_depth_outcome(above, accepted);
         }
+    }
+
+    /// `repo_with(commands)` that counts every read: each lookup by key and each listing.
+    fn counting_repo(
+        commands: Vec<UserCommand>,
+    ) -> (
+        MockUserCommandRepository,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut repo = MockUserCommandRepository::new();
+        let (looked_up, listed) = (commands.clone(), commands);
+        let lookups = Arc::clone(&reads);
+        repo.expect_get_by_key_for_user()
+            .returning(move |owner_user_id, command_key| {
+                lookups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(looked_up
+                    .iter()
+                    .find(|c| c.owner_user_id == owner_user_id && c.command_key == command_key)
+                    .cloned())
+            });
+        let listings = Arc::clone(&reads);
+        repo.expect_list_for_user().returning(move |owner_user_id| {
+            listings.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(listed
+                .iter()
+                .filter(|c| c.owner_user_id == owner_user_id)
+                .cloned()
+                .collect())
+        });
+        (repo, reads)
+    }
+
+    fn read_count(reads: &std::sync::atomic::AtomicUsize) -> usize {
+        reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A user command of `owner` with `copies` steps, each `target`.
+    fn repeating_command(
+        owner: rim_core::user::model::UserId,
+        command_key: &str,
+        target: &str,
+        copies: usize,
+    ) -> UserCommand {
+        stored_user_command(
+            owner,
+            command_key,
+            vec![step(target, serde_json::Value::Null); copies],
+        )
+    }
+
+    /// `user.level0` .. `user.level{levels - 1}`, each naming the next `fan_out` times, the
+    /// last one listing state `fan_out` times: `fan_out` to the power `levels` builtin steps.
+    fn fanned_out_levels(
+        owner: rim_core::user::model::UserId,
+        levels: usize,
+        fan_out: usize,
+    ) -> Vec<UserCommand> {
+        (0..levels)
+            .map(|level| {
+                let target = if level + 1 == levels {
+                    "state.list".to_string()
+                } else {
+                    format!("user.level{}", level + 1)
+                };
+                repeating_command(owner, &format!("user.level{level}"), &target, fan_out)
+            })
+            .collect()
+    }
+
+    /// A user command named many times by the commands above it is read and derived once:
+    /// four stored levels of ten references each cost four reads, not one per reference,
+    /// and a run of the top level, a thousand builtin steps, is refused before any runs.
+    #[tokio::test]
+    async fn repeated_references_are_read_once_and_an_oversized_run_runs_nothing() {
+        let actor = new_actor();
+        let (repo, reads) = counting_repo(fanned_out_levels(actor.user_id, 4, 10));
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_list().never();
+        let svc = state_service(repo, workspace_state);
+        let too_many = "a user command expands to more than 100 steps";
+
+        let looked_up = svc
+            .get_command(GetCommandQuery {
+                actor,
+                command_id: "user.level0".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(looked_up), too_many);
+        assert!(read_count(&reads) <= 4, "{} reads", read_count(&reads));
+
+        let before = read_count(&reads);
+        let executed = svc
+            .execute_command(palette_cmd(actor, "user.level0"))
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(executed), too_many);
+        assert!(
+            read_count(&reads) - before <= 4,
+            "{} reads",
+            read_count(&reads) - before
+        );
+    }
+
+    /// A user command that expands to exactly the limit resolves with one read per stored
+    /// command and runs every one of its builtin steps.
+    #[tokio::test]
+    async fn a_user_command_expanding_to_the_limit_runs_every_step() {
+        let actor = new_actor();
+        let (repo, reads) = counting_repo(fanned_out_levels(actor.user_id, 2, 10));
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state
+            .expect_list()
+            .times(100)
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+        let svc = state_service(repo, workspace_state);
+
+        let result = svc
+            .execute_command(palette_cmd(actor, "user.level0"))
+            .await
+            .expect("a run of 100 builtin steps is allowed");
+
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+        assert_eq!(read_count(&reads), 2);
+    }
+
+    /// Creating a user command over stored levels that would expand past the limit is
+    /// refused after one lookup and one listing, and nothing is stored.
+    #[tokio::test]
+    async fn create_user_command_expanding_past_the_limit_is_refused_with_bounded_reads() {
+        let actor = new_actor();
+        let mut stored = fanned_out_levels(actor.user_id, 4, 10);
+        stored.remove(0);
+        let (mut repo, reads) = counting_repo(stored);
+        repo.expect_create_user_command().never();
+        let svc = validating_service(repo);
+
+        let err = svc
+            .create_user_command(create_cmd(actor, "user.top", &["user.level1"]))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            validation_message(err),
+            "a user command expands to more than 100 steps"
+        );
+        assert_eq!(read_count(&reads), 2);
+    }
+
+    /// A user command lists at most 20 steps; more is refused before the repository is read.
+    #[tokio::test]
+    async fn user_command_with_more_than_twenty_steps_is_refused_before_any_read() {
+        let actor = new_actor();
+        let svc = validating_service(MockUserCommandRepository::new());
+        let steps = ["state.list"; 21];
+        let too_many = "a user command may have at most 20 steps";
+
+        let created = svc
+            .create_user_command(create_cmd(actor, "user.long", &steps))
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(created), too_many);
+
+        let updated = svc
+            .update_user_command(update_cmd(actor, "user.long", &steps))
+            .await
+            .unwrap_err();
+        assert_eq!(validation_message(updated), too_many);
+
+        let svc = validating_service(saving_repo(vec![]));
+        svc.create_user_command(create_cmd(actor, "user.long", &steps[..20]))
+            .await
+            .expect("20 steps are allowed");
+    }
+
+    /// An update to a command another stored command calls is refused when it would push
+    /// that caller past the limit, and nothing is stored.
+    #[tokio::test]
+    async fn update_pushing_a_stored_caller_past_the_limit_is_refused() {
+        let actor = new_actor();
+        let commands = vec![
+            repeating_command(actor.user_id, "user.outer", "user.inner", 10),
+            repeating_command(actor.user_id, "user.middle", "user.inner", 1),
+            repeating_command(actor.user_id, "user.top", "user.middle", 1),
+            repeating_command(actor.user_id, "user.inner", "state.list", 10),
+        ];
+        let mut repo = repo_with(commands.clone());
+        repo.expect_update_user_command().never();
+        let svc = validating_service(repo);
+
+        let err = svc
+            .update_user_command(update_cmd(actor, "user.inner", &["state.list"; 11]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            validation_message(err),
+            "a user command expands to more than 100 steps"
+        );
+
+        let svc = validating_service(saving_repo(commands));
+        svc.update_user_command(update_cmd(actor, "user.inner", &["state.get"; 10]))
+            .await
+            .expect("an update keeping every caller within the limit is accepted");
+    }
+
+    /// Two steps reaching one shared user command (A calls B and C, both call D) are not a
+    /// cycle: D is read once, its definition reused, and the run performs D's step twice.
+    #[tokio::test]
+    async fn a_user_command_shared_by_two_steps_is_not_a_cycle() {
+        let actor = new_actor();
+        let commands = vec![
+            stored_user_command(
+                actor.user_id,
+                "user.a",
+                vec![
+                    step("user.b", serde_json::Value::Null),
+                    step("user.c", serde_json::Value::Null),
+                ],
+            ),
+            calling_command(actor.user_id, "user.b", "user.d"),
+            calling_command(actor.user_id, "user.c", "user.d"),
+            bump_command(actor.user_id, "user.d"),
+        ];
+        let (repo, reads) = counting_repo(commands.clone());
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state
+            .expect_increment()
+            .times(2)
+            .returning(|cmd| {
+                Box::pin(async move { Ok(state_entry(cmd.server_id, &cmd.key, 1.into())) })
+            });
+        let svc = state_service(repo, workspace_state);
+
+        let definition = svc
+            .get_command(GetCommandQuery {
+                actor,
+                command_id: "user.a".to_string(),
+            })
+            .await
+            .expect("a shared callee resolves")
+            .expect("user.a is the caller's");
+        assert_eq!(definition.id, "user.a");
+        assert_eq!(read_count(&reads), 4);
+
+        svc.execute_command(palette_cmd(actor, "user.a"))
+            .await
+            .expect("a shared callee runs once per step naming it");
+
+        let svc = validating_service(saving_repo(commands));
+        svc.create_user_command(create_cmd(actor, "user.e", &["user.b", "user.c"]))
+            .await
+            .expect("a new command sharing a callee is accepted");
+    }
+
+    /// A pipe whose stages together perform more builtin steps than the limit is refused
+    /// before any stage runs, though each stage alone is within it.
+    #[tokio::test]
+    async fn pipe_expanding_past_the_limit_runs_no_stage() {
+        let actor = new_actor();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_list().never();
+        workspace_state.expect_get().never();
+        let svc = state_service(
+            repo_with(fanned_out_levels(actor.user_id, 2, 10)),
+            workspace_state,
+        );
+
+        let err = svc
+            .execute_command(pipe_cmd(actor, "user.level0 | state.get key=k"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            validation_message(err),
+            "a pipe expands to more than 100 steps"
+        );
+    }
+
+    /// A user keeps at most 100 user commands: the 101st is refused, and editing one of the
+    /// hundred still works.
+    #[tokio::test]
+    async fn a_user_with_a_hundred_user_commands_cannot_create_another() {
+        let actor = new_actor();
+        let commands: Vec<UserCommand> = (0..100)
+            .map(|n| bump_command(actor.user_id, &format!("user.c{n}")))
+            .collect();
+        let svc = validating_service(saving_repo(commands));
+
+        let err = svc
+            .create_user_command(create_cmd(actor, "user.one_more", &["state.list"]))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            validation_message(err),
+            "a user may have at most 100 user commands"
+        );
+
+        svc.update_user_command(update_cmd(actor, "user.c7", &["state.list"]))
+            .await
+            .expect("an existing command can still be edited");
+    }
+
+    /// The listing leaves out a stored user command that no longer resolves, one naming an
+    /// unknown step or expanding past the limit, and lists the others.
+    #[tokio::test]
+    async fn list_commands_leaves_out_a_user_command_that_does_not_resolve() {
+        let actor = new_actor();
+        let mut commands = fanned_out_levels(actor.user_id, 3, 10);
+        commands.push(calling_command(actor.user_id, "user.ghostly", "user.ghost"));
+        commands.push(bump_command(actor.user_id, "user.good"));
+        let svc = service(
+            repo_with(commands),
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let listed = svc
+            .list_commands(ListCommandsQuery {
+                actor,
+                context: Some(workspace_context(rim_core::server::model::ServerId::new())),
+                surface: CommandSurfaceDto::Palette,
+            })
+            .await
+            .expect("one bad command does not fail the listing");
+
+        let user_ids: Vec<&str> = listed
+            .iter()
+            .map(|c| c.id.as_str())
+            .filter(|id| id.starts_with("user."))
+            .collect();
+        assert_eq!(user_ids, vec!["user.good", "user.level1", "user.level2"]);
     }
 
     // ── Moderation and selected-message commands ──
