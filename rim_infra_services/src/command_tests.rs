@@ -4345,6 +4345,7 @@ mod tests {
                             id: rim_core::auth::model::InviteId::new(),
                             server_id: cmd.server_id,
                             created_by_user_id: cmd.actor.user_id,
+                            created_at: chrono::Utc::now(),
                             expires_at: None,
                             max_uses: cmd.max_uses,
                             use_count: 0,

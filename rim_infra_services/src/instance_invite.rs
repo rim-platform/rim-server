@@ -1,5 +1,5 @@
 //! Instance invites: the terms every issuer is held to and the issuing itself, used by the
-//! operator's `rim_server invite` command.
+//! operator's `rim_server invite` command. Workspace invites share the expiry rule.
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -11,11 +11,11 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::auth::DefaultAuthService;
 
-/// Lifetime of an invite issued without an expiry.
+/// Lifetime of an invite (instance or workspace) issued without an expiry.
 pub const DEFAULT_TTL_DAYS: i64 = 7;
-/// Longest lifetime an invite may have.
+/// Longest lifetime an invite (instance or workspace) may have.
 pub const MAX_TTL_DAYS: i64 = 30;
-/// Most signups one invite may admit.
+/// Most signups one instance invite may admit.
 pub const MAX_USES: i32 = 50;
 
 /// An invite as stored, with its raw token, which is shown once and never stored.
@@ -30,17 +30,15 @@ fn new_token() -> String {
     generate_token("rim_iinv_")
 }
 
-/// The expiry and use count an invite gets: `expires_at` defaults to [`DEFAULT_TTL_DAYS`] from
-/// `now` and must lie after `now` and at most [`MAX_TTL_DAYS`] out; `max_uses` defaults to 1
-/// and is 1 to [`MAX_USES`].
+/// The expiry an invite gets, instance and workspace invites alike: `expires_at` defaults to
+/// [`DEFAULT_TTL_DAYS`] from `now` and must lie after `now` and at most [`MAX_TTL_DAYS`] out.
 ///
 /// # Errors
-/// [`ServiceError::Validation`] naming the field out of range.
-pub fn terms(
+/// [`ServiceError::Validation`] when the expiry is not after `now` or too far out.
+pub fn expiry(
     expires_at: Option<DateTime<Utc>>,
-    max_uses: Option<i32>,
     now: DateTime<Utc>,
-) -> ServiceResult<(DateTime<Utc>, i32)> {
+) -> ServiceResult<DateTime<Utc>> {
     let expires_at = expires_at.unwrap_or_else(|| now + Duration::days(DEFAULT_TTL_DAYS));
     if expires_at <= now {
         return Err(ServiceError::Validation(
@@ -52,6 +50,20 @@ pub fn terms(
             "expires_at may not be more than {MAX_TTL_DAYS} days from now"
         )));
     }
+    Ok(expires_at)
+}
+
+/// The expiry and use count an instance invite gets: the expiry as [`expiry`] gives it;
+/// `max_uses` defaults to 1 and is 1 to [`MAX_USES`].
+///
+/// # Errors
+/// [`ServiceError::Validation`] naming the field out of range.
+pub fn terms(
+    expires_at: Option<DateTime<Utc>>,
+    max_uses: Option<i32>,
+    now: DateTime<Utc>,
+) -> ServiceResult<(DateTime<Utc>, i32)> {
+    let expires_at = expiry(expires_at, now)?;
     let max_uses = max_uses.unwrap_or(1);
     if !(1..=MAX_USES).contains(&max_uses) {
         return Err(ServiceError::Validation(format!(

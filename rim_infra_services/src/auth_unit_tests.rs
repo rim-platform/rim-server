@@ -20,8 +20,9 @@ mod tests {
     use rim_core::user::model::{NewUser, User, UserId};
     use rim_core::user::repository::MockUserRepository;
     use rim_services::auth::command::{
-        AcceptInviteCmd, CreateInviteCmd, LoginCmd, LogoutCmd, LogoutOtherSessionsCmd,
-        PreviewInviteTokenQuery, SignupOpenCmd, SignupWithInstanceInviteCmd,
+        AcceptInviteCmd, CreateInviteCmd, ListInvitesQuery, LoginCmd, LogoutCmd,
+        LogoutOtherSessionsCmd, PreviewInviteTokenQuery, RevokeInviteCmd, SignupOpenCmd,
+        SignupWithInstanceInviteCmd,
     };
     use rim_services::auth::service::AuthService;
     use rim_services::session_revocation::{SessionRevocations, WatchedSession};
@@ -3300,5 +3301,282 @@ mod tests {
         .await
         .expect("open signup");
         assert!(events.0.lock().unwrap().is_empty());
+    }
+
+    /// Creates an invite for an owner of a workspace with the given expiry.
+    async fn invite_expiring(
+        expires_at: Option<chrono::DateTime<Utc>>,
+    ) -> Result<Option<chrono::DateTime<Utc>>, ServiceError> {
+        let (server_id, owner) = (ServerId::new(), UserId::new());
+        let svc = invite_service(server_id, owner, None, Default::default());
+        svc.create_invite(CreateInviteCmd {
+            actor: Actor::new(owner),
+            server_id,
+            expires_at,
+            max_uses: 1,
+            recipient_email: None,
+            role: ServerMemberRole::Member,
+        })
+        .await
+        .map(|created| created.invite.expires_at)
+    }
+
+    /// An invite created without an expiry expires seven days later; a given expiry is kept.
+    #[tokio::test]
+    async fn create_invite_expires_in_a_week_by_default() {
+        let expires_at = invite_expiring(None)
+            .await
+            .expect("created")
+            .expect("an expiry");
+        let week = Utc::now() + Duration::days(7);
+        assert!((week - expires_at).num_seconds().abs() < 60, "{expires_at}");
+
+        let tomorrow = Utc::now() + Duration::days(1);
+        assert_eq!(
+            invite_expiring(Some(tomorrow)).await.expect("created"),
+            Some(tomorrow)
+        );
+    }
+
+    /// An expiry in the past or more than thirty days out is `Validation`, and nothing is
+    /// stored.
+    #[tokio::test]
+    async fn create_invite_refuses_past_and_far_expiries() {
+        for (expires_at, why) in [
+            (Utc::now() - Duration::minutes(1), "future"),
+            (Utc::now() + Duration::days(31), "30 days"),
+        ] {
+            match invite_expiring(Some(expires_at)).await {
+                Err(ServiceError::Validation(message)) => {
+                    assert!(message.contains(why), "{message}")
+                }
+                other => panic!("expected a validation error, got {other:?}"),
+            }
+        }
+    }
+
+    fn stored_invite(server_id: ServerId, creator: UserId) -> Invite {
+        Invite {
+            id: InviteId::new(),
+            server_id,
+            created_by_user_id: creator,
+            token_hash: "hash".to_string(),
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::days(7)),
+            max_uses: 3,
+            use_count: 1,
+            revoked_at: None,
+            role: ServerMemberRole::Member,
+        }
+    }
+
+    /// An auth service over `invite` (`None`: no invite stored), where the actor holds `role`
+    /// in the invite's workspace (`None`: not a member). The store expects `revokes`
+    /// revocations, each setting `revoked_at` if unset.
+    fn revoke_service(
+        invite: Option<Invite>,
+        role: Option<ServerMemberRole>,
+        revokes: usize,
+    ) -> DefaultAuthService {
+        let (user_repo, server_repo, mut server_member_repo, session_repo, mut invite_repo, conv) =
+            repos();
+        let stored = Arc::new(std::sync::Mutex::new(invite));
+        let read = Arc::clone(&stored);
+        invite_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(read.lock().unwrap().clone().filter(|i| i.id == id)));
+        let written = Arc::clone(&stored);
+        invite_repo
+            .expect_revoke()
+            .times(revokes)
+            .returning(move |_, at| {
+                if let Some(invite) = written.lock().unwrap().as_mut() {
+                    invite.revoked_at.get_or_insert(at);
+                }
+                Ok(())
+            });
+        server_member_repo
+            .expect_is_member()
+            .returning(move |_, _| Ok(role.is_some()));
+        server_member_repo
+            .expect_get_member()
+            .returning(move |server_id, user_id| {
+                Ok(role.map(|member_role| ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role,
+                    joined_at: Utc::now(),
+                }))
+            });
+        DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conv,
+            ),
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
+        )
+    }
+
+    async fn revoke(
+        svc: &DefaultAuthService,
+        invite_id: InviteId,
+    ) -> Result<rim_services::auth::dto::InviteDto, ServiceError> {
+        svc.revoke_invite(RevokeInviteCmd {
+            actor: Actor::new(UserId::new()),
+            invite_id,
+        })
+        .await
+    }
+
+    /// The owner revokes an invite and gets it back revoked; revoking it again changes nothing
+    /// and answers the same invite.
+    #[tokio::test]
+    async fn the_owner_revokes_an_invite_once() {
+        let invite = stored_invite(ServerId::new(), UserId::new());
+        let svc = revoke_service(Some(invite.clone()), Some(ServerMemberRole::Owner), 1);
+
+        let revoked = revoke(&svc, invite.id).await.expect("revoked");
+        assert_eq!(revoked.id, invite.id);
+        let revoked_at = revoked.revoked_at.expect("revoked_at set");
+        assert_eq!(
+            revoked.state_at(Utc::now()),
+            rim_services::auth::dto::InviteState::Revoked
+        );
+
+        let again = revoke(&svc, invite.id).await.expect("idempotent");
+        assert_eq!(again.revoked_at, Some(revoked_at));
+    }
+
+    /// A moderator, a member or a guest of the invite's workspace is `PermissionDenied`; an
+    /// outsider and an unknown invite are `NotFound`. None of them revokes anything.
+    #[tokio::test]
+    async fn only_the_owner_revokes_and_others_see_no_invite() {
+        let invite = stored_invite(ServerId::new(), UserId::new());
+        for role in [
+            ServerMemberRole::Moderator,
+            ServerMemberRole::Member,
+            ServerMemberRole::Guest,
+        ] {
+            let svc = revoke_service(Some(invite.clone()), Some(role), 0);
+            assert!(
+                matches!(
+                    revoke(&svc, invite.id).await,
+                    Err(ServiceError::PermissionDenied)
+                ),
+                "{role:?}"
+            );
+        }
+
+        let outsider = revoke_service(Some(invite.clone()), None, 0);
+        assert!(matches!(
+            revoke(&outsider, invite.id).await,
+            Err(ServiceError::NotFound)
+        ));
+        let unknown = revoke_service(None, Some(ServerMemberRole::Owner), 0);
+        assert!(matches!(
+            revoke(&unknown, InviteId::new()).await,
+            Err(ServiceError::NotFound)
+        ));
+    }
+
+    /// An auth service whose actor holds `role` in every workspace and whose store lists
+    /// `stored` for `lists` calls.
+    fn list_service(
+        role: Option<ServerMemberRole>,
+        stored: Vec<Invite>,
+        lists: usize,
+    ) -> DefaultAuthService {
+        let (user_repo, server_repo, mut server_member_repo, session_repo, mut invite_repo, conv) =
+            repos();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |server_id, user_id| {
+                Ok(role.map(|member_role| ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role,
+                    joined_at: Utc::now(),
+                }))
+            });
+        invite_repo
+            .expect_list_for_server()
+            .times(lists)
+            .returning(move |params| {
+                assert_eq!(params.limit, 10);
+                assert_eq!(params.dir, rim_core::repository::pagination::PageDir::After);
+                Ok(rim_core::repository::pagination::Page::new(
+                    stored.clone(),
+                    None,
+                    None,
+                ))
+            });
+        DefaultAuthService::new(
+            make_auth_repos(
+                user_repo,
+                server_repo,
+                server_member_repo,
+                session_repo,
+                invite_repo,
+                conv,
+            ),
+            None,
+            Duration::hours(1),
+            noop_observers(),
+            Arc::new(crate::email::LogEmailSender),
+            None,
+        )
+    }
+
+    fn list_query(server_id: ServerId) -> ListInvitesQuery {
+        ListInvitesQuery {
+            actor: Actor::new(UserId::new()),
+            server_id,
+            dir: rim_core::repository::pagination::PageDir::After,
+            cursor: None,
+            limit: 10,
+        }
+    }
+
+    /// The owner lists the workspace's invites; anyone else is `PermissionDenied` and lists
+    /// nothing.
+    #[tokio::test]
+    async fn only_the_owner_lists_invites() {
+        let server_id = ServerId::new();
+        let invite = stored_invite(server_id, UserId::new());
+        let owner = list_service(Some(ServerMemberRole::Owner), vec![invite.clone()], 1);
+        let page = owner
+            .list_invites(list_query(server_id))
+            .await
+            .expect("listed");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, invite.id);
+        assert_eq!(page.items[0].use_count, 1);
+        assert_eq!(page.items[0].created_at, invite.created_at);
+
+        for role in [
+            Some(ServerMemberRole::Moderator),
+            Some(ServerMemberRole::Member),
+            Some(ServerMemberRole::Guest),
+            None,
+        ] {
+            let svc = list_service(role, vec![invite.clone()], 0);
+            assert!(
+                matches!(
+                    svc.list_invites(list_query(server_id)).await,
+                    Err(ServiceError::PermissionDenied)
+                ),
+                "{role:?}"
+            );
+        }
     }
 }

@@ -266,8 +266,8 @@ pub(crate) async fn check_workspace_invite(
 /// # Errors
 /// - Instance invite: `InvalidToken` when it was used up since the check (the double-spend
 ///   race; the caller's transaction rolls back).
-/// - Workspace invite: `PermissionDenied` when the user is banned there, `InvalidToken` when the
-///   invite was used up since the check.
+/// - Workspace invite: `PermissionDenied` when the user is banned there, `ExpiredToken` when the
+///   invite expired since the check, `InvalidToken` when it was used up or revoked since.
 pub(crate) async fn claim_token(
     repos: &SignupRepos,
     token: &CheckedToken,
@@ -301,7 +301,11 @@ pub(crate) async fn claim_token(
             )
             .await?;
             if !repos.invite_repo.try_consume(invite.id).await? {
-                // Used up reads like unknown.
+                // Expired since the check reads like an expired invite; used up or revoked
+                // reads like unknown.
+                if invite.expires_at.is_some_and(|at| at <= Utc::now()) {
+                    return Err(ServiceError::ExpiredToken);
+                }
                 return Err(ServiceError::InvalidToken);
             }
             repos
@@ -819,6 +823,56 @@ pub(crate) mod tests {
             *chains.lock().unwrap(),
             vec![(user_id, invite_id, Some(creator))]
         );
+    }
+
+    /// A workspace invite the consume refuses reads as expired when its expiry has passed
+    /// since the check, and as unknown otherwise (used up or revoked since).
+    #[tokio::test]
+    async fn claim_token_workspace_invite_refused_by_the_consume() {
+        for (expires_in, expired) in [
+            (Some(Duration::seconds(-1)), true),
+            (Some(Duration::minutes(5)), false),
+            (None, false),
+        ] {
+            let mut moderation = MockModerationRepository::new();
+            moderation
+                .expect_get_active_ban()
+                .returning(|_, _, _| Box::pin(async { Ok(None) }));
+            let mut members = MockServerMemberRepository::new();
+            members
+                .expect_add_member()
+                .returning(|server_id, user_id, role| {
+                    Ok(ServerMember {
+                        id: ServerMemberId::new(),
+                        server_id,
+                        user_id,
+                        member_role: role,
+                        joined_at: Utc::now(),
+                    })
+                });
+            let mut conversations = MockConversationRepository::new();
+            conversations
+                .expect_list_public_channel_ids()
+                .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+            let mut invites = MockInviteRepository::new();
+            invites.expect_try_consume().returning(|_| Ok(false));
+            let (users, chains) = chain_recorder();
+
+            let mut r = repos();
+            r.moderation_repo = Arc::new(moderation);
+            r.server_member_repo = Arc::new(members);
+            r.conversation_repo = Arc::new(conversations);
+            r.invite_repo = Arc::new(invites);
+            r.user_repo = Arc::new(users);
+            let token = CheckedToken::WorkspaceInvite(workspace_invite(expires_in, false));
+            let res = claim_token(&r, &token, UserId::new(), None).await;
+            if expired {
+                assert!(matches!(res, Err(ServiceError::ExpiredToken)), "{res:?}");
+            } else {
+                assert!(matches!(res, Err(ServiceError::InvalidToken)), "{res:?}");
+            }
+            assert!(chains.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

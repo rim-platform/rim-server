@@ -124,4 +124,7 @@ pub(crate) struct MutationGroup8(
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct MutationGroup9(dm_policy::DmPolicyMutations);
+pub(crate) struct MutationGroup9(
+    dm_policy::DmPolicyMutations,
+    invite::WorkspaceInviteMutations,
+);

@@ -477,3 +477,26 @@ fn notification_sdl_ends_with_the_reaction_fields() {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }
 }
+
+/// The workspace invite list and revocation, with their exact signatures, appended after the
+/// existing roots; the listed invite carries no token.
+#[test]
+fn workspace_invite_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "userCommands: [UserCommand!]! workspaceInvites(serverId: ID!, dir: PageDir, cursor: \
+         WorkspaceInviteCursorInput, limit: Int): WorkspaceInvitePage! }",
+        "setMyWorkspaceDmSetting(workspaceId: ID!, members: DmMembers!): MyDmSettings! \
+         revokeInvite(inviteId: ID!): WorkspaceInvite! }",
+        "type WorkspaceInvite { id: ID! serverId: ID! role: ServerMemberRoleGql! useCount: Int! \
+         maxUses: Int! expiresAt: DateTime createdAt: DateTime! createdById: ID! revokedAt: \
+         DateTime state: WorkspaceInviteState! createdBy: User }",
+        "enum WorkspaceInviteState { ACTIVE EXPIRED USED_UP REVOKED }",
+        "input WorkspaceInviteCursorInput { createdAt: DateTime! inviteId: ID! }",
+        "type WorkspaceInviteCursorOutput { createdAt: DateTime! inviteId: ID! }",
+        "type WorkspaceInvitePage { items: [WorkspaceInvite!]! next: \
+         WorkspaceInviteCursorOutput prev: WorkspaceInviteCursorOutput pageInfo: PageInfo! }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}

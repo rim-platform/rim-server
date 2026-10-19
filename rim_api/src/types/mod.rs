@@ -78,7 +78,8 @@ pub use instance_moderation::{
 };
 pub use invite::{
     InviteTokenPreviewGql, InviteTokenTypeGql, RegistrationModeGql, SignupWithInvitePayloadGql,
-    WorkspaceInvitePreviewGql,
+    WorkspaceInvite, WorkspaceInviteCursorInput, WorkspaceInviteCursorOutput, WorkspaceInvitePage,
+    WorkspaceInvitePreviewGql, WorkspaceInviteState,
 };
 pub use key_identity::{
     DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLogEntry, KeyLogEntryKind,

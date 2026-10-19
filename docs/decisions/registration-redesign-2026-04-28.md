@@ -300,6 +300,8 @@ The `/login` route and the `login` mutation are unchanged. They authenticate exi
 
 - **`instance_invite.expires_at`** is `NOT NULL` at the DB layer (unlike workspace invites where it's nullable). At the *service layer*, `createInstanceInvite` with `expires_at = None` defaults to **`now() + 7d`** (R1: canonical). Operator-supplied values past **30 days** from now return `Validation`. No forever-tokens. The `NOT NULL` constraint is a defense-in-depth backstop — under normal flow the service always supplies a value (default or operator-provided), so the constraint should never fire.
 - **Revocation:** `revoked_at` column + `revokeInstanceInvite` mutation, mirroring existing `revoke_invite`.
+
+  > **Correction 2026-10-19:** no `revoke_invite` existed for workspace invites when this was written, nor any way for an owner to revoke one. Owners revoke them with `revokeInvite`, and they now expire like instance invites (7 days by default, 30 at most). `docs/messaging.md` "Workspace invites" has the contract.
 - **Single-use vs multi-use:** instance invites carry `max_uses`, defaulting to **1**, with a hard cap of **50**. Each consumption increments `use_count`. `try_consume` mirrors the existing workspace-invite implementation.
 - **Audit:** every issuance and consumption logs at `target = "audit"` with `instance_invite_id` and (on consumption) `consumed_by_user_id`.
 
