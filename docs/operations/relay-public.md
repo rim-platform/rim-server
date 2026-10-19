@@ -193,7 +193,9 @@ To let people in without the proof-of-work, give them a signup link:
 prints it on its first line (the token is shown once); `rim-relay invite list` shows each live
 link's use count and `rim-relay invite revoke <id>` ends one. For one person,
 `rim-relay invite create --email <their address> --public-url https://<domain>` gives a
-single-use link bound to that address: the account it signs up gets that address.
+single-use link bound to that address: the account it signs up gets that address. The binding
+does not keep others out, since a key signup gives no address: whoever holds the link signs up
+with it.
 
 ## Monitoring
 

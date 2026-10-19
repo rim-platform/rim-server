@@ -129,7 +129,9 @@ dc exec rim /app/rim-server invite create --public-url https://rim.example.org
 ```
 
 `--email you@example.org` binds the link to that address: a key signup with it gives the new
-account that address, and a password signup must give that address.
+account that address, and a password signup must give that address. It does not keep others
+out: a key signup gives no address, so whoever holds the link can sign up with it. Hand the
+link only to the person it is for.
 
 Open the link it prints (`https://rim.example.org/join/…`) and sign up. For other people, a link
 for up to 50 signups that lasts up to 30 days:
@@ -305,9 +307,11 @@ of a message. Each is a `RIM_LIMIT_*` variable, off until set (the "Instance lim
 a message naming the cap, and clients read every cap from `serverInfo.limits`. Devices and DM
 requests also follow the relay quotas `RIM_RELAY_DEVICES_PER_USER` and
 `RIM_RELAY_DM_REQUESTS_PER_DAY`: the stricter number applies. A negative or non-numeric value,
-or `RIM_LIMIT_MESSAGE_BYTES` above 65536, stops the server at boot. One cap is on by default:
-`RIM_LIMIT_PENDING_INVITES_PER_USER` (50, 0 turns it off) bounds the invitations to encrypted
-conversations one person holds, so nobody can be buried in them.
+or `RIM_LIMIT_MESSAGE_BYTES` above 65536, stops the server at boot. Two caps are on by default,
+and 0 turns either off: `RIM_LIMIT_PENDING_INVITES_PER_USER` (50) bounds the invitations to
+encrypted conversations one person holds, so nobody can be buried in them, and
+`RIM_LIMIT_INVITES_PER_USER_PER_DAY` (50) bounds the workspace invites one person creates and
+the invite emails they send in 24 hours, so nobody can use the server to mail strangers in bulk.
 
 `RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
 an account cannot create a workspace or send a DM request to someone it shares no workspace

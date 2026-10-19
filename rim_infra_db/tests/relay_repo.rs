@@ -2,8 +2,8 @@
 
 //! Relay queues, the request inbox, host event streams, the outbox and the device request
 //! window against a real database: per-stream `seq` under concurrency, outbox order, inbound
-//! idempotency, deletion only after every device acked, cascades, and the migration's refusing
-//! `down`.
+//! idempotency, deletion only after every device acked, expired requests left undecided,
+//! cascades, and the migration's refusing `down`.
 
 mod support;
 
@@ -656,6 +656,58 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
         2,
         "the ignored requests expire, the refused conversation's too; the accepted ones stay"
     );
+}
+
+#[tokio::test]
+async fn an_expired_pending_request_cannot_be_decided() {
+    let ctx = support::TestCtx::new().await;
+    let user = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let new = |expires_at| NewDmRequest {
+        status: DmRequestStatus::Pending,
+        user_id: user.id,
+        from_principal_id: "rimp1_alice".to_string(),
+        card_payload: "{}".to_string(),
+        card_signature: "ed25519:c".to_string(),
+        host_server_id: HOST.to_string(),
+        conversation_id: Uuid::now_v7(),
+        expires_at,
+    };
+    let expired = repo
+        .insert_request(new(Utc::now() - Duration::minutes(1)))
+        .await
+        .unwrap();
+    for status in [DmRequestStatus::Accepted, DmRequestStatus::Ignored] {
+        assert!(
+            repo.decide_request(expired.id, status, Utc::now() + Duration::days(30))
+                .await
+                .unwrap()
+                .is_none(),
+            "an expired request stays undecided: {status:?}"
+        );
+    }
+    let stored = repo
+        .get_request(user.id, expired.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, DmRequestStatus::Pending);
+    assert_eq!(stored.decided_at, None);
+
+    let live = repo
+        .insert_request(new(Utc::now() + Duration::days(30)))
+        .await
+        .unwrap();
+    let decided = repo
+        .decide_request(
+            live.id,
+            DmRequestStatus::Accepted,
+            Utc::now() + Duration::days(36500),
+        )
+        .await
+        .unwrap()
+        .expect("a live request is decided");
+    assert_eq!(decided.status, DmRequestStatus::Accepted);
 }
 
 #[tokio::test]

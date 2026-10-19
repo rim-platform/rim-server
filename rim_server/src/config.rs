@@ -249,7 +249,8 @@ pub struct RIMConfig {
 
     // ── Instance limits (RIM_LIMIT_*) ───────────────────────────────────────
     //
-    // Each caps one thing across the instance; unset or 0 sets no cap. See
+    // Each caps one thing across the instance; 0 sets no cap, and so does unset unless the cap
+    // names a default. See
     // [`RIMConfig::instance_limits`].
     /// Workspaces one user owns. Controlled by `RIM_LIMIT_WORKSPACES_PER_USER`.
     pub limit_workspaces_per_user: Option<u32>,
@@ -271,7 +272,9 @@ pub struct RIMConfig {
     pub limit_pipelines_per_workspace: Option<u32>,
     /// Plugins of one workspace's registry. Controlled by `RIM_LIMIT_PLUGINS_PER_WORKSPACE`.
     pub limit_plugins_per_workspace: Option<u32>,
-    /// Invites one user creates per day. Controlled by `RIM_LIMIT_INVITES_PER_USER_PER_DAY`.
+    /// Workspace invites one user creates per day, and invite emails one user has sent in the
+    /// last 24 hours; unlike most caps it defaults to [`DEFAULT_INVITES_PER_USER_PER_DAY`], and 0
+    /// turns it off. Controlled by `RIM_LIMIT_INVITES_PER_USER_PER_DAY`.
     pub limit_invites_per_user_per_day: Option<u32>,
     /// Uses one invite may have. Controlled by `RIM_LIMIT_INVITE_MAX_USES`.
     pub limit_invite_max_uses: Option<u32>,
@@ -493,7 +496,7 @@ impl Default for RIMConfig {
             limit_macros_per_workspace: None,
             limit_pipelines_per_workspace: None,
             limit_plugins_per_workspace: None,
-            limit_invites_per_user_per_day: None,
+            limit_invites_per_user_per_day: Some(DEFAULT_INVITES_PER_USER_PER_DAY),
             limit_invite_max_uses: None,
             limit_message_bytes: None,
             limit_pending_invites_per_user: Some(DEFAULT_PENDING_INVITES_PER_USER),
@@ -1184,6 +1187,9 @@ impl RIMConfig {
 /// Default `RIM_LIMIT_PENDING_INVITES_PER_USER`.
 pub const DEFAULT_PENDING_INVITES_PER_USER: u32 = 50;
 
+/// Default `RIM_LIMIT_INVITES_PER_USER_PER_DAY`.
+pub const DEFAULT_INVITES_PER_USER_PER_DAY: u32 = 50;
+
 /// Largest `RIM_LIMIT_MESSAGE_BYTES`: the largest message content a client may send.
 pub const MAX_LIMIT_MESSAGE_BYTES: u32 = rim_services::e2ee::MAX_CONTENT_BYTES as u32;
 
@@ -1201,8 +1207,9 @@ fn stricter<T: Ord>(quota: T, limit: Option<T>) -> T {
 }
 
 impl RIMConfig {
-    /// The instance limits from `RIM_LIMIT_*`, each off when unset or 0. Devices and DM
-    /// requests report the stricter of their cap and relay quota, which is what applies.
+    /// The instance limits from `RIM_LIMIT_*`, each off when 0, or when unset and without a
+    /// default. Devices and DM requests report the stricter of their cap and relay quota, which
+    /// is what applies.
     ///
     /// # Errors
     /// A message naming `RIM_LIMIT_MESSAGE_BYTES` when it is above
@@ -1275,6 +1282,10 @@ impl RIMConfig {
             .set_default(
                 "limit_pending_invites_per_user",
                 i64::from(DEFAULT_PENDING_INVITES_PER_USER),
+            )?
+            .set_default(
+                "limit_invites_per_user_per_day",
+                i64::from(DEFAULT_INVITES_PER_USER_PER_DAY),
             )?
             .add_source(Environment::with_prefix("RIM").source(Some(env)))
             .add_source(Environment::default().source(Some(unprefixed)));
@@ -2167,6 +2178,7 @@ mod tests {
             ..Default::default()
         };
         let defaults = InstanceLimits {
+            invites_per_user_per_day: Some(DEFAULT_INVITES_PER_USER_PER_DAY),
             pending_invites_per_user: Some(DEFAULT_PENDING_INVITES_PER_USER),
             ..relay_only
         };

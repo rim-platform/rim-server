@@ -136,7 +136,7 @@ once.
 | `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days |
 | `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused |
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored |
-| Nothing | Expires after the retention period |
+| Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request |
 
 Limits: 100 pending requests per recipient, `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
 principal per day on this relay, 1,000 per delivering host per day whichever principals it names,

@@ -705,7 +705,7 @@ Once accepted it is an ordinary conversation of the space he uses directly.
 | `acceptDmRequest(id)` | Held items released; later items flow; the sender becomes a contact |
 | `ignoreDmRequest(id)` | Held items deleted but the `DmInvite`; later items of that conversation dropped; row expires in 30 days |
 | `blockPrincipal(principalId)` | Pending requests from it ignored; its `DmInvite`s refused (`blocked`) and its claims refused; the app leaves the conversation through the home |
-| Nothing | Expires after 30 days |
+| Nothing | Expires after 30 days; from then on deciding or reporting it is `NOT_FOUND`, as for an unknown request |
 
 The app shows the card's name (verified against the sender's key log) and a fingerprint of the
 principal id, `base32(first 10 bytes of SHA-256("rim.principal-fingerprint.v1\0" || principal id))`

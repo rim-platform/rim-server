@@ -84,6 +84,16 @@ fn accepted_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
     now + Duration::days(365 * 100)
 }
 
+/// Why a pending `request` could not be decided: `NotFound` once it has expired, as for an
+/// unknown request, else `Conflict` because it was decided already.
+fn undecided(request: &DmRequest) -> ServiceError {
+    if request.expires_at <= Utc::now() {
+        ServiceError::NotFound
+    } else {
+        ServiceError::Conflict("the request was decided already".to_string())
+    }
+}
+
 #[derive(Clone)]
 pub struct RelayRepos {
     pub relay_repo: Arc<dyn RelayRepository>,
@@ -400,11 +410,13 @@ impl DefaultRelayService {
         })
     }
 
+    /// The actor's request `id`, or `NotFound` when there is none or it has expired.
     async fn own_request(&self, actor: Actor, id: DmRequestId) -> ServiceResult<DmRequest> {
         self.repos
             .relay_repo
             .get_request(actor.user_id, id)
             .await?
+            .filter(|request| request.expires_at > Utc::now())
             .ok_or(ServiceError::NotFound)
     }
 
@@ -1192,7 +1204,7 @@ impl RelayService for DefaultRelayService {
                 accepted_expiry(Utc::now()),
             )
             .await?
-            .ok_or_else(|| ServiceError::Conflict("the request was decided already".to_string()))?;
+            .ok_or_else(|| undecided(&request))?;
         repos.relay_repo.release_held(request.id).await?;
         let relays = contact_relays(&request.card_payload);
         if !relays.is_empty() {
@@ -1224,7 +1236,7 @@ impl RelayService for DefaultRelayService {
                 Utc::now() + IGNORED_REQUEST_TTL,
             )
             .await?
-            .ok_or_else(|| ServiceError::Conflict("the request was decided already".to_string()))?;
+            .ok_or_else(|| undecided(&request))?;
         repos.relay_repo.delete_held(request.id).await?;
         Self::commit(scope).await?;
         self.request_dto(decided).await
@@ -1889,6 +1901,31 @@ mod tests {
         assert!(check_relay_urls(&["https://a b".to_string()]).is_err());
         assert!(check_relay_urls(&["x".repeat(257)]).is_err());
         assert!(check_relay_urls(&vec!["https://a.example".to_string(); 9]).is_err());
+    }
+
+    #[test]
+    fn an_expired_request_is_not_found_and_a_live_one_was_decided_already() {
+        let request = |expires_at| DmRequest {
+            id: DmRequestId::new(),
+            user_id: UserId::new(),
+            from_principal_id: "rimp1_alice".to_string(),
+            card_payload: "{}".to_string(),
+            card_signature: "ed25519:c".to_string(),
+            host_server_id: "rims1_host".to_string(),
+            conversation_id: Uuid::now_v7(),
+            status: DmRequestStatus::Pending,
+            created_at: Utc::now(),
+            decided_at: None,
+            expires_at,
+        };
+        assert!(matches!(
+            undecided(&request(Utc::now() - Duration::minutes(1))),
+            ServiceError::NotFound
+        ));
+        assert!(matches!(
+            undecided(&request(Utc::now() + Duration::days(1))),
+            ServiceError::Conflict(_)
+        ));
     }
 
     fn peer(server_id: &str, origin: &str) -> PeerDto {

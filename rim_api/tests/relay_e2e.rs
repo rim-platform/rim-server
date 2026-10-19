@@ -1,9 +1,9 @@
 //! Two RIM servers as relays of their users and hosts of their direct spaces: an encrypted DM
 //! across relays from creation through Welcome, Commit, a message, an edit and a read state;
-//! the request inbox accepted, ignored and blocked; queued host events pushed on `relayStream`
-//! and a gap pulled from the host's outbox; forwarded requests with replayed and tampered device
-//! requests; forwarded GraphQL under the host's batch cap and a mutation budget per device; and
-//! the roles' refusals. Clients talk to their own relay only, over HTTP, and check
+//! the request inbox accepted, ignored and blocked, and an expired request refused; queued host
+//! events pushed on `relayStream` and a gap pulled from the host's outbox; forwarded requests
+//! with replayed and tampered device requests; forwarded GraphQL under the host's batch cap and
+//! a mutation budget per device; and the roles' refusals. Clients talk to their own relay only, over HTTP, and check
 //! every host event and forwarded answer against the host's key. The public relay: proof-of-work
 //! signups refused, accepted and replaced by an invite; a reported DM request listed and
 //! resolved by the operator; a principal blocked on its relay signed out and refused signup,
@@ -407,6 +407,38 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
         )
         .await;
     assert_eq!(unblocked["unblockPrincipal"], json!(true));
+
+    a.stop().await;
+    b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_expired_dm_request_cannot_be_accepted_ignored_or_reported() {
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&b, "bob", 2).await;
+    alice.start_dm(&bob, &b, true).await;
+    let request = bob.pending_request(&alice).await;
+    let id: Uuid = request["id"].as_str().expect("id").parse().expect("uuid");
+    b.db.execute_raw(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "UPDATE relay_dm_request SET expires_at = now() - interval '1 minute' WHERE id = $1",
+        [id.into()],
+    ))
+    .await
+    .expect("expire the request");
+
+    for mutation in [
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        "mutation($id: ID!) { ignoreDmRequest(id: $id) { status } }",
+        "mutation($id: ID!) { reportDmRequest(id: $id, reason: \"spam\") }",
+    ] {
+        assert_eq!(
+            bob.err(mutation, json!({ "id": request["id"] })).await,
+            "NOT_FOUND",
+            "{mutation}"
+        );
+    }
 
     a.stop().await;
     b.stop().await;

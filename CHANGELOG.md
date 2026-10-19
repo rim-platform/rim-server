@@ -259,6 +259,15 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- **Upgrade:** `RIM_LIMIT_INVITES_PER_USER_PER_DAY` is on by default, at 50, and also caps the
+  invite emails (`createInvite` with `recipientEmail`) one user sends in 24 hours. Emails are
+  counted apart from the invites, so deleting a workspace does not give them back. Past either
+  count `createInvite` is `VALIDATION` and creates nothing. Before, the cap was off unless set,
+  and any workspace owner could have the server email any number of addresses. Set a higher
+  number if your owners invite more people a day, or 0 to turn the cap off (`docs/email.md`).
+- Accepting, ignoring or reporting a DM request whose expiry has passed is `NOT_FOUND`, as for
+  an unknown request; the decision checks the expiry in the same update that records it.
+  Before, an expired request not yet purged could still be accepted.
 - A relay files a DM invite another server delivers only when that server speaks for the
   sender it names: the sender's card must be signed by their key, and their newest card must
   list the delivering server (or the sender is a local user subscribed there). Anything else is
