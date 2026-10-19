@@ -41,6 +41,7 @@ port, and every 15 seconds collects:
 | `rim-readyz` | `probe_success` of a GET of `http://rim:8080/readyz`: a `200` passes, a redirect fails. `instance` is that URL. |
 | `node` | The host's CPU, memory, filesystem and network metrics (`node_*`), read from `/proc`, `/sys` and `/` mounted read-only. `instance` is `RIM_DOMAIN`. |
 | `alloy` | The collector's own metrics, such as its remote-write queue. |
+| `cadvisor` | With `deploy/compose.monitoring-containers.yml` only: each compose service's CPU and memory use (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`), labelled `container_label_com_docker_compose_project` and `container_label_com_docker_compose_service`. |
 
 It remote-writes them to `GRAFANA_CLOUD_METRICS_URL` with `GRAFANA_CLOUD_METRICS_USER` and
 `GRAFANA_CLOUD_METRICS_TOKEN` from `deploy/.env` (`deploy/.env.example` says where Grafana Cloud
@@ -48,6 +49,28 @@ shows them); any Prometheus remote-write endpoint with basic authentication work
 Samples the endpoint does not accept are kept in Alloy's volume and retried for up to two
 hours. The dashboards and alert rules that read these series are in the
 [rim-monitoring](https://github.com/rim-platform/rim-monitoring) repository.
+
+### Container metrics
+
+`deploy/compose.monitoring-containers.yml`, on top of the files above, adds cAdvisor and a
+Docker socket proxy, and `deploy/monitoring-containers.alloy` to Alloy's configuration
+directory. It needs rootful Docker on Linux with the `overlay2` storage driver
+(`docker info --format '{{.Driver}}'`), and `DOCKER_GID` in `deploy/.env`, the group of
+`/var/run/docker.sock` (`stat -c %g /var/run/docker.sock`).
+
+Only the proxy (`wollomatic/socket-proxy`) mounts the socket. It answers cAdvisor alone, on a
+network of the two with no way out, and only `HEAD /_ping`, `GET /version`, `GET /info` and
+`GET /containers/<id>/json`; any other path or method is refused, so nothing can create,
+start, stop or remove a container, exec into one, read its logs or copy files out of it.
+cAdvisor runs unprivileged without capabilities, reads the host's cgroups and the read-only
+layer ids under `/var/lib/docker/image/overlay2/layerdb/mounts`, and has no way out either;
+Alloy scrapes it on the internal network and forwards only the two series above.
+
+What remains: inspecting a container returns its configuration, environment variables
+included, and other containers' environments hold secrets such as `DATABASE_URL` with the
+database password and `GRAFANA_CLOUD_METRICS_TOKEN`. A compromised cAdvisor could read them;
+it has no route to the internet itself, but it shares the internal network with the other
+services.
 
 ## The metrics
 
