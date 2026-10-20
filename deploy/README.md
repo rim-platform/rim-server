@@ -40,7 +40,7 @@ apex of the domain can serve a website from elsewhere.
 
    ```sh
    alias dc='docker compose -f deploy/compose.yml -f deploy/compose.relay.yml'
-   dc config --services          # postgres, migrate, rim, caddy: no web client
+   dc config --services          # postgres, migrate, rim, caddy-init, caddy: no web client
    ```
 
    The relay runs only `ghcr.io/rim-platform/rim-server:<RIM_VERSION>` (or

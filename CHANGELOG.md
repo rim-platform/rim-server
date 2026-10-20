@@ -483,5 +483,12 @@ tag `v<version>`, the version every crate in the workspace carries.
   to 128 KiB, so a host could fill a relay's database by inventing conversations
   (`server-to-server-v1.md` "Outbox and `deliver`", "The request inbox", "Storage", "Limits and
   audit").
+- Every service of `deploy/compose.yml` drops its capabilities, cannot gain privileges and has
+  a read-only root filesystem, as the monitoring overlays' services already did. PostgreSQL runs
+  as `postgres` from the start, and Caddy, the only container on the public ports, as `nobody`
+  instead of root, keeping only `NET_BIND_SERVICE`, which its binary needs to start. A new
+  one-shot service, `caddy-init`, gives Caddy's volumes to that user before each start, so
+  volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
+  `docs/self-hosting.md` shows how to pass a file in instead.
 
 [Unreleased]: https://github.com/rim-platform/rim-server/commits/master

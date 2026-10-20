@@ -74,7 +74,7 @@ with the recovery key. The new key is signed by the recovery key, and peers stop
 old one as soon as they see it.
 
 ```sh
-dc cp ./recovery.txt rim:/tmp/recovery.txt        # the offline copy, briefly
+dc exec -T rim sh -c 'umask 077; cat > /tmp/recovery.txt' < ./recovery.txt   # in memory, briefly
 rim-relay server-key recover --recovery-key-file /tmp/recovery.txt --new-recovery-key
 dc exec rim rm /tmp/recovery.txt
 dc exec rim cat /data/server-recovery-key.txt     # the new recovery key: store it as above
