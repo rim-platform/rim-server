@@ -29,22 +29,21 @@ join, and it does not depend on someone else's budget. `docs/self-hosting.md` se
 the same image and compose file as this relay. An account here can move to such a server later
 and keep its account id ("If the relay shuts down" says how).
 
-## Who pays for it
+## A first test run
 
-| | |
-|---|---|
-| Who pays | **FILL**: the person or organisation paying for the host, the domain and the backup storage |
-| What it costs | **FILL**: per month, the host, the domain and the backup storage, in the currency paid |
-| Accounts it pays for | **FILL**: the `RIM_LIMIT_ACCOUNTS` value, "The account cap" |
-
-When the payer or the cost changes, this table and the account cap change with it.
+The public relay is a test run of the project, provided as is: there is no guarantee that it
+stays up, and none against data loss. Accounts and what the relay holds may be reset or deleted
+at any time, and the relay may end. Its terms (`deploy/terms.md`) say the same to everyone who
+signs up. Questions go to the project's GitHub issues
+(`https://github.com/rim-platform/rim-server/issues`), which are public; reports about content
+or a person go through the app's report function, which reaches the relay's moderators.
 
 ## If the relay shuts down
 
-The relay closes with notice: **FILL**: how long (e.g. 90 days) and where it is announced (e.g.
-the project site, and `RIM_INSTANCE_NOTICE`, which the app shows where people sign in). From the
-announcement `RIM_LIMIT_ACCOUNTS` is set at or below the number of accounts there are, which
-closes signups and says so in the app.
+When the relay is going to close and there is time, it is announced on the project site and in
+`RIM_INSTANCE_NOTICE`, which the app shows where people sign in, and `RIM_LIMIT_ACCOUNTS` is set
+at or below the number of accounts there are, which closes signups and says so in the app. A
+test run promises no notice period.
 
 People then move to another relay, a server of their own or one someone else runs, with the
 desktop app's Settings > Security > "Switch relays" (`docs/relay-client.md` in rim-ui; the
@@ -227,16 +226,16 @@ Per local user, set in `deploy/.env`; the compose file has the public relay's va
 
 ### The account cap
 
-`RIM_LIMIT_ACCOUNTS` in `deploy/.env`: **FILL**: the public relay's value, the number "Who pays
-for it" carries. Unset, the relay takes anyone who does the proof-of-work.
+`RIM_LIMIT_ACCOUNTS` in `deploy/.env`. The public relay sets none for now and takes anyone who
+does the proof-of-work; the operator sets a cap at any time with `dc up -d`.
 
 It counts the people who signed up here, those waiting out their deletion grace period included,
 since they can still cancel; it does not count the `r_` rows of people from other servers or the
 tombstones of purged accounts, so each purge frees a place. At the cap every signup is refused
 with `REGISTRATION_FULL`, "this server is full and takes no new accounts; run your own server or
 sign up on another one": a proof-of-work, a signup link from `invite create` and a person from
-another server signing up here with their key alike. The cap is what the budget carries, so an
-invite does not get past it; raise the cap to let someone in. The app reads
+another server signing up here with their key alike. The cap is the most the operator chose to
+carry, so an invite does not get past it; raise the cap to let someone in. The app reads
 `serverInfo.registrationFull` and the discovery document says `"registration":{"full":true}`, so
 people see it before they do the work. Signups count one at a time under a database lock, so
 two at once never pass the cap. Each refusal is audited as `signup_refused_registration_full`.
@@ -285,7 +284,7 @@ month of normal traffic shows the baseline.
 | Proof-of-work signups | audit `relay.registration_pow` per hour; log `refused a signup's proof-of-work` | **FILL** above the weekly hourly mean |
 | Blocked principals knocking | audit `relay.blocked_principal_refused` and `blocked_email_refused` | **FILL** |
 | Open abuse reports | `rim-relay abuse-reports list --open` | any older than the response time below |
-| Accounts against the cap | the query in "The account cap"; audit `signup_refused_registration_full` | **FILL**: e.g. 90% of `RIM_LIMIT_ACCOUNTS` |
+| Accounts against the cap | the query in "The account cap"; audit `signup_refused_registration_full` | 90% of `RIM_LIMIT_ACCOUNTS`, once one is set |
 
 ```sh
 dc logs --since 1h rim | grep -c '"event":"relay.registration_pow"'

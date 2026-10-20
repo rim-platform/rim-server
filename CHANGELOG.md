@@ -182,8 +182,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   that the server is full and points to running a server or signing up on another one. The new
   `ServerInfo.registrationFull` and `ServerLimits.accounts`, and `registration.full` in the
   discovery document beside the descriptor (`server-to-server-v1.md`), say so before anyone
-  tries. `docs/operations/relay-public.md` says who pays for the public relay, what it costs
-  and what happens if it shuts down.
+  tries. `docs/operations/relay-public.md` says the public relay is a first test run with no
+  guarantee against data loss, and what happens if it shuts down.
 
 ### Changed
 
