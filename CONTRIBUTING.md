@@ -52,6 +52,15 @@ cargo test --workspace
 cargo audit --deny unsound
 ```
 
+A change to the shell scripts in `deploy/` or `scripts/` also passes these, which CI runs in
+the `Lint & Format` job:
+
+```sh
+shellcheck -x deploy/*.sh scripts/release/*.sh scripts/deploy/*.sh
+scripts/release/test-set-version.sh
+scripts/deploy/test-deploy.sh                # upgrade.sh and rim-deploy.sh with stub commands
+```
+
 `cargo audit --deny unsound` fails on a known vulnerability or an unsoundness advisory in
 `Cargo.lock`. An advisory that cannot be fixed yet goes in `.cargo/audit.toml` with why it does
 not apply and when the entry comes out.

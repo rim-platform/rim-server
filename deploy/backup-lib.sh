@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# Helpers shared by backup.sh, restore.sh and restore-drill.sh; sourced, never run.
+# Helpers shared by backup.sh, restore.sh, restore-drill.sh and upgrade.sh; sourced, never run.
 #
 # COMPOSE_FILE and COMPOSE_PROJECT_NAME pick the deployment as they do for docker compose
-# itself; without COMPOSE_FILE it is deploy/compose.yml. RIM_ENV_FILE names the env file,
-# deploy/.env by default.
+# itself, from the environment or the env file; without COMPOSE_FILE it is deploy/compose.yml.
+# RIM_ENV_FILE names the env file, deploy/.env by default.
 
 deploy_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 env_file=${RIM_ENV_FILE:-$deploy_dir/.env}
@@ -22,7 +22,7 @@ say() {
 # docker compose on the deployment's files and env file.
 compose() {
 	local args=()
-	if [[ -z ${COMPOSE_FILE:-} ]]; then
+	if [[ -z $(setting COMPOSE_FILE) ]]; then
 		args+=(-f "$deploy_dir/compose.yml")
 	fi
 	if [[ -f $env_file ]]; then
@@ -59,17 +59,27 @@ running() {
 	[[ -n $(compose ps --status running -q "$1") ]]
 }
 
-# Waits until the server's /readyz answers 200, up to RIM_READY_TIMEOUT seconds (180).
-wait_ready() {
-	local deadline=$((SECONDS + ${RIM_READY_TIMEOUT:-180})) answer=""
-	say "waiting for /readyz"
-	while ((SECONDS < deadline)); do
-		if answer=$(compose exec -T rim curl -fsS http://localhost:8080/readyz 2>/dev/null); then
-			printf '%s\n' "$answer"
+# Runs a command until it succeeds, once every 3 seconds for the number of seconds given (the
+# command's own run time comes on top), and prints its output once it does. Returns 1 when it
+# never succeeded.
+retry_for() {
+	local tries=$((($1 + 2) / 3)) out
+	shift
+	while ((tries-- > 0)); do
+		if out=$("$@" 2>/dev/null); then
+			printf '%s\n' "$out"
 			return 0
 		fi
-		sleep 3
+		((tries == 0)) || sleep 3
 	done
+	return 1
+}
+
+# Waits until the server's /readyz answers 200, up to RIM_READY_TIMEOUT seconds (180).
+wait_ready() {
+	say "waiting for /readyz"
+	retry_for "${RIM_READY_TIMEOUT:-180}" compose exec -T rim curl -fsS http://localhost:8080/readyz &&
+		return 0
 	compose exec -T rim curl -sS http://localhost:8080/readyz >&2 || true
 	compose logs --tail 40 rim >&2 || true
 	die "the server was not ready within ${RIM_READY_TIMEOUT:-180}s"
