@@ -350,6 +350,76 @@ pub(crate) async fn build_s2s(
     })
 }
 
+/// Check the configured default workspace, apply the definition file to the claimed one, or
+/// write a new owner claim link, and say in the log which happened. The log names the claim
+/// link file, never the link.
+async fn start_default_workspace(
+    config: &RIMConfig,
+    repos: &AppRepos,
+    setting: &rim_infra_services::default_workspace::DefaultWorkspace,
+    direct_space_id: rim_core::server::model::ServerId,
+    signups_take_tokens: bool,
+) -> std::io::Result<()> {
+    use rim_infra_services::default_workspace::{
+        DefaultWorkspace, StartContext, StartRepos, Started, start,
+    };
+
+    let variable = match setting {
+        DefaultWorkspace::Defined(_) => "RIM_DEFAULT_WORKSPACE_FILE",
+        _ => "RIM_DEFAULT_WORKSPACE",
+    };
+    let link_base = crate::invite_cmd::base_url(config, None);
+    let started = start(
+        &StartRepos {
+            default_workspace_repo: Arc::clone(&repos.default_workspace_repo),
+            instance_invite_repo: Arc::clone(&repos.instance_invite_repo),
+            server_repo: Arc::clone(&repos.server_repo),
+            conversation_repo: Arc::clone(&repos.conversation_repo),
+            dm_policy_repo: Arc::clone(&repos.dm_policy_repo),
+        },
+        setting,
+        StartContext {
+            direct_space_id,
+            signups_take_tokens,
+            link_base: &link_base,
+            now: chrono::Utc::now(),
+        },
+    )
+    .await
+    .map_err(io_error(variable))?;
+    match started {
+        Started::None => {}
+        Started::Fixed(workspace) => tracing::info!(
+            target: "audit",
+            server_id = %workspace,
+            "RIM_DEFAULT_WORKSPACE is set: every new account joins this workspace"
+        ),
+        Started::Applied { workspace, changes } => tracing::info!(
+            target: "audit",
+            server_id = %workspace,
+            renamed_to = ?changes.renamed_to,
+            channels_added = ?changes.channels_added,
+            topics_set = ?changes.topics_set,
+            dm_policy_set = changes.dm_policy_set,
+            "RIM_DEFAULT_WORKSPACE_FILE applied to the default workspace; every new account \
+             joins it"
+        ),
+        Started::ClaimWaiting {
+            file,
+            expires_at,
+            workspace_deleted,
+        } => tracing::warn!(
+            target: "audit",
+            file = %file.display(),
+            expires_at = %expires_at,
+            workspace_deleted,
+            "the default workspace of RIM_DEFAULT_WORKSPACE_FILE is waiting for its owner: \
+             sign up through the link in the file to create and own it"
+        ),
+    }
+    Ok(())
+}
+
 pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime> {
     // Checked first, so a misconfigured server stops before it touches the database or disk.
     let mut key_login_audiences = config
@@ -362,6 +432,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let terms_page = config.terms_page().map_err(std::io::Error::other)?;
     let instance_policy = config
         .instance_policy(terms_page.as_ref())
+        .map_err(std::io::Error::other)?;
+    let default_workspace = config
+        .default_workspace_setting()
         .map_err(std::io::Error::other)?;
     let instance_limits = config.instance_limits().map_err(std::io::Error::other)?;
     let dm_policy = config.dm_policy().map_err(std::io::Error::other)?;
@@ -415,22 +488,16 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     let s2s = build_s2s(config, &db, &raw_db, &registration_mode).await?;
 
-    // The default workspace must be an ordinary workspace of this server; checked once the
-    // direct space exists, before any signup can run.
-    if let Some(workspace) = instance_policy.default_workspace {
-        rim_infra_services::default_workspace::check(
-            repos.server_repo.as_ref(),
-            s2s.direct_space_id,
-            workspace,
-        )
-        .await
-        .map_err(io_error("RIM_DEFAULT_WORKSPACE"))?;
-        tracing::info!(
-            target: "audit",
-            server_id = %workspace,
-            "RIM_DEFAULT_WORKSPACE is set: every new account joins this workspace"
-        );
-    }
+    // The default workspace is checked, applied or offered for claiming once the direct space
+    // exists, before any signup can run.
+    start_default_workspace(
+        config,
+        &repos,
+        &default_workspace,
+        s2s.direct_space_id,
+        registration_mode != rim_services::auth::dto::RegistrationMode::Open,
+    )
+    .await?;
 
     // The deny list is in force before the listener binds.
     let ip_block_service: Arc<dyn rim_services::ip_block::service::IpBlockService> =
@@ -523,7 +590,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             terms_url: instance_policy.terms_url.clone(),
             signup_requires_keys: instance_policy.signup_requires_keys,
             dm_policy: dm_policy.clone(),
-            default_workspace: instance_policy.default_workspace,
+            default_workspace,
             handle_domain: s2s.descriptor_settings.handle_domain.clone(),
             minimum_age: instance_policy.minimum_age,
         },

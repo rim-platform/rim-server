@@ -578,6 +578,17 @@ impl AppServiceProvider for TestAppServiceProvider {
         // No resolver test here calls it, so an unprimed mock is enough.
         Arc::new(rim_services::dm_policy::service::MockDmPolicyService::new())
     }
+
+    fn default_workspace_service(
+        &self,
+    ) -> Arc<dyn rim_services::default_workspace::DefaultWorkspaceService> {
+        // The server names no default workspace unless a test's instance policy does.
+        let mut service = rim_services::default_workspace::MockDefaultWorkspaceService::new();
+        service
+            .expect_current()
+            .returning(|| Box::pin(async { Ok(None) }));
+        Arc::new(service)
+    }
 }
 
 /// `request` on an instance where `disabled` are switched off: request data takes precedence

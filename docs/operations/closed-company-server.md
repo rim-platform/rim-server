@@ -28,9 +28,18 @@ only, and the operator invites each person (`rim-server invite create`, "The fir
 colleagues reach each other at once; its Owner can still set `REQUESTS` for a large workspace
 (`setWorkspaceDmPolicy`).
 
-Name the company's workspace as the server's default workspace, so every person the operator
+Make the company's workspace the server's default workspace, so every person the operator
 invites joins it, with its public channels, the moment their account exists ("A default
-workspace" in `docs/self-hosting.md`):
+workspace" in `docs/self-hosting.md`). On a new server, describe it in
+`deploy/default-workspace.json` (the company's name and channels, `claimGrantsOperator` left
+out) and point the server at it; the first start writes an owner claim link to
+`/data/owner-claim.txt`, and the person who will own the workspace signs up through it:
+
+```sh
+RIM_DEFAULT_WORKSPACE_FILE=/config/default-workspace.json
+```
+
+On a server whose workspace already exists, name it by its id instead:
 
 ```sh
 # The id of the company's workspace on this server.

@@ -8,6 +8,7 @@ use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
 use rim_core::custom_emoji::repository::CustomEmojiRepository;
+use rim_core::default_workspace::repository::DefaultWorkspaceRepository;
 use rim_core::device_link::repository::DeviceLinkRepository;
 use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::e2ee::repository::E2eeRepository;
@@ -76,6 +77,7 @@ pub struct AppRepos {
     pub subscription_repo: Arc<dyn SubscriptionRepository>,
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
     pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
+    pub default_workspace_repo: Arc<dyn DefaultWorkspaceRepository>,
 }
 
 #[derive(Clone)]
@@ -154,6 +156,10 @@ pub struct AuthRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     /// Ban checks on the workspace join paths.
     pub moderation_repo: Arc<dyn ModerationRepository>,
+    /// The DM policy a claimed default workspace starts with.
+    pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
+    /// The claimed default workspace and its owner claim.
+    pub default_workspace_repo: Arc<dyn DefaultWorkspaceRepository>,
 }
 
 impl AuthRepos {
@@ -169,6 +175,8 @@ impl AuthRepos {
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             moderation_repo: Arc::clone(&self.moderation_repo),
             user_repo: Arc::clone(&self.user_repo),
+            dm_policy_repo: Arc::clone(&self.dm_policy_repo),
+            default_workspace_repo: Arc::clone(&self.default_workspace_repo),
         }
     }
 }
@@ -335,6 +343,8 @@ impl AppRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             moderation_repo: Arc::clone(&self.moderation_repo),
+            dm_policy_repo: Arc::clone(&self.dm_policy_repo),
+            default_workspace_repo: Arc::clone(&self.default_workspace_repo),
         }
     }
 
@@ -721,6 +731,11 @@ impl AppRepos {
             dm_policy_repo: Arc::new(sea_orm_impl::dm_policy::SeaOrmDmPolicyRepository::new(
                 handle.clone(),
             )),
+            default_workspace_repo: Arc::new(
+                sea_orm_impl::default_workspace::SeaOrmDefaultWorkspaceRepository::new(
+                    handle.clone(),
+                ),
+            ),
         }
     }
 }
