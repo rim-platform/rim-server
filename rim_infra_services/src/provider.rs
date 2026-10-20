@@ -151,6 +151,8 @@ impl DefaultAppServiceProvider {
         // Shared so password and key-only signups count against one open-mode budget per IP.
         let signup_rate_limiter =
             crate::registration_rate_limiter::RegistrationRateLimiter::signup_default();
+        // Shared so a signup on either path refreshes the "full" answer the other gives.
+        let account_cap = crate::account_cap::AccountCap::new(limits.accounts);
         let auth_service: Arc<dyn AuthService> = Arc::new(
             crate::auth::DefaultAuthService::new(
                 repos.for_auth(),
@@ -168,7 +170,8 @@ impl DefaultAppServiceProvider {
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
             .with_signup_requires_keys(federation.signup_requires_keys)
-            .with_default_workspace(federation.default_workspace.clone()),
+            .with_default_workspace(federation.default_workspace.clone())
+            .with_account_cap(account_cap.clone()),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -202,7 +205,8 @@ impl DefaultAppServiceProvider {
             .with_reserved_names(federation.reserved_names.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
-            .with_default_workspace(federation.default_workspace.clone());
+            .with_default_workspace(federation.default_workspace.clone())
+            .with_account_cap(account_cap);
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }

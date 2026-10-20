@@ -374,6 +374,18 @@ impl TestCtx {
         &self,
         limits: rim_services::limits::InstanceLimits,
     ) -> (rim_api::AppSchema, std::sync::Arc<RecordingBroadcaster>) {
+        self.build_with_limits_in(
+            limits,
+            rim_services::auth::dto::RegistrationMode::InviteOnly,
+        )
+    }
+
+    /// [`Self::build_with_limits`] in `registration_mode`.
+    pub fn build_with_limits_in(
+        &self,
+        limits: rim_services::limits::InstanceLimits,
+        registration_mode: rim_services::auth::dto::RegistrationMode,
+    ) -> (rim_api::AppSchema, std::sync::Arc<RecordingBroadcaster>) {
         let events = std::sync::Arc::new(RecordingBroadcaster::default());
         let (provider, observers) = test_provider(
             &self.conn,
@@ -382,11 +394,7 @@ impl TestCtx {
             rim_infra_services::FederationHooks::default(),
             limits,
         );
-        let schema = schema_for(
-            std::sync::Arc::new(provider),
-            observers,
-            rim_services::auth::dto::RegistrationMode::InviteOnly,
-        );
+        let schema = schema_for(std::sync::Arc::new(provider), observers, registration_mode);
         (schema, events)
     }
 

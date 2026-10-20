@@ -26,14 +26,16 @@ fi
 drill_project=${RIM_DRILL_PROJECT:-rim-drill}
 [[ $drill_project != "$(project_name 2>/dev/null)" ]] || die "the drill project is the deployment's own project"
 
-# The drill's own env file: the deployment's images and compose files, nothing else of its
-# settings.
+# The drill's own env file: the deployment's images and compose files and the relay overlay's
+# two required settings, nothing else of its settings.
 drill_env=$(mktemp)
 cat >"$drill_env" <<EOF
 POSTGRES_PASSWORD=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 RIM_DOMAIN=localhost
 RIM_PUBLIC_BASE_URL=
 RIM_KEY_LOGIN_AUDIENCES=localhost:8080
+RIM_ROLE=$(setting RIM_ROLE)
+RIM_CADDYFILE=$(setting RIM_CADDYFILE)
 RIM_VERSION=$(setting RIM_VERSION)
 RIM_SERVER_IMAGE=$(setting RIM_SERVER_IMAGE)
 RIM_WEB_IMAGE=$(setting RIM_WEB_IMAGE)

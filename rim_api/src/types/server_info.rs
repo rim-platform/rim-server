@@ -1,7 +1,10 @@
 //! GraphQL type describing the running server build and its features.
 
+use std::sync::Arc;
+
 use async_graphql::*;
 use rim_core::server_feature::model::{FeatureState, ServerFeature};
+use rim_services::auth::service::AuthService;
 use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::feature::service::FeatureGate;
 use rim_services::limits::InstanceLimits;
@@ -12,6 +15,7 @@ pub const API_VERSION: i32 = 1;
 
 /// The running server build, the API version it speaks and the optional features it runs.
 #[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
 pub struct ServerInfo {
     /// The server's release version, e.g. `0.1.0`.
     pub version: String,
@@ -81,6 +85,9 @@ pub struct ServerLimits {
     /// Pending invitations to encrypted conversations one user holds; past it, adding them to
     /// one more answers `VALIDATION`.
     pub pending_invites_per_user: Option<u32>,
+    /// Local accounts the instance holds, those waiting out a deletion grace period included;
+    /// at it every signup answers `REGISTRATION_FULL` and `serverInfo.registrationFull` is true.
+    pub accounts: Option<u32>,
 }
 
 impl From<&InstanceLimits> for ServerLimits {
@@ -99,6 +106,7 @@ impl From<&InstanceLimits> for ServerLimits {
             message_bytes: limits.message_bytes,
             probation_hours: limits.probation_hours,
             pending_invites_per_user: limits.pending_invites_per_user,
+            accounts: limits.accounts,
         }
     }
 }
@@ -122,6 +130,23 @@ pub struct InstancePolicy {
     /// The workspace every new account joins as a Member, when configured by id; `None` leaves
     /// `serverInfo` to the workspace an owner claimed from the definition file, if any.
     pub default_workspace: Option<rim_core::server::model::ServerId>,
+}
+
+#[ComplexObject]
+impl ServerInfo {
+    /// Whether the instance holds as many local accounts as `limits.accounts` allows, so every
+    /// signup answers `REGISTRATION_FULL`; false when there is no cap. The answer may be up to half
+    /// a minute old. A client says the server is full before anyone tries, and points
+    /// to another server or to running one.
+    async fn registration_full(&self, ctx: &Context<'_>) -> bool {
+        let Ok(auth) = ctx.data::<Arc<dyn AuthService>>() else {
+            return false;
+        };
+        auth.registration_full().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not tell whether registration is full");
+            false
+        })
+    }
 }
 
 impl ServerInfo {
