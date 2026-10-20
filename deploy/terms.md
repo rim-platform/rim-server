@@ -49,9 +49,10 @@ notice.
 
 - Your account: username, display name, profile, public keys and devices, and when you
   accepted these terms.
-- Direct messages and encrypted groups are end-to-end encrypted. The server stores and
-  forwards them but cannot read them; it does see who talks to whom and when, which it needs
-  to deliver them.
+- Direct messages and groups marked as encrypted, which the RIM apps do by default, are
+  end-to-end encrypted. The server stores and forwards them but cannot read them; it does see
+  who talks to whom and when, which it needs to deliver them. A direct message or group that is
+  not marked as encrypted is stored readable, like a channel.
 - Messages in workspace channels are not end-to-end encrypted. The server stores them and can
   read them, and so can the people who run it.
 - The IP addresses you connect from appear in the server's logs, which are kept for a limited
