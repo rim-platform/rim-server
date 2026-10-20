@@ -94,6 +94,9 @@ USER rim
 #                           (default: true); password sign-in of existing accounts still works
 #   RIM_DEFAULT_WORKSPACE — id of a workspace here every new account joins as a member
 #                           (default: none); one that does not exist stops the server at boot
+#   RIM_DEFAULT_WORKSPACE_FILE — JSON definition of the default workspace (default: none);
+#                           unclaimed, each start writes a single-use owner claim link to
+#                           <RIM_DATA_DIR>/owner-claim.txt; an invalid file stops the server
 #   RIM_NOTIFICATION_DIGEST_INTERVAL_SECS — Seconds between digest runs, at least 60 (default: 900)
 #   RIM_SMTP_HOST         — SMTP server; without it or RIM_SMTP_FROM mail is only logged
 #   RIM_SMTP_PORT         — SMTP port (default: 587)

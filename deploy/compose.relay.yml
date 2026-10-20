@@ -15,6 +15,10 @@ services:
   rim:
     environment:
       RIM_ROLE: relay
+      # The default workspace every new account joins, from deploy/default-workspace.json:
+      # the first start writes its owner claim link to /data/owner-claim.txt. Set it empty in
+      # deploy/.env to host none.
+      RIM_DEFAULT_WORKSPACE_FILE: ${RIM_DEFAULT_WORKSPACE_FILE-/config/default-workspace.json}
       # Signups: a proof-of-work of 24 bits (about 16.7 million hashes) or an invite.
       RIM_REGISTRATION_POW_BITS: ${RIM_REGISTRATION_POW_BITS:-24}
       # Quotas per local user.

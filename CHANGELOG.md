@@ -23,6 +23,16 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `RIM_DEFAULT_WORKSPACE_FILE`: the default workspace described in a JSON file (its name, DM
+  policy and channels with topics), checked at every start. While nobody has claimed it, each
+  start writes a single-use owner claim link to `<RIM_DATA_DIR>/owner-claim.txt`; the account
+  that signs up through it creates the workspace as its Owner, optionally becomes an instance
+  operator (`claimGrantsOperator`), and every existing local account joins as a Member. Later
+  starts add new channels, topics, the name and the DM policy from the file and delete nothing.
+  `deploy/default-workspace.json` is the public relay's workspace; the relay overlay uses it and
+  `compose.yml` mounts it at `/config/default-workspace.json`. The signup through the claim link
+  answers the new workspace as `serverId`, and `serverInfo.defaultWorkspace` names it from then
+  on. "A default workspace" in `docs/self-hosting.md` describes it.
 - `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
   `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
   and memory use (job `cadvisor`). cAdvisor reaches the Docker and containerd sockets only

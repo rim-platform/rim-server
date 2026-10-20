@@ -26,6 +26,7 @@ alias rim-sql='docker compose exec -T postgres psql -U rim -d rim'
 | What | Where | Backed up |
 |---|---|---|
 | Configuration | `deploy/.env` on the host (secrets), `deploy/compose.yml` and `deploy/compose.relay.yml` | `.env` in every backup; the compose files are in Git |
+| Default workspace | `deploy/default-workspace.json`, mounted at `/config/default-workspace.json`; until claimed, the owner claim link in `/data/owner-claim.txt` | the file is in Git; the link is never backed up on purpose: a restart issues a new one |
 | Database | volume `rim-relay_postgres_data` | nightly backup, "Backups" |
 | Server key | `/data/server-key.json` in volume `rim-relay_rim_data` | with every dump |
 | Server recovery key | offline only, "The server recovery key" | its own copies |
@@ -97,6 +98,26 @@ rim-relay franking-key rotate
 
 Rotate when `/data` may have leaked. Losing the file loses the ability to verify reports of
 messages sent before: back it up with everything else in `/data`.
+
+## The default workspace
+
+The relay overlay makes `deploy/default-workspace.json` the server's default workspace: every new
+account joins it as a Member with its public channels. Its owner claims it once, right after the
+first start:
+
+```sh
+dc exec rim cat /data/owner-claim.txt
+```
+
+Open the link and sign up with a key. The signup creates the workspace with the file's name,
+channels, topics and DM policy, makes the account its Owner and, with `claimGrantsOperator`, an
+instance operator, and deletes the file. A lost or leaked link before the claim is a restart
+(`dc restart rim`): each start revokes the previous link and writes a new one. After the claim,
+add the owner's name to `RIM_RESERVED_NAMES`.
+
+The file changes only through a release: each start applies it to the claimed workspace (new
+channels, topics, the name, the DM policy) and deletes nothing. A channel is renamed in the app
+first and then in the file. Ownership moves in the app.
 
 ## Backups
 

@@ -100,6 +100,8 @@ services:
       RIM_REGISTRATION_POW_BITS:
       RIM_SIGNUP_REQUIRE_KEYS:
       RIM_DEFAULT_WORKSPACE:
+      # The default workspace's definition, mounted below: /config/default-workspace.json.
+      RIM_DEFAULT_WORKSPACE_FILE:
       RIM_SMTP_HOST:
       RIM_SMTP_PORT:
       RIM_SMTP_USERNAME:
@@ -156,9 +158,11 @@ services:
       # custom_emoji, workspace_plugins, ai_commands. A switched-off feature's API fails with
       # FEATURE_DISABLED.
       # RIM_FEATURES_DISABLED: attachments,custom_emoji
-    # The image's rim user (uid 1001) writes only to this volume and /tmp.
+    # The image's rim user (uid 1001) writes only to this volume and /tmp. The default
+    # workspace's definition is read from the deploy directory, read-only.
     volumes:
       - rim_data:/data
+      - ./default-workspace.json:/config/default-workspace.json:ro
     tmpfs: [/tmp]
     read_only: true
     cap_drop: [ALL]

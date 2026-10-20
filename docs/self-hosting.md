@@ -354,15 +354,82 @@ set it once their accounts exist, since it refuses those names to new signups to
 
 ## A default workspace
 
-`RIM_DEFAULT_WORKSPACE` (commented out in `deploy/.env.example`) names a workspace on this
-server that every new account joins as a Member, whichever way it signs up: open,
-proof-of-work, with an instance invite or a workspace invite, with a key or a password. The
-account joins as soon as it exists and gets the workspace's public channels like any new member,
-so people land where others already are instead of in an empty direct space.
+A server may name one workspace that every new account joins as a Member, whichever way it
+signs up: open, proof-of-work, with an instance invite or a workspace invite, with a key or a
+password. The account joins as soon as it exists and gets the workspace's public channels like
+any new member, so people land where others already are instead of in an empty direct space.
 `serverInfo.defaultWorkspace` names the workspace, so a client can open it after a signup.
-Unset, nothing changes: a new account joins only the workspace its invite names.
+Without one, nothing changes: a new account joins only the workspace its invite names.
 
-Create the workspace in the app, look its id up, set it in `deploy/.env` and run `dc up -d`:
+There are two ways to name it: describe it in a file, or point at a workspace made in the app.
+Setting both stops the server at boot.
+
+### From a definition file
+
+`RIM_DEFAULT_WORKSPACE_FILE` names a JSON file that describes the workspace. `compose.yml`
+mounts `deploy/default-workspace.json` read-only at `/config/default-workspace.json`; set the
+variable to that path in `deploy/.env` (the relay overlay sets it already). The committed file is
+the project's own workspace on the public relay; edit it for yours:
+
+```json
+{
+  "name": "RIM",
+  "claimGrantsOperator": true,
+  "dm": { "outsideFloor": "REQUESTS", "memberDefault": "DIRECT" },
+  "channels": [
+    { "name": "general", "topic": "Anything about RIM" },
+    { "name": "announcements", "topic": "Releases and news from the project" }
+  ]
+}
+```
+
+- `name` (required): the workspace's name, at most 128 characters.
+- `claimGrantsOperator` (default `false`): the account that claims the workspace also becomes an
+  instance operator, as `rim-server operator grant` would make it.
+- `dm` (optional): the workspace's DM policy, as `setWorkspaceDmPolicy` takes it:
+  `outsideFloor` is `NONE`, `REQUESTS` or `CLOSED`, `memberDefault` is `DIRECT` or `REQUESTS`.
+- `channels` (optional): each with a `name` (at most 100 characters, unique in the file), an
+  optional `topic` (at most 512 characters) and `private` (default `false`).
+
+The server checks the file at every start; a field it does not take, a missing name, a value out
+of range or a file it cannot read stops it at boot with a message naming the field. The owner is
+not in the file: it is claimed.
+
+**The claim.** While nobody has claimed the workspace, each start issues a single-use owner
+claim link, an instance invite valid for 30 days, and writes it to `owner-claim.txt` in the data
+directory (`/data/owner-claim.txt` in the compose stack), readable by its owner only. The log says
+that a claim is waiting and names the file, never the link. Each start revokes the previous link,
+so a lost or expired link is a restart. Read it and open it in the app:
+
+```sh
+dc exec rim cat /data/owner-claim.txt
+```
+
+The account that signs up through the link, with a key or a password, creates the workspace in
+the same step: the workspace with that account as its Owner, the channels with their topics, the
+DM policy, and the instance operator role when `claimGrantsOperator` is set. Every local account
+that already exists joins it as a Member. The link is then used up and the file deleted; nothing
+needs editing and nothing restarts. Only a new signup claims: an account that already exists
+cannot, and nobody can claim by registering a name first, since only someone who can read the
+data directory has the link. The link is an invite, so it works on an invite-only server and
+stands in for the proof-of-work in proof-of-work mode; a server with `RIM_OPEN_REGISTRATION`,
+whose signups take no invite, refuses to start until the workspace is claimed.
+
+**Every later start** applies the file to the claimed workspace again: it renames the workspace
+when the name changed, creates the channels missing by name (with no members; new accounts join
+the public ones), sets the topics the file gives and the DM policy. It never deletes a channel
+or a member, never changes a channel's privacy and never moves ownership (the Owner transfers
+it in the app). A channel renamed in the file is a new channel: rename it in the app first, then
+in the file. A channel or topic made in the app and left out of the file stays as it is. When
+the claimed workspace is deleted, the next start offers a new claim. Unsetting the variable
+stops the default workspace (signups join nothing) and revokes a waiting claim link; the
+workspace itself stays.
+
+### A workspace made in the app
+
+`RIM_DEFAULT_WORKSPACE` (commented out in `deploy/.env.example`) names a workspace on this server
+by its id. Create the workspace in the app, look its id up, set it in `deploy/.env` and run
+`dc up -d`:
 
 ```sh
 dc exec -T postgres psql -U rim -d rim -c "SELECT id, name FROM server WHERE kind = 'workspace'"
@@ -370,12 +437,15 @@ dc exec -T postgres psql -U rim -d rim -c "SELECT id, name FROM server WHERE kin
 
 A value that is not a workspace id, a workspace that does not exist on this server, and the
 direct space each stop the server at boot. Accounts that existed before are not added; invite
-them. An account already in the workspace, or banned from it, is left as it is.
+them. A workspace deleted while the server runs stops the joins until the setting changes, and
+the next start refuses its id.
+
+### Either way
+
+An account already in the workspace, or banned from it, is left as it is.
 `RIM_LIMIT_MEMBERS_PER_WORKSPACE` does not keep a new account out of the default workspace, but
-an invite to it still follows the cap. A workspace deleted while the server runs stops the joins
-until the setting changes, and the next start refuses its id. The workspace's channels are
-ordinary plaintext channels; DMs and encrypted groups are untouched, and other servers see an
-ordinary membership.
+an invite to it still follows the cap. The workspace's channels are ordinary plaintext channels;
+DMs and encrypted groups are untouched, and other servers see an ordinary membership.
 
 ## Who may start a DM
 

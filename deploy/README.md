@@ -66,6 +66,21 @@ dc exec rim cat /data/server-recovery-key.txt
 dc exec rim rm /data/server-recovery-key.txt
 ```
 
+The relay overlay names `default-workspace.json` as the server's default workspace
+(`RIM_DEFAULT_WORKSPACE_FILE`); edit the file for your own, or set the variable empty in
+`deploy/.env` to host none. Until somebody claims it, every start writes a single-use owner claim
+link to `/data/owner-claim.txt` and logs that a claim is waiting. Sign the owner's account up
+through that link: the signup creates the workspace with its channels, makes the account its
+Owner (and an instance operator when the file says `claimGrantsOperator`), and deletes the file.
+
+```sh
+dc exec rim cat /data/owner-claim.txt
+```
+
+A lost link is a restart (`dc restart rim`), which revokes the old one. Later starts apply the
+file again: new channels and topics arrive with the next release ("A default workspace" in
+`docs/self-hosting.md`).
+
 Check it answers:
 
 ```sh
