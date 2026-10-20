@@ -140,6 +140,7 @@ TRUNCATE TABLE
   device_request_seen,
   host_delegation,
   host_event_stream,
+  instance_default_workspace,
   instance_invite,
   invite,
   ip_block,

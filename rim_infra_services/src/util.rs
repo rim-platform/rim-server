@@ -552,6 +552,10 @@ mod tests {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 
+        async fn rename(&self, _id: ServerId, _name: &str) -> RepoResult<bool> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
         async fn get_servers_for_user(&self, _user_id: UserId) -> RepoResult<Vec<Server>> {
             Ok(vec![])
         }

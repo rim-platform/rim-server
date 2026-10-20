@@ -144,8 +144,8 @@ pub async fn run_with(
 }
 
 /// Where a signup link points: `--public-url`, else `RIM_PUBLIC_BASE_URL`, else the bind
-/// address.
-fn base_url(config: &RIMConfig, public_url: Option<String>) -> String {
+/// address. The owner claim link of the default workspace points at the same origin.
+pub(crate) fn base_url(config: &RIMConfig, public_url: Option<String>) -> String {
     let base = public_url
         .or_else(|| config.public_base_url())
         .unwrap_or_else(|| format!("http://{}:{}", config.server_host, config.server_port));

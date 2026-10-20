@@ -268,6 +268,14 @@ pub struct RIMConfig {
     /// `RIM_DEFAULT_WORKSPACE`; see [`RIMConfig::default_workspace`].
     pub default_workspace: Option<String>,
 
+    /// A JSON file describing the default workspace: its name, DM policy and channels. While
+    /// nobody has claimed it, each start writes a single-use owner claim link to
+    /// `<RIM_DATA_DIR>/owner-claim.txt`; the account that signs up through the link creates the
+    /// workspace and owns it, and every later start applies the file to it again. Unset, no
+    /// file is read. Cannot be set together with `RIM_DEFAULT_WORKSPACE`. Controlled by
+    /// `RIM_DEFAULT_WORKSPACE_FILE`; see [`RIMConfig::default_workspace_setting`].
+    pub default_workspace_file: Option<String>,
+
     // ── Instance limits (RIM_LIMIT_*) ───────────────────────────────────────
     //
     // Each caps one thing across the instance; 0 sets no cap, and so does unset unless the cap
@@ -447,6 +455,7 @@ impl fmt::Debug for RIMConfig {
             .field("minimum_age", &self.minimum_age)
             .field("signup_requires_keys", &self.signup_requires_keys())
             .field("default_workspace", &self.default_workspace)
+            .field("default_workspace_file", &self.default_workspace_file)
             .field("instance_limits", &self.instance_limits())
             .field(
                 "account_deletion_grace_days",
@@ -524,6 +533,7 @@ impl Default for RIMConfig {
             minimum_age: None,
             signup_require_keys: None,
             default_workspace: None,
+            default_workspace_file: None,
             limit_workspaces_per_user: None,
             limit_members_per_workspace: None,
             limit_channels_per_workspace: None,
@@ -1103,6 +1113,41 @@ impl RIMConfig {
         uuid::Uuid::parse_str(workspace)
             .map(|id| Some(id.into()))
             .map_err(|_| format!("RIM_DEFAULT_WORKSPACE={workspace} is not a workspace id"))
+    }
+
+    /// Where the default workspace comes from: the workspace `RIM_DEFAULT_WORKSPACE` names, the
+    /// definition `RIM_DEFAULT_WORKSPACE_FILE` holds (read and checked here, its claim link file
+    /// in the data directory), or neither.
+    ///
+    /// # Errors
+    /// A message naming both variables when both are set, the message of
+    /// [`RIMConfig::default_workspace`], or one naming the file and the field it refuses.
+    pub fn default_workspace_setting(
+        &self,
+    ) -> Result<rim_infra_services::default_workspace::DefaultWorkspace, String> {
+        use rim_infra_services::default_workspace::{
+            CLAIM_LINK_FILE, DefaultWorkspace, DefinedWorkspace, WorkspaceDefinition,
+        };
+
+        let workspace = self.default_workspace()?;
+        let Some(file) = non_blank(self.default_workspace_file.as_deref()) else {
+            return Ok(workspace.into());
+        };
+        if workspace.is_some() {
+            return Err(
+                "RIM_DEFAULT_WORKSPACE and RIM_DEFAULT_WORKSPACE_FILE are both set; \
+                        set one of them"
+                    .to_string(),
+            );
+        }
+        let definition = WorkspaceDefinition::load(std::path::Path::new(file))
+            .map_err(|e| format!("RIM_DEFAULT_WORKSPACE_FILE={file}: {e}"))?;
+        Ok(DefaultWorkspace::Defined(std::sync::Arc::new(
+            DefinedWorkspace {
+                definition,
+                claim_link_file: std::path::Path::new(&self.data_dir).join(CLAIM_LINK_FILE),
+            },
+        )))
     }
 
     /// The terms page `RIM_TERMS_FILE` names, read and rendered, with its URL under
@@ -2446,6 +2491,107 @@ mod tests {
             config.instance_policy(None).map(|p| p.default_workspace),
             Ok(Some(uuid::Uuid::parse_str(id).expect("uuid").into()))
         );
+    }
+
+    /// A definition file with `contents` in a fresh directory, and that directory.
+    fn definition_file(contents: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rim-definition-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("default-workspace.json");
+        std::fs::write(&file, contents).expect("write definition");
+        (dir, file)
+    }
+
+    #[test]
+    fn default_workspace_file_is_read_checked_and_claimed_into_the_data_dir() {
+        use rim_infra_services::default_workspace::DefaultWorkspace;
+
+        let (dir, file) = definition_file(
+            r#"{ "name": "Lobby", "channels": [{ "name": "general", "topic": "Hi" }] }"#,
+        );
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_DATA_DIR", "/srv/data"),
+            (
+                "RIM_DEFAULT_WORKSPACE_FILE",
+                file.to_str().expect("utf-8 path"),
+            ),
+        ]))
+        .expect("loads");
+        let setting = config.default_workspace_setting().expect("a valid file");
+        let DefaultWorkspace::Defined(defined) = setting else {
+            panic!("expected a definition, got {setting:?}");
+        };
+        assert_eq!(defined.definition.name, "Lobby");
+        assert_eq!(defined.definition.channels[0].title, "general");
+        assert_eq!(
+            defined.claim_link_file,
+            std::path::Path::new("/srv/data/owner-claim.txt")
+        );
+        assert_eq!(
+            config.instance_policy(None).map(|p| p.default_workspace),
+            Ok(None)
+        );
+        std::fs::remove_dir_all(dir).expect("clean up");
+    }
+
+    #[test]
+    fn a_bad_definition_file_names_the_variable_the_file_and_the_field() {
+        let (dir, file) = definition_file(r#"{ "name": "Lobby", "channels": [{ "name": "" }] }"#);
+        let path = file.to_str().expect("utf-8 path").to_string();
+        let config = RIMConfig {
+            default_workspace_file: Some(path.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.default_workspace_setting().unwrap_err(),
+            format!("RIM_DEFAULT_WORKSPACE_FILE={path}: channels[0].name: must not be empty")
+        );
+        std::fs::remove_dir_all(dir).expect("clean up");
+
+        let missing = RIMConfig {
+            default_workspace_file: Some("/nonexistent/workspace.json".to_string()),
+            ..Default::default()
+        };
+        let err = missing.default_workspace_setting().unwrap_err();
+        assert!(
+            err.starts_with("RIM_DEFAULT_WORKSPACE_FILE=/nonexistent/workspace.json: cannot read"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_workspace_id_and_a_definition_file_together_are_refused() {
+        let config = RIMConfig {
+            default_workspace: Some("0199d1a0-7c2e-7b3a-9f10-2c4d5e6f7a8b".to_string()),
+            default_workspace_file: Some("/config/default-workspace.json".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.default_workspace_setting().unwrap_err(),
+            "RIM_DEFAULT_WORKSPACE and RIM_DEFAULT_WORKSPACE_FILE are both set; set one of them"
+        );
+    }
+
+    #[test]
+    fn without_a_file_the_setting_follows_the_workspace_id() {
+        use rim_infra_services::default_workspace::DefaultWorkspace;
+
+        assert!(matches!(
+            RIMConfig::default().default_workspace_setting(),
+            Ok(DefaultWorkspace::None)
+        ));
+        let id = "0199d1a0-7c2e-7b3a-9f10-2c4d5e6f7a8b";
+        let config = RIMConfig {
+            default_workspace: Some(id.to_string()),
+            default_workspace_file: Some("  ".to_string()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.default_workspace_setting(),
+            Ok(DefaultWorkspace::Fixed(workspace))
+                if workspace == uuid::Uuid::parse_str(id).expect("uuid").into()
+        ));
     }
 
     #[test]

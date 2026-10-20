@@ -87,8 +87,9 @@ pub struct DefaultAuthService {
     minimum_age: Option<u8>,
     /// Refuse every password signup.
     signup_requires_keys: bool,
-    /// The workspace every new account joins as a Member; `None` when there is none.
-    default_workspace: Option<rim_core::server::model::ServerId>,
+    /// The workspace every new account joins as a Member, and the definition an owner claim
+    /// creates it from.
+    default_workspace: default_workspace::DefaultWorkspace,
     /// The cap on local accounts every signup checks.
     account_cap: AccountCap,
 }
@@ -131,7 +132,7 @@ impl DefaultAuthService {
             terms_url: None,
             minimum_age: None,
             signup_requires_keys: false,
-            default_workspace: None,
+            default_workspace: default_workspace::DefaultWorkspace::None,
             account_cap: AccountCap::default(),
         }
     }
@@ -258,12 +259,13 @@ impl DefaultAuthService {
         self
     }
 
-    /// Makes every new account a Member of `workspace`.
+    /// Makes every new account a Member of `workspace`: a workspace id, or a definition an owner
+    /// claim creates the workspace from.
     pub fn with_default_workspace(
         mut self,
-        workspace: Option<rim_core::server::model::ServerId>,
+        workspace: impl Into<default_workspace::DefaultWorkspace>,
     ) -> Self {
-        self.default_workspace = workspace;
+        self.default_workspace = workspace.into();
         self
     }
 
@@ -346,7 +348,7 @@ impl DefaultAuthService {
             terms_url: None,
             minimum_age: None,
             signup_requires_keys: false,
-            default_workspace: None,
+            default_workspace: default_workspace::DefaultWorkspace::None,
             account_cap: AccountCap::default(),
         }
     }
@@ -1011,7 +1013,7 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
         let joined_default =
-            default_workspace::join(&signup_repos, self.default_workspace, user.id).await?;
+            default_workspace::join(&signup_repos, &self.default_workspace, user.id).await?;
 
         let (sess, raw_token, csrf) =
             Self::create_session_in_txn(&repos, self.session_ttl, user.id, None, None).await?;
@@ -1216,8 +1218,16 @@ impl AuthService for DefaultAuthService {
             self.limits.members_per_workspace,
         )
         .await?;
+        let claimed = default_workspace::claim(
+            &signup_repos,
+            &self.default_workspace,
+            Some(&token),
+            user.id,
+        )
+        .await?;
+        let claimed_workspace = claimed.as_ref().map(|c| c.workspace_id);
         let joined_default =
-            default_workspace::join(&signup_repos, self.default_workspace, user.id).await?;
+            default_workspace::join(&signup_repos, &self.default_workspace, user.id).await?;
 
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
@@ -1229,11 +1239,12 @@ impl AuthService for DefaultAuthService {
 
         crate::metrics::registered();
         signup::announce_claimed(&token, user.id, username, &self.observers);
+        default_workspace::announce_claim(claimed, user.id, &self.observers);
         default_workspace::announce(joined_default, user.id, username, &self.observers);
 
         Ok(SignupResultDto {
             user_id: user.id,
-            server_id: None,
+            server_id: claimed_workspace,
             session: Self::to_session_dto(&sess),
             session_token: raw_sess_token,
             csrf_token: csrf,
@@ -1301,7 +1312,7 @@ impl AuthService for DefaultAuthService {
         )
         .await?;
         let joined_default =
-            default_workspace::join(&txn_repos.signup_repos(), self.default_workspace, user.id)
+            default_workspace::join(&txn_repos.signup_repos(), &self.default_workspace, user.id)
                 .await?;
         let (sess, raw_sess_token, csrf) =
             Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;

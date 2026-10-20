@@ -46,7 +46,8 @@ pub struct ServerInfo {
     /// The server ids the `PARTNERS` settings name (`RIM_DM_PARTNERS`).
     pub dm_partners: Vec<String>,
     /// The workspace every new account joins as a Member, so a client can open it after a
-    /// signup; null when the server names none (`RIM_DEFAULT_WORKSPACE`).
+    /// signup: the one `RIM_DEFAULT_WORKSPACE` names, or the one an owner claimed from the
+    /// definition file; null when there is none.
     pub default_workspace: Option<ID>,
     /// Where to report abuse on this server; served after `registrationFull`.
     #[graphql(skip)]
@@ -132,7 +133,8 @@ pub struct InstancePolicy {
     pub terms_url: Option<String>,
     /// Whether password signups are refused.
     pub signup_requires_keys: bool,
-    /// The workspace every new account joins as a Member; `None` when there is none.
+    /// The workspace every new account joins as a Member, when configured by id; `None` leaves
+    /// `serverInfo` to the workspace an owner claimed from the definition file, if any.
     pub default_workspace: Option<rim_core::server::model::ServerId>,
     /// Where to report abuse; `None` when the operator names none.
     pub abuse_contact: Option<String>,

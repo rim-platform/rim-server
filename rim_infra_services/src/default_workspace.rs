@@ -1,19 +1,313 @@
 //! The server's default workspace: the workspace every account created here joins as a Member.
+//! It is a workspace made in the app and named by its id, or the workspace a definition file
+//! describes, which the first account to sign up through the owner claim link creates and owns.
 
-use chrono::Utc;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
+
+use rim_core::auth::repository::InstanceInviteRepository;
+use rim_core::conversation::model::{ConversationType, NewConversation};
+use rim_core::conversation::repository::ConversationRepository;
+use rim_core::default_workspace::repository::DefaultWorkspaceRepository;
+use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_services::ServiceResult;
+use rim_services::default_workspace::DefaultWorkspaceService;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
-use crate::signup::SignupRepos;
+use crate::instance_invite::{InviteTerms, MAX_TTL_DAYS, issue};
+use crate::secret_file::write_secret;
+use crate::signup::{CheckedToken, SignupRepos};
 use crate::util::add_workspace_member;
 
+#[cfg(test)]
+mod claim_tests;
+mod definition;
+
+pub use definition::{ChannelDefinition, DmDefinition, WorkspaceDefinition};
+
+/// The name of the file in the data directory that holds the owner claim link.
+pub const CLAIM_LINK_FILE: &str = "owner-claim.txt";
+
+/// Where the default workspace comes from.
+#[derive(Clone, Debug, Default)]
+pub enum DefaultWorkspace {
+    /// No default workspace: a new account joins only the workspace its invite names.
+    #[default]
+    None,
+    /// A workspace made in the app, named by its id.
+    Fixed(ServerId),
+    /// The workspace a definition file describes, once an owner claimed it.
+    Defined(Arc<DefinedWorkspace>),
+}
+
+impl From<Option<ServerId>> for DefaultWorkspace {
+    fn from(workspace: Option<ServerId>) -> Self {
+        workspace.map_or(Self::None, Self::Fixed)
+    }
+}
+
+/// A definition file and where its owner claim link is written.
+#[derive(Clone, Debug)]
+pub struct DefinedWorkspace {
+    pub definition: WorkspaceDefinition,
+    /// The file holding the owner claim link; the claim deletes it.
+    pub claim_link_file: PathBuf,
+}
+
+/// The repositories the start reads and applies the default workspace with.
+#[derive(Clone)]
+pub struct StartRepos {
+    pub default_workspace_repo: Arc<dyn DefaultWorkspaceRepository>,
+    pub instance_invite_repo: Arc<dyn InstanceInviteRepository>,
+    pub server_repo: Arc<dyn ServerRepository>,
+    pub conversation_repo: Arc<dyn ConversationRepository>,
+    pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
+}
+
+/// What the start found and did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Started {
+    /// No default workspace.
+    None,
+    /// The configured workspace exists.
+    Fixed(ServerId),
+    /// The claimed workspace, with what applying the definition changed.
+    Applied {
+        workspace: ServerId,
+        changes: AppliedChanges,
+    },
+    /// Nothing claimed yet: a new owner claim link, valid until `expires_at`, is in `file`.
+    /// `workspace_deleted` when a workspace was claimed before and has been deleted since.
+    ClaimWaiting {
+        file: PathBuf,
+        expires_at: DateTime<Utc>,
+        workspace_deleted: bool,
+    },
+}
+
+/// What applying a definition to the claimed workspace changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppliedChanges {
+    /// The new name, when the workspace was renamed.
+    pub renamed_to: Option<String>,
+    /// The titles of the channels created.
+    pub channels_added: Vec<String>,
+    /// The titles of the channels whose topic was set.
+    pub topics_set: Vec<String>,
+    /// Whether the DM policy was set.
+    pub dm_policy_set: bool,
+}
+
+/// What the start is told about the server.
+#[derive(Debug, Clone, Copy)]
+pub struct StartContext<'a> {
+    /// The relay's direct space, which can never be the default workspace.
+    pub direct_space_id: ServerId,
+    /// Whether signups take an invite token; an owner claim link needs it.
+    pub signups_take_tokens: bool,
+    /// The origin a claim link points at, without a trailing slash.
+    pub link_base: &'a str,
+    pub now: DateTime<Utc>,
+}
+
+/// Check and apply the default workspace at start, before any signup runs.
+///
+/// - [`DefaultWorkspace::Fixed`]: the workspace must exist and not be the direct space.
+/// - [`DefaultWorkspace::Defined`], claimed: the definition is applied to the workspace (see
+///   [`apply`]).
+/// - [`DefaultWorkspace::Defined`], not claimed: the previous claim invite is revoked, a new
+///   single-use one valid for the longest invite lifetime is issued, and its link
+///   (`<link base>/join/<token>`) is written to the claim link file, readable by its owner
+///   only.
+/// - Otherwise a claim invite left from an earlier start is revoked.
+///
+/// # Errors
+/// A message naming the problem: a missing workspace, a claim waiting on a server whose signups
+/// take no token, a storage error, or a claim link file that cannot be written.
+pub async fn start(
+    repos: &StartRepos,
+    setting: &DefaultWorkspace,
+    ctx: StartContext<'_>,
+) -> Result<Started, String> {
+    let record = repos
+        .default_workspace_repo
+        .record()
+        .await
+        .map_err(|e| format!("could not read the default workspace record: {e}"))?;
+    let defined = match setting {
+        DefaultWorkspace::Defined(defined) => defined,
+        other => {
+            if let Some(invite) = record.claim_invite_id {
+                repos
+                    .instance_invite_repo
+                    .revoke(invite)
+                    .await
+                    .map_err(|e| format!("could not revoke the owner claim invite: {e}"))?;
+            }
+            return match other {
+                DefaultWorkspace::Fixed(workspace) => {
+                    check(repos.server_repo.as_ref(), ctx.direct_space_id, *workspace).await?;
+                    Ok(Started::Fixed(*workspace))
+                }
+                _ => Ok(Started::None),
+            };
+        }
+    };
+    if let Some(workspace) = record.workspace_id {
+        let changes = apply(repos, workspace, &defined.definition)
+            .await
+            .map_err(|e| format!("could not apply the definition to workspace {workspace}: {e}"))?;
+        return Ok(Started::Applied { workspace, changes });
+    }
+    if !ctx.signups_take_tokens {
+        return Err(
+            "the owner claim link is an invite, and open registration takes none; \
+                    turn RIM_OPEN_REGISTRATION off until the workspace is claimed"
+                .to_string(),
+        );
+    }
+    if let Some(invite) = record.claim_invite_id {
+        repos
+            .instance_invite_repo
+            .revoke(invite)
+            .await
+            .map_err(|e| format!("could not revoke the previous owner claim invite: {e}"))?;
+    }
+    let issued = issue(
+        repos.instance_invite_repo.as_ref(),
+        None,
+        InviteTerms {
+            expires_at: Some(ctx.now + Duration::days(MAX_TTL_DAYS)),
+            max_uses: Some(1),
+            email: None,
+        },
+        ctx.now,
+    )
+    .await
+    .map_err(|e| format!("could not issue the owner claim invite: {e}"))?;
+    repos
+        .default_workspace_repo
+        .set_claim_invite(issued.invite.id)
+        .await
+        .map_err(|e| format!("could not record the owner claim invite: {e}"))?;
+    let file = &defined.claim_link_file;
+    remove_claim_link(file).map_err(|e| format!("cannot replace {}: {e}", file.display()))?;
+    write_secret(file, &format!("{}/join/{}\n", ctx.link_base, issued.token))
+        .map_err(|e| format!("{e:#}"))?;
+    tracing::info!(
+        target: "audit",
+        event = "default_workspace_claim_issued",
+        instance_invite_id = %issued.invite.id,
+        expires_at = %issued.invite.expires_at,
+        "owner claim invite issued for the default workspace"
+    );
+    Ok(Started::ClaimWaiting {
+        file: file.clone(),
+        expires_at: issued.invite.expires_at,
+        workspace_deleted: record.claimed_at.is_some(),
+    })
+}
+
+/// Remove the claim link file; a file that is not there is not an error.
+fn remove_claim_link(file: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Apply `definition` to the claimed `workspace`: rename it when the name differs, create the
+/// channels missing by title (with no members; new members join the public ones), set the
+/// topics the definition gives where they differ, and set the DM policy when it differs.
+/// Nothing is deleted, no channel's privacy changes and nobody's membership or role changes.
+///
+/// # Errors
+/// Storage errors; a workspace that no longer exists is `NotFound`.
+pub async fn apply(
+    repos: &StartRepos,
+    workspace: ServerId,
+    definition: &WorkspaceDefinition,
+) -> ServiceResult<AppliedChanges> {
+    let server = repos
+        .server_repo
+        .get_by_id(workspace)
+        .await?
+        .ok_or(rim_services::ServiceError::NotFound)?;
+    let mut changes = AppliedChanges::default();
+    if server.name != definition.name {
+        repos
+            .server_repo
+            .rename(workspace, &definition.name)
+            .await?;
+        changes.renamed_to = Some(definition.name.clone());
+    }
+    for channel in &definition.channels {
+        let existing = repos
+            .conversation_repo
+            .get_channel_by_title(workspace, &channel.title)
+            .await?;
+        let (id, topic) = match existing {
+            Some(conversation) => (conversation.id, conversation.topic),
+            None => {
+                let created = repos
+                    .conversation_repo
+                    .create_conversation_with_members(
+                        new_channel(workspace, channel, None),
+                        &[],
+                        &[],
+                    )
+                    .await?;
+                changes.channels_added.push(channel.title.clone());
+                (created.id, None)
+            }
+        };
+        if channel.topic.is_some() && channel.topic != topic {
+            repos
+                .conversation_repo
+                .update_topic(id, channel.topic.clone())
+                .await?;
+            changes.topics_set.push(channel.title.clone());
+        }
+    }
+    if let Some(dm) = definition.dm {
+        let current = repos.dm_policy_repo.workspace_policy(workspace).await?;
+        if current.is_none_or(|p| {
+            p.outside_floor != dm.outside_floor || p.member_default != dm.member_default
+        }) {
+            repos
+                .dm_policy_repo
+                .set_workspace_policy(workspace, dm.outside_floor, dm.member_default)
+                .await?;
+            changes.dm_policy_set = true;
+        }
+    }
+    Ok(changes)
+}
+
+fn new_channel(
+    workspace: ServerId,
+    channel: &ChannelDefinition,
+    created_by: Option<UserId>,
+) -> NewConversation {
+    NewConversation {
+        server_id: workspace,
+        conversation_type: ConversationType::Channel,
+        title: Some(channel.title.clone()),
+        is_private: channel.private,
+        created_by,
+        encrypted: false,
+    }
+}
+
 /// Check that `workspace` can be the default workspace: it exists on this server and is not the
-/// direct space `direct_space_id`. Run once at start.
+/// direct space `direct_space_id`.
 ///
 /// # Errors
 /// A message naming the problem, or the storage error the lookup failed with.
@@ -32,21 +326,176 @@ pub async fn check(
     }
 }
 
-/// Make the new account `user_id` a Member of `workspace` inside the signup's transaction, with
-/// the public-channel auto-join every new member gets. The members-per-workspace cap does not
-/// apply. Nothing happens without a default workspace, when the account already belongs to it
-/// (it signed up with an invite to it, or was a member from another server), when it is banned
-/// there, or when the workspace was deleted since the start. Returns the workspace when the
-/// account joined it.
+/// The default workspace now: the configured one, or the claimed one read through
+/// `default_workspace_repo` (the signup's transaction, when it runs in one).
+///
+/// # Errors
+/// Storage errors reading the claimed workspace.
+async fn current(
+    default_workspace_repo: &dyn DefaultWorkspaceRepository,
+    setting: &DefaultWorkspace,
+) -> ServiceResult<Option<ServerId>> {
+    Ok(match setting {
+        DefaultWorkspace::None => None,
+        DefaultWorkspace::Fixed(workspace) => Some(*workspace),
+        DefaultWorkspace::Defined(_) => default_workspace_repo.record().await?.workspace_id,
+    })
+}
+
+/// The workspace created by an owner claim, for what the signup announces once it committed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Claimed {
+    pub workspace_id: ServerId,
+    /// The existing local accounts added as Members, with their usernames.
+    pub members: Vec<(UserId, String)>,
+    pub operator_granted: bool,
+    pub claim_link_file: PathBuf,
+}
+
+/// Claim the defined workspace for the new account `owner`, inside the signup's transaction,
+/// when `token` is the owner claim invite (already consumed by the signup): create the
+/// workspace with `owner` as Owner, its channels with their topics and its DM policy; record it
+/// as the default workspace; add every other local account as a Member; and make `owner` an
+/// instance operator when the definition says so. Returns `None` for every other signup.
+///
+/// # Errors
+/// Storage errors; the caller's transaction rolls back and the invite stays unconsumed.
+pub(crate) async fn claim(
+    repos: &SignupRepos,
+    setting: &DefaultWorkspace,
+    token: Option<&CheckedToken>,
+    owner: UserId,
+) -> ServiceResult<Option<Claimed>> {
+    let (DefaultWorkspace::Defined(defined), Some(CheckedToken::InstanceInvite(invite))) =
+        (setting, token)
+    else {
+        return Ok(None);
+    };
+    if !repos.default_workspace_repo.take_claim(invite.id).await? {
+        return Ok(None);
+    }
+    let definition = &defined.definition;
+    let server = repos.server_repo.create_server(&definition.name).await?;
+    add_workspace_member(
+        repos.server_member_repo.as_ref(),
+        repos.conversation_repo.as_ref(),
+        repos.conversation_member_repo.as_ref(),
+        server.id,
+        owner,
+        ServerMemberRole::Owner,
+        None,
+    )
+    .await?;
+    for channel in &definition.channels {
+        let created = repos
+            .conversation_repo
+            .create_conversation_with_members(
+                new_channel(server.id, channel, Some(owner)),
+                &[owner],
+                &[],
+            )
+            .await?;
+        if channel.topic.is_some() {
+            repos
+                .conversation_repo
+                .update_topic(created.id, channel.topic.clone())
+                .await?;
+        }
+    }
+    if let Some(dm) = definition.dm {
+        repos
+            .dm_policy_repo
+            .set_workspace_policy(server.id, dm.outside_floor, dm.member_default)
+            .await?;
+    }
+    repos
+        .default_workspace_repo
+        .record_claim(server.id, owner)
+        .await?;
+    let others = repos
+        .default_workspace_repo
+        .other_local_accounts(owner)
+        .await?;
+    for user_id in &others {
+        add_workspace_member(
+            repos.server_member_repo.as_ref(),
+            repos.conversation_repo.as_ref(),
+            repos.conversation_member_repo.as_ref(),
+            server.id,
+            *user_id,
+            ServerMemberRole::Member,
+            None,
+        )
+        .await?;
+    }
+    let members = if others.is_empty() {
+        Vec::new()
+    } else {
+        repos
+            .user_repo
+            .get_by_ids(&others)
+            .await?
+            .into_iter()
+            .map(|user| (user.id, user.username))
+            .collect()
+    };
+    if definition.claim_grants_operator {
+        repos.user_repo.set_instance_operator(owner, true).await?;
+    }
+    Ok(Some(Claimed {
+        workspace_id: server.id,
+        members,
+        operator_granted: definition.claim_grants_operator,
+        claim_link_file: defined.claim_link_file.clone(),
+    }))
+}
+
+/// After the claiming signup committed: delete the claim link file, tell the workspace about
+/// the accounts added as Members, and write the audit line.
+pub(crate) fn announce_claim(claimed: Option<Claimed>, owner: UserId, observers: &Observers) {
+    let Some(claimed) = claimed else {
+        return;
+    };
+    if let Err(e) = remove_claim_link(&claimed.claim_link_file) {
+        tracing::warn!(
+            file = %claimed.claim_link_file.display(),
+            error = %e,
+            "the default workspace is claimed, but its claim link file could not be deleted"
+        );
+    }
+    for (user_id, username) in &claimed.members {
+        observers.emit(WorkspaceEvent::MemberJoined {
+            workspace_id: claimed.workspace_id,
+            user_id: *user_id,
+            username: username.clone(),
+        });
+    }
+    tracing::info!(
+        target: "audit",
+        event = "default_workspace_claimed",
+        user_id = %owner,
+        server_id = %claimed.workspace_id,
+        members_added = claimed.members.len(),
+        operator_granted = claimed.operator_granted,
+        "the default workspace was created and claimed by its owner"
+    );
+}
+
+/// Make the new account `user_id` a Member of the default workspace inside the signup's
+/// transaction, with the public-channel auto-join every new member gets. The members-per-workspace
+/// cap does not apply. Nothing happens without a default workspace, when the account already
+/// belongs to it (it signed up with an invite to it, claimed it, or was a member from another
+/// server), when it is banned there, or when the workspace was deleted since the start. Returns
+/// the workspace when the account joined it.
 ///
 /// # Errors
 /// Storage errors; the caller's transaction rolls back.
 pub(crate) async fn join(
     repos: &SignupRepos,
-    workspace: Option<ServerId>,
+    setting: &DefaultWorkspace,
     user_id: UserId,
 ) -> ServiceResult<Option<ServerId>> {
-    let Some(workspace) = workspace else {
+    let Some(workspace) = current(repos.default_workspace_repo.as_ref(), setting).await? else {
         return Ok(None);
     };
     if repos
@@ -67,8 +516,7 @@ pub(crate) async fn join(
     if repos.server_repo.get_by_id(workspace).await?.is_none() {
         tracing::warn!(
             server_id = %workspace,
-            "RIM_DEFAULT_WORKSPACE names a workspace that no longer exists; the new account \
-             joins no workspace"
+            "the default workspace no longer exists; the new account joins no workspace"
         );
         return Ok(None);
     }
@@ -108,6 +556,25 @@ pub(crate) fn announce(
         server_id = %workspace_id,
         "new account joined the default workspace"
     );
+}
+
+/// [`DefaultWorkspaceService`] over the instance's setting and its record.
+pub struct DefaultDefaultWorkspaceService {
+    setting: DefaultWorkspace,
+    repo: Arc<dyn DefaultWorkspaceRepository>,
+}
+
+impl DefaultDefaultWorkspaceService {
+    pub fn new(setting: DefaultWorkspace, repo: Arc<dyn DefaultWorkspaceRepository>) -> Self {
+        Self { setting, repo }
+    }
+}
+
+#[async_trait]
+impl DefaultWorkspaceService for DefaultDefaultWorkspaceService {
+    async fn current(&self) -> ServiceResult<Option<ServerId>> {
+        current(self.repo.as_ref(), &self.setting).await
+    }
 }
 
 #[cfg(test)]
@@ -169,6 +636,12 @@ mod tests {
             conversation_member_repo: Arc::new(conversation_members),
             moderation_repo: Arc::new(moderation),
             user_repo: Arc::new(MockUserRepository::new()),
+            dm_policy_repo: Arc::new(
+                rim_core::dm_policy::repository::MockDmPolicyRepository::new(),
+            ),
+            default_workspace_repo: Arc::new(
+                rim_core::default_workspace::repository::MockDefaultWorkspaceRepository::new(),
+            ),
         }
     }
 
@@ -293,7 +766,9 @@ mod tests {
             conversation_members,
         );
         assert_eq!(
-            join(&r, Some(workspace), user_id).await.unwrap(),
+            join(&r, &DefaultWorkspace::Fixed(workspace), user_id)
+                .await
+                .unwrap(),
             Some(workspace)
         );
     }
@@ -310,7 +785,12 @@ mod tests {
             MockConversationRepository::new(),
             MockConversationMemberRepository::new(),
         );
-        assert_eq!(join(&r, None, UserId::new()).await.unwrap(), None);
+        assert_eq!(
+            join(&r, &DefaultWorkspace::None, UserId::new())
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     /// An account already in the workspace keeps its membership and role.
@@ -325,7 +805,9 @@ mod tests {
             MockConversationMemberRepository::new(),
         );
         assert_eq!(
-            join(&r, Some(workspace), UserId::new()).await.unwrap(),
+            join(&r, &DefaultWorkspace::Fixed(workspace), UserId::new())
+                .await
+                .unwrap(),
             None
         );
     }
@@ -356,7 +838,9 @@ mod tests {
             MockConversationMemberRepository::new(),
         );
         assert_eq!(
-            join(&r, Some(workspace), UserId::new()).await.unwrap(),
+            join(&r, &DefaultWorkspace::Fixed(workspace), UserId::new())
+                .await
+                .unwrap(),
             None
         );
     }
@@ -372,7 +856,7 @@ mod tests {
             MockConversationMemberRepository::new(),
         );
         assert_eq!(
-            join(&r, Some(ServerId::new()), UserId::new())
+            join(&r, &DefaultWorkspace::Fixed(ServerId::new()), UserId::new())
                 .await
                 .unwrap(),
             None
@@ -397,7 +881,11 @@ mod tests {
             MockConversationRepository::new(),
             MockConversationMemberRepository::new(),
         );
-        assert!(join(&r, Some(workspace), UserId::new()).await.is_err());
+        assert!(
+            join(&r, &DefaultWorkspace::Fixed(workspace), UserId::new())
+                .await
+                .is_err()
+        );
     }
 
     #[derive(Default)]

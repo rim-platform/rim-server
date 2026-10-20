@@ -1,0 +1,11 @@
+{
+  "name": "RIM",
+  "claimGrantsOperator": true,
+  "dm": { "outsideFloor": "REQUESTS", "memberDefault": "DIRECT" },
+  "channels": [
+    { "name": "general", "topic": "Anything about RIM" },
+    { "name": "announcements", "topic": "Releases and news from the project" },
+    { "name": "help", "topic": "Questions about installing and using RIM" },
+    { "name": "plugins", "topic": "Writing and sharing plugins" }
+  ]
+}

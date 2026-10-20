@@ -237,7 +237,9 @@ ignored.
 
 When the server names a default workspace (`serverInfo.defaultWorkspace` is set), every signup
 makes the new account a Member of it, with its public channels, before the signup answers. The
-payload's `serverId` still names only the workspace of a workspace invite; a client opens the
+payload's `serverId` names only the workspace of a workspace invite, and the workspace an owner
+claim link created (an instance invite the operator's server issues for a default workspace
+described in a file, "A default workspace" in `self-hosting.md`); otherwise a client opens the
 default workspace from `serverInfo`.
 
 `logout` ends the session and clears both cookies; `logoutOtherSessions` ends every other
@@ -535,8 +537,9 @@ each list.
   `messaging.md`). A client shows them read-only and explains a greyed choice with
   `myDmSettings.outsideFloorFrom`.
 - **`defaultWorkspace`**: the id of the workspace every new account joins as a Member
-  (`RIM_DEFAULT_WORKSPACE`), or null when the server names none. After a signup a client can
-  open it instead of the empty direct space.
+  (`RIM_DEFAULT_WORKSPACE`, or the workspace of `RIM_DEFAULT_WORKSPACE_FILE` once its owner
+  claimed it), or null when the server names none. After a signup a client can open it instead
+  of the empty direct space.
 - **`registrationFull`**: true when the server holds as many accounts as `limits.accounts`
   allows, so every signup answers `REGISTRATION_FULL`; false when there is no cap. The answer may
   be up to half a minute old. A client says on its sign-up page that the server is full and

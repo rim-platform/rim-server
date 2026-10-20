@@ -23,6 +23,17 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `RIM_DEFAULT_WORKSPACE_FILE`: the default workspace described in a JSON file (its name, DM
+  policy and channels with topics), checked at every start. While nobody has claimed it, each
+  start writes a single-use owner claim link to `<RIM_DATA_DIR>/owner-claim.txt`; the account
+  that signs up through it creates the workspace as its Owner, optionally becomes an instance
+  operator (`claimGrantsOperator`), and every existing local account joins as a Member. Later
+  starts add new channels, topics, the name and the DM policy from the file and delete nothing.
+  `deploy/default-workspace.json` is the public relay's workspace; `compose.yml` mounts it at
+  `/config/default-workspace.json`, and `RIM_DEFAULT_WORKSPACE_FILE` in `deploy/.env` turns it
+  on. The signup through the claim link
+  answers the new workspace as `serverId`, and `serverInfo.defaultWorkspace` names it from then
+  on. "A default workspace" in `docs/self-hosting.md` describes it.
 - `RIM_TERMS_FILE`: the terms of service as a Markdown file the server serves as a page at
   `/api/terms?v=<hash>`, which is then `serverInfo.termsUrl` and the URL every signup accepts.
   A missing, empty or oversized file, a `FILL:` placeholder in it, or `RIM_TERMS_URL` set too

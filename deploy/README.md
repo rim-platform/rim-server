@@ -85,13 +85,14 @@ The descriptor in the discovery document says `"registration":{"mode":"pow","pow
 ## A relay that hosts a workspace
 
 A relay can host workspaces too, as the project's relay does: it runs `RIM_ROLE=both` and
-hosts the RIM community workspace, which every new account joins, with the web client. Three
+hosts the RIM community workspace, which every new account joins, with the web client. Four
 settings in `deploy/.env` turn it on:
 
 ```sh
 RIM_ROLE=both
 RIM_CADDYFILE=./Caddyfile
 COMPOSE_PROFILES=web
+RIM_DEFAULT_WORKSPACE_FILE=/config/default-workspace.json
 ```
 
 `RIM_ROLE=both` lets accounts here create workspaces, `./Caddyfile` sends every path that is not
@@ -99,9 +100,21 @@ the API, discovery or server-to-server to the web client, and the `web` profile 
 `dc config --services` then lists `web` too. To serve the web client on a domain of its own,
 as `chat.rim-platform.org` is, add `RIM_WEB_DOMAIN` ("The web client on its own domain" below).
 
-The first run, in short: start the stack as above, read the owner claim link with
-`dc exec rim cat /data/owner-claim.txt`, open it in a browser and sign up through it. That
-account owns the server's default workspace (`docs/self-hosting.md`, "A default workspace").
+`RIM_DEFAULT_WORKSPACE_FILE` makes `deploy/default-workspace.json` (mounted read-only at
+`/config/default-workspace.json`) the server's default workspace; edit the file for your own.
+Until somebody claims it, every start writes a single-use owner claim link to
+`/data/owner-claim.txt` and logs that a claim is waiting. The first run, in short: start the
+stack as above, then read the link, open it in a browser and sign up through it:
+
+```sh
+dc exec rim cat /data/owner-claim.txt
+```
+
+The signup creates the workspace with its channels, makes the account its Owner (and an
+instance operator when the file says `claimGrantsOperator`), and deletes the file. A lost link
+is a restart (`dc restart rim`), which revokes the old one. Later starts apply the file again:
+new channels and topics arrive with the next release (`docs/self-hosting.md`, "A default
+workspace").
 
 ### The web client on its own domain
 

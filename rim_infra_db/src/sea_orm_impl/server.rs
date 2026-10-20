@@ -62,6 +62,22 @@ impl ServerRepository for SeaOrmServerRepository {
         })
     }
 
+    async fn rename(&self, id: ServerId, name: &str) -> RepoResult<bool> {
+        let result = server::Entity::update_many()
+            .filter(server::Column::Id.eq::<Uuid>(id.into()))
+            .col_expr(server::Column::Name, Expr::value(name.to_owned()))
+            .col_expr(
+                server::Column::UpdatedAt,
+                Expr::value(sea_orm::prelude::DateTimeWithTimeZone::from(
+                    chrono::Utc::now(),
+                )),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(result.rows_affected == 1)
+    }
+
     async fn get_servers_for_user(&self, user_id: UserId) -> RepoResult<Vec<Server>> {
         let servers = server::Entity::find()
             .join(JoinType::InnerJoin, server::Relation::ServerMember.def())
