@@ -1,19 +1,21 @@
 # Deploying a public relay
 
-`compose.relay.yml` turns `compose.yml` into a public relay: rim-server with `RIM_ROLE=relay`,
-the public relay's quotas and proof-of-work signups, PostgreSQL 17 and Caddy terminating TLS,
-and no web client. The relay holds its users' accounts, devices and cards, queues what other
-servers send them and forwards their requests; it hosts no workspaces. This page brings a relay up for the first time. The operator's runbook
-(`docs/operations/relay-public.md`) covers running it: keys, backups, quotas, monitoring,
-incidents, the abuse policy and every command. `docs/relay.md` explains what a relay does, and
-`docs/specs/server-to-server-v1.md` is the protocol.
+`compose.relay.yml` turns `compose.yml` into a public relay: rim-server with the public relay's
+quotas and proof-of-work signups, PostgreSQL 17 and Caddy terminating TLS, and no web client
+unless the operator adds it. The relay holds its users' accounts, devices and cards, queues what
+other servers send them and forwards their requests; it hosts no workspaces unless the operator
+turns that on ("A relay that hosts a workspace"). This page brings a relay up for the first
+time. The operator's runbook (`docs/operations/relay-public.md`) covers running it: keys,
+backups, quotas, monitoring, incidents, the abuse policy and every command. `docs/relay.md`
+explains what a relay does, and `docs/specs/server-to-server-v1.md` is the protocol.
 
 A server that hosts workspaces uses `compose.yml` alone: `docs/self-hosting.md` covers it, and
 its sections on updates, backups and monitoring apply to the relay too.
 
-The project's public relay is `relay.rim-platform.org`; yours uses your own domain. `RIM_DOMAIN`
-is the relay's host name, such as a `relay.` subdomain: Caddy answers for that name only, so the
-apex of the domain can serve a website from elsewhere.
+The project's public relay is `relay.rim-platform.org`, with its web client on
+`chat.rim-platform.org`; yours uses your own domain. `RIM_DOMAIN` is the relay's host name, such
+as a `relay.` subdomain: Caddy answers for that name only (and for `RIM_WEB_DOMAIN` when it is
+set), so the apex of the domain can serve a website from elsewhere.
 
 ## Before the first start
 
@@ -27,14 +29,19 @@ apex of the domain can serve a website from elsewhere.
    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')
    RIM_DOMAIN=relay.example.org
    RIM_VERSION=0.0.1
+   RIM_ROLE=relay
+   RIM_CADDYFILE=./Caddyfile.relay
    EOF
    chmod 600 deploy/.env
    ```
 
    `RIM_VERSION` is the release you run, the tag this checkout is at without its `v`.
-   `RIM_PUBLIC_BASE_URL` follows `RIM_DOMAIN`. Every other setting has the public relay's value
-   in the compose files; set it in `.env` to change it (the quotas are listed in the runbook).
-   Without `POSTGRES_PASSWORD` or `RIM_DOMAIN` every compose command stops and names it.
+   `RIM_PUBLIC_BASE_URL` follows `RIM_DOMAIN`. `RIM_ROLE` and `RIM_CADDYFILE` say what the relay
+   is: a relay that serves the API alone, as here, or one that hosts a workspace with the web
+   client (below). Every other setting has the public relay's value in the compose files;
+   set it in `.env` to change it (the quotas are listed in the runbook). Without
+   `POSTGRES_PASSWORD`, `RIM_DOMAIN`, `RIM_ROLE` or `RIM_CADDYFILE` every compose command stops
+   and names it.
 3. Check the configuration. The commands on this page and in the runbook use this alias, from
    the repository root:
 
@@ -75,6 +82,42 @@ dc exec rim /app/rim-server server-key show
 
 The descriptor in the discovery document says `"registration":{"mode":"pow","powBits":24}`.
 
+## A relay that hosts a workspace
+
+A relay can host workspaces too, as the project's relay does: it runs `RIM_ROLE=both` and
+hosts the RIM community workspace, which every new account joins, with the web client. Three
+settings in `deploy/.env` turn it on:
+
+```sh
+RIM_ROLE=both
+RIM_CADDYFILE=./Caddyfile
+COMPOSE_PROFILES=web
+```
+
+`RIM_ROLE=both` lets accounts here create workspaces, `./Caddyfile` sends every path that is not
+the API, discovery or server-to-server to the web client, and the `web` profile starts it.
+`dc config --services` then lists `web` too. To serve the web client on a domain of its own,
+as `chat.rim-platform.org` is, add `RIM_WEB_DOMAIN` ("The web client on its own domain" below).
+
+The first run, in short: start the stack as above, read the owner claim link with
+`dc exec rim cat /data/owner-claim.txt`, open it in a browser and sign up through it. That
+account owns the server's default workspace (`docs/self-hosting.md`, "A default workspace").
+
+### The web client on its own domain
+
+With `RIM_WEB_DOMAIN` set, `./Caddyfile` answers for a second domain too: the web client is
+served there and calls the API on that same origin, and `RIM_DOMAIN` stays the server's name,
+the one apps sign in to, other servers reach, and the discovery document names. A browser that
+opens `RIM_DOMAIN` is redirected to the web domain with its path and query, so links the server
+builds on `RIM_PUBLIC_BASE_URL`, such as invite and owner claim links, open the web client.
+
+```sh
+RIM_WEB_DOMAIN=chat.example.org     # an A/AAAA record for it points at this host too
+```
+
+`docs/self-hosting.md`, "The web client on its own domain", says what the server accepts from
+that origin.
+
 ## Health, updates and operation
 
 The probes (`/healthz`, `/readyz`) and their checks are the same as on any server:
@@ -95,9 +138,74 @@ $EDITOR deploy/.env          # RIM_VERSION=<version>
 dc pull && dc up -d
 ```
 
+`deploy/upgrade.sh <version>` does the same after the checkout, with the signature check, the
+migrations first and a rollback when the new version does not come up
+(`docs/operations/upgrade.md`).
+
 The operator's commands (`/app/rim-server` inside the `rim` container: invites that skip the
 proof-of-work, principal and peer blocks, abuse reports, key rotation) are listed in the runbook,
 "Command reference".
+
+## Unattended upgrades from releases
+
+A host that runs the published images needs no checkout: one directory holds the compose files,
+the Caddyfiles, the scripts and `.env`, and `rim-deploy` keeps it on the latest release. On the
+project's relay that directory is `/srv/rim-server`. Every five minutes `rim-deploy.timer` runs
+`rim-deploy --check`, which asks the GitHub API for the latest published release of rim-server
+that is not a pre-release. When that version is not `RIM_VERSION` in `.env`, it first checks
+with cosign that the version's `rim-server` image carries the signature of that tag's release
+workflow, since the tag's files run as root: a tag without an approved release run installs
+nothing. Then it downloads the tag's source tarball, copies its `deploy/` files over the directory, writes `SOURCE` (the tag,
+the time and the tarball's SHA-256) and runs the tag's `upgrade.sh <version>` there
+(`docs/operations/upgrade.md`): the signatures, the backup, the migrations, the start and the
+rollback are its steps. Nothing in GitHub reaches the host, and no git runs on it. A release is
+published when its `release.yaml` run is approved, so approving a release is the deployment; it
+runs within five minutes, so approve it in a quiet hour.
+
+The deployer writes nothing in `.env` but `RIM_VERSION`, and never touches `.env` or
+`.env.previous` otherwise; every other file in the directory is the tag's, and the next deploy
+overwrites a file edited on the host. Settings change in `.env` by hand, and so do the
+**Upgrade:** lines of `CHANGELOG.md`, before the release is approved. When the upgrade does not
+complete, the files from before come back.
+
+Installing it, as root, with Docker (Compose v2.20 or later), cosign, curl and flock on the host:
+
+```sh
+mkdir -p /srv/rim-server        # then write /srv/rim-server/.env, chmod 600
+install -m 0755 deploy/rim-deploy.sh /usr/local/sbin/rim-deploy
+install -m 0644 deploy/systemd/rim-deploy.service deploy/systemd/rim-deploy.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now rim-deploy.timer
+rim-deploy --check              # "no release yet", or it deploys the latest release
+```
+
+`.env` names the compose files for the scripts and for `docker compose` run in the directory,
+relative to it: `COMPOSE_FILE=compose.yml:compose.relay.yml` for a relay. Leave `RIM_VERSION`
+out before the first deploy, which then skips the backup (there is no data yet), starts the
+stack and records the version. `rim-deploy` is installed by hand and changes rarely; when it
+does, install it again from the new release the same way. `RIM_DEPLOY_DIR` names another
+directory.
+
+- **The log** is `journalctl -u rim-deploy` (`-f` follows a deploy as it runs);
+  `systemctl list-timers rim-deploy.timer` shows the next check. Each check logs one line when
+  there is nothing to do.
+- **Not yet published images.** When `rim-web` of the version is not out yet, because rim-ui
+  was not tagged first, `upgrade.sh` exits 2 before changing anything; the check puts the files
+  back, ends quietly, and the next one tries again.
+- **Brakes.** A release marked **pre-release** on GitHub is never deployed by the timer, which is
+  how a release is published without deploying it. `touch /srv/rim-server/HOLD` stops the timer
+  deploying anything until the file is removed. A deploy that fails writes its version to
+  `FAILED`, and the timer leaves that version alone until the file is removed; the next release
+  deploys as usual.
+- **By hand.** `rim-deploy <version>` deploys that version without asking the API, forward or
+  back, whether `HOLD` or `FAILED` exist or not; with `upgrade.sh`, a version older than the
+  running one is a binary rollback. Touch `HOLD` before rolling back, or the next check deploys
+  the latest release again.
+- **The unit** runs as root, because it runs docker, with no new privileges, a read-only
+  `/usr`, `/boot`, `/etc` and home directories, and a private `/tmp`; cosign and the docker
+  client keep their caches in `/var/lib/rim-deploy`. A `v*` tag starts the whole chain, and
+  only the maintainer may push one to rim-server and rim-ui; an image the release workflows did
+  not sign does not verify, and `upgrade.sh` stops before it changes anything.
 
 ## Metrics to Grafana Cloud
 

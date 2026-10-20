@@ -33,6 +33,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests,rim_api/e2e-tests" -- -D warnings
       - name: Release version script
         run: scripts/release/test-set-version.sh
+      - name: Deploy scripts
+        # shellcheck is preinstalled on the runner.
+        run: |
+          shellcheck -x deploy/*.sh scripts/release/*.sh scripts/deploy/*.sh
+          scripts/deploy/test-deploy.sh
 
   # Coverage runs as three jobs, so the serial database suites do not queue behind each other,
   # and Test & Coverage merges their lcov files and applies the gate.

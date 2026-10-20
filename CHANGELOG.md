@@ -36,6 +36,28 @@ tag `v<version>`, the version every crate in the workspace carries.
   `docs/server-identity.md` ("Handles and delegation") and `docs/specs/server-to-server-v1.md`
   ("Handles") describe it; a client that refuses unknown descriptor fields must accept
   `handleDomain`.
+- `RIM_WEB_DOMAIN` in `deploy/.env` serves the web client on a domain of its own with
+  `deploy/Caddyfile`, such as `chat.example.org` next to `RIM_DOMAIN`. The client calls the API
+  on that origin; `RIM_DOMAIN` stays the server's name for apps, other servers and the discovery
+  document, and redirects browsers to the web domain with the path kept, so invite links still
+  open the client. The compose file sets `RIM_CORS_ALLOWED_ORIGIN` to the web domain's origin
+  and `RIM_KEY_LOGIN_AUDIENCES` to both domains unless they are set. Unset, nothing changes.
+  "The web client on its own domain" in `docs/self-hosting.md` describes it.
+- `deploy/upgrade.sh <version>`, the upgrade of `docs/operations/upgrade.md` in one script: it
+  checks that the version's images are published (exit 2 when one is not), verifies their
+  signatures against the release workflows, takes a backup, sets `RIM_VERSION` in
+  `deploy/.env`, pulls, migrates and starts, waits for `/readyz` and the public discovery
+  document, and rolls back to the version before when they do not answer. `--dry-run` checks
+  the images and prints the rest.
+- `deploy/rim-deploy.sh` with `deploy/systemd/rim-deploy.service` and `rim-deploy.timer`, the
+  unattended upgrade for a host that runs published images: every five minutes it installs the
+  latest published rim-server release that is not a pre-release from the tag's `deploy/` files
+  and its `upgrade.sh`, once the version's signed `rim-server` image proves an approved release
+  run. A `HOLD` file stops it, a failed version is held back in `FAILED`,
+  and `rim-deploy <version>` deploys or rolls back by hand. "Unattended upgrades from releases"
+  in `deploy/README.md` describes it.
+- The backup and upgrade scripts read `COMPOSE_FILE` from `deploy/.env` too, so a relay can name
+  its compose files there once.
 
 - `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
   `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
@@ -192,6 +214,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- **Upgrade:** `deploy/compose.relay.yml` no longer sets `RIM_ROLE=relay` and the Caddyfile
+  itself: set `RIM_ROLE` (`relay`, or `both` to host workspaces) and `RIM_CADDYFILE`
+  (`./Caddyfile.relay`, or `./Caddyfile` with the web client and `COMPOSE_PROFILES=web`) in
+  `deploy/.env`. Without either, every compose command with the overlay stops and names it.
+  An existing relay keeps its behaviour with `RIM_ROLE=relay` and
+  `RIM_CADDYFILE=./Caddyfile.relay`. "A relay that hosts a workspace" in `deploy/README.md`
+  describes the other choice.
 - **Upgrade:** usernames are stored lowercase and compared without regard to case. A signup
   stores `Alice` as `alice` and refuses `aLiCe` once `alice` exists (`CONFLICT`); `login`,
   `requestPasswordReset`, `requestAccountDeletion`, `from:@name` in message search and the

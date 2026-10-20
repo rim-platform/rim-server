@@ -14,9 +14,10 @@ The shipped-state ledger is at the end._
 
 RIM is not trying to replace Discord, Slack, or Matrix. It is a **programmable communication
 workspace**: a place where chat is the medium and the product is what the user can build on
-top of it. Gamers can live in it, developers can live in it, people who want a self-hosted
-private place to talk can live in it, and each of them shapes it differently without RIM
-shipping a feature for each of them.
+top of it. Developer teams can live in it, open-source communities can live in it, people who
+want a self-hosted private place to talk can live in it, and gamers can once a voice bridge
+plugin exists; each of them shapes it differently without RIM shipping a feature for each of
+them.
 
 Five bets define the product. Everything on this roadmap either serves one of them or is the
 minimum support needed so people can use the app daily.

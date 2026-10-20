@@ -11,7 +11,11 @@ The gates run locally on the release commit. CI counts only when it ran on that 
 ## Before the first public release
 
 One-time sign-offs for the launch. Tick them in the first release pull request, with a link or
-a date for each.
+a date for each. Two of them cannot be ticked before the first release exists: the public relay
+runs the published images, so it first answers, and takes its first backup, after section 8
+publishes them. For the first release the DNS item below and the restore drill of section 4 are
+ticked right after section 8, from the first deployment and its first backup, and before the
+release is announced (section 9). Later releases keep the order as written.
 
 - [ ] The state of the outside cryptographic review of Stages 3 and 4 is linked here. `0.0.x`
       releases go out before its sign-off; `0.1.0` waits for it (section 1). The brief is
@@ -59,9 +63,11 @@ a date for each.
       to `https://github.com/rim-platform/rim-ui/releases/latest/download/latest.json` and
       `RELEASE_GRAPHQL_ENDPOINT` to `https://relay.rim-platform.org/api`, the server that release
       builds of the desktop app start with.
-- [ ] DNS for `relay.rim-platform.org` points at the public relay, and
-      `curl -s https://relay.rim-platform.org/.well-known/rim-server` answers with its descriptor.
-      The apex `rim-platform.org` is the website and does not serve the API.
+- [ ] DNS for `relay.rim-platform.org` and `chat.rim-platform.org` points at the public relay,
+      and `curl -s https://relay.rim-platform.org/.well-known/rim-server` answers with its
+      descriptor. `https://chat.rim-platform.org/` opens the web client (`RIM_WEB_DOMAIN`), and
+      `https://relay.rim-platform.org/` redirects there. The apex `rim-platform.org` is the
+      website and does not serve the API.
 - [ ] The credentials the old `.env` exposed stay rotated: rewriting history does not revoke them
       (`docs/security/env-history-purge-runbook.md`).
 
@@ -127,7 +133,8 @@ yet, so the new images are built from the release commits with `deploy/compose.d
       applies its migrations to real data and reaches `/readyz`. The backup is encrypted with
       `age`, and the identity that decrypts it is held offline by the maintainer, never on the
       relay. Copy the archive to the scratch host and point `RIM_BACKUP_AGE_IDENTITY` at the
-      identity there for the drill.
+      identity there for the drill. The first release has no such backup yet: its drill runs
+      on the relay's first backup, after section 8 ("Before the first public release").
 - [ ] Record the drill in the release pull request: `Drill run: <YYYY-MM-DD>`, the host, and the
       previous release it started from.
 

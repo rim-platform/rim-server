@@ -2,10 +2,12 @@
 
 The public relay is the server anyone's app can use as its relay: accounts, devices, profile
 cards, the queue of what other servers send, the request inbox, and the forward path to the
-servers that host people's workspaces. It runs the stock image with `RIM_ROLE=relay` from
-`deploy/compose.yml` with the `deploy/compose.relay.yml` override (`deploy/README.md` brings it
-up). The project's relay is `relay.rim-platform.org`; read it as "the relay's domain" wherever
-this page says it.
+servers that host people's workspaces. It runs the stock image from `deploy/compose.yml` with the
+`deploy/compose.relay.yml` override (`deploy/README.md` brings it up), with `RIM_ROLE=relay`, or
+`both` to host workspaces too. The project's relay is `relay.rim-platform.org`; read it as "the
+relay's domain" wherever this page says it. It runs `both`: it also hosts the RIM community
+workspace, the server's default workspace, which every new account joins, and serves the web
+client on `chat.rim-platform.org` (`RIM_WEB_DOMAIN`).
 
 Everything marked **FILL** is a decision or a fact the operator records here before the relay
 opens to the public.
@@ -14,23 +16,27 @@ The commands below assume, on the host, in the repository checkout:
 
 ```sh
 export COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml
-alias dc='docker compose'
-alias rim-relay='docker compose exec rim /app/rim-server'
-alias rim-sql='docker compose exec -T postgres psql -U rim -d rim'
+alias dc='sudo -E docker compose'
+alias rim-relay='sudo -E docker compose exec rim /app/rim-server'
+alias rim-sql='sudo -E docker compose exec -T postgres psql -U rim -d rim'
 ```
 
-`COMPOSE_FILE` points docker compose and the backup scripts at the relay's two files.
+`COMPOSE_FILE` points docker compose and the backup scripts at the relay's two files. The
+operator's account is in no group that reaches Docker, so every command runs through `sudo`;
+`-E` keeps `COMPOSE_FILE`. The backup and restore scripts call Docker too: run them as
+`sudo -E deploy/backup.sh` and so on.
 
 ## What lives where
 
 | What | Where | Backed up |
 |---|---|---|
-| Configuration | `deploy/.env` on the host (secrets), `deploy/compose.yml` and `deploy/compose.relay.yml` | `.env` in every backup; the compose files are in Git |
+| Configuration | `deploy/.env` on the host (secrets), `deploy/compose.yml`, `deploy/compose.relay.yml` and the Caddyfile `RIM_CADDYFILE` names | `.env` in every backup; the compose files and Caddyfiles are in Git |
 | Database | volume `rim-relay_postgres_data` | nightly backup, "Backups" |
 | Server key | `/data/server-key.json` in volume `rim-relay_rim_data` | with every dump |
 | Server recovery key | offline only, "The server recovery key" | its own copies |
 | Franking keys | `/data/franking-key.json` | with every dump |
-| Uploads (avatars) | `/data/uploads` | with every dump |
+| Workspace content: channels, their messages, members | the database | nightly backup, "Backups" |
+| Uploads (avatars, attachments in channels) | `/data/uploads` in volume `rim-relay_rim_data` | with every dump |
 | Audit log | `/data/audit.log`, and every audit event on stdout too; rotated by logrotate (`docs/operations/audit-retention.md`) | with every dump |
 | Audit exports | `/data/audit-exports/`, command audit rows past `RIM_AUDIT_RETENTION_DAYS` | with every dump |
 | TLS certificates | volume `rim-relay_caddy_data` | not needed: Caddy gets new ones |
@@ -163,6 +169,32 @@ one server to every peer.
 |---|---|---|---|
 | **FILL** | | | |
 
+## Deploys
+
+The relay runs published images only, from `/srv/rim-server` on the host, and
+`rim-deploy.timer` installs every rim-server release there within five minutes of its
+publication (`deploy/README.md`, "Unattended upgrades from releases"). Approving the release in
+the `release` environment is the deployment: approve it in a quiet hour, after doing what the
+release's **Upgrade:** lines say in `/srv/rim-server/.env`. Tag rim-ui first: until `rim-web` of
+the version is published, each check waits and tries again.
+
+- **The log**: `journalctl -u rim-deploy`, with `-f` during a deploy: the file copy, the
+  signature check, the backup, the pull, the migrations, the start, `/readyz` and the version.
+  `systemctl list-timers rim-deploy.timer` shows the next check.
+- **Publish without deploying**: mark the release a **pre-release** on GitHub.
+- **Stop all deploys**: `sudo touch /srv/rim-server/HOLD`; `sudo rm /srv/rim-server/HOLD` lets
+  the timer deploy again.
+- **A failed deploy** rolls back by itself and writes the version to `/srv/rim-server/FAILED`;
+  the timer skips that version until the file is removed, and deploys the next release.
+- **Roll back by hand**: `sudo touch /srv/rim-server/HOLD`, then
+  `sudo rim-deploy <previous version>` (or mark the bad release a pre-release instead of the
+  `HOLD`). Remove `HOLD` once the fix is released. Anything further back than the release before
+  is a restore from the backup the deploy took ("Restore").
+- **When the GitHub API is down**: `sudo rim-deploy <version>` deploys without it.
+
+Files in `/srv/rim-server` other than `.env` come from the release tag; an edit on the host is
+overwritten by the next deploy, so a change to them is a rim-server pull request.
+
 ## Quotas
 
 Per local user, set in `deploy/.env`; the compose file has the public relay's values.
@@ -232,7 +264,7 @@ SQL
 
 Per-status counts of every client request come from the proxy. Caddy keeps no access log by
 default, since it would hold users' IP addresses; during an incident add `log` to the site block
-of `deploy/Caddyfile.relay`, `dc restart caddy`, and remove it afterwards.
+of the Caddyfile `RIM_CADDYFILE` names, `dc restart caddy`, and remove it afterwards.
 
 ## Incidents
 
@@ -338,6 +370,10 @@ The text to publish (**FILL**: where, e.g. `https://<domain>/abuse`), filled in:
 > To report: use "Report" on a message request in the app, or write to **FILL**: abuse address
 > with the principal id or server id, what happened and when. We cannot read encrypted
 > messages; a report from the app carries what the sender's own request showed.
+>
+> The workspaces this relay hosts, the RIM community workspace among them, are moderated from
+> the app: by each workspace's owners and moderators, who get the reports of its messages, and by
+> the instance operators, who block accounts and servers on the whole relay.
 >
 > We answer reports within **FILL** (e.g. one working day) and act on clear spam or attacks
 > within **FILL** (e.g. four hours). We keep reports for **FILL** and the blocked identity until
