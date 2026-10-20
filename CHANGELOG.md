@@ -36,6 +36,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   `confirmedMinimumAge`; a signup without it answers `VALIDATION`. The account records only the
   age confirmed. The migration adds a nullable `user.minimum_age_confirmed` column.
 - "Legal duties of an operator" in `docs/self-hosting.md`.
+- `RIM_WEB_DOMAIN` in `deploy/.env` serves the web client on a domain of its own with
+  `deploy/Caddyfile`, such as `chat.example.org` next to `RIM_DOMAIN`. The client calls the API
+  on that origin; `RIM_DOMAIN` stays the server's name for apps, other servers and the discovery
+  document, and redirects browsers to the web domain with the path kept, so invite links still
+  open the client. The compose file sets `RIM_CORS_ALLOWED_ORIGIN` to the web domain's origin
+  and `RIM_KEY_LOGIN_AUDIENCES` to both domains unless they are set. Unset, nothing changes.
+  "The web client on its own domain" in `docs/self-hosting.md` describes it.
 - `deploy/upgrade.sh <version>`, the upgrade of `docs/operations/upgrade.md` in one script: it
   checks that the version's images are published (exit 2 when one is not), verifies their
   signatures against the release workflows, takes a backup, sets `RIM_VERSION` in
@@ -204,9 +211,25 @@ tag `v<version>`, the version every crate in the workspace carries.
   `WorkspaceInviteCursorOutput`, never with their tokens; the new `revokeInvite(inviteId)`
   stops an invite admitting anyone, while members who joined with it stay ("Workspace invites"
   in `docs/messaging.md`).
+- `RIM_LIMIT_ACCOUNTS` caps the local accounts a server holds, those waiting out their deletion
+  grace period included; people from other servers and purged accounts do not count. Off when
+  unset or 0. At the cap every signup, password or key, with an invite, open or with a
+  proof-of-work, is refused with the new GraphQL error code `REGISTRATION_FULL` and a message
+  that the server is full and points to running a server or signing up on another one. The new
+  `ServerInfo.registrationFull` and `ServerLimits.accounts`, and `registration.full` in the
+  discovery document beside the descriptor (`server-to-server-v1.md`), say so before anyone
+  tries. `docs/operations/relay-public.md` says the public relay is a first test run with no
+  guarantee against data loss, and what happens if it shuts down.
 
 ### Changed
 
+- **Upgrade:** `deploy/compose.relay.yml` no longer sets `RIM_ROLE=relay` and the Caddyfile
+  itself: set `RIM_ROLE` (`relay`, or `both` to host workspaces) and `RIM_CADDYFILE`
+  (`./Caddyfile.relay`, or `./Caddyfile` with the web client and `COMPOSE_PROFILES=web`) in
+  `deploy/.env`. Without either, every compose command with the overlay stops and names it.
+  An existing relay keeps its behaviour with `RIM_ROLE=relay` and
+  `RIM_CADDYFILE=./Caddyfile.relay`. "A relay that hosts a workspace" in `deploy/README.md`
+  describes the other choice.
 - **Upgrade:** usernames are stored lowercase and compared without regard to case. A signup
   stores `Alice` as `alice` and refuses `aLiCe` once `alice` exists (`CONFLICT`); `login`,
   `requestPasswordReset`, `requestAccountDeletion`, `from:@name` in message search and the

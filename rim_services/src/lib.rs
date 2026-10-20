@@ -175,9 +175,18 @@ pub enum ServiceError {
     #[error("feature {0} is not available on this server")]
     FeatureDisabled(rim_core::server_feature::model::ServerFeature),
 
+    /// The instance holds as many local accounts as it accepts, so it takes no new one.
+    /// Surfaced as the `REGISTRATION_FULL` GraphQL error code.
+    #[error("{}", REGISTRATION_FULL_MESSAGE)]
+    RegistrationFull,
+
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }
+
+/// The message of [`ServiceError::RegistrationFull`].
+pub const REGISTRATION_FULL_MESSAGE: &str = "this server is full and takes no new accounts; \
+     run your own server or sign up on another one";
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
 

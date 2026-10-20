@@ -261,10 +261,10 @@ applied from a person's identity, with the sessions and delegations they ended);
 
 ### The public relay
 
-A relay anyone may sign up on runs `RIM_ROLE=relay` with the settings of
-`deploy/compose.relay.yml` on top of `deploy/compose.yml`. This section says how its
-registration and blocks behave; `docs/operations/relay-public.md` has its quotas, the operator's
-commands and the abuse policy.
+A relay anyone may sign up on runs with the settings of `deploy/compose.relay.yml` on top of
+`deploy/compose.yml`, as `RIM_ROLE=relay`, or `both` to host workspaces as well, as the
+project's relay does. This section says how its registration and blocks behave;
+`docs/operations/relay-public.md` has its quotas, the operator's commands and the abuse policy.
 
 **Registration.** `RIM_REGISTRATION_POW_BITS` (1 to 40; 24 on the public relay) turns on `pow`
 registration, whatever `RIM_OPEN_REGISTRATION` says. `signupWithKey` then takes a registration
@@ -281,6 +281,12 @@ and are audited as `relay.registration_pow`. Password signups take a token, as i
 mode. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
 answers `POW`. A signup link from `rim_server invite create` lets a person in without the work;
 it needs no account or workspace, so it works with `RIM_ROLE=relay`.
+
+**Account cap.** `RIM_LIMIT_ACCOUNTS` caps the local accounts the relay holds, those waiting out
+their deletion grace period included; the `r_` rows of people from other servers and purged
+accounts do not count. At the cap every signup is refused with `REGISTRATION_FULL`, a signup link
+and a proof-of-work too, a person from another server signing up here with their key included,
+and the discovery document says `"registration":{"full":true}` beside the descriptor.
 
 **Quotas** per local user are the `RIM_RELAY_*` settings above. The per-minute and per-day
 counters are in memory, per node.

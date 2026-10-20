@@ -133,6 +133,14 @@ pub trait AuthService: Send + Sync {
         &self,
         query: PreviewInviteTokenQuery,
     ) -> ServiceResult<InviteTokenPreviewDto>;
+
+    /// Whether the instance holds as many local accounts as its cap allows, so every signup
+    /// answers `RegistrationFull`; `false` when there is no cap. The answer may be up to half a
+    /// minute old; a signup always counts afresh.
+    ///
+    /// # Errors
+    /// Propagates storage errors.
+    async fn registration_full(&self) -> ServiceResult<bool>;
 }
 
 #[async_trait]

@@ -106,6 +106,7 @@ pub async fn serve(
     let moderation_service = runtime.moderation_service;
     let plugin_bundle_service = runtime.plugin_bundle_service;
     let feature_gate = runtime.feature_gate;
+    let auth_service = runtime.auth_service;
     let readiness = web::Data::new(ReadinessCache::new(Arc::new(SystemProbe {
         db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
@@ -210,6 +211,7 @@ pub async fn serve(
             .app_data(web::Data::new(Arc::clone(&moderation_service)))
             .app_data(web::Data::new(Arc::clone(&plugin_bundle_service)))
             .app_data(web::Data::new(Arc::clone(&feature_gate)))
+            .app_data(web::Data::new(Arc::clone(&auth_service)))
             .app_data(web::Data::new(handler_cfg))
             .app_data(edge_limits.clone())
     })

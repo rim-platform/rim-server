@@ -146,6 +146,7 @@ fn record_failure(response: &Response, executed: bool) {
                     | "STALE_EPOCH"
                     | "MLS_COMMIT_REQUIRED"
                     | "FEATURE_DISABLED"
+                    | "REGISTRATION_FULL"
                     | "TOO_MANY_SUBSCRIPTIONS" => 0,
                     _ => 1,
                 },

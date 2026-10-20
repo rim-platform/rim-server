@@ -110,6 +110,11 @@ pub fn map_service_error(err: ServiceError) -> Error {
             e.set("code", Value::from("FEATURE_DISABLED"));
             e.set("feature", Value::from(feature.as_str()));
         }),
+        // The client says the server is full and points to another server or self-hosting.
+        ServiceError::RegistrationFull => Error::new(rim_services::REGISTRATION_FULL_MESSAGE)
+            .extend_with(|_, e| {
+                e.set("code", Value::from("REGISTRATION_FULL"));
+            }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),
@@ -132,6 +137,15 @@ mod tests {
             err.message,
             "the custom_emoji feature is not available on this server"
         );
+    }
+
+    #[test]
+    fn registration_full_maps_to_its_code_with_a_message_pointing_elsewhere() {
+        let err = map_service_error(ServiceError::RegistrationFull);
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("REGISTRATION_FULL")));
+        assert!(err.message.contains("this server is full"));
+        assert!(err.message.contains("run your own server"));
     }
 
     #[test]

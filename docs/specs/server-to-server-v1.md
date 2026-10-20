@@ -93,7 +93,8 @@ keyHash  = base64url(SHA-256(tagged key text))          (as device_key.key_hash)
 
 ```json
 {"rim":"server-discovery","keyLog":[{"payload":"…","signature":"…"}],"descriptor":{"payload":"…","signature":"…"},
- "features":{"attachments":{"state":"enabled"},"email":{"state":"unavailable","reason":"…"},"custom_emoji":{"state":"disabled"},…}}
+ "features":{"attachments":{"state":"enabled"},"email":{"state":"unavailable","reason":"…"},"custom_emoji":{"state":"disabled"},…},
+ "registration":{"full":false}}
 ```
 
 `features` is optional and unsigned: each optional feature of the instance (the names of
@@ -105,6 +106,13 @@ beside the descriptor rather than in it because the descriptor refuses unknown f
 earlier server would refuse a descriptor that carried it.
 `abuseContact` is in the descriptor, signed, so a copy cannot send reports elsewhere; it is
 left out when unset, so only a server that sets it needs peers that know the field.
+
+`registration` is optional and unsigned too: `full` is true while the server holds as many local
+accounts as it accepts (`RIM_LIMIT_ACCOUNTS`) and refuses every signup. It is advisory, since
+each signup counts afresh, and sits beside the descriptor for the reason `features` does and
+because it changes with signups and purges, which would otherwise re-sign the descriptor each
+time. The descriptor's `registration` still says how to sign up; readers ignore a missing
+`registration`.
 
 The descriptor is signed by the head server key over `rim.server-descriptor.v1\0 || payload`
 (at most 16 KiB):
@@ -1034,7 +1042,8 @@ failures, `401`/`409`/`429` rates, PoW signups), incident response for spam wave
 stolen server key and a database leak, and the abuse policy text.
 
 **Compose** (`deploy/compose.yml` with the `deploy/compose.relay.yml` override, and
-`deploy/README.md`): rim-server with `RIM_ROLE=relay`, `RIM_PUBLIC_BASE_URL=https://<RIM_DOMAIN>`,
+`deploy/README.md`): rim-server with the `RIM_ROLE` `deploy/.env` sets (`relay`, or `both` to host
+workspaces too), `RIM_PUBLIC_BASE_URL=https://<RIM_DOMAIN>`,
 `RIM_REGISTRATION_POW_BITS=24`, `RIM_RELAY_QUEUE_BYTES_PER_USER=67108864` and the other quotas
 above, `RIM_TRUST_FORWARDED_HEADERS=true`, `RIM_FORCE_SECURE_COOKIES=true`, `RIM_DATA_DIR=/data` on a
 volume (the audit log too); a migration step before it; Postgres 17 on its own volume, on a

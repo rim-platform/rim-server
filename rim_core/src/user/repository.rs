@@ -107,4 +107,13 @@ pub trait UserRepository: Send + Sync {
 
     /// The instance operators, by username.
     async fn instance_operators(&self) -> RepoResult<Vec<User>>;
+
+    /// Hold the instance's account-creation lock until the surrounding transaction ends, so
+    /// the signups that check the account cap run one after another. Outside a transaction it
+    /// is released at once.
+    async fn lock_account_creation(&self) -> RepoResult<()>;
+
+    /// The local accounts that are not purged, those waiting out a deletion grace period
+    /// included, counted up to `at_most`: the answer is the smaller of the two.
+    async fn count_local_accounts(&self, at_most: u64) -> RepoResult<u64>;
 }

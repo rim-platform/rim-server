@@ -132,7 +132,9 @@ the **descriptor**: a statement signed by the current key with the server's role
 MLS cipher suites, limits and registration mode, and the abuse contact when `RIM_ABUSE_CONTACT`
 names one. Registration is invite-only (`invite`) unless `RIM_OPEN_REGISTRATION` or
 `RIM_REGISTRATION_POW_BITS` is set. The server signs a new descriptor with a higher `version`
-whenever its configuration changes it and after every rotation.
+whenever its configuration changes it and after every rotation. Beside the descriptor,
+unsigned, the document lists the optional features and says whether registration is full
+(`RIM_LIMIT_ACCOUNTS`, `docs/api.md`).
 
 ## Roles and server-to-server configuration
 

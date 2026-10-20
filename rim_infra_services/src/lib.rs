@@ -1,3 +1,4 @@
+pub(crate) mod account_cap;
 /// Public for `rim_server`, whose composition root runs the hourly purge and whose
 /// `account purge` command runs it once.
 pub mod account_deletion;

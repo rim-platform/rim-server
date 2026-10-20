@@ -1,15 +1,11 @@
-# TLS for one server; certificates come from Let's Encrypt for RIM_DOMAIN. The web client
-# and the API share this origin.
-{$RIM_DOMAIN} {
+# TLS for one server; certificates come from Let's Encrypt for RIM_DOMAIN, and for RIM_WEB_DOMAIN
+# when it is set. Without RIM_WEB_DOMAIN the web client and the API share RIM_DOMAIN's origin.
+# With it the web client is served on RIM_WEB_DOMAIN and calls the API on that origin, while
+# RIM_DOMAIN stays the server's name for the discovery document and other servers.
+{$RIM_DOMAIN} {$RIM_WEB_DOMAIN} {
 	# Attachments are up to 25 MiB and forwarded requests up to 32 MiB.
 	request_body {
 		max_size 32MiB
-	}
-
-	# Signed server-to-server bodies pass unchanged: no compression, no rewriting.
-	@rim path /api /api/* /s2s/* /.well-known/*
-	handle @rim {
-		reverse_proxy rim:8080
 	}
 
 	# The probes stay on the compose network; the client's fallback page must not answer them.
@@ -18,7 +14,33 @@
 		respond 404
 	}
 
+	# The web domain, the one host here besides RIM_DOMAIN: the API and the discovery document the
+	# client reads go to rim-server, the rest to the web client. Other servers reach RIM_DOMAIN
+	# only.
+	@web_domain not host {$RIM_DOMAIN}
+	handle @web_domain {
+		@client path /api /api/* /.well-known/rim-server
+		handle @client {
+			reverse_proxy rim:8080
+		}
+
+		handle {
+			reverse_proxy web:80
+		}
+	}
+
+	# Signed server-to-server bodies pass unchanged: no compression, no rewriting.
+	@rim path /api /api/* /s2s/* /.well-known/*
+	handle @rim {
+		reverse_proxy rim:8080
+	}
+
+	# With a web domain, a browser that opens RIM_DOMAIN, such as an invite link built on
+	# RIM_PUBLIC_BASE_URL, goes there with the path and query kept.
 	handle {
+		@web_elsewhere expression `"{$RIM_WEB_DOMAIN}" != ""`
+		redir @web_elsewhere https://{$RIM_WEB_DOMAIN}{uri}
+
 		reverse_proxy web:80
 	}
 }

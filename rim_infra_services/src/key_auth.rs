@@ -50,6 +50,7 @@ use rim_services::remote_workspace::service::RevocationFanout;
 use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::account_cap::AccountCap;
 use crate::default_workspace;
 use crate::quota::Quotas;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
@@ -147,6 +148,8 @@ pub struct DefaultKeyAuthService {
     minimum_age: Option<u8>,
     /// The workspace every new account joins as a Member; `None` when there is none.
     default_workspace: Option<rim_core::server::model::ServerId>,
+    /// The cap on local accounts every key-only signup checks.
+    account_cap: AccountCap,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -288,6 +291,7 @@ impl DefaultKeyAuthService {
             terms_url: None,
             minimum_age: None,
             default_workspace: None,
+            account_cap: AccountCap::default(),
         }
     }
 
@@ -302,8 +306,18 @@ impl DefaultKeyAuthService {
         self
     }
 
+    /// Applies the instance's caps: workspace members and, with a cap of its own that
+    /// `with_account_cap` can replace by a shared one, local accounts.
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
+        self.account_cap = AccountCap::new(limits.accounts);
+        self
+    }
+
+    /// Checks every key-only signup against `cap`, built from the same limits and shared with
+    /// the password signups, so a signup on either path refreshes the other's "full" answer.
+    pub(crate) fn with_account_cap(mut self, cap: AccountCap) -> Self {
+        self.account_cap = cap;
         self
     }
 
@@ -1095,6 +1109,8 @@ impl KeyAuthService for DefaultKeyAuthService {
         let (scope, repos) = self.begin().await?;
         Self::consume_proof_challenge(&repos, &proof).await?;
         Self::ensure_principal_not_retired(&repos, &state.principal_id).await?;
+        // A remote user signing up here becomes local too, so both branches below count.
+        self.account_cap.admit(repos.user_repo.as_ref()).await?;
         // Checked for a clear answer; two signups racing for one principal are settled by the
         // unique index, which turns the second insert into `Conflict` as well.
         let (user_id, device) = match Self::remote_holder(&repos, &state.principal_id).await? {
@@ -1184,6 +1200,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             .await?;
         repos.key_identity_repo.touch_device(device.id).await?;
         Self::commit(scope).await?;
+        self.account_cap.admitted();
 
         crate::metrics::registered();
         match (&token, pow_bits) {
