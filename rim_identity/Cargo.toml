@@ -14,7 +14,7 @@ aes = { version = "0.8.4", features = ["zeroize"] }
 aes-gcm = { version = "0.10.3", features = ["zeroize"] }
 base64 = "0.22.1"
 chrono = { version = "0.4.42", features = ["serde"] }
-ed25519-dalek = "2.2"
+ed25519-dalek = "3.0"
 hkdf = "0.12.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.145"
