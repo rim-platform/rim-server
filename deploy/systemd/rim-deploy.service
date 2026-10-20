@@ -1,0 +1,34 @@
+# Deploys the latest rim-server release to /srv/rim-server when it is not running yet; started
+# by rim-deploy.timer. `journalctl -u rim-deploy` is the deploy log.
+[Unit]
+Description=Deploy the latest rim-server release
+Documentation=https://github.com/rim-platform/rim-server/blob/master/deploy/README.md
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rim-deploy --check
+WorkingDirectory=/srv/rim-server
+# A backup, the image pulls and the migrations run within this.
+TimeoutStartSec=1h
+# Root, because it runs docker. cosign and the docker client keep their caches here, not in
+# /root.
+StateDirectory=rim-deploy
+Environment=HOME=/var/lib/rim-deploy
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native

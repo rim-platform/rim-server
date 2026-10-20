@@ -25,6 +25,47 @@ line starting with **Upgrade:** is something the operator does before or after t
 
 ## Upgrade
 
+`deploy/upgrade.sh` runs the steps of this section in one go. Put the new release's files in
+place first, then run it with the version:
+
+```sh
+git fetch --tags && git checkout v<version>      # or copy the tag's deploy/ over yours
+deploy/upgrade.sh --dry-run <version>            # checks the images, prints the rest
+deploy/upgrade.sh <version>
+```
+
+In order, it:
+
+1. checks that the version's images are published (`rim-web` only when the web client runs);
+   when one is not, it says which, changes nothing and exits 2. rim-ui's release publishes
+   `rim-web`, so tag rim-ui first;
+2. verifies the signatures against the release workflows, as `docs/self-hosting.md`, "Verify
+   the images", says (cosign must be installed);
+3. runs `deploy/backup.sh`, or says there is nothing to back up when the deployment has no
+   data volume yet (the first start);
+4. writes `RIM_VERSION=<version>` into `deploy/.env`, keeping the file before as
+   `deploy/.env.previous`;
+5. pulls the images, runs the migrations (`dc run --rm migrate`) and `dc up -d`;
+6. waits up to 90 seconds (`RIM_UPGRADE_TIMEOUT`) for `/readyz`, then as long for
+   `https://<RIM_DOMAIN>/.well-known/rim-server` from the host;
+7. reloads Caddy, so a Caddyfile that changed with the release applies, and prints the version
+   `/healthz` reports.
+
+When a step after the env file fails, it prints the tails of the `migrate` and `rim` logs, puts
+`deploy/.env.previous` back, starts the version before as "Rolling back" below does, and exits
+1. On a first start there is no version before, and it stops the stack instead. A version older
+than the running one is that binary rollback: no migrations, and `rim` and `web` start without
+their dependencies.
+
+It reads `COMPOSE_FILE` from the environment or from `deploy/.env`, as the backup scripts do, so
+a relay sets it once in `deploy/.env` (`COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml`,
+relative to the directory the scripts run from). It touches no git, and refuses to run while
+`RIM_SERVER_IMAGE` or `RIM_WEB_IMAGE` is set, since those override the version. A server that
+runs published images only can leave all of this to `rim-deploy`, which installs each release as
+it is published (`deploy/README.md`, "Unattended upgrades from releases").
+
+The same steps by hand:
+
 ```sh
 deploy/backup.sh
 git fetch --tags && git checkout v<version>
@@ -79,10 +120,11 @@ dc pull rim web
 dc up -d --no-deps rim web
 ```
 
-A relay has no web client: `dc pull rim` and `dc up -d --no-deps rim`. The old server's
-`/readyz` passes: it counts only the migrations it knows as pending. Until the next upgrade, a
-plain `dc up -d` stops at the failing `migrate`; use `--no-deps` as above. When you upgrade again
-there is no migration left to run.
+A relay has no web client: `dc pull rim` and `dc up -d --no-deps rim`. From the previous release's
+checkout, `deploy/upgrade.sh <previous version>` does the same after a backup. The old server's
+`/readyz` passes: it counts only the migrations it knows as pending. Until the next upgrade, a plain
+`dc up -d` stops at the failing `migrate`; use `--no-deps` as above. When you upgrade again there is
+no migration left to run.
 
 **Further back.** Restore the backup taken before the upgrade (`docs/self-hosting.md`,
 "Restore"). Everything written since that backup is lost.
