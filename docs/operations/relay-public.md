@@ -61,10 +61,10 @@ What stays here and goes with the relay: the account row, the contact list (the 
 the names the app knows) and DM requests nobody answered yet.
 
 A switch needs this relay to answer: it drains the queue here and ends with `leaveRelay` here.
-If the relay stopped without notice, what was queued and not yet fetched would be lost, and the
-conversations homed here could take no new messages; keys, the history on the devices and the
-workspaces on other servers would stay. That is why the relay closes with notice, and why a
-failed host is restored from the backups ("Restore") rather than closed.
+If the relay stops, or its accounts are reset, before someone has switched, what was queued for
+them and not yet fetched is lost, and the conversations homed here take no new messages; their
+keys, the history on their devices and their workspaces on other servers stay. Switch while the
+relay still answers.
 
 ## What lives where
 
