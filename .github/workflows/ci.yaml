@@ -50,7 +50,7 @@ jobs:
           cargo llvm-cov clean --workspace
           cargo llvm-cov --workspace --no-report
           cargo llvm-cov report --lcov --output-path lcov-unit.info
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lcov-unit
           path: lcov-unit.info
@@ -87,7 +87,7 @@ jobs:
           cargo llvm-cov --no-report -p rim_api --features rim_api/e2e-tests --test '*' \
             -- --test-threads=1
           cargo llvm-cov report --lcov --output-path lcov-api.info
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lcov-api
           path: lcov-api.info
@@ -124,7 +124,7 @@ jobs:
             --features "rim_infra_db/db-tests,rim_infra_services/infra-db-tests" --test '*' \
             -- --test-threads=1
           cargo llvm-cov report --lcov --output-path lcov-repository.info
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: lcov-repository
           path: lcov-repository.info
@@ -153,7 +153,7 @@ jobs:
         run: genhtml coverage/lcov.info --output-directory coverage/html
       - name: Upload Coverage Artifact
         # Uploaded before the gate so the per-file report is available when the gate fails.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage/
