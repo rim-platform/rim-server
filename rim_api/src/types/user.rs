@@ -23,6 +23,12 @@ pub struct User {
     /// (`instanceReports` and the other `instance…` roots). Read on `me` only; false for
     /// everyone else.
     pub instance_operator: bool,
+    /// The person's handle, `@<username>:<domain>`: a local account's username at this server's
+    /// handle domain, or a person from another server's username at their home server and that
+    /// server's handle domain. Null when it is not known (a person from another server whose
+    /// home server did not say, or whose handle domain does not point back at it) and for a
+    /// deleted account.
+    pub handle: Option<String>,
 }
 
 impl From<rim_services::user::dto::UserDto> for User {
@@ -38,6 +44,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             probation_ends_at: None,
             deletion_scheduled_for: value.deletion_scheduled_for,
             instance_operator: false,
+            handle: value.handle,
         }
     }
 }

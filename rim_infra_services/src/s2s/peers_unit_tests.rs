@@ -48,6 +48,7 @@ fn row(pin: &PeerPin, status: PeerStatus) -> PeerServer {
         first_seen_at: Utc::now(),
         fetched_at: Utc::now(),
         last_request_at: None,
+        handle_domain: None,
     }
 }
 
@@ -189,6 +190,13 @@ impl PeerServerRepository for MemoryPeers {
     async fn touch(&self, _server_id: &str) -> RepoResult<()> {
         Ok(())
     }
+
+    async fn set_handle_domain(&self, server_id: &str, domain: Option<String>) -> RepoResult<()> {
+        if let Some((peer, _)) = self.peers.lock().expect("lock").get_mut(server_id) {
+            peer.handle_domain = domain;
+        }
+        Ok(())
+    }
 }
 
 /// Serves whatever document was last set for an origin, and counts fetches.
@@ -208,6 +216,10 @@ impl FakeFetcher {
 
     fn fetches(&self) -> usize {
         self.fetches.load(Ordering::SeqCst)
+    }
+
+    fn stop_serving(&self, origin: &str) {
+        self.docs.lock().expect("lock").remove(origin);
     }
 }
 
@@ -232,6 +244,7 @@ struct Peer {
     log: Vec<SignedStatement>,
     state: ServerKeyState,
     version: u32,
+    handle_domain: Option<String>,
 }
 
 impl Peer {
@@ -247,6 +260,7 @@ impl Peer {
             log: vec![inception],
             state,
             version: 1,
+            handle_domain: None,
         }
     }
 
@@ -301,6 +315,7 @@ impl Peer {
                     mode: RegistrationMode::Invite,
                     pow_bits: None,
                 },
+                self.handle_domain.clone(),
                 "2026-10-09T00:00:00Z".into(),
             ),
         )
@@ -726,4 +741,111 @@ async fn an_origin_holds_at_most_its_limit_of_pins() {
         .pin(ORIGIN, None)
         .await
         .expect("refresh");
+}
+
+#[tokio::test]
+async fn a_peer_declaring_its_own_host_gets_its_handle_domain_without_another_fetch() {
+    let (service, _, fetcher) = service();
+    let mut peer = Peer::new(1);
+    peer.handle_domain = Some("peer.example".into());
+    peer.publish(&fetcher);
+    service.pin(ORIGIN, None).await.expect("pin");
+    assert_eq!(
+        service.handle_domain(&peer.id()).await.expect("domain"),
+        Some("peer.example".to_string())
+    );
+    assert_eq!(fetcher.fetches(), 1);
+}
+
+#[tokio::test]
+async fn a_delegated_handle_domain_counts_only_while_it_points_back_at_the_peer() {
+    const APEX: &str = "https://peer.org";
+    let (service, repo, fetcher) = service();
+    let mut peer = Peer::new(1);
+    peer.handle_domain = Some("peer.org".into());
+    peer.publish(&fetcher);
+    let delegate =
+        |to: &str| serde_json::to_vec(&serde_json::json!({ "delegate": to })).expect("json");
+    fetcher.serve(APEX, delegate(ORIGIN));
+    service.pin(ORIGIN, None).await.expect("pin");
+    assert_eq!(
+        service.handle_domain(&peer.id()).await.expect("domain"),
+        Some("peer.org".to_string())
+    );
+    assert_eq!(fetcher.fetches(), 3);
+
+    // The domain does not answer: what was recorded stays.
+    fetcher.stop_serving(APEX);
+    let service = service_over(&repo, &fetcher);
+    service.pin(ORIGIN, None).await.expect("pin");
+    assert_eq!(
+        service.handle_domain(&peer.id()).await.expect("domain"),
+        Some("peer.org".to_string())
+    );
+
+    // The domain now delegates to another server declaring it: the peer loses it.
+    const OTHER: &str = "https://other.example";
+    let mut other = Peer::new(2);
+    other.handle_domain = Some("peer.org".into());
+    fetcher.serve(OTHER, other.document(Some("https://other.example/s2s/v1")));
+    fetcher.serve(APEX, delegate(OTHER));
+    let service = service_over(&repo, &fetcher);
+    service.pin(ORIGIN, None).await.expect("pin");
+    assert_eq!(
+        service.handle_domain(&peer.id()).await.expect("domain"),
+        None
+    );
+    assert_eq!(
+        repo.find(&peer.id())
+            .await
+            .expect("find")
+            .expect("peer")
+            .handle_domain,
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_checked_domain_the_descriptor_no_longer_declares_does_not_count() {
+    let (service, repo, fetcher) = service();
+    let mut peer = Peer::new(1);
+    peer.handle_domain = Some("peer.example".into());
+    peer.publish(&fetcher);
+    service.pin(ORIGIN, None).await.expect("pin");
+    // A newer descriptor declares another domain; the stored check is for the old one.
+    peer.handle_domain = Some("elsewhere.example".into());
+    peer.version += 1;
+    peer.publish(&fetcher);
+    repo.mark_fetched(
+        &peer.id(),
+        Some((
+            peer.version,
+            serde_json::from_slice::<serde_json::Value>(&peer.document(None))
+                .ok()
+                .and_then(|d| {
+                    Some(SignedRecord {
+                        payload: d["descriptor"]["payload"].as_str()?.to_string(),
+                        signature: d["descriptor"]["signature"].as_str()?.to_string(),
+                    })
+                })
+                .expect("descriptor"),
+        )),
+    )
+    .await
+    .expect("mark");
+    assert_eq!(
+        service.handle_domain(&peer.id()).await.expect("domain"),
+        None
+    );
+    // A blocked peer has no handle domain either.
+    let (service, _, fetcher) = self::service();
+    let mut peer = Peer::new(3);
+    peer.handle_domain = Some("peer.example".into());
+    peer.publish(&fetcher);
+    service.pin(ORIGIN, None).await.expect("pin");
+    service.set_blocked(&peer.id(), true).await.expect("block");
+    assert_eq!(
+        service.handle_domain(&peer.id()).await.expect("domain"),
+        None
+    );
 }

@@ -5,8 +5,8 @@ use mockall::automock;
 
 use crate::conversation::model::ConversationId;
 use crate::host::model::{
-    DelegationStored, NewDelegation, NewRemoteUser, OutboxBacklog, OutboxRow, OutboxStats,
-    PeerDelivery, RemoteMember, SeqDecision, UserKind,
+    DelegationStored, HomeHandle, NewDelegation, NewRemoteUser, OutboxBacklog, OutboxRow,
+    OutboxStats, PeerDelivery, RemoteMember, SeqDecision, UserKind,
 };
 use crate::key_identity::model::DeviceKeyId;
 use crate::repository::error::RepoResult;
@@ -57,6 +57,9 @@ pub trait HostRepository: Send + Sync {
     ) -> RepoResult<()>;
 
     async fn home_relay(&self, user_id: UserId) -> RepoResult<Option<String>>;
+
+    /// Set or clear a remote user's handle at their home relay.
+    async fn set_home_handle(&self, user_id: UserId, handle: Option<HomeHandle>) -> RepoResult<()>;
 
     /// The active pinned peer at an origin.
     async fn peer_at_origin(&self, origin: &str) -> RepoResult<Option<String>>;

@@ -46,6 +46,12 @@ pub struct Model {
     pub invited_by_user_id: Option<Uuid>,
     /// Whether the account may run the instance's moderation queue.
     pub instance_operator: bool,
+    /// A remote user's username at their home relay; set together with `home_handle_domain`.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub home_username: Option<String>,
+    /// The checked handle domain of a remote user's home relay.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub home_handle_domain: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

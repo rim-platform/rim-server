@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 use chrono::{Duration, Utc};
 use migration::{Migrator, MigratorTrait};
-use rim_core::host::model::{NewRemoteUser, SeqDecision, UserKind};
+use rim_core::host::model::{HomeHandle, NewRemoteUser, SeqDecision, UserKind};
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::{DeviceKey, NewDeviceKey};
 use rim_core::key_identity::repository::KeyIdentityRepository;
@@ -20,7 +20,7 @@ use rim_core::relay::model::{
 };
 use rim_core::relay::repository::RelayRepository;
 use rim_core::server::repository::ServerRepository;
-use rim_core::user::model::UserId;
+use rim_core::user::model::{UserHandle, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository;
 use rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository;
@@ -1115,6 +1115,117 @@ async fn the_direct_space_is_unique_and_unlisted_and_remote_users_are_members() 
         repo.make_local(remote, "bob2", "Bob", None).await.is_err(),
         "only remote users"
     );
+}
+
+#[tokio::test]
+async fn a_remote_users_home_handle_is_stored_found_and_cleared() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmHostRepository::new(ctx.db.clone());
+    let users = SeaOrmUserRepository::new(ctx.db.clone());
+    let remote = repo
+        .create_remote_user(NewRemoteUser {
+            principal_id: "rimp1_kuba".to_string(),
+            identity_key: "ed25519:kuba".to_string(),
+            username: "r_kuba".to_string(),
+            display_name: "Kuba".to_string(),
+            home_relay: Some("rims1_relay".to_string()),
+        })
+        .await
+        .unwrap();
+    let handle = |user: &rim_core::user::model::User| user.handle.clone();
+    let stored = users.get_by_id(remote).await.unwrap().expect("user");
+    assert_eq!(handle(&stored), UserHandle::Unknown);
+
+    repo.set_home_handle(
+        remote,
+        Some(HomeHandle {
+            username: "kuba".to_string(),
+            domain: "rim-platform.org".to_string(),
+        }),
+    )
+    .await
+    .unwrap();
+    let stored = users.get_by_id(remote).await.unwrap().expect("user");
+    assert_eq!(
+        handle(&stored),
+        UserHandle::Home {
+            username: "kuba".to_string(),
+            domain: "rim-platform.org".to_string(),
+        }
+    );
+    let found = users
+        .find_by_home_handle("Kuba", "Rim-Platform.org")
+        .await
+        .unwrap()
+        .expect("found by handle");
+    assert_eq!(found.id, remote);
+    assert!(
+        users
+            .find_by_home_handle("kuba", "other.example")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // A local account takes no home handle, and keeps its own.
+    let local = ctx.create_key_only_user("alice", "rimp1_alice").await;
+    repo.set_home_handle(
+        local.id,
+        Some(HomeHandle {
+            username: "alice".to_string(),
+            domain: "elsewhere.example".to_string(),
+        }),
+    )
+    .await
+    .unwrap();
+    let alice = users.get_by_id(local.id).await.unwrap().expect("alice");
+    assert_eq!(handle(&alice), UserHandle::Local);
+    assert!(
+        users
+            .find_by_home_handle("alice", "elsewhere.example")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Turning the remote row into a local account drops the home handle.
+    repo.make_local(remote, "kuba", "Kuba", None).await.unwrap();
+    let kuba = users.get_by_id(remote).await.unwrap().expect("kuba");
+    assert_eq!(handle(&kuba), UserHandle::Local);
+    assert_eq!(
+        count(
+            &ctx.db,
+            "SELECT count(*) AS n FROM \"user\" WHERE home_username IS NOT NULL"
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn clearing_a_home_handle_leaves_it_unknown() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmHostRepository::new(ctx.db.clone());
+    let remote = repo
+        .create_remote_user(NewRemoteUser {
+            principal_id: "rimp1_kuba".to_string(),
+            identity_key: "ed25519:kuba".to_string(),
+            username: "r_kuba".to_string(),
+            display_name: "Kuba".to_string(),
+            home_relay: None,
+        })
+        .await
+        .unwrap();
+    let set = Some(HomeHandle {
+        username: "kuba".to_string(),
+        domain: "rim-platform.org".to_string(),
+    });
+    repo.set_home_handle(remote, set.clone()).await.unwrap();
+    repo.set_home_handle(remote, set).await.unwrap();
+    repo.set_home_handle(remote, None).await.unwrap();
+    let users = SeaOrmUserRepository::new(ctx.db.clone());
+    let stored = users.get_by_id(remote).await.unwrap().expect("user");
+    assert_eq!(stored.handle, UserHandle::Unknown);
 }
 
 #[tokio::test]

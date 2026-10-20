@@ -117,6 +117,20 @@ impl UserRepository for SeaOrmUserRepository {
         Ok(model.map(Into::into))
     }
 
+    async fn find_by_home_handle(&self, username: &str, domain: &str) -> RepoResult<Option<User>> {
+        let model = user::Entity::find()
+            .filter(user::Column::Kind.eq("remote"))
+            .filter(user::Column::HomeHandleDomain.eq(domain.to_ascii_lowercase()))
+            .filter(user::Column::HomeUsername.eq(username.to_ascii_lowercase()))
+            .filter(user::Column::DeletedAt.is_null())
+            .order_by_desc(user::Column::UpdatedAt)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(model.map(Into::into))
+    }
+
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User> {
         let model = user::Entity::find_by_id(id)
             .one(&self.db)

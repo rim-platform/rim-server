@@ -103,6 +103,8 @@ async fn disabled_features_are_reported_and_refused() {
     let key_state = ServerKeyState::replay(&log).expect("log replays");
     let descriptor = verify_descriptor(&key_state, &signed(&doc["descriptor"])).expect("verifies");
     assert_eq!(descriptor.server_id, node.id());
+    // The handle domain defaults to the host of the public origin.
+    assert_eq!(descriptor.handle_domain.as_deref(), Some("127.0.0.1"));
     assert!(
         !doc["descriptor"]["payload"]
             .as_str()

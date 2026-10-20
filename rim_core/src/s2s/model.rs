@@ -117,6 +117,9 @@ pub struct PeerServer {
     pub first_seen_at: DateTime<Utc>,
     pub fetched_at: DateTime<Utc>,
     pub last_request_at: Option<DateTime<Utc>>,
+    /// The handle domain the peer's descriptor declared when it was last checked to point back
+    /// at the peer; `None` before, and when it did not.
+    pub handle_domain: Option<String>,
 }
 
 /// How many peers may be pinned at one origin, whatever their status. An origin serves another

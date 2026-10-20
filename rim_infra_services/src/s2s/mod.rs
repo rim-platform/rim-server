@@ -1,7 +1,8 @@
 //! Server identity and server-to-server traffic: the server key and descriptor, pinned peers,
-//! request nonces, and the signing client other servers are called through.
+//! handle domains, request nonces, and the signing client other servers are called through.
 
 pub mod client;
+pub(crate) mod handle_domain;
 pub mod net;
 pub mod nonces;
 pub mod peers;

@@ -60,6 +60,18 @@ also refetches a remote person's identity when the stored copy is over an hour o
 relays their card lists and then their home relay. If such a person later signs up here with
 their key, the remote row becomes their local account and keeps its memberships.
 
+The `r_` username is internal and never shown as a name. What people see for someone from
+another server is their **handle**, `@<username>:<domain>` (`User.handle`): the username their
+home relay gives them and that relay's handle domain (`docs/server-identity.md`, "Handles and
+delegation"). A relay sends its user's username with their identity and with a workspace join;
+this server records it only from the relay that is their home relay, and only with a handle
+domain it checked to point back at that relay. Until both are known (the relay is older and does
+not send the username, or its domain does not delegate to it) the person has no handle here,
+`User.handle` is null, and clients show their card's display name. Local people's handles use
+this server's own handle domain, so in a shared workspace two people called `kuba` on two servers
+read `@kuba:rim-platform.org` and `@kuba:example.org`. A search can name either form:
+`from:@kuba` (a local account) or `from:@kuba:example.org`.
+
 Remote users never sign in here and never run account mutations here: sign-in, sign-up, device
 and key changes, card publishing, profile, workspace creation, device links, instance invites
 and the relay's own mutations are refused with `FORBIDDEN` ("not available to remote

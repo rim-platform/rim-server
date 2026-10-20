@@ -138,6 +138,7 @@ fn descriptor_settings(
     role: ServerRole,
     s2s_origin: Option<&str>,
     registration: &rim_services::auth::dto::RegistrationMode,
+    handle_domain: String,
 ) -> DescriptorSettings {
     let origin = config.public_origin();
     let websocket = match origin.split_once("://") {
@@ -172,6 +173,7 @@ fn descriptor_settings(
             },
         },
         mls_cipher_suites: rim_services::e2ee::ACCEPTED_CIPHER_SUITES.to_vec(),
+        handle_domain: Some(handle_domain),
     }
 }
 
@@ -190,6 +192,9 @@ pub(crate) async fn build_s2s(
         .host_allowed_relays()
         .map_err(io_error("RIM_HOST_ALLOWED_RELAYS"))?;
     let dm_policy = config.dm_policy().map_err(io_error("RIM_DM_*"))?;
+    let handle_domain = config
+        .handle_domain()
+        .map_err(io_error("RIM_HANDLE_DOMAIN"))?;
     let s2s_origin = config.s2s_origin();
     let key_files = config.key_files();
     let identity_repo: Arc<dyn ServerIdentityRepository> =
@@ -197,7 +202,13 @@ pub(crate) async fn build_s2s(
     let loaded = server_key::load_or_create(identity_repo.as_ref(), &key_files)
         .await
         .map_err(|e| io_error("server key")(format!("{e:#}")))?;
-    let settings = descriptor_settings(config, role, s2s_origin.as_deref(), registration);
+    let settings = descriptor_settings(
+        config,
+        role,
+        s2s_origin.as_deref(),
+        registration,
+        handle_domain,
+    );
     let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
         .await
         .map_err(|e| io_error("server descriptor")(format!("{e:#}")))?;
@@ -336,6 +347,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let mut key_login_audiences = config
         .key_login_audiences()
         .map_err(std::io::Error::other)?;
+    config.handle_domain().map_err(std::io::Error::other)?;
     let audit_retention_days = config
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
@@ -501,6 +513,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             signup_requires_keys: instance_policy.signup_requires_keys,
             dm_policy: dm_policy.clone(),
             default_workspace: instance_policy.default_workspace,
+            handle_domain: s2s.descriptor_settings.handle_domain.clone(),
         },
         Arc::clone(&feature_gate),
         instance_limits,

@@ -33,6 +33,11 @@ pub trait UserRepository: Send + Sync {
     /// account is nobody.
     async fn find_by_username(&self, username: &str) -> RepoResult<Option<User>>;
 
+    /// The person from another server whose handle at their home relay is `username` at
+    /// `domain`, both compared without regard to case; the most recently updated row when
+    /// several claim it.
+    async fn find_by_home_handle(&self, username: &str, domain: &str) -> RepoResult<Option<User>>;
+
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User>;
 
     async fn update_password(&self, id: UserId, password_hash: String) -> RepoResult<()>;

@@ -142,6 +142,8 @@ pub struct DefaultMessageService {
     /// The cap on a message's text in bytes, and the probation of new accounts.
     limits: InstanceLimits,
     clock: Clock,
+    /// This server's handle domain: `from:@name:<it>` names a local account.
+    handle_domain: Option<String>,
 }
 
 impl DefaultMessageService {
@@ -158,7 +160,14 @@ impl DefaultMessageService {
             probation_budget: None,
             limits: InstanceLimits::default(),
             clock: Clock::default(),
+            handle_domain: None,
         }
+    }
+
+    /// Resolve `from:@name:<handle_domain>` searches to local accounts.
+    pub fn with_handle_domain(mut self, handle_domain: Option<String>) -> Self {
+        self.handle_domain = handle_domain;
+        self
     }
 
     /// The message rate of accounts in probation.
@@ -1334,6 +1343,24 @@ impl MessageService for DefaultMessageService {
             Some(FromToken::UserId(uuid)) => Some((*uuid).into()),
             Some(FromToken::Username(name)) => {
                 match self.repos.user_repo.find_by_username(name).await? {
+                    Some(user) => Some(user.id),
+                    None => return Ok(Page::new(vec![], None, None)),
+                }
+            }
+            Some(FromToken::Handle { username, domain }) => {
+                let local = self
+                    .handle_domain
+                    .as_deref()
+                    .is_some_and(|own| own.eq_ignore_ascii_case(domain));
+                let user = if local {
+                    self.repos.user_repo.find_by_username(username).await?
+                } else {
+                    self.repos
+                        .user_repo
+                        .find_by_home_handle(username, domain)
+                        .await?
+                };
+                match user {
                     Some(user) => Some(user.id),
                     None => return Ok(Page::new(vec![], None, None)),
                 }

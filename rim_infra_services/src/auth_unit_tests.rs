@@ -127,6 +127,7 @@ mod tests {
             timezone: None,
             principal_id: None,
             deletion_scheduled_for: None,
+            handle: rim_core::user::model::UserHandle::Local,
         }
     }
 
@@ -970,6 +971,7 @@ mod tests {
                 timezone: None,
                 principal_id: None,
                 deletion_scheduled_for: None,
+                handle: rim_core::user::model::UserHandle::Local,
             }))
         });
         user_repo.expect_create_user().never();
@@ -2064,6 +2066,7 @@ mod tests {
                     timezone: None,
                     principal_id: None,
                     deletion_scheduled_for: None,
+                    handle: rim_core::user::model::UserHandle::Local,
                 })
             });
 
@@ -2232,6 +2235,7 @@ mod tests {
                     timezone: None,
                     principal_id: None,
                     deletion_scheduled_for: None,
+                    handle: rim_core::user::model::UserHandle::Local,
                 })
             });
 
@@ -2304,6 +2308,7 @@ mod tests {
                     timezone: None,
                     principal_id: None,
                     deletion_scheduled_for: None,
+                    handle: rim_core::user::model::UserHandle::Local,
                 })
             });
 

@@ -1,8 +1,14 @@
 use crate::user;
-use rim_core::user::model::User;
+use rim_core::user::model::{User, UserHandle};
 
 impl From<user::Model> for User {
     fn from(m: user::Model) -> Self {
+        let handle = match (m.kind.as_str(), m.home_username, m.home_handle_domain) {
+            _ if m.deleted_at.is_some() => UserHandle::Unknown,
+            ("remote", Some(username), Some(domain)) => UserHandle::Home { username, domain },
+            ("remote", _, _) => UserHandle::Unknown,
+            _ => UserHandle::Local,
+        };
         Self {
             id: m.id.into(),
             username: m.username,
@@ -18,6 +24,7 @@ impl From<user::Model> for User {
             timezone: m.timezone,
             principal_id: m.principal_id,
             deletion_scheduled_for: m.deletion_scheduled_for.map(Into::into),
+            handle,
         }
     }
 }

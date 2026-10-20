@@ -27,6 +27,21 @@ pub struct User {
     pub principal_id: Option<String>,
     /// When the account's pending deletion runs; `None` while no deletion is pending.
     pub deletion_scheduled_for: Option<DateTime<Utc>>,
+    /// What the account's handle is built from.
+    pub handle: UserHandle,
+}
+
+/// What an account's handle (`@<username>:<domain>`) is built from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserHandle {
+    /// A local account: its username at this server's handle domain.
+    Local,
+    /// A person from another server: their username at their home relay and that relay's
+    /// handle domain.
+    Home { username: String, domain: String },
+    /// No handle: a person from another server whose home handle is not known, or a purged
+    /// account.
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -14,4 +14,6 @@ pub struct UserDto {
     pub principal_id: Option<String>,
     /// When the account's pending deletion runs; set only for the account itself (`me`).
     pub deletion_scheduled_for: Option<chrono::DateTime<chrono::Utc>>,
+    /// `@<username>:<domain>`, or `None` when the account has no known handle.
+    pub handle: Option<String>,
 }

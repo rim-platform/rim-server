@@ -96,6 +96,7 @@ services:
       RIM_S2S_DENIED_PEERS: ${RIM_S2S_DENIED_PEERS:-}
       # Passed through only when set in deploy/.env; deploy/.env.example describes each.
       RIM_KEY_LOGIN_AUDIENCES:
+      RIM_HANDLE_DOMAIN:
       RIM_OPEN_REGISTRATION:
       RIM_REGISTRATION_POW_BITS:
       RIM_SIGNUP_REQUIRE_KEYS:

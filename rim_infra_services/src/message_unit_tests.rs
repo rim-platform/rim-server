@@ -739,6 +739,58 @@ mod tests {
         assert!(matches!(err, ServiceError::Validation(_)));
     }
 
+    /// `from:@name:<domain>` looks up a local account when the domain is this server's handle
+    /// domain and a person from another server by their home handle otherwise. An unknown
+    /// handle answers an empty page before anything else is read.
+    #[tokio::test]
+    async fn search_from_a_handle_looks_up_by_where_the_domain_points() {
+        for (query, local) in [
+            ("from:@kuba:Chat.Example", true),
+            ("from:@kuba:rim-platform.org", false),
+        ] {
+            let mut user_repo = MockUserRepository::new();
+            if local {
+                user_repo
+                    .expect_find_by_username()
+                    .withf(|name| name == "kuba")
+                    .returning(|_| Ok(None));
+            } else {
+                user_repo
+                    .expect_find_by_home_handle()
+                    .withf(|name, domain| name == "kuba" && domain == "rim-platform.org")
+                    .returning(|_, _| Ok(None));
+            }
+            let svc = DefaultMessageService::new(
+                MessageRepos {
+                    conversation_repo: Arc::new(MockConversationRepository::new()),
+                    conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                    message_repo: Arc::new(MockMessageRepository::new()),
+                    message_attachment_repo: Arc::new(MockMessageAttachmentRepository::new()),
+                    message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
+                    message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
+                    server_member_repo: Arc::new(MockServerMemberRepository::new()),
+                    user_repo: Arc::new(user_repo),
+                },
+                None,
+                test_observers(),
+            )
+            .with_handle_domain(Some("chat.example".to_string()));
+            let page = svc
+                .search_messages(SearchMessagesQuery {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    conversation_id: None,
+                    query: query.to_string(),
+                    limit: 10,
+                    cursor: None,
+                    dir: PageDir::After,
+                })
+                .await
+                .expect("search");
+            assert!(page.items.is_empty(), "{query}");
+        }
+    }
+
     /// The repository returns `limit + 1` search rows nearest the cursor, newest first, so the
     /// overflow row (farthest from the cursor) is the last one for `After` but the first one for
     /// `Before`. The service must drop that row — not the one next to the cursor.

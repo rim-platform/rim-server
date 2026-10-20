@@ -2,6 +2,7 @@ use rim_identity::SignedStatement;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{StatementError, StatementResult};
+use crate::handle::is_handle_domain;
 use crate::key_log::ServerKeyState;
 use crate::signer::ServerSigner;
 use crate::statement::{STATEMENT_VERSION, ServerStatement, parse_payload, verify};
@@ -80,6 +81,10 @@ pub struct ServerDescriptor {
     pub mls_cipher_suites: Vec<i32>,
     pub limits: Limits,
     pub registration: Registration,
+    /// The domain of this server's handles (`@<username>:<domain>`). A descriptor without one
+    /// declares no handles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle_domain: Option<String>,
     pub issued_at: String,
 }
 
@@ -97,6 +102,7 @@ impl ServerDescriptor {
         mls_cipher_suites: Vec<i32>,
         limits: Limits,
         registration: Registration,
+        handle_domain: Option<String>,
         issued_at: String,
     ) -> Self {
         Self {
@@ -111,6 +117,7 @@ impl ServerDescriptor {
             mls_cipher_suites,
             limits,
             registration,
+            handle_domain,
             issued_at,
         }
     }
@@ -152,6 +159,15 @@ impl ServerDescriptor {
         if !pow_ok {
             return Err(StatementError::invalid(
                 "powBits is set exactly in pow registration mode",
+            ));
+        }
+        if self
+            .handle_domain
+            .as_deref()
+            .is_some_and(|d| !is_handle_domain(d))
+        {
+            return Err(StatementError::invalid(
+                "handleDomain must be a lowercase DNS name",
             ));
         }
         Ok(())
@@ -238,6 +254,7 @@ mod tests {
                 mode: RegistrationMode::Invite,
                 pow_bits: None,
             },
+            None,
             "2026-10-09T00:00:00Z".into(),
         )
     }
@@ -252,16 +269,38 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_carries_its_handle_domain_before_the_issue_time() {
+        let (state, signer) = state();
+        let mut d = descriptor(&state);
+        assert!(
+            !sign_descriptor(&signer, &d)
+                .expect("sign")
+                .payload
+                .contains("handleDomain")
+        );
+        d.handle_domain = Some("rim-platform.org".into());
+        let signed = sign_descriptor(&signer, &d).expect("sign");
+        assert!(
+            signed
+                .payload
+                .contains(r#""handleDomain":"rim-platform.org","issuedAt":"#)
+        );
+        assert_eq!(verify_descriptor(&state, &signed), Ok(d));
+    }
+
+    #[test]
     fn descriptor_refuses_bad_roles_versions_and_pow() {
         let (state, signer) = state();
         let mut bad = vec![];
-        for change in 0..5 {
+        for change in 0..7 {
             let mut d = descriptor(&state);
             match change {
                 0 => d.roles = vec![],
                 1 => d.roles = vec![Role::Relay, Role::Host],
                 2 => d.version = 0,
                 3 => d.registration.pow_bits = Some(16),
+                4 => d.handle_domain = Some("Rim-Platform.org".into()),
+                5 => d.handle_domain = Some(String::new()),
                 _ => d.roles = vec![Role::Host, Role::Host],
             }
             bad.push(d);

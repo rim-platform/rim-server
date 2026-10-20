@@ -280,6 +280,7 @@ impl DefaultWorkspaceHost {
             key_log: request.key_log.clone(),
             devices,
             card: request.card.clone(),
+            username: request.username.clone(),
         })
     }
 

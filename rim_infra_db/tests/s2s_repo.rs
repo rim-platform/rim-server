@@ -91,6 +91,22 @@ async fn key_log_entries_are_unique_per_seq_and_descriptors_only_move_up() {
 }
 
 #[tokio::test]
+async fn a_peers_checked_handle_domain_is_kept_across_fetches() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmPeerServerRepository::new(ctx.db.clone());
+    let inserted = repo.insert(pin(0), PeerStatus::Active).await.unwrap();
+    assert_eq!(inserted.handle_domain, None);
+    repo.set_handle_domain(PEER, Some("rim-platform.org".to_string()))
+        .await
+        .unwrap();
+    repo.mark_fetched(PEER, None).await.unwrap();
+    let advanced = repo.advance(pin(2), 0).await.unwrap().expect("advanced");
+    assert_eq!(advanced.handle_domain.as_deref(), Some("rim-platform.org"));
+    repo.set_handle_domain(PEER, None).await.unwrap();
+    assert_eq!(repo.find(PEER).await.unwrap().unwrap().handle_domain, None);
+}
+
+#[tokio::test]
 async fn a_pin_advances_only_from_the_expected_head_while_active() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmPeerServerRepository::new(ctx.db.clone());

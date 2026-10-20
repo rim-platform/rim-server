@@ -176,16 +176,16 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains("enum ServerFeatureState { ENABLED DISABLED UNAVAILABLE }"));
 }
 
-/// `User` ends with the caller's probation end, pending deletion and operator role.
+/// `User` ends with the caller's probation end, pending deletion, operator role and handle.
 #[test]
-fn user_sdl_ends_with_the_probation_end_the_pending_deletion_and_the_operator_role() {
+fn user_sdl_ends_with_the_probation_end_the_pending_deletion_the_operator_role_and_the_handle() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     assert!(
         sdl.contains(
             "principalId: String probationEndsAt: DateTime deletionScheduledFor: DateTime \
-             instanceOperator: Boolean! }"
+             instanceOperator: Boolean! handle: String }"
         ),
-        "User must end with probationEndsAt, deletionScheduledFor, then instanceOperator"
+        "User must end with probationEndsAt, deletionScheduledFor, instanceOperator, then handle"
     );
 }
 

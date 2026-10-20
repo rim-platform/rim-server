@@ -1087,6 +1087,7 @@ async fn relay_and_host_roles_refuse_what_they_do_not_run() {
     assert_eq!(identity.status, 200);
     let document: Value = serde_json::from_slice(&identity.body).expect("json");
     assert_eq!(document["principalId"], json!(carol.principal()));
+    assert_eq!(document["username"], json!("carol"));
 
     host.stop().await;
     relay.stop().await;
@@ -1126,6 +1127,30 @@ async fn a_remote_user_signing_up_here_becomes_local_and_leaving_a_relay_clears_
     assert_eq!(kind, "remote");
     assert!(username.starts_with("r_"));
     assert_eq!(direct, 1);
+    // Bob's handle comes from his relay: his username there and its handle domain, the host
+    // of its origin. Alice's is her username at her own relay's domain.
+    let home =
+        a.db.query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT home_username, home_handle_domain FROM "user" WHERE id = $1"#,
+            [Uuid::from(remote).into()],
+        ))
+        .await
+        .expect("query")
+        .expect("row");
+    assert_eq!(
+        (
+            home.try_get::<String>("", "home_username")
+                .expect("username"),
+            home.try_get::<String>("", "home_handle_domain")
+                .expect("domain"),
+        ),
+        ("bob".to_string(), "127.0.0.1".to_string())
+    );
+    assert_eq!(
+        alice.ok("query { me { handle } }", json!({})).await["me"]["handle"],
+        json!("@alice:127.0.0.1")
+    );
 
     // Bob signs up on Alice's relay with the same key and device: the row becomes his.
     sign_up_with_card(&a, "bobby", 2, 2).await;

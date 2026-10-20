@@ -23,6 +23,20 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Handles, `@<username>:<domain>`: GraphQL `User.handle` gives a local account its username at
+  this server's handle domain and a person from another server their username at their home
+  server and its handle domain, never the internal `r_…` name; null while unknown and for
+  deleted accounts. The domain is the new `RIM_HANDLE_DOMAIN`, by default the host of
+  `RIM_PUBLIC_BASE_URL` (the server refuses to start when it is not a DNS name, so a server
+  whose public URL has an IPv6 host sets it). The signed descriptor declares it as the optional
+  `handleDomain`; a domain that is not the server's host delegates with
+  `{"delegate": "<origin>"}` at its `/.well-known/rim-server`, followed once and accepted only
+  when the server's descriptor names that domain. Identity documents and joins carry the
+  person's `username` at their relay. `searchMessages` takes `from:@name:domain`.
+  `docs/server-identity.md` ("Handles and delegation") and `docs/specs/server-to-server-v1.md`
+  ("Handles") describe it; a client that refuses unknown descriptor fields must accept
+  `handleDomain`.
+
 - `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
   `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
   and memory use (job `cadvisor`). cAdvisor reaches the Docker and containerd sockets only

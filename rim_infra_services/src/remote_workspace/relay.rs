@@ -502,6 +502,7 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
             card: document.card,
             proof: input.proof,
             delegation: input.delegation,
+            username: document.username,
         })
         .map_err(ServiceError::internal)?;
         let host = input.host_server_id;

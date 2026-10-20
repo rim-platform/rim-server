@@ -111,7 +111,7 @@ The descriptor is signed by the head server key over `rim.server-descriptor.v1\0
 {"v":2,"type":"server-descriptor","serverId":"rims1_…","keySeq":0,"version":1,"roles":["host","relay"],
  "endpoints":{"graphql":"https://host.example/api","websocket":"wss://host.example/api/ws","s2s":"https://host.example/s2s/v1"},
  "s2sVersions":[1],"mlsCipherSuites":[79],"limits":{"maxBodyBytes":8388608,"clockSkewSeconds":300,"maxDeliverItems":256},
- "registration":{"mode":"invite","powBits":null},"issuedAt":"…"}
+ "registration":{"mode":"invite","powBits":null},"handleDomain":"host.example","issuedAt":"…"}
 ```
 
 | Field | Rule |
@@ -123,6 +123,7 @@ The descriptor is signed by the head server key over `rim.server-descriptor.v1\0
 | `s2sVersions` | `[1]`; a later version keeps serving the previous one (`ROADMAP.md`, "Releases and updates") |
 | `mlsCipherSuites` | What `uploadMlsKeyPackages` accepts |
 | `registration` | `mode` `invite`, `open` or `pow`; `powBits` only in `pow` mode |
+| `handleDomain` | The domain of the server's handles ("Handles"): a lowercase DNS name of at most 253 bytes, labels of 1 to 63 letters, digits and hyphens, no leading or trailing hyphen, no trailing dot. Optional: a descriptor without it declares no handles, and is still valid. Placed before `issuedAt` |
 
 The decision record wrote `/.well-known/rim/server` as an illustration; one well-known name is
 simpler. Rejected: an unsigned descriptor (anyone proxying the fetch, a relay included, could change
@@ -176,6 +177,53 @@ origin serves a new id and the earlier id's pin stays, since a refetch that find
 keeps it. An origin holds at most 4 pins, whatever their status. A fifth id there is not pinned
 (`CONFLICT` from `remoteServer`, an unknown peer to a request) until `rim_server peer reset` or
 the idle purge removes one. A lookup by origin takes the `active` pin fetched last.
+
+### Handles
+
+A person's handle is `@<username>:<domain>`: their username at their home relay and the
+`handleDomain` that relay's descriptor declares, such as `@kuba:rim-platform.org`. A username is
+3 to 32 lowercase ASCII letters, digits, `_` and `-` (never starting `r_` or `deleted-`) and the
+domain a DNS name, so neither `@` nor `:` occurs inside either part and the form parses
+unambiguously. The handle points at the principal id; it is never the identity. Contacts,
+memberships and pins stay keyed by principal id, and a username change changes the handle only.
+
+The domain need not be the host of the server's origin, so handles survive moving the server.
+A domain that is not the host delegates: `https://<domain>/.well-known/rim-server` serves
+exactly
+
+```json
+{"delegate":"https://relay.rim-platform.org"}
+```
+
+(one field, an `https` origin without path, query or fragment) instead of a discovery document.
+**Resolving** a handle domain fetches `https://<domain>/.well-known/rim-server` with the pinning
+fetch rules above (5 s, 64 KiB, no redirects, public addresses only). A discovery document there
+is the server's own and must verify at `https://<domain>`. A delegation is followed exactly once
+to the named origin, whose answer must be a discovery document (a second delegation is refused).
+Either way the server's descriptor must declare `handleDomain` equal to the domain resolution
+started from. The binding is two-way, so neither a site nor a server can claim the other's
+people.
+
+**Checking a peer's domain.** When a server pins a peer, and again on every refetch of the pin,
+it checks the `handleDomain` the descriptor declares: it holds when it is the host of the pinned
+origin (no fetch), or when the domain resolves to the same server id. The outcome is stored with
+the pin (`peer_server.handle_domain`, null when the descriptor declares none or the domain points
+elsewhere; audit `s2s.peer_handle_domain` when it changes). A check that cannot run (the domain
+does not answer, or the fetch limits of the pin are reached; the check counts against the
+overall 60 a minute and once a minute per domain) keeps the stored outcome. A stored domain
+counts only while the pin's current descriptor still declares it and the peer is `active`.
+
+**Usernames across servers.** A relay's identity document and its join request carry the
+person's `username` there (below); it is outside every signed statement, the relay's own word
+about its own account. A host records a remote user's handle (`user.home_username`,
+`user.home_handle_domain`) only from a document or join presented by the relay that is the
+user's `home_relay` after the store: the username, when it is a valid lowercase username, with
+that relay's checked handle domain. From the home relay without a valid username or without a
+checked domain, the handle is cleared; from any other relay it is left as it is. A remote user
+without a handle has none in the API (`User.handle` is null), and the `r_` username is never
+offered as one. A row that becomes a local account, or is purged, loses its home handle.
+
+Looking a handle up on its server (`@name:domain` to principal id) is not part of v1.
 
 ### Host keys in clients
 
@@ -349,6 +397,7 @@ delegation):
 | `display_name` | The card's `displayName`, updated with each newer card |
 | `password_hash`, `email` | Null (allowed: `principal_id` is set) |
 | `home_relay` | Server id of the relay that most recently presented a valid delegation for the user, else the first relay of their newest card that pins, else the relay that served their identity: one that speaks for them (7.4a) or one the host fetched it from. Null for local users |
+| `home_username`, `home_handle_domain` | The user's username at their home relay and its checked handle domain, set together ("Handles"); null while unknown and for local users |
 
 Key log, devices (with certificates and revocations) and card live in the existing
 `key_log_entry`, `device_key` and `profile_card` tables, as for an enrolled local user. A key-only
@@ -582,8 +631,9 @@ event (`c:` its conversation, `u:` the app's principal). Then per stream:
   subscriptions. Device additions and revocations, identity rotations and recoveries are pushed
   the same way. The answer is `{"applied":true|false}`.
 - **Identity endpoint** (relays, for local users): `GET /s2s/v1/principals/<principalId>` →
-  `{"principalId","keyLog":[…],"devices":[{"deviceId","certificate","revocation","mlsActive"}],"card"}`,
-  `404` for others. `devices` lists at most 64 devices, leaving out those whose certificate a
+  `{"principalId","keyLog":[…],"devices":[{"deviceId","certificate","revocation","mlsActive"}],"card","username"}`,
+  `404` for others. `username` is the person's username at the relay (optional; a reader
+  takes a document without it, and records it only as "Handles" says). `devices` lists at most 64 devices, leaving out those whose certificate a
   recovery rotation voided (`keySeq` before the log's last recovery entry); past 64 it keeps the
   unrevoked devices, then the most recently revoked. `POST /s2s/v1/identity` takes the same
   JSON; the receiver applies it only for principals it holds as remote: a log extending its
@@ -824,7 +874,8 @@ relayStream                  ◄─── POST /s2s/v1/deliver         (events)
    person. The proof keeps the `login` format, so what it may be used for lives with the
    challenge H issued; a distinct join statement naming the relay would harden this further and
    is not part of v1.
-3. The device signs a delegation. R sends H `{"inviteToken","keyLog":[…],"devices":[{"certificate","revocation"}],"card","proof","delegation"}`.
+3. The device signs a delegation. R sends H `{"inviteToken","keyLog":[…],"devices":[{"certificate","revocation"}],"card","proof","delegation","username"}`,
+   `username` (optional) being the person's username at R.
 4. H verifies log, certificates, proof (claiming the join challenge it issued to R) and invite
    token (the rules of `joinServerByInvite`, bans included), creates or updates the remote user,
    adds the membership with the invite's role, stores devices and card, accepts the delegation,
@@ -1160,6 +1211,12 @@ CREATE TABLE peer_server_forgotten (server_id text PRIMARY KEY, origin text NOT 
     head_seq integer NOT NULL CHECK (head_seq >= 0), head_payload text NOT NULL,
     forgotten_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX idx_remote_identity_cache_fetched ON remote_identity_cache (fetched_at);
+-- add_user_handles ("Handles")
+ALTER TABLE "user" ADD COLUMN home_username text, ADD COLUMN home_handle_domain text,
+    ADD CONSTRAINT chk_user_home_handle CHECK ((home_username IS NULL) = (home_handle_domain IS NULL));
+CREATE INDEX idx_user_home_handle ON "user" (home_handle_domain, home_username)
+    WHERE home_username IS NOT NULL;
+ALTER TABLE peer_server ADD COLUMN handle_domain text;   -- the checked handleDomain
 ```
 
 A per-minute cleanup (like the key challenge cleanup) deletes expired nonces, `device_request_seen`
@@ -1234,6 +1291,7 @@ type Mutation {
   applyRemoteRevocation(revocation: SignedStatementInput!): SignedStatement!  # host; no session, CSRF-exempt
 }
 type Subscription { relayStream(after: ID): String! }                     # JSON strings, as workspaceEvents
+type User { …  handle: String }                # "Handles"; null while unknown and for deleted accounts
 ```
 
 Every new mutation but `applyRemoteRevocation` needs the CSRF header. A peer that cannot be reached
@@ -1263,7 +1321,7 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 
 Rate limits are the in-memory per-node limiters; nonces, `seq` windows and cursors are in the
 database, so correctness never depends on one node. Audit (ids only):
-`s2s.peer_pinned`, `s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked`,
+`s2s.peer_pinned`, `s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked`, `s2s.peer_handle_domain`,
 `s2s.peer_unblocked`, `host.remote_join`, `host.delegation_accepted`, `host.revocation_applied`,
 `host.recovery_applied`, `host.identity_revocations_applied`,
 `relay.principal_blocked` (`scope` `user` for `blockPrincipal`, `server` for the operator's),

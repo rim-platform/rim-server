@@ -25,7 +25,7 @@ use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::dm_policy::model::DmOutbound;
 use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::e2ee::repository::E2eeRepository;
-use rim_core::host::model::{SeqDecision, UserKind};
+use rim_core::host::model::{HomeHandle, SeqDecision, UserKind};
 use rim_core::host::repository::{DelegationRepository, HostRepository};
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository};
@@ -504,6 +504,13 @@ impl DefaultHostService {
                 .await?;
         }
         if let Some(stored) = &stored
+            && let Err(e) = self
+                .record_home_handle(stored.user_id, document.username.as_deref(), served_by)
+                .await
+        {
+            warn!(error = %e, user_id = %stored.user_id, "could not record a remote user's handle");
+        }
+        if let Some(stored) = &stored
             && stored.devices_changed
             && !stored.created
             && let Some(e2ee) = self.e2ee_service.get()
@@ -512,6 +519,36 @@ impl DefaultHostService {
             warn!(error = %e, user_id = %stored.user_id, "could not announce a remote user's device change");
         }
         Ok(stored)
+    }
+
+    /// Record a remote user's handle from a document `served_by` sent, when `served_by` is
+    /// their home relay: `username` and the relay's checked handle domain. A document from any
+    /// other relay leaves the handle as it is; one from the home relay clears it when it
+    /// carries no valid username or the relay has no checked handle domain.
+    ///
+    /// # Errors
+    /// What the repositories and the peer service return.
+    async fn record_home_handle(
+        &self,
+        user_id: UserId,
+        username: Option<&str>,
+        served_by: &str,
+    ) -> ServiceResult<()> {
+        if self.repos.host_repo.home_relay(user_id).await?.as_deref() != Some(served_by) {
+            return Ok(());
+        }
+        let username = username
+            .filter(|u| crate::signup::normalize_username(u).is_ok_and(|n| n == *u))
+            .map(str::to_string);
+        let domain = self.peers.handle_domain(served_by).await?;
+        let handle = username
+            .zip(domain)
+            .map(|(username, domain)| HomeHandle { username, domain });
+        self.repos
+            .host_repo
+            .set_home_handle(user_id, handle)
+            .await?;
+        Ok(())
     }
 
     /// Close the live connections of the sessions a committed identity ended, and record the

@@ -94,6 +94,10 @@ pub trait PeerServerRepository: Send + Sync {
 
     /// Set `last_request_at` to now.
     async fn touch(&self, server_id: &str) -> RepoResult<()>;
+
+    /// Record the peer's checked handle domain, or `None` when its descriptor declares none or
+    /// the domain does not point back at it.
+    async fn set_handle_domain(&self, server_id: &str, domain: Option<String>) -> RepoResult<()>;
 }
 
 /// Request nonces seen per peer.

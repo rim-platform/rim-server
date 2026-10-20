@@ -77,6 +77,8 @@ pub struct FederationHooks {
     pub dm_policy: rim_services::dm_policy::dto::DmOperatorPolicy,
     /// The workspace every new account joins as a Member; `None` when there is none.
     pub default_workspace: Option<rim_core::server::model::ServerId>,
+    /// This server's handle domain (`RIM_HANDLE_DOMAIN`); `None` gives local accounts no handle.
+    pub handle_domain: Option<String>,
 }
 
 #[derive(Clone)]
@@ -248,7 +250,8 @@ impl DefaultAppServiceProvider {
             franking_keys.clone(),
         )
         .with_moderation_repo(Arc::clone(&repos.moderation_repo))
-        .with_limits(limits);
+        .with_limits(limits)
+        .with_handle_domain(federation.handle_domain.clone());
         if let Some(rate) = federation.quotas.messages {
             message_concrete = message_concrete.with_message_budget(rate);
         }
@@ -350,7 +353,8 @@ impl DefaultAppServiceProvider {
         let user_service: Arc<dyn UserService> = Arc::new(
             crate::user::DefaultUserService::new(repos.for_user())
                 .with_limits(limits)
-                .with_reserved_names(federation.reserved_names.clone()),
+                .with_reserved_names(federation.reserved_names.clone())
+                .with_handle_domain(federation.handle_domain.clone()),
         );
         let workspace_state_service: Arc<dyn WorkspaceStateService> = Arc::new(
             crate::workspace_state::DefaultWorkspaceStateService::new(

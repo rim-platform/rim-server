@@ -139,7 +139,7 @@ impl ServerIdentityRepository for SeaOrmServerIdentityRepository {
 
 const PEER_COLUMNS: &str = "server_id, origin, head_seq, head_key, previous_key, rotated_at, \
      rotation_signer, descriptor_version, descriptor_payload, descriptor_signature, status, \
-     first_seen_at, fetched_at, last_request_at";
+     first_seen_at, fetched_at, last_request_at, handle_domain";
 
 fn to_peer(row: &QueryResult) -> RepoResult<PeerServer> {
     let m = peer_server::Model::from_query_result(row, "").map_err(map_db_err)?;
@@ -165,6 +165,7 @@ fn to_peer(row: &QueryResult) -> RepoResult<PeerServer> {
         first_seen_at: m.first_seen_at.into(),
         fetched_at: m.fetched_at.into(),
         last_request_at: m.last_request_at.map(Into::into),
+        handle_domain: m.handle_domain,
     })
 }
 
@@ -529,6 +530,17 @@ impl PeerServerRepository for SeaOrmPeerServerRepository {
             .execute_raw(stmt(
                 "UPDATE peer_server SET last_request_at = now() WHERE server_id = $1",
                 vec![server_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        Ok(())
+    }
+
+    async fn set_handle_domain(&self, server_id: &str, domain: Option<String>) -> RepoResult<()> {
+        self.db
+            .execute_raw(stmt(
+                "UPDATE peer_server SET handle_domain = $2 WHERE server_id = $1",
+                vec![server_id.into(), domain.into()],
             ))
             .await
             .map_err(map_db_err)?;

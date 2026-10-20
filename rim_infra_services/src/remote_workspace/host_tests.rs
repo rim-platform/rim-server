@@ -67,6 +67,7 @@ fn identity(seed: u8) -> (SharedIdentity, Vec<SignedStatement>) {
             mode: RegistrationMode::Invite,
             pow_bits: None,
         },
+        None,
         timestamp(Utc::now()),
     );
     let descriptor = sign_descriptor(&signer, &content).expect("descriptor");

@@ -1026,6 +1026,7 @@ pub(crate) mod tests {
             timezone: None,
             principal_id: Some("rimp1_x".to_string()),
             deletion_scheduled_for: None,
+            handle: rim_core::user::model::UserHandle::Local,
         }
     }
 }

@@ -77,7 +77,8 @@ pub struct LoadedKey {
     pub log: Vec<SignedStatement>,
 }
 
-/// What the descriptor says besides the key: roles, endpoints, limits and registration.
+/// What the descriptor says besides the key: roles, endpoints, limits, registration and the
+/// handle domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescriptorSettings {
     pub roles: Vec<Role>,
@@ -85,6 +86,7 @@ pub struct DescriptorSettings {
     pub limits: Limits,
     pub registration: Registration,
     pub mls_cipher_suites: Vec<i32>,
+    pub handle_domain: Option<String>,
 }
 
 fn to_statement(record: &SignedRecord) -> SignedStatement {
@@ -443,6 +445,7 @@ pub async fn with_descriptor(
             settings.mls_cipher_suites.clone(),
             settings.limits.clone(),
             settings.registration.clone(),
+            settings.handle_domain.clone(),
             timestamp(Utc::now()),
         )
     };
@@ -595,6 +598,7 @@ mod tests {
                 pow_bits: None,
             },
             mls_cipher_suites: vec![79],
+            handle_domain: Some("a.example".into()),
         }
     }
 
@@ -800,5 +804,31 @@ mod tests {
         assert_eq!(current.state.seq, 1);
         assert_eq!(current.descriptor_content.key_seq, 1);
         assert_eq!(current.descriptor_content.version, 3);
+    }
+
+    #[tokio::test]
+    async fn a_new_handle_domain_signs_a_new_descriptor() {
+        let dir = tempfile::tempdir().expect("dir");
+        let files = files(dir.path());
+        let repo = MemoryRepo::default();
+        let loaded = load_or_create(&repo, &files).await.expect("create");
+        let without = DescriptorSettings {
+            handle_domain: None,
+            ..settings(None)
+        };
+        let first = with_descriptor(&repo, loaded, &without)
+            .await
+            .expect("descriptor");
+        assert!(!first.descriptor.payload.contains("handleDomain"));
+
+        let loaded = load(&repo, &files).await.expect("load");
+        let with = with_descriptor(&repo, loaded, &settings(None))
+            .await
+            .expect("descriptor");
+        assert_eq!(with.descriptor_content.version, 2);
+        assert_eq!(
+            with.descriptor_content.handle_domain.as_deref(),
+            Some("a.example")
+        );
     }
 }

@@ -130,6 +130,7 @@ fn host_descriptor(key_seq: u32, version: u32, issued_at: &str) -> ServerDescrip
             mode: RegistrationMode::Invite,
             pow_bits: None,
         },
+        None,
         issued_at.to_string(),
     )
 }

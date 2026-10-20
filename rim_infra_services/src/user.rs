@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use rim_core::user::model::{UpdateProfilePatch, UserId};
+use rim_core::user::model::{UpdateProfilePatch, UserHandle, UserId};
 use rim_services::limits::InstanceLimits;
 use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
 use rim_services::user::dto::UserDto;
@@ -31,6 +31,8 @@ pub struct DefaultUserService {
     clock: Clock,
     /// Display names a profile edit may not take.
     reserved_names: ReservedNames,
+    /// This server's handle domain; local accounts have no handle without one.
+    handle_domain: Option<String>,
 }
 
 impl DefaultUserService {
@@ -40,7 +42,14 @@ impl DefaultUserService {
             limits: InstanceLimits::default(),
             clock: Clock::default(),
             reserved_names: ReservedNames::default(),
+            handle_domain: None,
         }
+    }
+
+    /// Give local accounts handles at `handle_domain`.
+    pub fn with_handle_domain(mut self, handle_domain: Option<String>) -> Self {
+        self.handle_domain = handle_domain;
+        self
     }
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
@@ -77,8 +86,22 @@ impl DefaultUserService {
         self.reserved_names.check(display_name)
     }
 
-    fn convert_to_dto(user: rim_core::user::model::User) -> UserDto {
+    /// The account's handle: a local account's username at this server's handle domain, a
+    /// remote user's handle at their home relay, or `None`.
+    fn handle(&self, user: &rim_core::user::model::User) -> Option<String> {
+        match &user.handle {
+            UserHandle::Local => self
+                .handle_domain
+                .as_deref()
+                .map(|domain| rim_s2s::format_handle(&user.username.to_ascii_lowercase(), domain)),
+            UserHandle::Home { username, domain } => Some(rim_s2s::format_handle(username, domain)),
+            UserHandle::Unknown => None,
+        }
+    }
+
+    fn convert_to_dto(&self, user: rim_core::user::model::User) -> UserDto {
         UserDto {
+            handle: self.handle(&user),
             id: user.id,
             username: user.username,
             display_name: user.display_name,
@@ -104,7 +127,7 @@ impl UserService for DefaultUserService {
 
         Ok(UserDto {
             deletion_scheduled_for,
-            ..Self::convert_to_dto(user)
+            ..self.convert_to_dto(user)
         })
     }
 
@@ -132,7 +155,7 @@ impl UserService for DefaultUserService {
     ) -> ServiceResult<Vec<UserDto>> {
         let users = self.repos.user_repo.get_by_ids(ids).await?;
 
-        Ok(users.into_iter().map(Self::convert_to_dto).collect())
+        Ok(users.into_iter().map(|u| self.convert_to_dto(u)).collect())
     }
 
     async fn update_my_profile(&self, cmd: UpdateMyProfileCmd) -> ServiceResult<UserDto> {
@@ -205,6 +228,6 @@ impl UserService for DefaultUserService {
             )
             .await?;
 
-        Ok(Self::convert_to_dto(user))
+        Ok(self.convert_to_dto(user))
     }
 }
