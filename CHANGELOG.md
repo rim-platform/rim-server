@@ -332,6 +332,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `rustls` 0.23.46: the TLS library behind outgoing HTTPS requests picks up the fixes for
   RUSTSEC-2026-0346, -0347, -0348 and -0349 (TLS secrets in `Debug` output, buffered data after
   an ECH rejection, certificate decompression memory, key-exchange downgrade).
+- `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10: outgoing HTTPS requests no longer trust
+  the distrusted emSign intermediates or accept other distrusted intermediates
+  (RUSTSEC-2026-0381, RUSTSEC-2026-0382).
 - A member removed from a workspace (kicked, banned) or from a conversation (left, removed)
   loses their notifications for it, and the email digest leaves out anything its recipient can
   no longer read. Before, a kicked member's pending notification was still emailed in the next
