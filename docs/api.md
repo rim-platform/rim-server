@@ -220,7 +220,17 @@ username that differs from an existing account's only in case answers `CONFLICT`
 When the server has terms of service (`serverInfo.termsUrl` is set), both signups must accept
 them: `acceptedTermsUrl` in the input carries that URL unchanged. A signup without it, or with
 another URL, answers `VALIDATION`. The server records the acceptance and its time on the
-account. Without terms on the server the field is ignored.
+account. Without terms on the server the field is ignored. Terms the server serves itself
+(`RIM_TERMS_FILE`) are at `/api/terms?v=<hash of the file>`: a page in HTML, and the URL
+changes whenever the operator edits them, so a form that showed old terms is refused and reads
+`serverInfo` again.
+
+When the server has a minimum age (`serverInfo.minimumAge` is set), both signups must confirm
+it: once the person ticks "I am at least N", `confirmedMinimumAge` in the input carries
+`minimumAge` unchanged. A signup without it, or with another number, answers `VALIDATION` with
+a message about the minimum age (not the terms). The age is self-declared; the server records
+on the account only the age confirmed. Without a minimum age on the server the field is
+ignored.
 
 When the server names a default workspace (`serverInfo.defaultWorkspace` is set), every signup
 makes the new account a Member of it, with its public channels, before the signup answers. The
@@ -522,6 +532,13 @@ each list.
 - **`defaultWorkspace`**: the id of the workspace every new account joins as a Member
   (`RIM_DEFAULT_WORKSPACE`), or null when the server names none. After a signup a client can
   open it instead of the empty direct space.
+- **`abuseContact`**: where to report abuse on this server, an email address or an https URL
+  (`RIM_ABUSE_CONTACT`), or null when the operator names none. A client shows it on the
+  sign-in page, as a `mailto:` link for an address. The signed descriptor carries the same
+  value (`specs/server-to-server-v1.md`).
+- **`minimumAge`**: the age every signup confirms the person has reached (`RIM_MINIMUM_AGE`,
+  13 to 21), or null when the server asks for none. A client shows "I am at least N" at signup
+  and sends N back as `confirmedMinimumAge`.
 
 The discovery document carries the same `features` for a client that has not connected yet.
 

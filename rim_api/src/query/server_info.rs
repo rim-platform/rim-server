@@ -13,7 +13,8 @@ pub(crate) struct ServerInfoQueries;
 #[Object]
 impl ServerInfoQueries {
     /// The server's release version, API version, features, audit retention, instance notice,
-    /// terms URL, limits and DM settings. Readable without a session.
+    /// terms URL, limits, DM settings, abuse contact and minimum age. Readable without a
+    /// session.
     async fn server_info(&self, ctx: &Context<'_>) -> Result<ServerInfo> {
         let gate = ctx.data::<Arc<dyn FeatureGate>>()?;
         let retention = ctx.data::<AuditRetention>()?;

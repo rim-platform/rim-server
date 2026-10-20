@@ -431,8 +431,8 @@ async fn a_tombstone_frees_the_username_and_is_found_by_id_only() {
         &ctx,
         &format!(
             "UPDATE \"user\" SET email = 'alice@example.com', bio = 'hi', \
-             avatar_url = '/api/files/avatars/{0}/avatar.png', terms_accepted_url = 'https://t' \
-             WHERE id = '{0}'",
+             avatar_url = '/api/files/avatars/{0}/avatar.png', terms_accepted_url = 'https://t', \
+             minimum_age_confirmed = 16 WHERE id = '{0}'",
             alice.id
         ),
     )
@@ -484,7 +484,8 @@ async fn a_tombstone_frees_the_username_and_is_found_by_id_only() {
             &ctx,
             &format!(
                 "SELECT count(*) FROM \"user\" WHERE id = '{}' AND identity_key IS NULL \
-                 AND terms_accepted_url IS NULL AND deleted_at IS NOT NULL",
+                 AND terms_accepted_url IS NULL AND minimum_age_confirmed IS NULL \
+                 AND deleted_at IS NOT NULL",
                 alice.id
             )
         )

@@ -127,6 +127,9 @@ services:
       RIM_API_MAX_BATCH:
       RIM_INSTANCE_NOTICE:
       RIM_TERMS_URL:
+      RIM_TERMS_FILE:
+      RIM_ABUSE_CONTACT:
+      RIM_MINIMUM_AGE:
       RIM_LIMIT_WORKSPACES_PER_USER:
       RIM_LIMIT_MEMBERS_PER_WORKSPACE:
       RIM_LIMIT_CHANNELS_PER_WORKSPACE:
@@ -156,9 +159,11 @@ services:
       # custom_emoji, workspace_plugins, ai_commands. A switched-off feature's API fails with
       # FEATURE_DISABLED.
       # RIM_FEATURES_DISABLED: attachments,custom_emoji
-    # The image's rim user (uid 1001) writes only to this volume and /tmp.
+    # The image's rim user (uid 1001) writes only to this volume and /tmp. The terms of use
+    # are read from /config/terms.md when RIM_TERMS_FILE names it.
     volumes:
       - rim_data:/data
+      - ./terms.md:/config/terms.md:ro
     tmpfs: [/tmp]
     read_only: true
     cap_drop: [ALL]

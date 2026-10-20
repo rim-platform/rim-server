@@ -205,6 +205,22 @@ impl UserRepository for SeaOrmUserRepository {
         Ok(())
     }
 
+    async fn record_minimum_age_confirmation(&self, id: UserId, age: u8) -> RepoResult<()> {
+        let result = user::Entity::update_many()
+            .col_expr(
+                user::Column::MinimumAgeConfirmed,
+                Expr::value(i16::from(age)),
+            )
+            .filter(user::Column::Id.eq(sea_orm::prelude::Uuid::from(id)))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        if result.rows_affected == 0 {
+            return Err(RepoError::new(RepoErrorKind::NotFound));
+        }
+        Ok(())
+    }
+
     async fn record_invite_chain(
         &self,
         id: UserId,

@@ -236,9 +236,25 @@ pub struct RIMConfig {
     /// `RIM_INSTANCE_NOTICE`; see [`RIMConfig::instance_notice`].
     pub instance_notice: Option<String>,
 
-    /// The terms of service every signup accepts, an absolute http(s) URL. Controlled by
-    /// `RIM_TERMS_URL`; see [`RIMConfig::terms_url`].
+    /// The terms of service every signup accepts, an absolute http(s) URL, for terms hosted
+    /// elsewhere. Controlled by `RIM_TERMS_URL`; see [`RIMConfig::terms_url`].
     pub terms_url: Option<String>,
+
+    /// Path of a Markdown file holding the terms of service every signup accepts. The server
+    /// reads it at start, refuses to start when it is missing, unreadable, empty or larger
+    /// than 64 KiB, and serves it as a page at `/api/terms`; that page is then the terms URL.
+    /// Cannot be set together with `RIM_TERMS_URL`. Controlled by `RIM_TERMS_FILE`.
+    pub terms_file: Option<String>,
+
+    /// Where to report abuse on this server: an email address or an https URL, published in
+    /// the signed server descriptor and in `serverInfo`. Controlled by `RIM_ABUSE_CONTACT`; see
+    /// [`RIMConfig::abuse_contact`].
+    pub abuse_contact: Option<String>,
+
+    /// The age, 13 to 21, every signup confirms the person has reached; unset asks for no
+    /// confirmation. The age is self-declared: nothing checks it. Controlled by
+    /// `RIM_MINIMUM_AGE`; see [`RIMConfig::minimum_age`].
+    pub minimum_age: Option<u32>,
 
     /// Refuse every password signup, so new accounts sign up with a key only; unset is `true`.
     /// Password sign-in of existing accounts is unaffected. Controlled by
@@ -352,6 +368,9 @@ impl ServerRole {
 /// Longest `RIM_INSTANCE_NOTICE`, in characters.
 pub const MAX_INSTANCE_NOTICE_CHARS: usize = 500;
 
+/// The ages `RIM_MINIMUM_AGE` takes.
+pub const MINIMUM_AGE_RANGE: std::ops::RangeInclusive<u32> = 13..=21;
+
 /// Default of `RIM_S2S_PEER_RATE_PER_MIN`.
 const DEFAULT_S2S_PEER_RATE_PER_MIN: u32 = 600;
 
@@ -419,6 +438,9 @@ impl fmt::Debug for RIMConfig {
             .field("api_limits", &self.api_limits())
             .field("instance_notice", &self.instance_notice)
             .field("terms_url", &self.terms_url)
+            .field("terms_file", &self.terms_file)
+            .field("abuse_contact", &self.abuse_contact)
+            .field("minimum_age", &self.minimum_age)
             .field("signup_requires_keys", &self.signup_requires_keys())
             .field("default_workspace", &self.default_workspace)
             .field("instance_limits", &self.instance_limits())
@@ -493,6 +515,9 @@ impl Default for RIMConfig {
             ws_session_recheck_secs: None,
             instance_notice: None,
             terms_url: None,
+            terms_file: None,
+            abuse_contact: None,
+            minimum_age: None,
             signup_require_keys: None,
             default_workspace: None,
             limit_workspaces_per_user: None,
@@ -1075,20 +1100,117 @@ impl RIMConfig {
             .map_err(|_| format!("RIM_DEFAULT_WORKSPACE={workspace} is not a workspace id"))
     }
 
-    /// The instance notice, terms URL, signup policy and default workspace the GraphQL schema
-    /// serves and signups follow.
+    /// The terms page `RIM_TERMS_FILE` names, read and rendered, with its URL under
+    /// [`RIMConfig::public_origin`]; `None` when the variable is unset or blank.
     ///
     /// # Errors
-    /// The messages of [`RIMConfig::instance_notice`], [`RIMConfig::terms_url`] and
+    /// A message naming both variables when `RIM_TERMS_URL` is set too, and the messages of
+    /// [`crate::terms::TermsPage::load`].
+    pub(crate) fn terms_page(&self) -> Result<Option<crate::terms::TermsPage>, String> {
+        let Some(path) = non_blank(self.terms_file.as_deref()) else {
+            return Ok(None);
+        };
+        if non_blank(self.terms_url.as_deref()).is_some() {
+            return Err(
+                "RIM_TERMS_URL and RIM_TERMS_FILE are both set: set RIM_TERMS_FILE for terms this \
+                 server serves, or RIM_TERMS_URL for terms hosted elsewhere"
+                    .to_string(),
+            );
+        }
+        crate::terms::TermsPage::load(std::path::Path::new(path), &self.public_origin()).map(Some)
+    }
+
+    /// `RIM_ABUSE_CONTACT`, trimmed; `None` when unset or blank.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is neither an email address nor an
+    /// absolute https URL, or is longer than [`rim_s2s::descriptor::MAX_ABUSE_CONTACT_BYTES`]
+    /// bytes.
+    pub fn abuse_contact(&self) -> Result<Option<String>, String> {
+        let Some(contact) = non_blank(self.abuse_contact.as_deref()) else {
+            return Ok(None);
+        };
+        let https = || {
+            url::Url::parse(contact)
+                .is_ok_and(|url| url.scheme() == "https" && url.host().is_some())
+        };
+        if contact.len() <= rim_s2s::descriptor::MAX_ABUSE_CONTACT_BYTES
+            && (is_email_address(contact) || https())
+        {
+            Ok(Some(contact.to_string()))
+        } else {
+            Err(format!(
+                "RIM_ABUSE_CONTACT={contact} is neither an email address nor an https URL"
+            ))
+        }
+    }
+
+    /// `RIM_MINIMUM_AGE`; `None` when unset.
+    ///
+    /// # Errors
+    /// A message naming the variable when the age is outside [`MINIMUM_AGE_RANGE`].
+    pub fn minimum_age(&self) -> Result<Option<u8>, String> {
+        let Some(age) = self.minimum_age else {
+            return Ok(None);
+        };
+        if !MINIMUM_AGE_RANGE.contains(&age) {
+            return Err(format!(
+                "RIM_MINIMUM_AGE={age} is outside {} to {}",
+                MINIMUM_AGE_RANGE.start(),
+                MINIMUM_AGE_RANGE.end()
+            ));
+        }
+        u8::try_from(age)
+            .map(Some)
+            .map_err(|_| format!("RIM_MINIMUM_AGE={age} is not an age"))
+    }
+
+    /// The instance notice, terms URL, abuse contact, minimum age, signup policy and default
+    /// workspace the GraphQL schema serves and signups follow. The terms URL is that of
+    /// `terms_page` when there is one, else `RIM_TERMS_URL`.
+    ///
+    /// # Errors
+    /// The messages of [`RIMConfig::instance_notice`], [`RIMConfig::terms_url`],
+    /// [`RIMConfig::abuse_contact`], [`RIMConfig::minimum_age`] and
     /// [`RIMConfig::default_workspace`].
-    pub fn instance_policy(&self) -> Result<rim_api::types::InstancePolicy, String> {
+    pub(crate) fn instance_policy(
+        &self,
+        terms_page: Option<&crate::terms::TermsPage>,
+    ) -> Result<rim_api::types::InstancePolicy, String> {
+        let terms_url = match terms_page {
+            Some(page) => Some(page.url().to_string()),
+            None => self.terms_url()?,
+        };
         Ok(rim_api::types::InstancePolicy {
             notice: self.instance_notice()?,
-            terms_url: self.terms_url()?,
+            terms_url,
             signup_requires_keys: self.signup_requires_keys(),
             default_workspace: self.default_workspace()?,
+            abuse_contact: self.abuse_contact()?,
+            minimum_age: self.minimum_age()?,
         })
     }
+}
+
+/// Whether `value` looks like `local@domain.tld`: one `@`, no whitespace, a dotted domain of
+/// letters, digits and hyphens, and at most 254 bytes.
+fn is_email_address(value: &str) -> bool {
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    let local_ok = !local.is_empty()
+        && local
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._%+-".contains(c));
+    let labels: Vec<&str> = domain.split('.').collect();
+    let domain_ok = labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+        && labels
+            .last()
+            .is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()));
+    value.len() <= 254 && local_ok && domain_ok
 }
 
 impl RIMConfig {
@@ -2093,7 +2215,7 @@ mod tests {
             terms_url: Some("/terms".to_string()),
             ..Default::default()
         };
-        assert!(config.instance_policy().is_err());
+        assert!(config.instance_policy(None).is_err());
     }
 
     #[test]
@@ -2108,14 +2230,172 @@ mod tests {
         ]))
         .expect("loads");
         assert_eq!(
-            config.instance_policy(),
+            config.instance_policy(None),
             Ok(rim_api::types::InstancePolicy {
                 notice: Some("Run by the Example club, rules at /rules".to_string()),
                 terms_url: Some("https://rim.example.org/terms".to_string()),
                 signup_requires_keys: true,
                 default_workspace: None,
+                abuse_contact: None,
+                minimum_age: None,
             })
         );
+    }
+
+    #[test]
+    fn abuse_contact_takes_an_email_address_or_an_https_url() {
+        let contact = |value: &str| {
+            RIMConfig {
+                abuse_contact: Some(value.to_string()),
+                ..Default::default()
+            }
+            .abuse_contact()
+        };
+        assert_eq!(RIMConfig::default().abuse_contact(), Ok(None));
+        assert_eq!(contact("  "), Ok(None));
+        for good in [
+            "abuse@rim.example.org",
+            "first.last+abuse@mail.example.cz",
+            "https://rim.example.org/abuse",
+        ] {
+            assert_eq!(contact(&format!(" {good} ")), Ok(Some(good.to_string())));
+        }
+        let long = format!("https://rim.example.org/{}", "a".repeat(512));
+        for bad in [
+            "abuse",
+            "abuse@localhost",
+            "abuse @rim.example.org",
+            "a@b@rim.example.org",
+            "http://rim.example.org/abuse",
+            "mailto:abuse@rim.example.org",
+            "/abuse",
+            long.as_str(),
+        ] {
+            let err = contact(bad).unwrap_err();
+            assert!(err.starts_with("RIM_ABUSE_CONTACT="), "{err}");
+        }
+    }
+
+    #[test]
+    fn minimum_age_is_13_to_21_and_off_when_unset() {
+        let age = |value: u32| {
+            RIMConfig {
+                minimum_age: Some(value),
+                ..Default::default()
+            }
+            .minimum_age()
+        };
+        assert_eq!(RIMConfig::default().minimum_age(), Ok(None));
+        assert_eq!(age(13), Ok(Some(13)));
+        assert_eq!(age(16), Ok(Some(16)));
+        assert_eq!(age(21), Ok(Some(21)));
+        for bad in [0, 12, 22, 160] {
+            assert_eq!(
+                age(bad),
+                Err(format!("RIM_MINIMUM_AGE={bad} is outside 13 to 21"))
+            );
+        }
+    }
+
+    #[test]
+    fn abuse_contact_and_minimum_age_reach_the_instance_policy() {
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_ABUSE_CONTACT", "abuse@rim.example.org"),
+            ("RIM_MINIMUM_AGE", "16"),
+        ]))
+        .expect("loads");
+        let policy = config.instance_policy(None).expect("policy");
+        assert_eq!(
+            policy.abuse_contact.as_deref(),
+            Some("abuse@rim.example.org")
+        );
+        assert_eq!(policy.minimum_age, Some(16));
+        let bad = RIMConfig {
+            minimum_age: Some(99),
+            ..Default::default()
+        };
+        assert!(bad.instance_policy(None).is_err());
+    }
+
+    /// A file under the system temporary directory holding `content`, removed on drop.
+    struct TempFile(std::path::PathBuf);
+
+    impl TempFile {
+        fn new(content: &[u8]) -> Self {
+            let path = std::env::temp_dir().join(format!("rim-terms-{}.md", uuid::Uuid::now_v7()));
+            std::fs::write(&path, content).expect("write");
+            Self(path)
+        }
+
+        fn path(&self) -> String {
+            self.0.display().to_string()
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_terms_file_becomes_the_terms_url_under_the_public_origin() {
+        let file = TempFile::new(b"# Terms\n\nBe kind.\n");
+        let config = RIMConfig {
+            terms_file: Some(file.path()),
+            public_base_url: Some("https://rim.example.org/app".to_string()),
+            ..Default::default()
+        };
+        let page = config.terms_page().expect("reads").expect("a page");
+        assert!(
+            page.url()
+                .starts_with("https://rim.example.org/api/terms?v="),
+            "{}",
+            page.url()
+        );
+        let policy = config.instance_policy(Some(&page)).expect("policy");
+        assert_eq!(policy.terms_url.as_deref(), Some(page.url()));
+        assert_eq!(
+            RIMConfig::default().terms_page().map(|p| p.is_none()),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn the_terms_file_and_url_cannot_both_be_set() {
+        let file = TempFile::new(b"# Terms\n");
+        let config = RIMConfig {
+            terms_file: Some(file.path()),
+            terms_url: Some("https://rim.example.org/terms".to_string()),
+            ..Default::default()
+        };
+        let err = config.terms_page().unwrap_err();
+        assert!(
+            err.contains("RIM_TERMS_URL") && err.contains("RIM_TERMS_FILE"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_missing_empty_or_oversized_terms_file_is_refused() {
+        let terms = |path: String| {
+            RIMConfig {
+                terms_file: Some(path),
+                ..Default::default()
+            }
+            .terms_page()
+            .unwrap_err()
+        };
+        let missing = std::env::temp_dir().join(format!("rim-terms-{}.md", uuid::Uuid::now_v7()));
+        let err = terms(missing.display().to_string());
+        assert!(err.starts_with("RIM_TERMS_FILE="), "{err}");
+        let empty = TempFile::new(b" \n\t\n");
+        assert!(terms(empty.path()).contains("is empty"));
+        let large = TempFile::new(&vec![b'a'; crate::terms::MAX_TERMS_FILE_BYTES + 1]);
+        assert!(terms(large.path()).contains("larger than"));
+        let binary = TempFile::new(&[0xff, 0xfe, 0x00]);
+        assert!(terms(binary.path()).contains("UTF-8"));
     }
 
     #[test]
@@ -2145,7 +2425,7 @@ mod tests {
             default_workspace: Some("lobby".to_string()),
             ..Default::default()
         };
-        assert!(config.instance_policy().is_err());
+        assert!(config.instance_policy(None).is_err());
     }
 
     #[test]
@@ -2157,7 +2437,7 @@ mod tests {
         ]))
         .expect("loads");
         assert_eq!(
-            config.instance_policy().map(|p| p.default_workspace),
+            config.instance_policy(None).map(|p| p.default_workspace),
             Ok(Some(uuid::Uuid::parse_str(id).expect("uuid").into()))
         );
     }
@@ -2175,7 +2455,7 @@ mod tests {
             let config = load(&[("RIM_SIGNUP_REQUIRE_KEYS", value)]).expect("loads");
             assert_eq!(config.signup_requires_keys(), requires, "{value}");
             assert_eq!(
-                config.instance_policy().map(|p| p.signup_requires_keys),
+                config.instance_policy(None).map(|p| p.signup_requires_keys),
                 Ok(requires),
                 "{value}"
             );

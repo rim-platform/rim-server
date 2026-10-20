@@ -23,6 +23,20 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `RIM_TERMS_FILE`: the terms of service as a Markdown file the server serves as a page at
+  `/api/terms?v=<hash>`, which is then `serverInfo.termsUrl` and the URL every signup accepts.
+  A missing, empty or oversized file, a `FILL:` placeholder in it, or `RIM_TERMS_URL` set too
+  stops the server at boot. `deploy/terms.md` holds the public RIM server's terms and an example
+  for self-hosters; `compose.yml` mounts it read-only at `/config/terms.md`.
+- `RIM_ABUSE_CONTACT`: where to report abuse, an email address or an https URL, published as
+  `abuseContact` in the signed server descriptor (`docs/specs/server-to-server-v1.md`) and as
+  `serverInfo.abuseContact`.
+- `RIM_MINIMUM_AGE` (13 to 21): every signup confirms the person has reached that age.
+  `serverInfo.minimumAge` names it and `signupWithInvite` and `signupWithKey` take
+  `confirmedMinimumAge`; a signup without it answers `VALIDATION`. The account records only the
+  age confirmed. The migration adds a nullable `user.minimum_age_confirmed` column.
+- "Legal duties of an operator" in `docs/self-hosting.md`.
+
 - `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
   `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
   and memory use (job `cadvisor`). cAdvisor reaches the Docker and containerd sockets only

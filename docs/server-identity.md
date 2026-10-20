@@ -129,8 +129,10 @@ For local development bind `RIM_SERVER_HOST=127.0.0.1`, or set
 `GET /.well-known/rim-server` answers, to anyone and cacheable for five minutes, the key log and
 the **descriptor**: a statement signed by the current key with the server's roles, its endpoints
 (`/api`, `/api/ws`, and `/s2s/v1` when server-to-server traffic is on), the protocol versions,
-MLS cipher suites, limits and registration mode. The server signs a new descriptor with a higher
-`version` whenever its configuration changes it and after every rotation.
+MLS cipher suites, limits and registration mode, and the abuse contact when `RIM_ABUSE_CONTACT`
+names one. Registration is invite-only (`invite`) unless `RIM_OPEN_REGISTRATION` or
+`RIM_REGISTRATION_POW_BITS` is set. The server signs a new descriptor with a higher `version`
+whenever its configuration changes it and after every rotation.
 
 ## Roles and server-to-server configuration
 
