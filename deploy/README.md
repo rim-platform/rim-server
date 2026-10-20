@@ -138,9 +138,74 @@ $EDITOR deploy/.env          # RIM_VERSION=<version>
 dc pull && dc up -d
 ```
 
+`deploy/upgrade.sh <version>` does the same after the checkout, with the signature check, the
+migrations first and a rollback when the new version does not come up
+(`docs/operations/upgrade.md`).
+
 The operator's commands (`/app/rim-server` inside the `rim` container: invites that skip the
 proof-of-work, principal and peer blocks, abuse reports, key rotation) are listed in the runbook,
 "Command reference".
+
+## Unattended upgrades from releases
+
+A host that runs the published images needs no checkout: one directory holds the compose files,
+the Caddyfiles, the scripts and `.env`, and `rim-deploy` keeps it on the latest release. On the
+project's relay that directory is `/srv/rim-server`. Every five minutes `rim-deploy.timer` runs
+`rim-deploy --check`, which asks the GitHub API for the latest published release of rim-server
+that is not a pre-release. When that version is not `RIM_VERSION` in `.env`, it first checks
+with cosign that the version's `rim-server` image carries the signature of that tag's release
+workflow, since the tag's files run as root: a tag without an approved release run installs
+nothing. Then it downloads the tag's source tarball, copies its `deploy/` files over the directory, writes `SOURCE` (the tag,
+the time and the tarball's SHA-256) and runs the tag's `upgrade.sh <version>` there
+(`docs/operations/upgrade.md`): the signatures, the backup, the migrations, the start and the
+rollback are its steps. Nothing in GitHub reaches the host, and no git runs on it. A release is
+published when its `release.yaml` run is approved, so approving a release is the deployment; it
+runs within five minutes, so approve it in a quiet hour.
+
+The deployer writes nothing in `.env` but `RIM_VERSION`, and never touches `.env` or
+`.env.previous` otherwise; every other file in the directory is the tag's, and the next deploy
+overwrites a file edited on the host. Settings change in `.env` by hand, and so do the
+**Upgrade:** lines of `CHANGELOG.md`, before the release is approved. When the upgrade does not
+complete, the files from before come back.
+
+Installing it, as root, with Docker (Compose v2.20 or later), cosign, curl and flock on the host:
+
+```sh
+mkdir -p /srv/rim-server        # then write /srv/rim-server/.env, chmod 600
+install -m 0755 deploy/rim-deploy.sh /usr/local/sbin/rim-deploy
+install -m 0644 deploy/systemd/rim-deploy.service deploy/systemd/rim-deploy.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now rim-deploy.timer
+rim-deploy --check              # "no release yet", or it deploys the latest release
+```
+
+`.env` names the compose files for the scripts and for `docker compose` run in the directory,
+relative to it: `COMPOSE_FILE=compose.yml:compose.relay.yml` for a relay. Leave `RIM_VERSION`
+out before the first deploy, which then skips the backup (there is no data yet), starts the
+stack and records the version. `rim-deploy` is installed by hand and changes rarely; when it
+does, install it again from the new release the same way. `RIM_DEPLOY_DIR` names another
+directory.
+
+- **The log** is `journalctl -u rim-deploy` (`-f` follows a deploy as it runs);
+  `systemctl list-timers rim-deploy.timer` shows the next check. Each check logs one line when
+  there is nothing to do.
+- **Not yet published images.** When `rim-web` of the version is not out yet, because rim-ui
+  was not tagged first, `upgrade.sh` exits 2 before changing anything; the check puts the files
+  back, ends quietly, and the next one tries again.
+- **Brakes.** A release marked **pre-release** on GitHub is never deployed by the timer, which is
+  how a release is published without deploying it. `touch /srv/rim-server/HOLD` stops the timer
+  deploying anything until the file is removed. A deploy that fails writes its version to
+  `FAILED`, and the timer leaves that version alone until the file is removed; the next release
+  deploys as usual.
+- **By hand.** `rim-deploy <version>` deploys that version without asking the API, forward or
+  back, whether `HOLD` or `FAILED` exist or not; with `upgrade.sh`, a version older than the
+  running one is a binary rollback. Touch `HOLD` before rolling back, or the next check deploys
+  the latest release again.
+- **The unit** runs as root, because it runs docker, with no new privileges, a read-only
+  `/usr`, `/boot`, `/etc` and home directories, and a private `/tmp`; cosign and the docker
+  client keep their caches in `/var/lib/rim-deploy`. A `v*` tag starts the whole chain, and
+  only the maintainer may push one to rim-server and rim-ui; an image the release workflows did
+  not sign does not verify, and `upgrade.sh` stops before it changes anything.
 
 ## Metrics to Grafana Cloud
 

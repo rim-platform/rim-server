@@ -210,7 +210,9 @@ dc up -d
 dc logs -f rim
 ```
 
-`up` runs `migrate` before it starts the new server. To run the migrations alone,
+`deploy/upgrade.sh <version>`, run after the checkout, does these steps with the signature
+check and rolls back when the new version does not come up. `up` runs `migrate` before it
+starts the new server. To run the migrations alone,
 `dc run --rm migrate`. Rolling the image back leaves the migrations in place: the previous
 release runs on them, started with `dc up -d --no-deps rim web`, and anything further back is the
 backup taken before the update. `docs/operations/upgrade.md` has the whole procedure, what to
