@@ -349,6 +349,29 @@ impl GroupState {
             .filter(|d| !self.is_device(d.device.device_key_id))
     }
 
+    /// Clear `has_key_package` of each pending add without room for one more Welcome of the
+    /// largest size, as a claim serves such a device no package.
+    pub(crate) async fn drop_full_pending_adds(
+        &mut self,
+        e2ee_repo: &dyn E2eeRepository,
+    ) -> ServiceResult<()> {
+        let waiting: Vec<DeviceKeyId> = self
+            .pending_adds()
+            .filter(|d| d.has_key_package)
+            .map(|d| d.device.device_key_id)
+            .collect();
+        let backlog = e2ee_repo.welcome_backlog(&waiting).await?;
+        for d in &mut self.desired {
+            let pending = backlog
+                .iter()
+                .find(|b| b.device_key_id == d.device.device_key_id);
+            if !welcome_fits(pending, MAX_WELCOME_BYTES) {
+                d.has_key_package = false;
+            }
+        }
+        Ok(())
+    }
+
     /// Leaves that are no longer desired.
     pub(crate) fn pending_removes(&self) -> impl Iterator<Item = &MlsGroupDevice> {
         self.devices
@@ -1924,7 +1947,10 @@ impl E2eeService for DefaultE2eeService {
         let Some(group) = self.repos.e2ee_repo.current_group(conversation.id).await? else {
             return Ok(None);
         };
-        let state = GroupState::load(self.repos.e2ee_repo.as_ref(), group, Utc::now()).await?;
+        let mut state = GroupState::load(self.repos.e2ee_repo.as_ref(), group, Utc::now()).await?;
+        state
+            .drop_full_pending_adds(self.repos.e2ee_repo.as_ref())
+            .await?;
         let device_dto = |d: &MlsGroupDevice| MlsDeviceDto {
             user_id: d.device.user_id,
             principal_id: d.device.principal_id.clone(),

@@ -1719,6 +1719,48 @@ mod tests {
         assert_eq!(claimed[0].device_id, f.bob.device_id);
     }
 
+    #[tokio::test]
+    async fn a_pending_add_without_room_for_a_welcome_lists_no_key_package() {
+        let f = Fixture::new();
+        f.group(1, 2, &[&f.alice, &f.bob]);
+        f.package(&f.bob2, 1, true, None);
+        f.pending_welcomes(&f.bob2, MAX_PENDING_WELCOMES as usize, 8);
+        let has_key_package = || async {
+            let group = f
+                .service
+                .group(f.group_query(f.alice.user))
+                .await
+                .unwrap()
+                .expect("group");
+            assert_eq!(group.pending_adds.len(), 1);
+            assert_eq!(group.pending_adds[0].device_id, f.bob2.device_id);
+            group.pending_adds[0].has_key_package
+        };
+        assert!(!has_key_package().await, "a full device");
+        let claimed = f
+            .service
+            .claim_key_packages(claim(&f, &f.alice, &[&f.bob2]))
+            .await
+            .unwrap();
+        assert!(claimed.is_empty(), "the claim agrees with the listing");
+
+        let oldest = f.repo.state().welcomes[0].0;
+        f.service
+            .ack_welcomes(AckMlsWelcomesCmd {
+                caller: f.bob2.caller(),
+                ids: vec![oldest],
+            })
+            .await
+            .unwrap();
+        assert!(has_key_package().await, "room for one more");
+        let claimed = f
+            .service
+            .claim_key_packages(claim(&f, &f.alice, &[&f.bob2]))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+    }
+
     /// A re-add request of `d` issued now, with a fresh nonce and `lastEpoch` 1.
     fn readd_cmd(
         f: &Fixture,
