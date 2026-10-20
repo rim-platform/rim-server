@@ -290,6 +290,17 @@ tag `v<version>`, the version every crate in the workspace carries.
 - Accepting, ignoring or reporting a DM request whose expiry has passed is `NOT_FOUND`, as for
   an unknown request; the decision checks the expiry in the same update that records it.
   Before, an expired request not yet purged could still be accepted.
+- The outbox a host keeps for each relay is bounded: at most 100,000 rows and 2 GiB that the
+  relay has not acknowledged. Past either, new events are not queued for that relay; they are
+  counted in `rim_outbox_not_queued_rows_total` and logged at warn once a minute. A relay every
+  delivery to has failed for `RIM_S2S_PEER_DEAD_AFTER_HOURS` (default 24) is dead: nothing new
+  is queued for it, it is tried once every 5 minutes, and its first success resumes queueing.
+  The write itself and every other recipient are unaffected, and the relay's apps reconcile
+  what they missed from the host's streams. Before, rows for an unreachable relay piled up for 7
+  days at whatever rate events were written. New gauges `rim_outbox_pending_rows`,
+  `rim_outbox_pending_bytes`, `rim_outbox_peer_max_pending_rows`,
+  `rim_outbox_peer_max_pending_bytes` and `rim_outbox_dead_peers`
+  (`docs/specs/server-to-server-v1.md`, "Outbox and `deliver`"; `docs/operations/metrics.md`).
 - A relay files a DM invite another server delivers only when that server speaks for the
   sender it names: the sender's card must be signed by their key, and their newest card must
   list the delivering server (or the sender is a local user subscribed there). Anything else is

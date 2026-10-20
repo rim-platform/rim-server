@@ -23,6 +23,7 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_RELAY_RETENTION_DAYS` | 30 | How long queued items and DM requests are kept |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests per device per minute: those a local user's device sends through `/api/remote/…`, and those a host accepts |
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations one relay may hold on this host; past it new delegations are refused as `limited`, while renewals of active ones still go through |
+| `RIM_S2S_PEER_DEAD_AFTER_HOURS` | 24 | Hours every delivery to a relay may fail before it is dead: no new outbox rows are written for it until a delivery succeeds again (1 to 168) |
 | `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to push identities, join, subscribe, forward, report presence and bring revocations here |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Requests a local user sends through `/api/remote/…` per day |
 | `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers they do not know (a contact who lists them too, or someone either accepted a DM request from here) |
@@ -74,9 +75,19 @@ counts from 1 without gaps; `e` has none. The host appends one outbox row per re
 get the event (for a workspace, the relays holding an active delegation of the person; for the
 direct space, the relays the person's newest card lists, else the relay that served their
 identity) and a sender delivers each relay's rows in order (`POST /s2s/v1/deliver`), backing off
-from 1 second to 5 minutes. Outbox rows are kept 7 days. A relay that refuses a person as unknown
-is not sent their events for 24 hours. Each server process keeps that refusal in memory: a restart
-forgets it, and with several nodes each node learns it from the relay on its own.
+from 1 second to 5 minutes. Outbox rows are kept 7 days, delivered or not. A relay that refuses a
+person as unknown is not sent their events for 24 hours. Each server process keeps that refusal in
+memory: a restart forgets it, and with several nodes each node learns it from the relay on its own.
+
+The rows a relay has not acknowledged are capped at 100,000 rows and 2 GiB per relay; delivered
+rows do not count. Past either cap, and while the relay is dead (every delivery to it has failed
+for `RIM_S2S_PEER_DEAD_AFTER_HOURS`), new events get no row for that relay: they are counted in
+`rim_outbox_not_queued_rows_total` and logged at warn ("host events for a relay are not queued")
+at most once a minute per relay. The message or change itself is saved here, and other relays
+and local members get it as usual. A dead relay is tried once every 5 minutes, with an empty
+delivery when nothing is left for it; the first success ends its failures and queueing resumes
+within 10 seconds. The events it did not get still took their streams' `seq`, so its people's
+apps see the gap and reconcile from this host, as for any gap.
 
 A relay queues an item that names no conversation (a `w` event, presence on `e`, a person's
 directory events on their `u:` stream) for a recipient who holds an active subscription to its
@@ -222,7 +233,7 @@ mutations stay refused on it.
 ### Cleanup and audit
 
 Every minute the server deletes acknowledged and expired items, envelopes no item uses, expired
-requests, outbox rows over 7 days and accepted `seq` values out of the window, ends expired
+requests, outbox rows over 7 days (delivered or not) and accepted `seq` values out of the window, ends expired
 delegations and those of revoked devices or departed members, and marks this relay's expired
 subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit events
 (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,

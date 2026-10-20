@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rim_core::conversation::model::ConversationId;
 use rim_core::host::model::{
-    NewRemoteUser, OutboxRow, PeerDelivery, RemoteMember, SeqDecision, UserKind,
+    NewRemoteUser, OutboxBacklog, OutboxRow, OutboxStats, PeerDelivery, RemoteMember, SeqDecision,
+    UserKind,
 };
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::DeviceKeyId;
@@ -93,6 +94,23 @@ struct DeliveryRow {
     delivered_through: i64,
     failures: i32,
     next_attempt_at: DateTimeWithTimeZone,
+    failing_since: Option<DateTimeWithTimeZone>,
+}
+
+#[derive(FromQueryResult)]
+struct BacklogRow {
+    rows: i64,
+    bytes: i64,
+    failing_since: Option<DateTimeWithTimeZone>,
+}
+
+#[derive(FromQueryResult)]
+struct OutboxStatsRow {
+    rows: i64,
+    bytes: i64,
+    peer_max_rows: i64,
+    peer_max_bytes: i64,
+    dead_peers: i64,
 }
 
 #[derive(FromQueryResult)]
@@ -416,7 +434,10 @@ impl HostRepository for SeaOrmHostRepository {
                 "SELECT DISTINCT o.peer_server_id AS value FROM s2s_outbox o \
                  LEFT JOIN s2s_peer_delivery d ON d.peer_server_id = o.peer_server_id \
                  WHERE o.id > COALESCE(d.delivered_through, 0) \
-                   AND COALESCE(d.next_attempt_at, $1) <= $1",
+                   AND COALESCE(d.next_attempt_at, $1) <= $1 \
+                 UNION \
+                 SELECT peer_server_id FROM s2s_peer_delivery \
+                 WHERE failures > 0 AND next_attempt_at <= $1",
                 vec![now.into()],
             )
             .await?
@@ -464,8 +485,8 @@ impl HostRepository for SeaOrmHostRepository {
     async fn delivery(&self, peer_server_id: &str) -> RepoResult<PeerDelivery> {
         Ok(self
             .one::<DeliveryRow>(
-                "SELECT delivered_through, failures, next_attempt_at FROM s2s_peer_delivery \
-                 WHERE peer_server_id = $1",
+                "SELECT delivered_through, failures, next_attempt_at, failing_since \
+                 FROM s2s_peer_delivery WHERE peer_server_id = $1",
                 vec![peer_server_id.into()],
             )
             .await?
@@ -473,12 +494,63 @@ impl HostRepository for SeaOrmHostRepository {
                 delivered_through: r.delivered_through,
                 failures: r.failures,
                 next_attempt_at: r.next_attempt_at.into(),
+                failing_since: r.failing_since.map(Into::into),
             })
             .unwrap_or(PeerDelivery {
                 delivered_through: 0,
                 failures: 0,
                 next_attempt_at: Utc::now(),
+                failing_since: None,
             }))
+    }
+
+    async fn outbox_backlog(&self, peer_server_id: &str) -> RepoResult<OutboxBacklog> {
+        self.one::<BacklogRow>(
+            "WITH d AS ( \
+                 SELECT COALESCE(max(delivered_through), 0) AS through, \
+                        max(failing_since) AS failing_since \
+                 FROM s2s_peer_delivery WHERE peer_server_id = $1) \
+             SELECT count(o.id) AS rows, COALESCE(sum(o.size_bytes), 0)::bigint AS bytes, \
+                    d.failing_since \
+             FROM d LEFT JOIN s2s_outbox o ON o.peer_server_id = $1 AND o.id > d.through \
+             GROUP BY d.failing_since",
+            vec![peer_server_id.into()],
+        )
+        .await?
+        .map(|r| OutboxBacklog {
+            rows: r.rows,
+            bytes: r.bytes,
+            failing_since: r.failing_since.map(Into::into),
+        })
+        .ok_or_else(|| internal("no outbox backlog"))
+    }
+
+    async fn outbox_stats(&self, dead_before: DateTime<Utc>) -> RepoResult<OutboxStats> {
+        self.one::<OutboxStatsRow>(
+            "WITH backlog AS ( \
+                 SELECT o.peer_server_id, count(*) AS rows, sum(o.size_bytes)::bigint AS bytes \
+                 FROM s2s_outbox o \
+                 LEFT JOIN s2s_peer_delivery d ON d.peer_server_id = o.peer_server_id \
+                 WHERE o.id > COALESCE(d.delivered_through, 0) \
+                 GROUP BY o.peer_server_id) \
+             SELECT COALESCE(sum(rows), 0)::bigint AS rows, \
+                    COALESCE(sum(bytes), 0)::bigint AS bytes, \
+                    COALESCE(max(rows), 0)::bigint AS peer_max_rows, \
+                    COALESCE(max(bytes), 0)::bigint AS peer_max_bytes, \
+                    (SELECT count(*) FROM s2s_peer_delivery \
+                     WHERE failing_since <= $1) AS dead_peers \
+             FROM backlog",
+            vec![dead_before.into()],
+        )
+        .await?
+        .map(|r| OutboxStats {
+            rows: r.rows,
+            bytes: r.bytes,
+            peer_max_rows: r.peer_max_rows,
+            peer_max_bytes: r.peer_max_bytes,
+            dead_peers: r.dead_peers,
+        })
+        .ok_or_else(|| internal("no outbox stats"))
     }
 
     async fn record_delivered(&self, peer_server_id: &str, through: i64) -> RepoResult<()> {
@@ -488,7 +560,8 @@ impl HostRepository for SeaOrmHostRepository {
              ON CONFLICT (peer_server_id) DO UPDATE SET \
                  delivered_through = GREATEST(s2s_peer_delivery.delivered_through, \
                                               EXCLUDED.delivered_through), \
-                 failures = 0, next_attempt_at = now(), last_success_at = now()",
+                 failures = 0, next_attempt_at = now(), last_success_at = now(), \
+                 failing_since = NULL",
             vec![peer_server_id.into(), through.into()],
         )
         .await?;
@@ -502,10 +575,11 @@ impl HostRepository for SeaOrmHostRepository {
         next_attempt_at: DateTime<Utc>,
     ) -> RepoResult<()> {
         self.execute(
-            "INSERT INTO s2s_peer_delivery (peer_server_id, failures, next_attempt_at) \
-             VALUES ($1, $2, $3) \
+            "INSERT INTO s2s_peer_delivery (peer_server_id, failures, next_attempt_at, \
+                 failing_since) VALUES ($1, $2, $3, now()) \
              ON CONFLICT (peer_server_id) DO UPDATE SET \
-                 failures = EXCLUDED.failures, next_attempt_at = EXCLUDED.next_attempt_at",
+                 failures = EXCLUDED.failures, next_attempt_at = EXCLUDED.next_attempt_at, \
+                 failing_since = COALESCE(s2s_peer_delivery.failing_since, now())",
             vec![
                 peer_server_id.into(),
                 failures.into(),

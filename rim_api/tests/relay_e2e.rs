@@ -3,8 +3,10 @@
 //! the request inbox accepted, ignored and blocked, and an expired request refused; queued host
 //! events pushed on `relayStream` and a gap pulled from the host's outbox; forwarded requests
 //! with replayed and tampered device requests; forwarded GraphQL under the host's batch cap and
-//! a mutation budget per device; and the roles' refusals. Clients talk to their own relay only, over HTTP, and check
-//! every host event and forwarded answer against the host's key. The public relay: proof-of-work
+//! a mutation budget per device; the roles' refusals; and a dead relay that gets no new outbox
+//! rows until its first success, after which its streams show the gap. Clients talk to their own
+//! relay only, over HTTP, and check every host event and forwarded answer against the host's
+//! key. The public relay: proof-of-work
 //! signups refused, accepted and replaced by an invite; a reported DM request listed and
 //! resolved by the operator; a principal blocked on its relay signed out and refused signup,
 //! login and delivery; and a peer blocked both ways.
@@ -530,6 +532,115 @@ async fn relay_stream_pushes_host_events_and_a_gap_is_pulled_from_the_outbox() {
         b.s2s.relay.pull_outbox(a.id()).await.expect("pull"),
         0,
         "nothing above what was received"
+    );
+
+    a.stop().await;
+    b.stop().await;
+}
+
+/// Outbox rows `host` holds for `relay` above what the relay acknowledged.
+async fn waiting_for(host: &Node, relay: &Node) -> i64 {
+    host.db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT count(*) AS n FROM s2s_outbox WHERE peer_server_id = $1 AND id > \
+             (SELECT COALESCE(max(delivered_through), 0) FROM s2s_peer_delivery \
+              WHERE peer_server_id = $1)",
+            [relay.id().into()],
+        ))
+        .await
+        .expect("query")
+        .expect("row")
+        .try_get::<i64>("", "n")
+        .expect("n")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dead_relay_gets_nothing_new_until_its_first_success_and_its_streams_show_the_gap() {
+    let (a, b) = relays().await;
+    let mut alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&b, "bob", 2).await;
+    bob.ok(
+        "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+        json!({ "p": alice.principal(), "r": [a.origin] }),
+    )
+    .await;
+    let conv = alice.start_dm(&bob, &b, true).await;
+    let direct = alice.direct_space().await;
+    alice.create_group_with(&bob, &direct, &conv).await;
+    let first_id = json!(
+        alice
+            .send_encrypted(&direct, &conv, "first")
+            .await
+            .to_string()
+    );
+    let first = bob
+        .item_of(&a, "NewMessage", |i| i.event["message"]["id"] == first_id)
+        .await;
+    drained(&a).await;
+
+    // Every delivery to Bob's relay has failed for over a day. The writer reads a relay's
+    // state again after 10 seconds.
+    a.db.execute_unprepared(&format!(
+        "UPDATE s2s_peer_delivery SET next_attempt_at = now() + interval '1 hour', \
+         failures = 40, failing_since = now() - interval '25 hours' \
+         WHERE peer_server_id = '{}'",
+        b.id()
+    ))
+    .await
+    .expect("a dead relay");
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    let second_id = json!(
+        alice
+            .send_encrypted(&direct, &conv, "second")
+            .await
+            .to_string()
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        waiting_for(&a, &b).await,
+        0,
+        "nothing is queued for a dead relay"
+    );
+
+    // The next attempt is a probe with nothing to send; its success ends the failures.
+    a.db.execute_unprepared("UPDATE s2s_peer_delivery SET next_attempt_at = now()")
+        .await
+        .expect("attempt now");
+    eventually("the probe to succeed", || async {
+        let row =
+            a.db.query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT failures = 0 AND failing_since IS NULL AS ok FROM s2s_peer_delivery \
+                 WHERE peer_server_id = $1",
+                [b.id().into()],
+            ))
+            .await
+            .expect("query")
+            .expect("row");
+        row.try_get::<bool>("", "ok").expect("ok").then_some(())
+    })
+    .await;
+    let third_id = json!(
+        alice
+            .send_encrypted(&direct, &conv, "third")
+            .await
+            .to_string()
+    );
+    let third = bob
+        .item_of(&a, "NewMessage", |i| i.event["message"]["id"] == third_id)
+        .await;
+    let (first_seq, third_seq) = (first.seq.expect("seq"), third.seq.expect("seq"));
+    assert!(
+        third_seq >= first_seq + 2,
+        "the conversation stream shows the gap the app reconciles from the host: {first_seq} then {third_seq}"
+    );
+    assert!(
+        bob.items(&a, None)
+            .await
+            .iter()
+            .all(|i| i.event["message"]["id"] != second_id),
+        "the event written while the relay was dead never reaches it"
     );
 
     a.stop().await;
