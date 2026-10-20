@@ -266,6 +266,21 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- Adding someone as a contact no longer lets a user skip their own limits on DMs to strangers.
+  The daily invites to people on other servers (`RIM_RELAY_DM_REQUESTS_PER_DAY`) and a new
+  account's probation (`RIM_PROBATION_HOURS`) now pass only for people the user knows: a contact
+  who lists the user as a contact too, or someone either of them accepted a DM request from on
+  this server. A user holds at most 1,000 contacts; `addContact` for someone new past that
+  answers `VALIDATION`. "Who May Start A DM" in `docs/messaging.md` and "Public relay" in
+  `docs/specs/server-to-server-v1.md` describe both.
+- A device holds at most 256 pending MLS Welcomes and 64 MiB of them. A Commit whose Welcome
+  would take an added device past either is refused (`VALIDATION`), and `claimMlsKeyPackages`
+  leaves out a device without room for one more, so clients do not add it until it has read and
+  acknowledged its Welcomes. Before, Welcomes for one device piled up for 30 days without limit.
+  `myMlsWelcomes` answers a page at a time: the new optional `after: MlsWelcomeCursorInput` and
+  `limit` (1 to 100, 100 by default) arguments, and the new `MlsWelcome.createdAt` that with
+  `id` makes the cursor. A client that asks with no arguments gets the oldest 100
+  (`docs/specs/e2ee-mls-v1.md`, "Welcome delivery and joining").
 - **Upgrade:** `RIM_LIMIT_INVITES_PER_USER_PER_DAY` is on by default, at 50, and also caps the
   invite emails (`createInvite` with `recipientEmail`) one user sends in 24 hours. Emails are
   counted apart from the invites, so deleting a workspace does not give them back. Past either
@@ -429,6 +444,17 @@ tag `v<version>`, the version every crate in the workspace carries.
   limit from someone on this server, or from someone elsewhere through the forward path,
   skipped the request inbox and reached the recipient's conversations and notifications
   directly. Workspace DMs a member takes as requests meet the same limits.
+- Cached identities of people on other servers, stored by `remoteIdentity` and by a host
+  refreshing its remote members, are deleted 30 days after they were fetched unless the person
+  is a remote user here. A pin of another server is forgotten after 90 days without a fetch or
+  a request when nothing here refers to it and the configuration does not name it; its key-log
+  head is kept, so its next contact pins it again only with a log that extends the one seen
+  before (another history is pinned `forked`, a shorter one is not pinned). One origin holds at
+  most 4 pins: a fifth server id there is refused until `rim_server peer reset` removes one.
+  Before, any signed-in user could grow both tables without bound by looking up principals and
+  servers. The hourly job, its `s2s.peer_forgotten` audit line and the
+  `rim_remote_identities_purged_total` and `rim_peer_pins_forgotten_total` counters are in
+  `docs/operations/background-jobs.md` (`docs/specs/server-to-server-v1.md`, "Pinning a peer").
 - A relay queues a host's items that name no conversation (workspace events, presence,
   directory events) only for recipients subscribed to that workspace, or, for presence and a
   recipient's own directory events from a host's direct space, for recipients who accepted a

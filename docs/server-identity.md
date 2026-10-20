@@ -12,7 +12,7 @@ in `docs/operations/relay-public.md`.
 | What | Where |
 |---|---|
 | Server key seed | `RIM_SERVER_KEY_FILE`, default `<RIM_DATA_DIR>/server-key.json` (`RIM_DATA_DIR` defaults to `./data`) |
-| Key log, descriptor, pinned peers | The database (`server_key_log_entry`, `server_descriptor`, `peer_server`) |
+| Key log, descriptor, pinned peers | The database (`server_key_log_entry`, `server_descriptor`, `peer_server`, and `peer_server_forgotten` for the heads of pins forgotten after 90 idle days) |
 | Recovery key, after first start | `<RIM_DATA_DIR>/server-recovery-key.txt` until you move it |
 
 The key file is `{"v":1,"seed":"<base64url>"}`, mode `0600`. The server refuses to start when:
@@ -68,7 +68,9 @@ rotation up and keep signing with the old key until they get it.
   offline again.
 - **Peer reset** forgets a peer this server refuses because its key log forked (its history was
   rewritten: a restored backup, a stolen key, or an attack). Check with the peer's operator first,
-  out of band; its next request pins it afresh.
+  out of band; its next request pins it afresh. It also deletes the key-log head kept for a peer
+  whose idle pin was forgotten, and frees a place at an origin that holds the most pins allowed
+  (4).
 - **Peer block** refuses a pinned peer both ways from its next request, without a restart: its
   requests get `403 peer_not_allowed` and nothing is sent to it. **Peer unblock** lifts it. A
   peer never pinned cannot be blocked this way; list it in `RIM_S2S_DENIED_PEERS`.

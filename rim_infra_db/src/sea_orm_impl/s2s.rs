@@ -4,8 +4,8 @@ use entity::{peer_server, server_descriptor, server_key_log_entry};
 use rim_core::key_identity::model::KeyLogEntryType;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use rim_core::s2s::model::{
-    PeerPin, PeerRotationSigner, PeerServer, PeerStatus, ServerDescriptorRecord,
-    ServerKeyLogRecord, SignedRecord,
+    ForgottenPeer, MAX_PEERS_PER_ORIGIN, PeerPin, PeerRotationSigner, PeerServer, PeerStatus,
+    ServerDescriptorRecord, ServerKeyLogRecord, SignedRecord,
 };
 use rim_core::s2s::repository::{
     PeerServerRepository, S2sNonceRepository, ServerIdentityRepository,
@@ -217,7 +217,50 @@ fn numbered(log: &[SignedRecord], from: usize) -> RepoResult<Vec<(i32, SignedRec
         .collect()
 }
 
-/// Pinned peers on `peer_server` and `peer_key_log_entry`.
+/// What inserting a pin did: the row, or nothing because its origin has as many pins as allowed.
+enum PinInsert {
+    Row(Option<QueryResult>),
+    OriginFull,
+}
+
+/// Forgets the idle, unreferenced `active` pins (`$1` the idle cutoff, `$2` the ids kept) and
+/// records each one's key-log head in `peer_server_forgotten`. A pin whose head entry is missing
+/// is never forgotten, so no pin goes without its head. Returns the forgotten server ids.
+const FORGET_IDLE_SQL: &str = r#"
+WITH gone AS (
+    DELETE FROM peer_server p
+    WHERE p.status = 'active'
+      AND p.first_seen_at < $1 AND p.fetched_at < $1
+      AND (p.last_request_at IS NULL OR p.last_request_at < $1)
+      AND NOT (p.server_id = ANY($2))
+      AND EXISTS (SELECT 1 FROM peer_key_log_entry e
+                  WHERE e.server_id = p.server_id AND e.seq = p.head_seq)
+      AND NOT EXISTS (SELECT 1 FROM "user" u WHERE u.home_relay = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM host_delegation d WHERE d.relay_server_id = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM relay_subscription s WHERE s.host_server_id = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM s2s_outbox o WHERE o.peer_server_id = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM s2s_peer_inbound i WHERE i.peer_server_id = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM relay_envelope v WHERE v.host_server_id = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM relay_dm_request r WHERE r.host_server_id = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM relay_revocation_fanout f
+                      WHERE f.host_server_id = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM conversation c WHERE c.predecessor_host = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM remote_identity_cache ic WHERE ic.served_by = p.server_id)
+      AND NOT EXISTS (SELECT 1 FROM profile_card pc JOIN "user" u ON u.id = pc.user_id
+                      WHERE u.kind = 'remote' AND strpos(pc.payload, p.origin) > 0)
+    RETURNING p.server_id, p.origin, p.head_seq,
+        (SELECT e.payload FROM peer_key_log_entry e
+         WHERE e.server_id = p.server_id AND e.seq = p.head_seq) AS head_payload
+)
+INSERT INTO peer_server_forgotten (server_id, origin, head_seq, head_payload)
+SELECT server_id, origin, head_seq, head_payload FROM gone
+ON CONFLICT (server_id) DO UPDATE SET origin = EXCLUDED.origin, head_seq = EXCLUDED.head_seq,
+    head_payload = EXCLUDED.head_payload, forgotten_at = now()
+RETURNING server_id
+"#;
+
+/// Pinned peers on `peer_server` and `peer_key_log_entry`, and the heads of forgotten ones on
+/// `peer_server_forgotten`.
 pub struct SeaOrmPeerServerRepository {
     db: DbHandle,
 }
@@ -262,36 +305,109 @@ impl PeerServerRepository for SeaOrmPeerServerRepository {
             .collect()
     }
 
-    async fn insert(&self, pin: PeerPin) -> RepoResult<PeerServer> {
-        let values = pin_values(&pin)?;
+    async fn insert(&self, pin: PeerPin, status: PeerStatus) -> RepoResult<PeerServer> {
+        let mut values = pin_values(&pin)?;
+        values.push(status.as_str().into());
         let entries = numbered(&pin.log, 0)?;
         let server_id = pin.server_id.clone();
-        let row = self
+        let origin = pin.origin.clone();
+        let max_at_origin = i64::try_from(MAX_PEERS_PER_ORIGIN)
+            .map_err(|_| RepoError::new(RepoErrorKind::Internal))?;
+        let inserted = self
             .db
-            .transaction::<_, Option<QueryResult>, DbErr>(move |txn| {
+            .transaction::<_, PinInsert, DbErr>(move |txn| {
                 Box::pin(async move {
+                    txn.execute_raw(stmt(
+                        "SELECT pg_advisory_xact_lock(hashtext('peer_server.origin'), \
+                         hashtext($1))",
+                        vec![origin.clone().into()],
+                    ))
+                    .await?;
+                    let others = txn
+                        .query_one_raw(stmt(
+                            "SELECT count(*) AS n FROM peer_server \
+                             WHERE origin = $1 AND server_id <> $2",
+                            vec![origin.into(), server_id.clone().into()],
+                        ))
+                        .await?
+                        .map(|row| row.try_get::<i64>("", "n"))
+                        .transpose()?
+                        .unwrap_or(0);
+                    if others >= max_at_origin {
+                        return Ok(PinInsert::OriginFull);
+                    }
                     let row = txn
                         .query_one_raw(stmt(
                             &format!(
                                 "INSERT INTO peer_server (server_id, origin, head_seq, head_key, \
                                  previous_key, rotated_at, rotation_signer, descriptor_version, \
-                                 descriptor_payload, descriptor_signature, fetched_at) \
-                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now()) \
+                                 descriptor_payload, descriptor_signature, status, fetched_at) \
+                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now()) \
                                  RETURNING {PEER_COLUMNS}"
                             ),
                             values,
                         ))
                         .await?;
                     insert_log_entries(txn, &server_id, &entries).await?;
-                    Ok(row)
+                    txn.execute_raw(stmt(
+                        "DELETE FROM peer_server_forgotten WHERE server_id = $1",
+                        vec![server_id.into()],
+                    ))
+                    .await?;
+                    Ok(PinInsert::Row(row))
                 })
             })
             .await
             .map_err(map_txn_err)?;
-        row.as_ref()
-            .map(to_peer)
-            .transpose()?
-            .ok_or_else(|| RepoError::new(RepoErrorKind::Internal))
+        match inserted {
+            PinInsert::Row(row) => row
+                .as_ref()
+                .map(to_peer)
+                .transpose()?
+                .ok_or_else(|| RepoError::new(RepoErrorKind::Internal)),
+            PinInsert::OriginFull => Err(RepoError::with_message(
+                RepoErrorKind::PreconditionFailed,
+                "too many servers are pinned at this origin",
+            )),
+        }
+    }
+
+    async fn forgotten(&self, server_id: &str) -> RepoResult<Option<ForgottenPeer>> {
+        let row = self
+            .db
+            .query_one_raw(stmt(
+                "SELECT server_id, head_seq, head_payload FROM peer_server_forgotten \
+                 WHERE server_id = $1",
+                vec![server_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        row.map(|row| {
+            Ok(ForgottenPeer {
+                server_id: row.try_get("", "server_id").map_err(map_db_err)?,
+                head_seq: to_u32(row.try_get("", "head_seq").map_err(map_db_err)?)?,
+                head_payload: row.try_get("", "head_payload").map_err(map_db_err)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn forget_idle(
+        &self,
+        idle_before: DateTime<Utc>,
+        kept: &[String],
+    ) -> RepoResult<Vec<String>> {
+        let rows = self
+            .db
+            .query_all_raw(stmt(
+                FORGET_IDLE_SQL,
+                vec![idle_before.into(), kept.to_vec().into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        rows.iter()
+            .map(|row| row.try_get("", "server_id").map_err(map_db_err))
+            .collect()
     }
 
     async fn advance(
@@ -390,15 +506,22 @@ impl PeerServerRepository for SeaOrmPeerServerRepository {
     }
 
     async fn delete(&self, server_id: &str) -> RepoResult<bool> {
-        let result = self
+        let row = self
             .db
-            .execute_raw(stmt(
-                "DELETE FROM peer_server WHERE server_id = $1",
+            .query_one_raw(stmt(
+                "WITH pin AS (DELETE FROM peer_server WHERE server_id = $1 RETURNING 1), \
+                 head AS (DELETE FROM peer_server_forgotten WHERE server_id = $1 RETURNING 1) \
+                 SELECT (SELECT count(*) FROM pin) + (SELECT count(*) FROM head) AS n",
                 vec![server_id.into()],
             ))
             .await
             .map_err(map_db_err)?;
-        Ok(result.rows_affected() == 1)
+        let deleted = row
+            .map(|row| row.try_get::<i64>("", "n"))
+            .transpose()
+            .map_err(map_db_err)?
+            .unwrap_or(0);
+        Ok(deleted > 0)
     }
 
     async fn touch(&self, server_id: &str) -> RepoResult<()> {

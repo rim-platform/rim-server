@@ -118,3 +118,18 @@ pub struct PeerServer {
     pub fetched_at: DateTime<Utc>,
     pub last_request_at: Option<DateTime<Utc>>,
 }
+
+/// How many peers may be pinned at one origin, whatever their status. An origin serves another
+/// server id when its operator starts over with a new identity; the pins of the earlier ones
+/// stay until they are reset or forgotten.
+pub const MAX_PEERS_PER_ORIGIN: usize = 4;
+
+/// The key-log head of a peer whose pin was forgotten for being idle. The peer's next pin must
+/// hold the entry `head_payload` at `head_seq`: each entry names the hash of the one before it,
+/// so such a log extends the forgotten one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgottenPeer {
+    pub server_id: String,
+    pub head_seq: u32,
+    pub head_payload: String,
+}

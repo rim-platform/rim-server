@@ -44,6 +44,10 @@ pub const ATTACHMENTS_CLEANED: &str = "rim_attachments_cleaned_total";
 pub const WORKSPACE_STATE_PURGED: &str = "rim_workspace_state_purged_total";
 /// Expired conversation invitations the hourly purge deleted.
 pub const CONVERSATION_INVITES_EXPIRED: &str = "rim_conversation_invites_expired_total";
+/// Stale cached remote identities the hourly purge deleted.
+pub const REMOTE_IDENTITIES_PURGED: &str = "rim_remote_identities_purged_total";
+/// Idle peer pins the hourly purge forgot.
+pub const PEER_PINS_FORGOTTEN: &str = "rim_peer_pins_forgotten_total";
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
@@ -139,6 +143,16 @@ pub fn describe() {
         Unit::Count,
         "Expired conversation invitations the hourly purge deleted."
     );
+    describe_counter!(
+        REMOTE_IDENTITIES_PURGED,
+        Unit::Count,
+        "Stale cached remote identities the hourly purge deleted."
+    );
+    describe_counter!(
+        PEER_PINS_FORGOTTEN,
+        Unit::Count,
+        "Idle peer pins the hourly purge forgot."
+    );
 }
 
 /// Count one newly committed message.
@@ -185,6 +199,16 @@ pub fn workspace_state_purged(n: u64) {
 /// Count `n` expired conversation invitations the purge deleted.
 pub fn conversation_invites_expired(n: u64) {
     counter!(CONVERSATION_INVITES_EXPIRED).increment(n);
+}
+
+/// Count `n` stale cached remote identities the purge deleted.
+pub fn remote_identities_purged(n: u64) {
+    counter!(REMOTE_IDENTITIES_PURGED).increment(n);
+}
+
+/// Count `n` idle peer pins the purge forgot.
+pub fn peer_pins_forgotten(n: u64) {
+    counter!(PEER_PINS_FORGOTTEN).increment(n);
 }
 
 /// Set the audit retention gauge; `None` (keep forever) is recorded as 0.

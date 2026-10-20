@@ -18,8 +18,8 @@ use migration::{Migrator, MigratorTrait};
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::e2ee::model::{
-    MlsRetention, NewEncryptedMessage, NewFrankingRevision, NewMlsCommit, NewMlsGroup,
-    NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
+    MlsRetention, MlsWelcomeBacklog, MlsWelcomeCursor, NewEncryptedMessage, NewFrankingRevision,
+    NewMlsCommit, NewMlsGroup, NewMlsKeyPackage, NewMlsReaddRequest, NewMlsWelcome,
 };
 use rim_core::e2ee::repository::{E2eeRepository, GroupLock};
 use rim_core::host::repository::HostRepository;
@@ -850,14 +850,18 @@ async fn welcomes_wait_for_their_devices() {
         })
         .await
         .unwrap();
-    let pending = f.repo.pending_welcomes(f.bob.device).await.unwrap();
+    let pending = f
+        .repo
+        .pending_welcomes(f.bob.device, None, 100)
+        .await
+        .unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].id, welcome);
     assert_eq!(pending[0].server_id, f.server.id);
     assert_eq!(pending[0].epoch, 2);
     assert!(
         f.repo
-            .pending_welcomes(f.alice.device)
+            .pending_welcomes(f.alice.device, None, 100)
             .await
             .unwrap()
             .is_empty()
@@ -880,7 +884,7 @@ async fn welcomes_wait_for_their_devices() {
     );
     assert!(
         f.repo
-            .pending_welcomes(f.bob.device)
+            .pending_welcomes(f.bob.device, None, 100)
             .await
             .unwrap()
             .is_empty()
@@ -901,7 +905,11 @@ async fn welcomes_wait_for_their_devices() {
         .await
         .unwrap();
     assert_eq!(
-        f.repo.pending_welcomes(f.bob.device).await.unwrap()[0].id,
+        f.repo
+            .pending_welcomes(f.bob.device, None, 100)
+            .await
+            .unwrap()[0]
+            .id,
         again
     );
     SeaOrmConversationMemberRepository::new(f.ctx.db.clone())
@@ -910,11 +918,106 @@ async fn welcomes_wait_for_their_devices() {
         .unwrap();
     assert!(
         f.repo
-            .pending_welcomes(f.bob.device)
+            .pending_welcomes(f.bob.device, None, 100)
             .await
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn pending_welcomes_are_paged_and_counted_per_device() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let commit = f.repo.insert_commit(commit(&f, 1, 1)).await.unwrap();
+    let welcome = |size: usize, days: i64, recipients: Vec<(DeviceKeyId, UserId)>| NewMlsWelcome {
+        commit_id: commit.id,
+        conversation_id: f.conv.id,
+        incarnation: 1,
+        epoch: 2,
+        message: vec![7; size],
+        expires_at: Utc::now() + Duration::days(days),
+        recipients,
+    };
+    let bob = || vec![(f.bob.device, f.bob.user.id)];
+    let mut ids = Vec::new();
+    for size in 1..=5 {
+        ids.push(
+            f.repo
+                .insert_welcome(welcome(size, 30, bob()))
+                .await
+                .unwrap(),
+        );
+    }
+    f.repo
+        .insert_welcome(welcome(100, -1, bob()))
+        .await
+        .unwrap();
+    f.repo
+        .insert_welcome(welcome(9, 30, vec![(f.alice.device, f.alice.user.id)]))
+        .await
+        .unwrap();
+
+    // Pages follow (created_at, id) without gaps or repeats, and skip the expired Welcome.
+    let mut read = Vec::new();
+    let mut after = None;
+    loop {
+        let page = f
+            .repo
+            .pending_welcomes(f.bob.device, after, 2)
+            .await
+            .unwrap();
+        assert!(page.len() <= 2);
+        let Some(last) = page.last() else { break };
+        after = Some(MlsWelcomeCursor {
+            created_at: last.created_at,
+            id: last.id,
+        });
+        read.extend(page.iter().map(|w| w.id));
+    }
+    assert_eq!(read, ids);
+
+    let backlog = |devices: Vec<DeviceKeyId>| {
+        let repo = &f.repo;
+        async move {
+            let mut rows = repo.welcome_backlog(&devices).await.unwrap();
+            rows.sort_by_key(|b| b.count);
+            rows
+        }
+    };
+    let stranger = member(&f.ctx, "stranger").await;
+    assert_eq!(
+        backlog(vec![f.bob.device, f.alice.device, stranger.device]).await,
+        vec![
+            MlsWelcomeBacklog {
+                device_key_id: f.alice.device,
+                count: 1,
+                bytes: 9,
+            },
+            MlsWelcomeBacklog {
+                device_key_id: f.bob.device,
+                count: 5,
+                bytes: 15,
+            },
+        ]
+    );
+    assert!(backlog(Vec::new()).await.is_empty());
+
+    // An acknowledged Welcome no longer counts, nor do Welcomes of a conversation left.
+    f.repo.ack_welcomes(f.bob.device, &ids[4..]).await.unwrap();
+    assert_eq!(
+        backlog(vec![f.bob.device]).await,
+        vec![MlsWelcomeBacklog {
+            device_key_id: f.bob.device,
+            count: 4,
+            bytes: 10,
+        }]
+    );
+    SeaOrmConversationMemberRepository::new(f.ctx.db.clone())
+        .remove_member(f.conv.id, f.bob.user.id)
+        .await
+        .unwrap();
+    assert!(backlog(vec![f.bob.device]).await.is_empty());
 }
 
 #[tokio::test]

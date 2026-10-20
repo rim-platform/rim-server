@@ -26,7 +26,7 @@ Before that, a server is the relay and host of its own users only, as it always 
 | `RIM_S2S_PEER_DEAD_AFTER_HOURS` | 24 | Hours every delivery to a relay may fail before it is dead: no new outbox rows are written for it until a delivery succeeds again (1 to 168) |
 | `RIM_HOST_ALLOWED_RELAYS` | empty = any | Server ids of the relays allowed to push identities, join, subscribe, forward, report presence and bring revocations here |
 | `RIM_RELAY_FORWARDS_PER_USER_PER_DAY` | 50000 | Requests a local user sends through `/api/remote/…` per day |
-| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers who are not their contacts |
+| `RIM_RELAY_DM_REQUESTS_PER_DAY` | 20 | DM requests one sender principal files here per day, and invites a local user sends per day to people on other servers they do not know (a contact who lists them too, or someone either accepted a DM request from here) |
 | `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest profile card a local user publishes |
 | `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | Unclaimed one-time key packages per device and cipher suite |
 | `RIM_RELAY_DEVICES_PER_USER` | 32 | Devices a local user keeps, revoked ones not counted |
@@ -295,6 +295,13 @@ lifts the principal's block and its email's, not the sessions or invites that en
 forked peer stays forked; a peer never pinned is refused with `RIM_S2S_DENIED_PEERS` instead.
 Audited as `s2s.peer_blocked` and `s2s.peer_unblocked`.
 
+**Idle pins and cached identities.** An hourly job forgets the pin of a server that was neither
+fetched nor sent a request for 90 days when nothing here refers to it and the configuration does
+not name it, keeping its key-log head: its next contact pins it again only with a log that
+extends that head (`docs/specs/server-to-server-v1.md`, "Pinning a peer"). Forked and blocked
+pins stay. The same job deletes cached identities of people on other servers 30 days after they
+were fetched, except those of remote users held here. One origin holds at most 4 pins.
+
 **Abuse reports.** `reportDmRequest` in the app and reports that come by mail (`rim_server
 abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list` and
 `abuse-reports resolve` work through.
@@ -303,14 +310,20 @@ abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list`
 
 - `relayInfo { serverId roles directSpaceId }` (no session needed) names the direct space.
 - `remoteServer(origin)` pins another server through the relay and returns its discovery
-  document to verify and pin in the app.
+  document to verify and pin in the app. It fails `CONFLICT` when 4 other servers are pinned at
+  that origin.
 - `remoteIdentity(principalId, relayUrl)` returns a principal's key log, devices and card, from
-  this server or fetched from `relayUrl` and cached for 24 hours. Verify the log against the
+  this server or fetched from `relayUrl` and cached for 24 hours. Without `relayUrl` it refetches
+  from the relay that served the cached copy, which is deleted 30 days after the fetch (kept for
+  remote users held here); after that `relayUrl` is needed again. Verify the log against the
   principal id, each certificate against the log and the card against the head.
 - `contacts`, `addContact(principalId, relayUrls)`, `removeContact(principalId)`: the contact list
   the request inbox filters by. Relay URLs are 1 to 8 of 1 to 256 bytes of printable ASCII
   without `?`, `#` or `@`. The caller's own principal is refused (`VALIDATION`, "cannot add
-  yourself as a contact").
+  yourself as a contact"), and so is someone new once the caller holds 1,000 contacts
+  (`VALIDATION`, "a user holds at most 1000 contacts; remove one first"). A contact added on one
+  side only does not exempt its holder from the daily invites to other servers or from
+  probation; one who lists the holder too does.
 - `createConversation(input: { serverId: <directSpaceId>, remoteMembers: [{ principalId,
   relayUrls }], encrypted })` starts a DM (one remote member, no `otherUserId` or `memberIds`) or a
   group with people on other servers; people on this relay may be named the same way. A

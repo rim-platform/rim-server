@@ -799,6 +799,34 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
+    async fn count_contacts(&self, user_id: UserId) -> RepoResult<i64> {
+        self.count(
+            "SELECT count(*) AS n FROM relay_contact WHERE user_id = $1",
+            vec![uuid(user_id)],
+        )
+        .await
+    }
+
+    async fn knows(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool> {
+        self.flag(
+            r#"SELECT EXISTS (SELECT 1 FROM relay_contact mine
+                   JOIN "user" me ON me.id = mine.user_id
+                   JOIN "user" them ON them.principal_id = mine.principal_id
+                   JOIN relay_contact theirs
+                     ON theirs.user_id = them.id AND theirs.principal_id = me.principal_id
+                   WHERE mine.user_id = $1 AND mine.principal_id = $2)
+               OR EXISTS (SELECT 1 FROM relay_dm_request
+                   WHERE user_id = $1 AND from_principal_id = $2 AND status = 'accepted')
+               OR EXISTS (SELECT 1 FROM "user" me
+                   JOIN "user" them ON them.principal_id = $2
+                   JOIN relay_dm_request r ON r.user_id = them.id
+                     AND r.from_principal_id = me.principal_id AND r.status = 'accepted'
+                   WHERE me.id = $1) AS flag"#,
+            vec![uuid(user_id), principal_id.into()],
+        )
+        .await
+    }
+
     async fn block(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool> {
         Ok(self
             .execute(
@@ -888,5 +916,15 @@ impl RelayRepository for SeaOrmRelayRepository {
         )
         .await?;
         Ok(())
+    }
+
+    async fn purge_identities(&self, fetched_before: DateTime<Utc>) -> RepoResult<u64> {
+        self.execute(
+            r#"DELETE FROM remote_identity_cache c WHERE c.fetched_at < $1
+               AND NOT EXISTS (SELECT 1 FROM "user" u
+                               WHERE u.principal_id = c.principal_id AND u.kind = 'remote')"#,
+            vec![fetched_before.into()],
+        )
+        .await
     }
 }
