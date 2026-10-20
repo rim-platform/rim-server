@@ -25,7 +25,9 @@ use rim_infra_db::sea_orm_impl::monitoring::SeaOrmMonitoringRepository;
 use rim_infra_db::sea_orm_impl::s2s::{
     SeaOrmPeerServerRepository, SeaOrmS2sNonceRepository, SeaOrmServerIdentityRepository,
 };
-use rim_infra_services::host::outbox::{HostEventWriter, OutboxSender, OutboxSink, RefusalCache};
+use rim_infra_services::host::outbox::{
+    HostEventWriter, OutboxSender, OutboxSink, PeerBacklogs, RefusalCache,
+};
 use rim_infra_services::host::{DIRECT_SPACE_NAME, DefaultHostService};
 use rim_infra_services::relay::{
     DefaultRelayService, QUEUED_BYTES_PER_PEER_PER_DAY, RelaySettings,
@@ -657,6 +659,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     // the sender delivers each relay's outbox in order.
     if let Some(events) = outbox_events {
         let refusals = Arc::new(RefusalCache::default());
+        let backlogs = Arc::new(PeerBacklogs::new(config.s2s_peer_dead_after()));
         let wake = Arc::new(tokio::sync::Notify::new());
         let writer = HostEventWriter::new(
             repos.for_host(),
@@ -664,11 +667,18 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             s2s.state.identity.clone(),
             s2s.direct_space_id,
             Arc::clone(&refusals),
+            Arc::clone(&backlogs),
             Arc::clone(&wake),
         )
         .with_relay(Arc::clone(&s2s.relay) as Arc<dyn RelayService>)
         .with_dm_policy(dm_policy.clone());
-        let sender = OutboxSender::new(repos.for_host(), Arc::clone(&s2s.client), refusals, wake);
+        let sender = OutboxSender::new(
+            repos.for_host(),
+            Arc::clone(&s2s.client),
+            refusals,
+            backlogs,
+            wake,
+        );
         tokio::spawn(writer.run(events, shutdown_tx.subscribe()));
         tokio::spawn(sender.run(shutdown_tx.subscribe()));
     }
@@ -815,6 +825,28 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             shutdown_tx.subscribe(),
         ),
     );
+    // Background task: delete stale cached remote identities and forget idle peer pins hourly,
+    // keeping the peers the configuration names.
+    {
+        let settings = &s2s.state.settings;
+        let mut kept: Vec<String> = settings
+            .denied_peers
+            .iter()
+            .chain(&settings.allowed_relays)
+            .cloned()
+            .collect();
+        kept.extend(config.dm_policy().map(|p| p.partners).unwrap_or_default());
+        tokio::spawn(
+            rim_infra_services::scheduled_purges::run_remote_cache_purge(
+                Arc::clone(&repos.relay_repo),
+                Arc::new(SeaOrmPeerServerRepository::new(
+                    raw_db_for_tasks.clone().into(),
+                )),
+                kept,
+                shutdown_tx.subscribe(),
+            ),
+        );
+    }
     // Background task: end the WebSocket connections of sessions that ended where this
     // process did not hear of it (another process, expiry, a purge), every interval.
     if let Some(interval) = config.ws_session_recheck() {

@@ -118,6 +118,7 @@ pub async fn serve(
             addr,
             runtime.db.clone(),
             runtime.monitoring_repo,
+            config.s2s_peer_dead_after(),
             shutdown_tx.subscribe(),
         )?;
         rim_infra_services::metrics::set_audit_retention_days(

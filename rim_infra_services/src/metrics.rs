@@ -1,7 +1,10 @@
 //! Metrics recorded by the services through the `metrics` facade. Without an installed recorder
 //! every call is a no-op; the server installs the Prometheus exporter when metrics are on.
 
+use chrono::{Duration, Utc};
 use metrics::{Unit, counter, describe_counter, describe_gauge, gauge};
+use rim_core::host::model::OutboxStats;
+use rim_core::host::repository::HostRepository;
 use rim_core::relay::model::RelayQueueStats;
 use rim_core::relay::repository::RelayRepository;
 use rim_core::repository::error::RepoResult;
@@ -19,6 +22,18 @@ pub const POW_REJECTIONS: &str = "rim_pow_rejections_total";
 pub const RELAY_QUEUE_ITEMS: &str = "rim_relay_queue_items";
 /// Relay queue bytes, labelled `state` (`queued` or `held`).
 pub const RELAY_QUEUE_BYTES: &str = "rim_relay_queue_bytes";
+/// Outbox rows no relay has acknowledged yet.
+pub const OUTBOX_PENDING_ROWS: &str = "rim_outbox_pending_rows";
+/// Bytes of those rows.
+pub const OUTBOX_PENDING_BYTES: &str = "rim_outbox_pending_bytes";
+/// The most outbox rows one relay has waiting.
+pub const OUTBOX_PEER_MAX_PENDING_ROWS: &str = "rim_outbox_peer_max_pending_rows";
+/// The most outbox bytes one relay has waiting.
+pub const OUTBOX_PEER_MAX_PENDING_BYTES: &str = "rim_outbox_peer_max_pending_bytes";
+/// Relays every delivery to has failed for the dead-peer period.
+pub const OUTBOX_DEAD_PEERS: &str = "rim_outbox_dead_peers";
+/// Host events not queued for a relay, labelled `reason` (`peer_cap` or `dead_peer`).
+pub const OUTBOX_NOT_QUEUED: &str = "rim_outbox_not_queued_rows_total";
 /// Audit log rows deleted by the retention purge.
 pub const AUDIT_ROWS_PURGED: &str = "rim_audit_rows_purged_total";
 /// The configured audit retention in days, 0 when rows are kept forever.
@@ -29,6 +44,10 @@ pub const ATTACHMENTS_CLEANED: &str = "rim_attachments_cleaned_total";
 pub const WORKSPACE_STATE_PURGED: &str = "rim_workspace_state_purged_total";
 /// Expired conversation invitations the hourly purge deleted.
 pub const CONVERSATION_INVITES_EXPIRED: &str = "rim_conversation_invites_expired_total";
+/// Stale cached remote identities the hourly purge deleted.
+pub const REMOTE_IDENTITIES_PURGED: &str = "rim_remote_identities_purged_total";
+/// Idle peer pins the hourly purge forgot.
+pub const PEER_PINS_FORGOTTEN: &str = "rim_peer_pins_forgotten_total";
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
@@ -66,6 +85,39 @@ pub fn describe() {
         Unit::Bytes,
         "Bytes in the relay queue, waiting for devices (queued) or behind a DM request (held)."
     );
+    describe_gauge!(
+        OUTBOX_PENDING_ROWS,
+        Unit::Count,
+        "Outbox rows no relay has acknowledged yet."
+    );
+    describe_gauge!(
+        OUTBOX_PENDING_BYTES,
+        Unit::Bytes,
+        "Bytes of outbox rows no relay has acknowledged yet."
+    );
+    describe_gauge!(
+        OUTBOX_PEER_MAX_PENDING_ROWS,
+        Unit::Count,
+        "The most outbox rows one relay has waiting."
+    );
+    describe_gauge!(
+        OUTBOX_PEER_MAX_PENDING_BYTES,
+        Unit::Bytes,
+        "The most outbox bytes one relay has waiting."
+    );
+    describe_gauge!(
+        OUTBOX_DEAD_PEERS,
+        Unit::Count,
+        "Relays every delivery to has failed for the dead-peer period."
+    );
+    describe_counter!(
+        OUTBOX_NOT_QUEUED,
+        Unit::Count,
+        "Host events not queued for a relay, by reason."
+    );
+    for reason in ["peer_cap", "dead_peer"] {
+        counter!(OUTBOX_NOT_QUEUED, "reason" => reason).increment(0);
+    }
     describe_counter!(
         AUDIT_ROWS_PURGED,
         Unit::Count,
@@ -91,6 +143,16 @@ pub fn describe() {
         Unit::Count,
         "Expired conversation invitations the hourly purge deleted."
     );
+    describe_counter!(
+        REMOTE_IDENTITIES_PURGED,
+        Unit::Count,
+        "Stale cached remote identities the hourly purge deleted."
+    );
+    describe_counter!(
+        PEER_PINS_FORGOTTEN,
+        Unit::Count,
+        "Idle peer pins the hourly purge forgot."
+    );
 }
 
 /// Count one newly committed message.
@@ -114,6 +176,11 @@ pub fn pow_rejected() {
     counter!(POW_REJECTIONS).increment(1);
 }
 
+/// Count one host event not queued for a relay, for `reason` (`peer_cap` or `dead_peer`).
+pub(crate) fn outbox_not_queued(reason: &'static str) {
+    counter!(OUTBOX_NOT_QUEUED, "reason" => reason).increment(1);
+}
+
 /// Count `n` audit log rows the retention purge deleted.
 pub fn audit_rows_purged(n: u64) {
     counter!(AUDIT_ROWS_PURGED).increment(n);
@@ -134,6 +201,16 @@ pub fn conversation_invites_expired(n: u64) {
     counter!(CONVERSATION_INVITES_EXPIRED).increment(n);
 }
 
+/// Count `n` stale cached remote identities the purge deleted.
+pub fn remote_identities_purged(n: u64) {
+    counter!(REMOTE_IDENTITIES_PURGED).increment(n);
+}
+
+/// Count `n` idle peer pins the purge forgot.
+pub fn peer_pins_forgotten(n: u64) {
+    counter!(PEER_PINS_FORGOTTEN).increment(n);
+}
+
 /// Set the audit retention gauge; `None` (keep forever) is recorded as 0.
 pub fn set_audit_retention_days(days: Option<u32>) {
     gauge!(AUDIT_RETENTION_DAYS).set(f64::from(days.unwrap_or(0)));
@@ -151,6 +228,23 @@ pub fn record_relay_queue(stats: RelayQueueStats) {
 /// Read the relay queue totals and set the gauges; on error the gauges keep their last value.
 pub async fn sample_relay_queue(repo: &dyn RelayRepository) -> RepoResult<()> {
     record_relay_queue(repo.queue_stats().await?);
+    Ok(())
+}
+
+/// Set the outbox gauges from `stats`.
+pub fn record_outbox(stats: OutboxStats) {
+    let as_gauge = |n: i64| n.max(0) as f64;
+    gauge!(OUTBOX_PENDING_ROWS).set(as_gauge(stats.rows));
+    gauge!(OUTBOX_PENDING_BYTES).set(as_gauge(stats.bytes));
+    gauge!(OUTBOX_PEER_MAX_PENDING_ROWS).set(as_gauge(stats.peer_max_rows));
+    gauge!(OUTBOX_PEER_MAX_PENDING_BYTES).set(as_gauge(stats.peer_max_bytes));
+    gauge!(OUTBOX_DEAD_PEERS).set(as_gauge(stats.dead_peers));
+}
+
+/// Read the outbox totals, counting relays dead after `dead_after` of failures, and set the
+/// gauges; on error the gauges keep their last value.
+pub async fn sample_outbox(repo: &dyn HostRepository, dead_after: Duration) -> RepoResult<()> {
+    record_outbox(repo.outbox_stats(Utc::now() - dead_after).await?);
     Ok(())
 }
 
@@ -236,6 +330,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use rim_core::host::repository::MockHostRepository;
     use rim_core::relay::repository::MockRelayRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
 
@@ -325,6 +420,32 @@ mod tests {
             got.gauge(RELAY_QUEUE_BYTES, &[("state", "held")]),
             Some(120.0)
         );
+    }
+
+    #[test]
+    fn the_outbox_gauges_come_from_the_repository_and_name_no_relay() {
+        let mut repo = MockHostRepository::new();
+        repo.expect_outbox_stats()
+            .times(1)
+            .returning(|dead_before| {
+                assert!(dead_before < Utc::now() - Duration::hours(23));
+                Box::pin(async {
+                    Ok(OutboxStats {
+                        rows: 12,
+                        bytes: 1200,
+                        peer_max_rows: 10,
+                        peer_max_bytes: 1000,
+                        dead_peers: 1,
+                    })
+                })
+            });
+        let (result, got) = recorded(|| block_on(sample_outbox(&repo, Duration::hours(24))));
+        assert!(result.is_ok());
+        assert_eq!(got.gauge(OUTBOX_PENDING_ROWS, &[]), Some(12.0));
+        assert_eq!(got.gauge(OUTBOX_PENDING_BYTES, &[]), Some(1200.0));
+        assert_eq!(got.gauge(OUTBOX_PEER_MAX_PENDING_ROWS, &[]), Some(10.0));
+        assert_eq!(got.gauge(OUTBOX_PEER_MAX_PENDING_BYTES, &[]), Some(1000.0));
+        assert_eq!(got.gauge(OUTBOX_DEAD_PEERS, &[]), Some(1.0));
     }
 
     #[test]

@@ -50,7 +50,7 @@ const RELAY_ORIGIN: &str = "https://relay.example";
 const STRANGER: &str = "rims1_stranger";
 const STRANGER_ORIGIN: &str = "https://stranger.example";
 
-fn server_identity() -> SharedIdentity {
+pub(crate) fn server_identity() -> SharedIdentity {
     let signer = ServerSigner::from_seed([42; 32]);
     let recovery = ServerSigner::from_seed([142; 32]);
     let inception = sign_inception(&signer, &recovery, Utc::now());

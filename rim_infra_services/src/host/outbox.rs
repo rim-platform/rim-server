@@ -3,13 +3,15 @@
 //! each relay holding an active delegation of a recipient; for the direct space, the relays a
 //! recipient's card lists, those the operator's outbound DM setting admits); it files what local
 //! members get through the request inbox: invites and held events of the direct space and of
-//! workspace DMs. The sender delivers each relay's rows in order with backoff.
+//! workspace DMs. The sender delivers each relay's rows in order with backoff. A relay's rows
+//! stop being queued while its backlog is at the per-relay caps, or while it is dead: every
+//! delivery to it has failed for the configured period.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sea_orm::DatabaseConnection;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, watch};
@@ -18,6 +20,7 @@ use uuid::Uuid;
 
 use rim_core::conversation::model::ConversationType;
 use rim_core::host::model::{RemoteMember, UserKind};
+use rim_core::host::repository::HostRepository;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
@@ -33,6 +36,7 @@ use rim_services::s2s::service::S2sClient;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::host::{DefaultHostService, HostRepos};
+use crate::metrics;
 use crate::relay::policy::{DmPolicy, outbound};
 use crate::relay::{MAX_CONTACTS_PER_USER, MAX_DELIVER_BYTES, MAX_DELIVER_ITEMS, contact_relays};
 use crate::repos::AppRepos;
@@ -43,6 +47,14 @@ const MAX_EVENT_BYTES: usize = 512 * 1024;
 const REFUSAL_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// Longest wait between delivery attempts.
 const MAX_BACKOFF_SECS: i64 = 300;
+/// Most outbox rows kept for one relay above what it acknowledged.
+const MAX_PEER_OUTBOX_ROWS: i64 = 100_000;
+/// Most outbox bytes kept for one relay above what it acknowledged: 2 GiB.
+const MAX_PEER_OUTBOX_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+/// How long the writer counts on a relay's backlog as read before reading it again.
+const BACKLOG_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+/// Least time between two warnings about rows not queued for one relay.
+const DROP_WARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The stream an event belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +206,140 @@ impl RefusalCache {
     }
 }
 
+/// Why a row was not queued for a relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotQueued {
+    /// The relay's backlog is at [`MAX_PEER_OUTBOX_ROWS`] or [`MAX_PEER_OUTBOX_BYTES`].
+    PeerCap,
+    /// Every delivery to the relay has failed for the dead-peer period.
+    DeadPeer,
+}
+
+impl NotQueued {
+    /// The `reason` label of the metric counting such rows.
+    fn label(self) -> &'static str {
+        match self {
+            Self::PeerCap => "peer_cap",
+            Self::DeadPeer => "dead_peer",
+        }
+    }
+}
+
+/// One relay's backlog as the writer knows it.
+struct Backlog {
+    rows: i64,
+    bytes: i64,
+    dead: bool,
+    read_at: Instant,
+    /// Rows not queued since the last warning.
+    not_queued: u64,
+    warned_at: Option<Instant>,
+}
+
+/// Each relay's outbox backlog as the writer knows it: read from the database at most every
+/// 10 seconds and counted forward with the rows the writer adds. The writer asks it before
+/// queueing a row; the sender drops a relay's copy when a delivery to it succeeds after
+/// failures, so queueing resumes at once.
+pub struct PeerBacklogs {
+    dead_after: Duration,
+    peers: Mutex<HashMap<String, Backlog>>,
+}
+
+impl PeerBacklogs {
+    /// Backlogs of relays that are dead once every delivery to them has failed for
+    /// `dead_after`.
+    pub fn new(dead_after: Duration) -> Self {
+        Self {
+            dead_after,
+            peers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Backlog>> {
+        match self.peers.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Whether a relay whose deliveries have failed since `failing_since` is dead at `now`.
+    pub(crate) fn is_dead(&self, failing_since: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+        failing_since.is_some_and(|since| now - since >= self.dead_after)
+    }
+
+    /// Whether one more row may be queued for `peer`: not while it is dead, nor while its
+    /// backlog is at either cap. A row refused is counted, and warned about at most once a
+    /// minute per relay.
+    ///
+    /// # Errors
+    /// When the backlog has to be read and cannot be.
+    pub(crate) async fn admit(&self, repo: &dyn HostRepository, peer: &str) -> ServiceResult<bool> {
+        let fresh = self
+            .lock()
+            .get(peer)
+            .is_some_and(|b| b.read_at.elapsed() < BACKLOG_TTL);
+        if !fresh {
+            let backlog = repo.outbox_backlog(peer).await?;
+            let dead = self.is_dead(backlog.failing_since, Utc::now());
+            let mut peers = self.lock();
+            let entry = peers.entry(peer.to_string()).or_insert(Backlog {
+                rows: 0,
+                bytes: 0,
+                dead: false,
+                read_at: Instant::now(),
+                not_queued: 0,
+                warned_at: None,
+            });
+            entry.rows = backlog.rows;
+            entry.bytes = backlog.bytes;
+            entry.dead = dead;
+            entry.read_at = Instant::now();
+        }
+        let mut peers = self.lock();
+        let Some(entry) = peers.get_mut(peer) else {
+            return Ok(true);
+        };
+        let refusal = if entry.dead {
+            NotQueued::DeadPeer
+        } else if entry.rows >= MAX_PEER_OUTBOX_ROWS || entry.bytes >= MAX_PEER_OUTBOX_BYTES {
+            NotQueued::PeerCap
+        } else {
+            return Ok(true);
+        };
+        metrics::outbox_not_queued(refusal.label());
+        entry.not_queued += 1;
+        if entry
+            .warned_at
+            .is_none_or(|at| at.elapsed() >= DROP_WARN_INTERVAL)
+        {
+            warn!(
+                peer_server_id = %peer,
+                reason = refusal.label(),
+                rows = entry.rows,
+                bytes = entry.bytes,
+                not_queued = entry.not_queued,
+                "host events for a relay are not queued"
+            );
+            entry.not_queued = 0;
+            entry.warned_at = Some(Instant::now());
+        }
+        Ok(false)
+    }
+
+    /// Count a row of `bytes` queued for `peer`.
+    pub(crate) fn queued(&self, peer: &str, bytes: i64) {
+        if let Some(entry) = self.lock().get_mut(peer) {
+            entry.rows += 1;
+            entry.bytes += bytes;
+        }
+    }
+
+    /// Forget `peer`'s backlog, so the next row for it reads it again.
+    pub(crate) fn forget(&self, peer: &str) {
+        self.lock().remove(peer);
+    }
+}
+
 /// The non-lossy sink the observers send every event to; the writer reads it.
 pub struct OutboxSink {
     sender: mpsc::UnboundedSender<WorkspaceEvent>,
@@ -219,6 +365,7 @@ pub struct HostEventWriter {
     identity: SharedIdentity,
     direct_space_id: ServerId,
     refusals: Arc<RefusalCache>,
+    backlogs: Arc<PeerBacklogs>,
     wake: Arc<Notify>,
     /// Files direct-space events, and workspace DMs, for local members through the request
     /// inbox.
@@ -241,6 +388,7 @@ impl HostEventWriter {
         identity: SharedIdentity,
         direct_space_id: ServerId,
         refusals: Arc<RefusalCache>,
+        backlogs: Arc<PeerBacklogs>,
         wake: Arc<Notify>,
     ) -> Self {
         Self {
@@ -249,6 +397,7 @@ impl HostEventWriter {
             identity,
             direct_space_id,
             refusals,
+            backlogs,
             wake,
             relay: None,
             dm_policy: DmOperatorPolicy::default(),
@@ -558,7 +707,9 @@ impl HostEventWriter {
 
     /// Sign one envelope and add an outbox row for each relay its recipients use, in one
     /// transaction that also takes the stream's `seq`. A workspace's relays are those holding
-    /// a delegation (`delegated`); the direct space's are those each card lists.
+    /// a delegation (`delegated`); the direct space's are those each card lists. A relay that is
+    /// dead or at its backlog caps gets no row, but the event still takes its `seq`, so that
+    /// relay's clients see the gap.
     async fn append(
         &self,
         workspace_id: ServerId,
@@ -600,7 +751,19 @@ impl HostEventWriter {
                     .push(member.principal_id.clone());
             }
         }
-        if by_relay.is_empty() && planned.local.is_empty() {
+        let addressed = !by_relay.is_empty();
+        let mut admitted = BTreeMap::new();
+        for (relay, recipients) in by_relay {
+            if self
+                .backlogs
+                .admit(self.repos.host_repo.as_ref(), &relay)
+                .await?
+            {
+                admitted.insert(relay, recipients);
+            }
+        }
+        let by_relay = admitted;
+        if !addressed && planned.local.is_empty() {
             return Ok(0);
         }
         let scope = match &self.db {
@@ -652,6 +815,7 @@ impl HostEventWriter {
             .to_string();
             let size = i32::try_from(item.len()).map_err(ServiceError::internal)?;
             repos.host_repo.insert_outbox(relay, &item, size).await?;
+            self.backlogs.queued(relay, i64::from(size));
             rows += 1;
         }
         if let Some(scope) = scope {
@@ -675,11 +839,14 @@ impl HostEventWriter {
     }
 }
 
-/// Delivers each relay's outbox rows in id order.
+/// Delivers each relay's outbox rows in id order. A relay whose last delivery failed is tried
+/// again when its backoff ends even with nothing left to send, with an empty delivery, so the
+/// first success ends its run of failures.
 pub struct OutboxSender {
     repos: HostRepos,
     client: Arc<dyn S2sClient>,
     refusals: Arc<RefusalCache>,
+    backlogs: Arc<PeerBacklogs>,
     wake: Arc<Notify>,
 }
 
@@ -688,12 +855,14 @@ impl OutboxSender {
         repos: HostRepos,
         client: Arc<dyn S2sClient>,
         refusals: Arc<RefusalCache>,
+        backlogs: Arc<PeerBacklogs>,
         wake: Arc<Notify>,
     ) -> Self {
         Self {
             repos,
             client,
             refusals,
+            backlogs,
             wake,
         }
     }
@@ -726,7 +895,8 @@ impl OutboxSender {
         Ok(())
     }
 
-    /// Send a relay its next batch. Returns whether it acknowledged it.
+    /// Send a relay its next batch, or an empty one while its deliveries fail. Returns whether
+    /// it acknowledged it. A dead relay waits the longest backoff between attempts.
     pub async fn send_peer(&self, peer: &str) -> ServiceResult<bool> {
         let delivery = self.repos.host_repo.delivery(peer).await?;
         let rows = self
@@ -739,8 +909,10 @@ impl OutboxSender {
                 MAX_DELIVER_BYTES,
             )
             .await?;
-        let Some(last) = rows.last().map(|r| r.id) else {
-            return Ok(true);
+        let last = match rows.last() {
+            Some(row) => row.id,
+            None if delivery.failures > 0 => delivery.delivered_through,
+            None => return Ok(true),
         };
         let items = rows
             .iter()
@@ -775,14 +947,19 @@ impl OutboxSender {
             }
         };
         let Some(answer) = answer else {
+            let now = Utc::now();
             let failures = delivery.failures.saturating_add(1);
-            let backoff = 1_i64
-                .checked_shl(failures.clamp(1, 16) as u32 - 1)
-                .unwrap_or(MAX_BACKOFF_SECS)
-                .min(MAX_BACKOFF_SECS);
+            let backoff = if self.backlogs.is_dead(delivery.failing_since, now) {
+                MAX_BACKOFF_SECS
+            } else {
+                1_i64
+                    .checked_shl(failures.clamp(1, 16) as u32 - 1)
+                    .unwrap_or(MAX_BACKOFF_SECS)
+                    .min(MAX_BACKOFF_SECS)
+            };
             self.repos
                 .host_repo
-                .record_failure(peer, failures, Utc::now() + Duration::seconds(backoff))
+                .record_failure(peer, failures, now + Duration::seconds(backoff))
                 .await?;
             return Ok(false);
         };
@@ -805,6 +982,10 @@ impl OutboxSender {
             .unwrap_or(delivery.delivered_through)
             .min(last);
         self.repos.host_repo.record_delivered(peer, acked).await?;
+        if delivery.failures > 0 {
+            self.backlogs.forget(peer);
+            info!(peer_server_id = %peer, failures = delivery.failures, "a relay takes deliveries again");
+        }
         info!(peer_server_id = %peer, acked_through = acked, refused = answer.refused.len(), "delivered host events");
         Ok(true)
     }
@@ -812,9 +993,27 @@ impl OutboxSender {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use rim_core::auth::repository::MockSessionRepository;
     use rim_core::conversation::model::ConversationId;
+    use rim_core::conversation::repository::MockConversationRepository;
+    use rim_core::conversation_member::repository::MockConversationMemberRepository;
+    use rim_core::dm_policy::repository::MockDmPolicyRepository;
+    use rim_core::e2ee::repository::MockE2eeRepository;
+    use rim_core::host::model::{OutboxBacklog, OutboxRow, PeerDelivery};
+    use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
+    use rim_core::key_identity::repository::MockKeyIdentityRepository;
+    use rim_core::relay::repository::{MockRelayAbuseRepository, MockRelayRepository};
     use rim_core::server_member::model::ServerMemberRole;
+    use rim_core::server_member::repository::MockServerMemberRepository;
+    use rim_core::user::repository::MockUserRepository;
+    use rim_services::s2s::dto::{S2sClientError, S2sResponse};
+    use rim_services::s2s::service::MockS2sClient;
+
+    use super::*;
+    use crate::host::identity_tests::server_identity;
+    use crate::metrics::test_support::{block_on, recorded};
 
     fn member(role: ServerMemberRole) -> RemoteMember {
         RemoteMember {
@@ -933,5 +1132,356 @@ mod tests {
         cache.refuse("rims1_a", "rimp1_x");
         assert!(cache.is_refused("rims1_a", "rimp1_x"));
         assert!(!cache.is_refused("rims1_b", "rimp1_x"));
+    }
+
+    /// A relay's backlog, and the outbox rows and failures the mocked host repository records.
+    #[derive(Default)]
+    struct Outbox {
+        /// The backlogs `outbox_backlog` answers, one per read; the last repeats.
+        backlogs: Mutex<Vec<OutboxBacklog>>,
+        reads: AtomicUsize,
+        inserted: AtomicUsize,
+        seqs: AtomicUsize,
+        failures: Mutex<Vec<(i32, DateTime<Utc>)>>,
+        delivered: Mutex<Vec<i64>>,
+    }
+
+    fn backlog(rows: i64, bytes: i64, failing_since: Option<DateTime<Utc>>) -> OutboxBacklog {
+        OutboxBacklog {
+            rows,
+            bytes,
+            failing_since,
+        }
+    }
+
+    fn host_repo(outbox: &Arc<Outbox>) -> MockHostRepository {
+        let mut host = MockHostRepository::new();
+        let o = Arc::clone(outbox);
+        host.expect_outbox_backlog().returning(move |_| {
+            let n = o.reads.fetch_add(1, Ordering::SeqCst);
+            let backlogs = o.backlogs.lock().expect("lock");
+            let answer = backlogs[n.min(backlogs.len() - 1)].clone();
+            Box::pin(async move { Ok(answer) })
+        });
+        let o = Arc::clone(outbox);
+        host.expect_next_stream_seq().returning(move |_, _| {
+            let seq = o.seqs.fetch_add(1, Ordering::SeqCst) as i64 + 1;
+            Box::pin(async move { Ok(seq) })
+        });
+        let o = Arc::clone(outbox);
+        host.expect_insert_outbox().returning(move |_, _, _| {
+            let id = o.inserted.fetch_add(1, Ordering::SeqCst) as i64 + 1;
+            Box::pin(async move { Ok(id) })
+        });
+        let o = Arc::clone(outbox);
+        host.expect_record_failure()
+            .returning(move |_, failures, next_attempt_at| {
+                o.failures
+                    .lock()
+                    .expect("lock")
+                    .push((failures, next_attempt_at));
+                Box::pin(async { Ok(()) })
+            });
+        let o = Arc::clone(outbox);
+        host.expect_record_delivered().returning(move |_, through| {
+            o.delivered.lock().expect("lock").push(through);
+            Box::pin(async { Ok(()) })
+        });
+        host
+    }
+
+    fn repos(host: MockHostRepository) -> HostRepos {
+        HostRepos {
+            host_repo: Arc::new(host),
+            relay_repo: Arc::new(MockRelayRepository::new()),
+            key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
+            e2ee_repo: Arc::new(MockE2eeRepository::new()),
+            user_repo: Arc::new(MockUserRepository::new()),
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            delegation_repo: Arc::new(MockDelegationRepository::new()),
+            session_repo: Arc::new(MockSessionRepository::new()),
+            relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
+        }
+    }
+
+    const DEAD: &str = "rims1_dead";
+    const DEAD_AFTER: Duration = Duration::hours(24);
+
+    /// Write `events` conversation events whose one recipient's delegation is held by `DEAD`,
+    /// with the repository answering `backlogs` one read after another. Returns what the
+    /// repository saw and the shared backlogs.
+    async fn write_to_relay(
+        backlogs: Vec<OutboxBacklog>,
+        events: usize,
+    ) -> (Arc<Outbox>, Arc<PeerBacklogs>) {
+        let outbox = Arc::new(Outbox {
+            backlogs: Mutex::new(backlogs),
+            ..Outbox::default()
+        });
+        let peer_backlogs = Arc::new(PeerBacklogs::new(DEAD_AFTER));
+        let writer = HostEventWriter::new(
+            repos(host_repo(&outbox)),
+            None,
+            server_identity(),
+            ServerId::new(),
+            Arc::new(RefusalCache::default()),
+            Arc::clone(&peer_backlogs),
+            Arc::new(Notify::new()),
+        );
+        let bob = member(ServerMemberRole::Member);
+        let delegated = HashMap::from([(bob.user_id, vec![DEAD.to_string()])]);
+        let planned = Planned {
+            stream: "c:x".to_string(),
+            recipients: vec![bob],
+            device_id: None,
+            local: Vec::new(),
+        };
+        for _ in 0..events {
+            writer
+                .append(
+                    ServerId::new(),
+                    &planned,
+                    r#"{"type":"NewMessage"}"#,
+                    Some(&delegated),
+                )
+                .await
+                .expect("append");
+        }
+        (outbox, peer_backlogs)
+    }
+
+    #[test]
+    fn an_unreachable_relay_gets_no_rows_past_the_row_cap() {
+        let failing = Some(Utc::now() - Duration::hours(1));
+        let ((outbox, _), got) = recorded(|| {
+            block_on(write_to_relay(
+                vec![backlog(MAX_PEER_OUTBOX_ROWS - 1, 0, failing)],
+                5,
+            ))
+        });
+        assert_eq!(
+            outbox.inserted.load(Ordering::SeqCst),
+            1,
+            "one row fills the cap"
+        );
+        assert_eq!(
+            outbox.reads.load(Ordering::SeqCst),
+            1,
+            "rows the writer adds are counted without reading again"
+        );
+        assert_eq!(
+            outbox.seqs.load(Ordering::SeqCst),
+            5,
+            "every event takes its seq, so the relay's clients see the gap"
+        );
+        assert_eq!(
+            got.counter(crate::metrics::OUTBOX_NOT_QUEUED, &[("reason", "peer_cap")]),
+            4
+        );
+    }
+
+    #[test]
+    fn an_unreachable_relay_gets_no_rows_past_the_byte_cap() {
+        let ((outbox, _), got) = recorded(|| {
+            block_on(write_to_relay(
+                vec![backlog(10, MAX_PEER_OUTBOX_BYTES - 1, None)],
+                3,
+            ))
+        });
+        assert_eq!(outbox.inserted.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            got.counter(crate::metrics::OUTBOX_NOT_QUEUED, &[("reason", "peer_cap")]),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn a_relay_below_the_caps_gets_every_row() {
+        let (outbox, _) = write_to_relay(vec![backlog(10, 1_000, None)], 20).await;
+        assert_eq!(outbox.inserted.load(Ordering::SeqCst), 20);
+    }
+
+    #[test]
+    fn a_dead_relay_gets_no_rows_until_its_backlog_is_read_again_after_a_success() {
+        let dead = Some(Utc::now() - DEAD_AFTER - Duration::minutes(1));
+        let ((outbox, peer_backlogs), got) = recorded(|| {
+            block_on(write_to_relay(
+                vec![backlog(5, 500, dead), backlog(5, 500, None)],
+                3,
+            ))
+        });
+        assert_eq!(outbox.inserted.load(Ordering::SeqCst), 0);
+        assert_eq!(outbox.seqs.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            got.counter(
+                crate::metrics::OUTBOX_NOT_QUEUED,
+                &[("reason", "dead_peer")]
+            ),
+            3
+        );
+
+        // A success forgets the copy; the next read finds the failures over.
+        peer_backlogs.forget(DEAD);
+        let host = host_repo(&outbox);
+        let admitted = block_on(peer_backlogs.admit(&host, DEAD)).expect("admit");
+        assert!(admitted, "queueing resumes after the first success");
+    }
+
+    #[test]
+    fn a_relay_failing_for_less_than_the_period_is_not_dead() {
+        let backlogs = PeerBacklogs::new(Duration::hours(24));
+        let now = Utc::now();
+        assert!(!backlogs.is_dead(None, now));
+        assert!(!backlogs.is_dead(Some(now - Duration::hours(23)), now));
+        assert!(backlogs.is_dead(Some(now - Duration::hours(24)), now));
+    }
+
+    /// An outbox sender to `DEAD`, whose delivery state is `delivery` and outbox holds `rows`
+    /// rows, through a client answering `answer`. Returns what the repository and the client
+    /// saw.
+    async fn send_to_relay(
+        delivery: PeerDelivery,
+        rows: i64,
+        answer: Result<String, ()>,
+        peer_backlogs: Arc<PeerBacklogs>,
+    ) -> (Arc<Outbox>, Vec<DeliverRequest>, bool) {
+        let outbox = Arc::new(Outbox::default());
+        let mut host = host_repo(&outbox);
+        host.expect_delivery().returning(move |_| {
+            let delivery = delivery.clone();
+            Box::pin(async move { Ok(delivery) })
+        });
+        host.expect_outbox_after().returning(move |_, after, _, _| {
+            let rows = (after + 1..=after + rows)
+                .map(|id| OutboxRow {
+                    id,
+                    item: r#"{"envelope":{"payload":"p","signature":"s"},"recipients":["rimp1_a"],"deviceId":null}"#.to_string(),
+                    size_bytes: 80,
+                })
+                .collect();
+            Box::pin(async move { Ok(rows) })
+        });
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut client = MockS2sClient::new();
+        let s = Arc::clone(&sent);
+        client.expect_send().returning(move |request| {
+            s.lock()
+                .expect("lock")
+                .push(serde_json::from_slice::<DeliverRequest>(&request.body).expect("body"));
+            let answer = match &answer {
+                Ok(body) => Ok(S2sResponse {
+                    status: 200,
+                    content_type: "application/json".to_string(),
+                    body: body.clone().into_bytes(),
+                    key_seq: 0,
+                    headers: Vec::new(),
+                }),
+                Err(()) => Err(S2sClientError::Transport("connection refused".to_string())),
+            };
+            Box::pin(async move { answer })
+        });
+        let sender = OutboxSender::new(
+            repos(host),
+            Arc::new(client),
+            Arc::new(RefusalCache::default()),
+            peer_backlogs,
+            Arc::new(Notify::new()),
+        );
+        let acked = sender.send_peer(DEAD).await.expect("send");
+        let sent = sent.lock().expect("lock").clone();
+        (outbox, sent, acked)
+    }
+
+    fn delivery(failures: i32, failing_since: Option<DateTime<Utc>>) -> PeerDelivery {
+        PeerDelivery {
+            delivered_through: 7,
+            failures,
+            next_attempt_at: Utc::now(),
+            failing_since,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_idle_relay_that_takes_deliveries_is_not_contacted() {
+        let (_, sent, acked) = send_to_relay(
+            delivery(0, None),
+            0,
+            Err(()),
+            Arc::new(PeerBacklogs::new(DEAD_AFTER)),
+        )
+        .await;
+        assert!(acked);
+        assert!(sent.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failing_relay_with_nothing_left_is_probed_and_its_first_success_ends_the_failures() {
+        let dead = Some(Utc::now() - DEAD_AFTER - Duration::hours(1));
+        let peer_backlogs = Arc::new(PeerBacklogs::new(DEAD_AFTER));
+        let outbox = Arc::new(Outbox {
+            backlogs: Mutex::new(vec![backlog(0, 0, dead)]),
+            ..Outbox::default()
+        });
+        assert!(
+            !peer_backlogs
+                .admit(&host_repo(&outbox), DEAD)
+                .await
+                .expect("admit"),
+            "dead"
+        );
+        let (outbox, sent, acked) = send_to_relay(
+            delivery(40, dead),
+            0,
+            Ok(r#"{"ackedThrough":"7","refused":[]}"#.to_string()),
+            Arc::clone(&peer_backlogs),
+        )
+        .await;
+        assert!(acked);
+        assert_eq!(sent.len(), 1, "one probe");
+        assert!(sent[0].items.is_empty(), "the probe carries no items");
+        assert_eq!(*outbox.delivered.lock().expect("lock"), vec![7]);
+        assert!(
+            !peer_backlogs.lock().contains_key(DEAD),
+            "the writer reads the relay's state again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dead_relay_waits_the_longest_backoff_between_attempts() {
+        let dead = Some(Utc::now() - DEAD_AFTER - Duration::hours(1));
+        let (outbox, sent, acked) = send_to_relay(
+            delivery(1, dead),
+            3,
+            Err(()),
+            Arc::new(PeerBacklogs::new(DEAD_AFTER)),
+        )
+        .await;
+        assert!(!acked);
+        assert_eq!(sent[0].items.len(), 3, "the probe is the next batch");
+        let failures = outbox.failures.lock().expect("lock").clone();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, 2);
+        let wait = failures[0].1 - Utc::now();
+        assert!(
+            wait > Duration::seconds(MAX_BACKOFF_SECS - 5),
+            "waited {wait}"
+        );
+
+        let failing = Some(Utc::now() - Duration::hours(1));
+        let (outbox, _, _) = send_to_relay(
+            delivery(1, failing),
+            3,
+            Err(()),
+            Arc::new(PeerBacklogs::new(DEAD_AFTER)),
+        )
+        .await;
+        let wait = outbox.failures.lock().expect("lock")[0].1 - Utc::now();
+        assert!(
+            wait < Duration::seconds(5),
+            "a relay not yet dead backs off as before: {wait}"
+        );
     }
 }

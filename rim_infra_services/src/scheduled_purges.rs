@@ -1,6 +1,7 @@
 //! Background purges the composition root runs on a timer: stale attachment uploads are marked
-//! failed daily, expired workspace state and conversation invitations are deleted hourly, and
-//! accounts whose deletion grace period ended are purged hourly. Each runs first a few minutes after boot and stops when the
+//! failed daily, expired workspace state and conversation invitations are deleted hourly,
+//! accounts whose deletion grace period ended are purged hourly, and stale remote identities and
+//! idle peer pins are dropped hourly. Each runs first a few minutes after boot and stops when the
 //! shutdown signal changes.
 
 use std::future::Future;
@@ -10,6 +11,8 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use rim_core::conversation_member::repository::ConversationMemberRepository;
+use rim_core::relay::repository::RelayRepository;
+use rim_core::s2s::repository::PeerServerRepository;
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use rim_services::account_deletion::dto::PurgeRunDto;
 use rim_services::account_deletion::service::AccountDeletionService;
@@ -29,6 +32,13 @@ pub const CONVERSATION_INVITE_PURGE_INTERVAL: Duration = Duration::from_secs(60 
 pub const CONVERSATION_INVITE_TTL: chrono::Duration = chrono::Duration::days(30);
 /// Interval of the purge of accounts whose deletion grace period ended.
 pub const ACCOUNT_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Interval of the purge of stale remote identities and idle peer pins.
+pub const REMOTE_CACHE_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// How long a cached remote identity is kept after it was fetched, unless its principal is held
+/// here as a remote user.
+pub const REMOTE_IDENTITY_RETENTION: chrono::Duration = chrono::Duration::days(30);
+/// How long a peer's pin goes without a fetch or a request before it may be forgotten.
+pub const PEER_PIN_IDLE: chrono::Duration = chrono::Duration::days(90);
 
 /// Run `job` after [`FIRST_RUN_DELAY`] and then every `interval` until `shutdown` changes. A run
 /// that falls behind delays the next one rather than bunching them.
@@ -126,6 +136,75 @@ pub async fn purge_deleted_accounts(service: &dyn AccountDeletionService) -> Opt
     }
 }
 
+/// Delete the cached remote identities fetched more than [`REMOTE_IDENTITY_RETENTION`] ago,
+/// except those of remote users held here. Returns how many, `None` when the purge failed
+/// (logged).
+pub async fn purge_remote_identities(repo: &dyn RelayRepository) -> Option<u64> {
+    match repo
+        .purge_identities(chrono::Utc::now() - REMOTE_IDENTITY_RETENTION)
+        .await
+    {
+        Ok(count) => {
+            crate::metrics::remote_identities_purged(count);
+            tracing::info!(count, "purged stale cached remote identities");
+            Some(count)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "remote identity cache purge failed");
+            None
+        }
+    }
+}
+
+/// Forget the `active` peer pins idle for [`PEER_PIN_IDLE`] that nothing here refers to and
+/// whose ids are not in `kept`, keeping each one's key-log head. Writes an `s2s.peer_forgotten`
+/// audit line per peer. Returns how many, `None` when the purge failed (logged).
+pub async fn forget_idle_peers(repo: &dyn PeerServerRepository, kept: &[String]) -> Option<u64> {
+    match repo
+        .forget_idle(chrono::Utc::now() - PEER_PIN_IDLE, kept)
+        .await
+    {
+        Ok(forgotten) => {
+            for server_id in &forgotten {
+                tracing::info!(
+                    target: "audit",
+                    event = "s2s.peer_forgotten",
+                    peer_server_id = %server_id,
+                    "forgot an idle peer server's pin, keeping its key-log head"
+                );
+            }
+            let count = forgotten.len() as u64;
+            crate::metrics::peer_pins_forgotten(count);
+            tracing::info!(count, "forgot idle peer pins");
+            Some(count)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "idle peer pin purge failed");
+            None
+        }
+    }
+}
+
+/// Run [`purge_remote_identities`] and [`forget_idle_peers`] hourly until `shutdown` changes.
+pub async fn run_remote_cache_purge(
+    relay_repo: Arc<dyn RelayRepository>,
+    peer_repo: Arc<dyn PeerServerRepository>,
+    kept: Vec<String>,
+    shutdown: watch::Receiver<bool>,
+) {
+    let kept = Arc::new(kept);
+    every(REMOTE_CACHE_PURGE_INTERVAL, shutdown, || {
+        let relay_repo = Arc::clone(&relay_repo);
+        let peer_repo = Arc::clone(&peer_repo);
+        let kept = Arc::clone(&kept);
+        async move {
+            purge_remote_identities(relay_repo.as_ref()).await;
+            forget_idle_peers(peer_repo.as_ref(), &kept).await;
+        }
+    })
+    .await;
+}
+
 /// Run [`purge_deleted_accounts`] hourly until `shutdown` changes.
 pub async fn run_account_purge(
     service: Arc<dyn AccountDeletionService>,
@@ -185,7 +264,9 @@ pub async fn run_conversation_invite_purge(
 #[cfg(test)]
 mod tests {
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
+    use rim_core::relay::repository::MockRelayRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
+    use rim_core::s2s::repository::MockPeerServerRepository;
     use rim_core::workspace_state::repository::MockWorkspaceStateRepository;
     use rim_services::ServiceError;
     use rim_services::account_deletion::service::MockAccountDeletionService;
@@ -194,7 +275,8 @@ mod tests {
     use super::*;
     use crate::metrics::test_support::{block_on, recorded};
     use crate::metrics::{
-        ATTACHMENTS_CLEANED, CONVERSATION_INVITES_EXPIRED, WORKSPACE_STATE_PURGED,
+        ATTACHMENTS_CLEANED, CONVERSATION_INVITES_EXPIRED, PEER_PINS_FORGOTTEN,
+        REMOTE_IDENTITIES_PURGED, WORKSPACE_STATE_PURGED,
     };
 
     #[test]
@@ -267,6 +349,61 @@ mod tests {
         let (count, got) = recorded(|| block_on(purge_expired_workspace_state(&repo)));
         assert_eq!(count, None);
         assert_eq!(got.counter(WORKSPACE_STATE_PURGED, &[]), 0);
+    }
+
+    /// Whether `cutoff` lies `age` before now, within a minute.
+    fn is_ago(cutoff: chrono::DateTime<chrono::Utc>, age: chrono::Duration) -> bool {
+        let ago = chrono::Utc::now() - cutoff;
+        ago >= age && ago < age + chrono::Duration::minutes(1)
+    }
+
+    #[test]
+    fn the_identity_purge_deletes_those_fetched_30_days_ago_and_counts_them() {
+        let mut repo = MockRelayRepository::new();
+        repo.expect_purge_identities()
+            .withf(|cutoff| is_ago(*cutoff, REMOTE_IDENTITY_RETENTION))
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(6) }));
+        let (count, got) = recorded(|| block_on(purge_remote_identities(&repo)));
+        assert_eq!(count, Some(6));
+        assert_eq!(got.counter(REMOTE_IDENTITIES_PURGED, &[]), 6);
+        assert_eq!(REMOTE_IDENTITY_RETENTION, chrono::Duration::days(30));
+    }
+
+    #[test]
+    fn a_failed_identity_purge_counts_nothing() {
+        let mut repo = MockRelayRepository::new();
+        repo.expect_purge_identities()
+            .returning(|_| Box::pin(async { Err(RepoError::new(RepoErrorKind::Internal)) }));
+        let (count, got) = recorded(|| block_on(purge_remote_identities(&repo)));
+        assert_eq!(count, None);
+        assert_eq!(got.counter(REMOTE_IDENTITIES_PURGED, &[]), 0);
+    }
+
+    #[test]
+    fn the_pin_purge_forgets_those_idle_90_days_keeps_the_listed_and_counts_them() {
+        let mut repo = MockPeerServerRepository::new();
+        repo.expect_forget_idle()
+            .withf(|cutoff, kept| {
+                is_ago(*cutoff, PEER_PIN_IDLE) && kept == ["rims1_kept".to_string()]
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(vec!["rims1_a".into(), "rims1_b".into()]) }));
+        let kept = vec!["rims1_kept".to_string()];
+        let (count, got) = recorded(|| block_on(forget_idle_peers(&repo, &kept)));
+        assert_eq!(count, Some(2));
+        assert_eq!(got.counter(PEER_PINS_FORGOTTEN, &[]), 2);
+        assert_eq!(PEER_PIN_IDLE, chrono::Duration::days(90));
+    }
+
+    #[test]
+    fn a_failed_pin_purge_counts_nothing() {
+        let mut repo = MockPeerServerRepository::new();
+        repo.expect_forget_idle()
+            .returning(|_, _| Box::pin(async { Err(RepoError::new(RepoErrorKind::Internal)) }));
+        let (count, got) = recorded(|| block_on(forget_idle_peers(&repo, &[])));
+        assert_eq!(count, None);
+        assert_eq!(got.counter(PEER_PINS_FORGOTTEN, &[]), 0);
     }
 
     #[tokio::test]

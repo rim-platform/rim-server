@@ -155,6 +155,28 @@ A first pin keeps the key before the head but gives it no grace: the grace count
 extension this server saw. A refetch whose inception hashes to another id (the origin now serves
 another server) fails and keeps the pin; only a log from the same inception can fork it.
 
+**Idle pins.** An hourly job forgets an `active` pin that was neither fetched nor sent a request
+for 90 days, that nothing here refers to (a remote user's home relay, a remote user's card
+listing its origin, a delegation, a subscription, an outbox row, an inbound cursor, a queued
+envelope, a DM request, a revocation fan-out, a conversation's predecessor, a cached identity it
+served) and that `RIM_S2S_DENIED_PEERS`, `RIM_HOST_ALLOWED_RELAYS` and `RIM_DM_PARTNERS` do not
+name. Its row and log are deleted and its head stays in `peer_server_forgotten`: the seq and the
+exact payload of the head entry. The next pin of that id must hold that entry at that seq; each
+entry names the hash of the one before it, so such a log extends the forgotten one. A log that
+holds another entry there is pinned `forked` (ERROR log, audit `s2s.peer_forked`), and one that
+stops short of it is not pinned and the head stays, as a refetch keeps a pin for a prefix.
+Deleting the head as well would let the next contact pin any history from the same inception,
+such as one a server key stolen before a `signer: recovery` rotation can sign. `forked` and
+`blocked` pins are never forgotten, and `rim_server peer reset` deletes a pin and a forgotten head
+alike. Audit `s2s.peer_forgotten`.
+
+**Pins per origin.** One origin may hold pins of several server ids: when its operator starts
+over with a new identity (server key and recovery key lost, or the key file moved away), the
+origin serves a new id and the earlier id's pin stays, since a refetch that finds another id
+keeps it. An origin holds at most 4 pins, whatever their status. A fifth id there is not pinned
+(`CONFLICT` from `remoteServer`, an unknown peer to a request) until `rim_server peer reset` or
+the idle purge removes one. A lookup by origin takes the `active` pin fetched last.
+
 ### Host keys in clients
 
 - **From an invite** (`rim-invite:1:<hostServerId>:<hostKeyHash>:<inviteToken>:<hostOrigin>`): the
@@ -299,6 +321,7 @@ Actix's request types.
 | `RIM_DM_PARTNERS` | empty | Server ids the `partners` settings name |
 | `RIM_S2S_PEER_RATE_PER_MIN` | 600 | Requests per peer (in memory, per node) |
 | `RIM_S2S_SUBSCRIPTIONS_PER_PEER` | 10000 | Active delegations per relay on a host |
+| `RIM_S2S_PEER_DEAD_AFTER_HOURS` | 24 | Hours every delivery to a relay may fail before it is dead and gets no new outbox rows (1 to 168) |
 | `RIM_S2S_DEVICE_RATE_PER_MIN` | 120 | Forwarded requests per device |
 | `RIM_S2S_MAX_BODY_BYTES` | 8388608 | Body cap (forward path: 32 MiB) |
 | `RIM_RELAY_QUEUE_BYTES_PER_USER` | 268435456 | Queued bytes per local user |
@@ -486,9 +509,29 @@ POST /s2s/v1/deliver
   subscription. A refusal for one recipient carries `principalId`. The host skips a (relay,
   principal) for 24 hours after `unknown_principal` only; the other refusals are about one
   conversation or item.
-- Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days; a relay down longer
-  gets nothing and its clients catch up from the change feed. A relay may pull what it missed:
-  `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
+- Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days, delivered or not; a
+  relay down longer gets nothing and its clients catch up from the change feed. A relay may pull
+  what it missed: `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
+- **Per-relay caps.** A relay's backlog, its rows above what it acknowledged, holds at most
+  100,000 rows and 2 GiB. Delivered rows kept for the 7 days do not count. While the backlog is at
+  either cap, an event's row for that relay is not written: the event is dropped for that relay
+  only, counted (`rim_outbox_not_queued_rows_total{reason="peer_cap"}`) and logged at warn at most
+  once a minute per relay. The write that caused the event succeeds, the host's database has it,
+  and other relays and local members get it as usual. The writer reads each relay's backlog at
+  most every 10 seconds and counts its own rows in between, so with several nodes a backlog can
+  pass a cap by what the other nodes write in that time.
+- **Dead relays.** A relay every delivery to has failed for `RIM_S2S_PEER_DEAD_AFTER_HOURS`
+  (24) since the first failure after its last success (`s2s_peer_delivery.failing_since`) is dead.
+  Its backlog is kept, within the caps and the 7 days, and no new rows are written for it
+  (`reason="dead_peer"`). The sender tries a dead relay once every 5 minutes, the longest backoff:
+  with its next batch, or with an empty `deliver` (`{"items":[]}`) when nothing is left, which a
+  relay answers like any other. The first `200` ends the failures, and rows are written for it
+  again within 10 seconds.
+- An event a relay does not get still takes its stream's `seq`. When the relay is back, the next
+  event on each stream arrives with `seq > last + 1`, and the app reconciles from the host as for
+  any gap ("What the client checks"): change feed, pins, reactions, members and `streamHeads`,
+  through the forward path. Not recovered: `e` events (no `seq`), and a `DmInvite` written in
+  that window, which the recipient's relay never files.
 
 ### Relay queues
 
@@ -1086,11 +1129,20 @@ CREATE TABLE relay_abuse_report (id uuid PRIMARY KEY,
     subject_principal_id text NULL, subject_server_id text NULL,
     request_id uuid NULL REFERENCES relay_dm_request ON DELETE SET NULL, reason text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(), resolved_at timestamptz NULL);
+
+-- add_peer_delivery_failing_since: when a relay's run of failed deliveries began
+ALTER TABLE s2s_peer_delivery ADD COLUMN failing_since timestamptz NULL;
+-- add_peer_pin_forgotten
+CREATE TABLE peer_server_forgotten (server_id text PRIMARY KEY, origin text NOT NULL,
+    head_seq integer NOT NULL CHECK (head_seq >= 0), head_payload text NOT NULL,
+    forgotten_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX idx_remote_identity_cache_fetched ON remote_identity_cache (fetched_at);
 ```
 
 A per-minute cleanup (like the key challenge cleanup) deletes expired nonces, `device_request_seen`
 rows, relay items and orphaned envelopes, expired requests and outbox rows older than 7 days, and
-ends expired delegations. Code follows the layers: repository traits in `rim_core` (`s2s`, `relay`),
+ends expired delegations. An hourly purge deletes cached identities fetched more than 30 days ago,
+except those of remote users held here, and forgets idle pins ("Pinning a peer"). Code follows the layers: repository traits in `rim_core` (`s2s`, `relay`),
 `S2sService`, `RelayService` and `HostService` traits in `rim_services`, implementations in
 `rim_infra_services`, handlers in `rim_server` (the `s2s` module and `remote_handlers.rs`), wired in
 `app.rs`.
@@ -1174,14 +1226,15 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 |---|---|
 | S2S body / forward body / discovery fetch | 8 MiB / 32 MiB / 64 KiB |
 | Clock window; nonce retention | `created` ≤ 300 s ahead, `expires − created ≤ 300`; 600 s |
-| Deliver; outbox | 256 items and 8 MiB per request; 7 days |
+| Deliver; outbox | 256 items and 8 MiB per request; 7 days, delivered or not; per relay 100,000 rows and 2 GiB not yet acknowledged; a relay failing every delivery for 24 hours gets no new rows |
 | Relay queue | 30 days; 256 MiB per user (64 MiB on the public relay); 2 GiB of items per delivering host per day, across all recipients, those of subscribed workspaces not counted |
 | Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender and 1,000 per delivering host per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
 | Stranger claims | Last-resort packages only; 20 per claimer per day |
 | Contacts | 1,000 per user |
-| Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h |
+| Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h, rows kept 30 days (a remote user's while the user exists) |
+| Peer pins | 4 per origin; an unreferenced `active` pin forgotten after 90 idle days, its head kept |
 | Remote user's direct session | 24 h |
 
 Rate limits are the in-memory per-node limiters; nonces, `seq` windows and cursors are in the
@@ -1192,9 +1245,10 @@ database, so correctness never depends on one node. Audit (ids only):
 `relay.principal_blocked` (`scope` `user` for `blockPrincipal`, `server` for the operator's),
 `relay.principal_unblocked`, `relay.blocked_principal_refused`, `relay.dm_request_reported`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `relay.registration_pow`,
-`server_key.created`, `server_key.rotated`, `server_key.recovered`, `s2s.peer_reset`. Events with an acting user and workspace go to `command_audit_log`; the server
+`server_key.created`, `server_key.rotated`, `server_key.recovered`, `s2s.peer_reset`,
+`s2s.peer_forgotten`. Events with an acting user and workspace go to `command_audit_log`; the server
 key and peer events have neither (its columns are `NOT NULL`), so they go to the audit log stream
-(`target = "audit"`, as key logins do). Logs carry server, principal and row ids, never payloads. Metrics: outbox depth and oldest age per peer, deliver failures, relay
+(`target = "audit"`, as key logins do). Logs carry server, principal and row ids, never payloads. Metrics: outbox rows and bytes not yet acknowledged, in all and for the relay with the most, dead relays, rows not queued by reason, deliver failures, relay
 queue bytes, S2S responses by status, signature failures by reason.
 
 ## Threat model
@@ -1239,8 +1293,10 @@ device keys move to hybrid.
   recovery, grace), the `seq` window, delegation rules, stranger rules, request transitions, queue
   retention and overflow, the revocation schedule, the role table.
 - **db-tests.** One nonce inserted twice concurrently, one wins; per-stream `seq` under concurrency
-  without gaps or repeats; outbox order per peer; `received_through` idempotency; items deleted only
-  once every device acked; cascades; each migration up and down, and the refusing `down`s.
+  without gaps or repeats; outbox order per peer; a relay's backlog counts only rows above its
+  acknowledgement, and a run of failures starts once and ends with a success; `received_through`
+  idempotency; items deleted only once every device acked; cascades; each migration up and down,
+  and the refusing `down`s.
 - **e2e with two servers** (`rim_api/tests/s2s_e2e.rs`, `e2e-tests`): two Actix servers in one
   process with two databases, `RIM_S2S_ALLOW_HTTP` and `RIM_S2S_ALLOW_PRIVATE_ADDRESSES`. Flows:
   pinning and rotation; an encrypted DM across relays from creation to edit and read state

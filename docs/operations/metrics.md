@@ -260,6 +260,23 @@ can remain until cleanup runs. They are not exact counts of pending delivery or 
 Queue byte gauges sum the bytes charged to each recipient item. Several items may share one
 stored envelope, so these gauges are not physical PostgreSQL or filesystem usage.
 
+### Host outbox
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rim_outbox_pending_rows` | gauge | | Outbox rows no relay has acknowledged yet, over all relays. |
+| `rim_outbox_pending_bytes` | gauge | | Bytes of those rows. |
+| `rim_outbox_peer_max_pending_rows` | gauge | | The most unacknowledged rows one relay has; compare with the cap of 100,000. |
+| `rim_outbox_peer_max_pending_bytes` | gauge | | The most unacknowledged bytes one relay has; compare with the cap of 2 GiB. |
+| `rim_outbox_dead_peers` | gauge | | Relays every delivery to has failed for `RIM_S2S_PEER_DEAD_AFTER_HOURS`. |
+| `rim_outbox_not_queued_rows_total` | counter | `reason` | Host events not queued for a relay: `peer_cap` when its unacknowledged rows are at a cap, `dead_peer` while it is dead. |
+
+The outbox holds, per relay, the host events this server sends it (`docs/relay.md`, "Queues and
+the outbox"). Delivered rows stay 7 days but are not counted here. The gauges carry no relay
+label, so the number of series stays fixed; the log line `host events for a relay are not
+queued` names the relay, and `docs/operations/relay-public.md` has a query for the depth of
+each. An event not queued for a relay is still stored here and reaches every other recipient.
+
 ### Pending device delivery
 
 | Metric | Type | Labels | Meaning |
@@ -303,7 +320,7 @@ or deleting an account, are not included in those removal counters.
 | `rim_database_sample_last_success_timestamp_seconds` | gauge | `sample` | Unix time of the last successful sample; zero until the first success. |
 | `rim_database_sample_failures_total` | counter | `sample` | Failed or timed-out samples. |
 
-`sample` is `usage`, `delivery`, `relay` (stored queue rows) or `migrations`.
+`sample` is `usage`, `delivery`, `relay` (stored queue rows), `outbox` or `migrations`.
 
 Database-backed gauges are read when the metrics listener starts and every 30 seconds after.
 A read that fails or takes over five seconds leaves its last successful values in place. Check
@@ -338,6 +355,8 @@ users or queue items, so do not sum their identical gauges.
 | `rim_attachments_cleaned_total` | counter | | Attachment uploads the daily cleanup marked failed because they never completed (`docs/operations/background-jobs.md`). |
 | `rim_workspace_state_purged_total` | counter | | Expired workspace state entries the hourly purge deleted. |
 | `rim_conversation_invites_expired_total` | counter | | Expired conversation invitations the hourly purge deleted. |
+| `rim_remote_identities_purged_total` | counter | | Cached identities of people on other servers the hourly purge deleted, 30 days after they were fetched. |
+| `rim_peer_pins_forgotten_total` | counter | | Pins of other servers the hourly purge forgot after 90 idle days with nothing here referring to them. |
 
 ## Example alert rules
 

@@ -94,11 +94,14 @@ async fn key_log_entries_are_unique_per_seq_and_descriptors_only_move_up() {
 async fn a_pin_advances_only_from_the_expected_head_while_active() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmPeerServerRepository::new(ctx.db.clone());
-    let inserted = repo.insert(pin(0)).await.unwrap();
+    let inserted = repo.insert(pin(0), PeerStatus::Active).await.unwrap();
     assert_eq!(inserted.status, PeerStatus::Active);
     assert_eq!(inserted.head_seq, 0);
     assert_eq!(
-        repo.insert(pin(0)).await.unwrap_err().kind(),
+        repo.insert(pin(0), PeerStatus::Active)
+            .await
+            .unwrap_err()
+            .kind(),
         RepoErrorKind::Conflict
     );
     assert_eq!(repo.key_log(PEER).await.unwrap(), pin(0).log);
@@ -150,7 +153,7 @@ async fn a_pin_advances_only_from_the_expected_head_while_active() {
 async fn mark_fetched_takes_only_a_newer_descriptor_and_delete_cascades() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmPeerServerRepository::new(ctx.db.clone());
-    let before = repo.insert(pin(1)).await.unwrap();
+    let before = repo.insert(pin(1), PeerStatus::Active).await.unwrap();
     assert_eq!(before.descriptor_version, 2);
 
     repo.mark_fetched(PEER, Some((1, record("older"))))

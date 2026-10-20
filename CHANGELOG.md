@@ -293,6 +293,17 @@ tag `v<version>`, the version every crate in the workspace carries.
 - Accepting, ignoring or reporting a DM request whose expiry has passed is `NOT_FOUND`, as for
   an unknown request; the decision checks the expiry in the same update that records it.
   Before, an expired request not yet purged could still be accepted.
+- The outbox a host keeps for each relay is bounded: at most 100,000 rows and 2 GiB that the
+  relay has not acknowledged. Past either, new events are not queued for that relay; they are
+  counted in `rim_outbox_not_queued_rows_total` and logged at warn once a minute. A relay every
+  delivery to has failed for `RIM_S2S_PEER_DEAD_AFTER_HOURS` (default 24) is dead: nothing new
+  is queued for it, it is tried once every 5 minutes, and its first success resumes queueing.
+  The write itself and every other recipient are unaffected, and the relay's apps reconcile
+  what they missed from the host's streams. Before, rows for an unreachable relay piled up for 7
+  days at whatever rate events were written. New gauges `rim_outbox_pending_rows`,
+  `rim_outbox_pending_bytes`, `rim_outbox_peer_max_pending_rows`,
+  `rim_outbox_peer_max_pending_bytes` and `rim_outbox_dead_peers`
+  (`docs/specs/server-to-server-v1.md`, "Outbox and `deliver`"; `docs/operations/metrics.md`).
 - A relay files a DM invite another server delivers only when that server speaks for the
   sender it names: the sender's card must be signed by their key, and their newest card must
   list the delivering server (or the sender is a local user subscribed there). Anything else is
@@ -436,6 +447,17 @@ tag `v<version>`, the version every crate in the workspace carries.
   limit from someone on this server, or from someone elsewhere through the forward path,
   skipped the request inbox and reached the recipient's conversations and notifications
   directly. Workspace DMs a member takes as requests meet the same limits.
+- Cached identities of people on other servers, stored by `remoteIdentity` and by a host
+  refreshing its remote members, are deleted 30 days after they were fetched unless the person
+  is a remote user here. A pin of another server is forgotten after 90 days without a fetch or
+  a request when nothing here refers to it and the configuration does not name it; its key-log
+  head is kept, so its next contact pins it again only with a log that extends the one seen
+  before (another history is pinned `forked`, a shorter one is not pinned). One origin holds at
+  most 4 pins: a fifth server id there is refused until `rim_server peer reset` removes one.
+  Before, any signed-in user could grow both tables without bound by looking up principals and
+  servers. The hourly job, its `s2s.peer_forgotten` audit line and the
+  `rim_remote_identities_purged_total` and `rim_peer_pins_forgotten_total` counters are in
+  `docs/operations/background-jobs.md` (`docs/specs/server-to-server-v1.md`, "Pinning a peer").
 - A relay queues a host's items that name no conversation (workspace events, presence,
   directory events) only for recipients subscribed to that workspace, or, for presence and a
   recipient's own directory events from a host's direct space, for recipients who accepted a

@@ -5,8 +5,8 @@ use mockall::automock;
 
 use crate::conversation::model::ConversationId;
 use crate::host::model::{
-    DelegationStored, NewDelegation, NewRemoteUser, OutboxRow, PeerDelivery, RemoteMember,
-    SeqDecision, UserKind,
+    DelegationStored, NewDelegation, NewRemoteUser, OutboxBacklog, OutboxRow, OutboxStats,
+    PeerDelivery, RemoteMember, SeqDecision, UserKind,
 };
 use crate::key_identity::model::DeviceKeyId;
 use crate::repository::error::RepoResult;
@@ -99,7 +99,8 @@ pub trait HostRepository: Send + Sync {
         size_bytes: i32,
     ) -> RepoResult<i64>;
 
-    /// Relays with outbox rows above what they acknowledged, whose next attempt is due.
+    /// Relays whose next attempt is due: those with outbox rows above what they acknowledged,
+    /// and those whose last delivery failed.
     async fn outbox_peers_due(&self, now: DateTime<Utc>) -> RepoResult<Vec<String>>;
 
     /// A relay's outbox rows above `after`, oldest first: at most `limit` rows and, past the
@@ -115,9 +116,20 @@ pub trait HostRepository: Send + Sync {
     /// How far a relay has acknowledged; zero values before its first delivery.
     async fn delivery(&self, peer_server_id: &str) -> RepoResult<PeerDelivery>;
 
-    /// Record an acknowledgement through `through` and reset the failure count.
+    /// The rows and bytes of a relay's outbox above what it acknowledged, and since when
+    /// deliveries to it fail.
+    async fn outbox_backlog(&self, peer_server_id: &str) -> RepoResult<OutboxBacklog>;
+
+    /// The outbox rows and bytes no relay has acknowledged yet, in all and for the relay with
+    /// the most, and how many relays have failed every delivery since before `dead_before`.
+    async fn outbox_stats(&self, dead_before: DateTime<Utc>) -> RepoResult<OutboxStats>;
+
+    /// Record an acknowledgement through `through`, reset the failure count and end the run
+    /// of failures.
     async fn record_delivered(&self, peer_server_id: &str, through: i64) -> RepoResult<()>;
 
+    /// Record a failed delivery: the failure count, the next attempt and, for the first
+    /// failure after a success, when the run of failures began.
     async fn record_failure(
         &self,
         peer_server_id: &str,
