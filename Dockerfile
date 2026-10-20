@@ -161,6 +161,8 @@ USER rim
 #                           at boot
 #   RIM_LIMIT_PENDING_INVITES_PER_USER — pending invitations to encrypted conversations one user
 #                           holds; unlike the others it is on unless set to 0 (default: 50)
+#   RIM_LIMIT_ACCOUNTS    — local accounts the instance holds, those in their deletion grace
+#                           period included; at it every signup answers REGISTRATION_FULL
 #   RIM_PROBATION_HOURS   — hours after creation during which an account creates no workspace
 #                           and sends no DM request to a stranger (default: off)
 #   RIM_RATE_PROBATION_MESSAGES_PER_MIN — messages per minute of an account in probation,

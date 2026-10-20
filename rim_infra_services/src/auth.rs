@@ -32,6 +32,7 @@ use rim_services::{ServiceError, ServiceResult};
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::AuthRepos;
+use crate::account_cap::AccountCap;
 use crate::default_workspace;
 use crate::email::{EmailSender, templates};
 use crate::login_sources::KnownLoginSources;
@@ -86,6 +87,8 @@ pub struct DefaultAuthService {
     signup_requires_keys: bool,
     /// The workspace every new account joins as a Member; `None` when there is none.
     default_workspace: Option<rim_core::server::model::ServerId>,
+    /// The cap on local accounts every signup checks.
+    account_cap: AccountCap,
 }
 
 impl DefaultAuthService {
@@ -126,6 +129,7 @@ impl DefaultAuthService {
             terms_url: None,
             signup_requires_keys: false,
             default_workspace: None,
+            account_cap: AccountCap::default(),
         }
     }
 
@@ -168,8 +172,11 @@ impl DefaultAuthService {
         self
     }
 
+    /// Applies the instance's caps: invites, workspace members and, with a cap of its own
+    /// that `with_account_cap` can replace by a shared one, local accounts.
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
+        self.account_cap = AccountCap::new(limits.accounts);
         self.invite_email_rate_limiter = limits
             .invites_per_user_per_day
             .map(|cap| RegistrationRateLimiter::new(INVITE_EMAIL_WINDOW_SECS, cap));
@@ -251,6 +258,13 @@ impl DefaultAuthService {
         self
     }
 
+    /// Checks every signup against `cap`, built from the same limits and shared with the
+    /// key-only signup, so a signup on either path refreshes the other's "full" answer.
+    pub(crate) fn with_account_cap(mut self, cap: AccountCap) -> Self {
+        self.account_cap = cap;
+        self
+    }
+
     /// `Forbidden` ([`signup::KEYS_REQUIRED_REFUSAL`]) when password signups are refused.
     fn ensure_password_signup_allowed(&self, path: &str) -> ServiceResult<()> {
         if !self.signup_requires_keys {
@@ -323,6 +337,7 @@ impl DefaultAuthService {
             terms_url: None,
             signup_requires_keys: false,
             default_workspace: None,
+            account_cap: AccountCap::default(),
         }
     }
 
@@ -937,6 +952,7 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
+        self.account_cap.admit(repos.user_repo.as_ref()).await?;
         // Ensure username not taken (inside transaction to prevent TOCTOU race).
         if repos.user_repo.find_by_username(username).await?.is_some() {
             return Err(ServiceError::Conflict(
@@ -985,6 +1001,7 @@ impl AuthService for DefaultAuthService {
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
+        self.account_cap.admitted();
 
         crate::metrics::registered();
         signup::announce_claimed(&token, user.id, username, &self.observers);
@@ -1153,6 +1170,7 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
+        self.account_cap.admit(txn_repos.user_repo.as_ref()).await?;
         let user = Self::create_user_in_txn(
             &txn_repos,
             username,
@@ -1181,6 +1199,7 @@ impl AuthService for DefaultAuthService {
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
+        self.account_cap.admitted();
 
         crate::metrics::registered();
         signup::announce_claimed(&token, user.id, username, &self.observers);
@@ -1237,6 +1256,7 @@ impl AuthService for DefaultAuthService {
             None => self.repos.clone(),
         };
 
+        self.account_cap.admit(txn_repos.user_repo.as_ref()).await?;
         let user = Self::create_user_in_txn(
             &txn_repos,
             username,
@@ -1255,6 +1275,7 @@ impl AuthService for DefaultAuthService {
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
+        self.account_cap.admitted();
 
         crate::metrics::registered();
         default_workspace::announce(joined_default, user.id, username, &self.observers);
@@ -1390,5 +1411,11 @@ impl AuthService for DefaultAuthService {
         }
 
         Err(ServiceError::InvalidToken)
+    }
+
+    async fn registration_full(&self) -> ServiceResult<bool> {
+        self.account_cap
+            .is_full(self.repos.user_repo.as_ref())
+            .await
     }
 }

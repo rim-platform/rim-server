@@ -1,9 +1,11 @@
-//! `GET /.well-known/rim-server`: this server's key log, signed descriptor and features.
+//! `GET /.well-known/rim-server`: this server's key log, signed descriptor, features and
+//! whether registration is full.
 
 use std::sync::Arc;
 
 use actix_web::{HttpResponse, web};
 use rim_identity::SignedStatement;
+use rim_services::auth::service::AuthService;
 use rim_services::feature::service::FeatureGate;
 use serde_json::{Map, Value, json};
 
@@ -28,17 +30,30 @@ fn features(gate: &dyn FeatureGate) -> Value {
     Value::Object(features)
 }
 
+/// Whether the server takes new accounts: `full` once it holds as many local accounts as it
+/// accepts. Unsigned and advisory beside the descriptor's `registration`, which says how to sign
+/// up: every signup counts afresh.
+fn registration(full: bool) -> Value {
+    json!({ "full": full })
+}
+
 /// The discovery document, unauthenticated and cacheable for five minutes by anyone.
 pub(crate) async fn handle(
     state: web::Data<S2sState>,
     gate: web::Data<Arc<dyn FeatureGate>>,
+    auth: web::Data<Arc<dyn AuthService>>,
 ) -> HttpResponse {
     let identity = state.identity.current();
+    let full = auth.registration_full().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not tell whether registration is full");
+        false
+    });
     let body = json!({
         "rim": "server-discovery",
         "keyLog": identity.log.iter().map(statement).collect::<Vec<_>>(),
         "descriptor": statement(&identity.descriptor),
         "features": features(gate.get_ref().as_ref()),
+        "registration": registration(full),
     });
     HttpResponse::Ok()
         .insert_header(("cache-control", "max-age=300"))
@@ -52,6 +67,12 @@ mod tests {
     use rim_infra_services::feature_gate::InstanceFeatureGate;
 
     use super::*;
+
+    #[test]
+    fn registration_says_whether_it_is_full() {
+        assert_eq!(registration(true), json!({ "full": true }));
+        assert_eq!(registration(false), json!({ "full": false }));
+    }
 
     #[test]
     fn features_name_every_feature_with_its_state_and_reason() {

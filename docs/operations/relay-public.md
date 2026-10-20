@@ -26,6 +26,51 @@ operator's account is in no group that reaches Docker, so every command runs thr
 `-E` keeps `COMPOSE_FILE`. The backup and restore scripts call Docker too: run them as
 `sudo -E deploy/backup.sh` and so on.
 
+## Run your own server first
+
+This relay is for people who cannot run a server yet. A server of your own, or one your team,
+project or community runs, is the better home: you choose its limits, its terms and who may
+join, and it does not depend on someone else's budget. `docs/self-hosting.md` sets one up with
+the same image and compose file as this relay. An account here can move to such a server later
+and keep its account id ("If the relay shuts down" says how).
+
+## A first test run
+
+The public relay is a test run of the project, provided as is: there is no guarantee that it
+stays up, and none against data loss. Accounts and what the relay holds may be reset or deleted
+at any time, and the relay may end. Its terms (`deploy/terms.md`) say the same to everyone who
+signs up. Questions go to the project's GitHub issues
+(`https://github.com/rim-platform/rim-server/issues`), which are public; reports about content
+or a person go through the app's report function, which reaches the relay's moderators.
+
+## If the relay shuts down
+
+When the relay is going to close and there is time, it is announced on the project site and in
+`RIM_INSTANCE_NOTICE`, which the app shows where people sign in, and `RIM_LIMIT_ACCOUNTS` is set
+at or below the number of accounts there are, which closes signups and says so in the app. A
+test run promises no notice period.
+
+People then move to another relay, a server of their own or one someone else runs, with the
+desktop app's Settings > Security > "Switch relays" (`docs/relay-client.md` in rim-ui; the
+contract is "Switching relays" in `docs/specs/server-to-server-v1.md`). The account id stays the
+same, so contacts and workspaces keep knowing them, and nothing they had is lost:
+
+- their keys and their message history are on their devices, not on the relay;
+- their workspaces stay on the servers that host them, which deliver to the new relay once the
+  switch has delegated each workspace to it;
+- what this relay queued for them is drained into the app before the switch leaves it;
+- their DMs and groups homed in this relay's direct space get successors on the new relay, the
+  history before stays on the devices.
+
+What stays here and goes with the relay: the account row, the contact list (the switch copies
+the names the app knows) and DM requests nobody answered yet.
+
+A switch needs this relay to answer: it drains the queue here and ends with `leaveRelay` here.
+If the relay stops, or its accounts are reset, before someone has switched, what was queued for
+them and not yet fetched is lost, and the conversations homed here take no new messages; their
+keys, the history on their devices and their workspaces on other servers stay. Switch while the
+relay still answers.
+
 ## What lives where
 
 | What | Where | Backed up |
@@ -211,6 +256,29 @@ Per local user, set in `deploy/.env`; the compose file has the public relay's va
 | `RIM_RELAY_RETENTION_DAYS` | 30 | Queued items and DM requests are deleted |
 | `RIM_REGISTRATION_POW_BITS` | 24 | Signups without a registration token need a proof-of-work of that many leading zero bits (about 2^24 hashes); the open-signup limit of 20 per IP per 10 minutes applies too |
 
+### The account cap
+
+`RIM_LIMIT_ACCOUNTS` in `deploy/.env`. The public relay sets none for now and takes anyone who
+does the proof-of-work; the operator sets a cap at any time with `dc up -d`.
+
+It counts the people who signed up here, those waiting out their deletion grace period included,
+since they can still cancel; it does not count the `r_` rows of people from other servers or the
+tombstones of purged accounts, so each purge frees a place. At the cap every signup is refused
+with `REGISTRATION_FULL`, "this server is full and takes no new accounts; run your own server or
+sign up on another one": a proof-of-work, a signup link from `invite create` and a person from
+another server signing up here with their key alike. The cap is the most the operator chose to
+carry, so an invite does not get past it; raise the cap to let someone in. The app reads
+`serverInfo.registrationFull` and the discovery document says `"registration":{"full":true}`, so
+people see it before they do the work. Signups count one at a time under a database lock, so
+two at once never pass the cap. Each refusal is audited as `signup_refused_registration_full`.
+
+```sh
+rim-sql -c "SELECT count(*) FROM \"user\" WHERE kind = 'local' AND deleted_at IS NULL"
+```
+
+To change it, edit `deploy/.env` and run `dc up -d`. A cap below the accounts there are refuses
+new signups only; nobody loses an account.
+
 The public relay keeps the DM defaults, `RIM_DM_INBOUND=requests` and
 `RIM_DM_OUTBOUND=allowed`: a stranger's first message is a request, from anywhere ("Who May Start
 A DM" in `docs/messaging.md`).
@@ -220,7 +288,8 @@ reconnect. The per-minute and per-day counters are in memory, so a restart start
 Each extra bit of proof-of-work doubles a signup's cost; the descriptor tells apps the new value
 at once.
 
-To let people in without the proof-of-work, give them a signup link:
+To let people in without the proof-of-work, while the relay is under its account cap, give them
+a signup link:
 `rim-relay invite create --max-uses <1-50> --expires-in-days <1-30> --public-url https://<domain>`
 prints it on its first line (the token is shown once); `rim-relay invite list` shows each live
 link's use count and `rim-relay invite revoke <id>` ends one. For one person,
@@ -247,6 +316,7 @@ month of normal traffic shows the baseline.
 | Proof-of-work signups | audit `relay.registration_pow` per hour; log `refused a signup's proof-of-work` | **FILL** above the weekly hourly mean |
 | Blocked principals knocking | audit `relay.blocked_principal_refused` and `blocked_email_refused` | **FILL** |
 | Open abuse reports | `rim-relay abuse-reports list --open` | any older than the response time below |
+| Accounts against the cap | the query in "The account cap"; audit `signup_refused_registration_full` | 90% of `RIM_LIMIT_ACCOUNTS`, once one is set |
 
 ```sh
 dc logs --since 1h rim | grep -c '"event":"relay.registration_pow"'

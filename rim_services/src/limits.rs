@@ -37,6 +37,8 @@ pub struct InstanceLimits {
     pub probation_hours: Option<u32>,
     /// Pending invitations to encrypted conversations one user holds.
     pub pending_invites_per_user: Option<u32>,
+    /// Local accounts the instance holds, those in a deletion grace period included.
+    pub accounts: Option<u32>,
 }
 
 impl InstanceLimits {
