@@ -1030,7 +1030,8 @@ failures, `401`/`409`/`429` rates, PoW signups), incident response for spam wave
 stolen server key and a database leak, and the abuse policy text.
 
 **Compose** (`deploy/compose.yml` with the `deploy/compose.relay.yml` override, and
-`deploy/README.md`): rim-server with `RIM_ROLE=relay`, `RIM_PUBLIC_BASE_URL=https://<RIM_DOMAIN>`,
+`deploy/README.md`): rim-server with the `RIM_ROLE` `deploy/.env` sets (`relay`, or `both` to host
+workspaces too), `RIM_PUBLIC_BASE_URL=https://<RIM_DOMAIN>`,
 `RIM_REGISTRATION_POW_BITS=24`, `RIM_RELAY_QUEUE_BYTES_PER_USER=67108864` and the other quotas
 above, `RIM_TRUST_FORWARDED_HEADERS=true`, `RIM_FORCE_SECURE_COOKIES=true`, `RIM_DATA_DIR=/data` on a
 volume (the audit log too); a migration step before it; Postgres 17 on its own volume, on a

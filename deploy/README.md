@@ -1,19 +1,21 @@
 # Deploying a public relay
 
-`compose.relay.yml` turns `compose.yml` into a public relay: rim-server with `RIM_ROLE=relay`,
-the public relay's quotas and proof-of-work signups, PostgreSQL 17 and Caddy terminating TLS,
-and no web client. The relay holds its users' accounts, devices and cards, queues what other
-servers send them and forwards their requests; it hosts no workspaces. This page brings a relay up for the first time. The operator's runbook
-(`docs/operations/relay-public.md`) covers running it: keys, backups, quotas, monitoring,
-incidents, the abuse policy and every command. `docs/relay.md` explains what a relay does, and
-`docs/specs/server-to-server-v1.md` is the protocol.
+`compose.relay.yml` turns `compose.yml` into a public relay: rim-server with the public relay's
+quotas and proof-of-work signups, PostgreSQL 17 and Caddy terminating TLS, and no web client
+unless the operator adds it. The relay holds its users' accounts, devices and cards, queues what
+other servers send them and forwards their requests; it hosts no workspaces unless the operator
+turns that on ("A relay that hosts a workspace"). This page brings a relay up for the first
+time. The operator's runbook (`docs/operations/relay-public.md`) covers running it: keys,
+backups, quotas, monitoring, incidents, the abuse policy and every command. `docs/relay.md`
+explains what a relay does, and `docs/specs/server-to-server-v1.md` is the protocol.
 
 A server that hosts workspaces uses `compose.yml` alone: `docs/self-hosting.md` covers it, and
 its sections on updates, backups and monitoring apply to the relay too.
 
-The project's public relay is `relay.rim-platform.org`; yours uses your own domain. `RIM_DOMAIN`
-is the relay's host name, such as a `relay.` subdomain: Caddy answers for that name only, so the
-apex of the domain can serve a website from elsewhere.
+The project's public relay is `relay.rim-platform.org`, with its web client on
+`chat.rim-platform.org`; yours uses your own domain. `RIM_DOMAIN` is the relay's host name, such
+as a `relay.` subdomain: Caddy answers for that name only (and for `RIM_WEB_DOMAIN` when it is
+set), so the apex of the domain can serve a website from elsewhere.
 
 ## Before the first start
 
@@ -27,14 +29,19 @@ apex of the domain can serve a website from elsewhere.
    POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')
    RIM_DOMAIN=relay.example.org
    RIM_VERSION=0.0.1
+   RIM_ROLE=relay
+   RIM_CADDYFILE=./Caddyfile.relay
    EOF
    chmod 600 deploy/.env
    ```
 
    `RIM_VERSION` is the release you run, the tag this checkout is at without its `v`.
-   `RIM_PUBLIC_BASE_URL` follows `RIM_DOMAIN`. Every other setting has the public relay's value
-   in the compose files; set it in `.env` to change it (the quotas are listed in the runbook).
-   Without `POSTGRES_PASSWORD` or `RIM_DOMAIN` every compose command stops and names it.
+   `RIM_PUBLIC_BASE_URL` follows `RIM_DOMAIN`. `RIM_ROLE` and `RIM_CADDYFILE` say what the relay
+   is: a relay that serves the API alone, as here, or one that hosts a workspace with the web
+   client (below). Every other setting has the public relay's value in the compose files;
+   set it in `.env` to change it (the quotas are listed in the runbook). Without
+   `POSTGRES_PASSWORD`, `RIM_DOMAIN`, `RIM_ROLE` or `RIM_CADDYFILE` every compose command stops
+   and names it.
 3. Check the configuration. The commands on this page and in the runbook use this alias, from
    the repository root:
 
@@ -74,6 +81,42 @@ dc exec rim /app/rim-server server-key show
 ```
 
 The descriptor in the discovery document says `"registration":{"mode":"pow","powBits":24}`.
+
+## A relay that hosts a workspace
+
+A relay can host workspaces too, as the project's relay does: it runs `RIM_ROLE=both` and
+hosts the RIM community workspace, which every new account joins, with the web client. Three
+settings in `deploy/.env` turn it on:
+
+```sh
+RIM_ROLE=both
+RIM_CADDYFILE=./Caddyfile
+COMPOSE_PROFILES=web
+```
+
+`RIM_ROLE=both` lets accounts here create workspaces, `./Caddyfile` sends every path that is not
+the API, discovery or server-to-server to the web client, and the `web` profile starts it.
+`dc config --services` then lists `web` too. To serve the web client on a domain of its own,
+as `chat.rim-platform.org` is, add `RIM_WEB_DOMAIN` ("The web client on its own domain" below).
+
+The first run, in short: start the stack as above, read the owner claim link with
+`dc exec rim cat /data/owner-claim.txt`, open it in a browser and sign up through it. That
+account owns the server's default workspace (`docs/self-hosting.md`, "A default workspace").
+
+### The web client on its own domain
+
+With `RIM_WEB_DOMAIN` set, `./Caddyfile` answers for a second domain too: the web client is
+served there and calls the API on that same origin, and `RIM_DOMAIN` stays the server's name,
+the one apps sign in to, other servers reach, and the discovery document names. A browser that
+opens `RIM_DOMAIN` is redirected to the web domain with its path and query, so links the server
+builds on `RIM_PUBLIC_BASE_URL`, such as invite and owner claim links, open the web client.
+
+```sh
+RIM_WEB_DOMAIN=chat.example.org     # an A/AAAA record for it points at this host too
+```
+
+`docs/self-hosting.md`, "The web client on its own domain", says what the server accepts from
+that origin.
 
 ## Health, updates and operation
 

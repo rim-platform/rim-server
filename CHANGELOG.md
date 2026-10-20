@@ -23,6 +23,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `RIM_WEB_DOMAIN` in `deploy/.env` serves the web client on a domain of its own with
+  `deploy/Caddyfile`, such as `chat.example.org` next to `RIM_DOMAIN`. The client calls the API
+  on that origin; `RIM_DOMAIN` stays the server's name for apps, other servers and the discovery
+  document, and redirects browsers to the web domain with the path kept, so invite links still
+  open the client. The compose file sets `RIM_CORS_ALLOWED_ORIGIN` to the web domain's origin
+  and `RIM_KEY_LOGIN_AUDIENCES` to both domains unless they are set. Unset, nothing changes.
+  "The web client on its own domain" in `docs/self-hosting.md` describes it.
 - `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
   `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
   and memory use (job `cadvisor`). cAdvisor reaches the Docker and containerd sockets only
@@ -178,6 +185,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- **Upgrade:** `deploy/compose.relay.yml` no longer sets `RIM_ROLE=relay` and the Caddyfile
+  itself: set `RIM_ROLE` (`relay`, or `both` to host workspaces) and `RIM_CADDYFILE`
+  (`./Caddyfile.relay`, or `./Caddyfile` with the web client and `COMPOSE_PROFILES=web`) in
+  `deploy/.env`. Without either, every compose command with the overlay stops and names it.
+  An existing relay keeps its behaviour with `RIM_ROLE=relay` and
+  `RIM_CADDYFILE=./Caddyfile.relay`. "A relay that hosts a workspace" in `deploy/README.md`
+  describes the other choice.
 - **Upgrade:** usernames are stored lowercase and compared without regard to case. A signup
   stores `Alice` as `alice` and refuses `aLiCe` once `alice` exists (`CONFLICT`); `login`,
   `requestPasswordReset`, `requestAccountDeletion`, `from:@name` in message search and the

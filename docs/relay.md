@@ -261,10 +261,10 @@ applied from a person's identity, with the sessions and delegations they ended);
 
 ### The public relay
 
-A relay anyone may sign up on runs `RIM_ROLE=relay` with the settings of
-`deploy/compose.relay.yml` on top of `deploy/compose.yml`. This section says how its
-registration and blocks behave; `docs/operations/relay-public.md` has its quotas, the operator's
-commands and the abuse policy.
+A relay anyone may sign up on runs with the settings of `deploy/compose.relay.yml` on top of
+`deploy/compose.yml`, as `RIM_ROLE=relay`, or `both` to host workspaces as well, as the
+project's relay does. This section says how its registration and blocks behave;
+`docs/operations/relay-public.md` has its quotas, the operator's commands and the abuse policy.
 
 **Registration.** `RIM_REGISTRATION_POW_BITS` (1 to 40; 24 on the public relay) turns on `pow`
 registration, whatever `RIM_OPEN_REGISTRATION` says. `signupWithKey` then takes a registration
