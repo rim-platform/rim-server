@@ -508,7 +508,11 @@ POST /s2s/v1/deliver
   refuses everything else naming no conversation (`w`, another person's `u:`) without a
   subscription. A refusal for one recipient carries `principalId`. The host skips a (relay,
   principal) for 24 hours after `unknown_principal` only; the other refusals are about one
-  conversation or item.
+  conversation or item. After `not_subscribed` for an item of a conversation of its direct space
+  that the principal is still a member of, the host sends that member the conversation's
+  `DmInvite` again, as when they were added, at most once a day per conversation and principal,
+  whatever the relay lost it to: a row that expired after a long silence, or an invite written
+  while the relay was dead and never delivered. The refused item itself is not sent again.
 - Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days, delivered or not; a
   relay down longer gets nothing and its clients catch up from the change feed. A relay may pull
   what it missed: `GET /s2s/v1/outbox?after=<id>&limit=256` → `{"items":[…],"hasMore":false}`.
@@ -530,8 +534,8 @@ POST /s2s/v1/deliver
 - An event a relay does not get still takes its stream's `seq`. When the relay is back, the next
   event on each stream arrives with `seq > last + 1`, and the app reconciles from the host as for
   any gap ("What the client checks"): change feed, pins, reactions, members and `streamHeads`,
-  through the forward path. Not recovered: `e` events (no `seq`), and a `DmInvite` written in
-  that window, which the recipient's relay never files.
+  through the forward path. Not recovered: `e` events (no `seq`). A `DmInvite` written in that
+  window is sent again once the relay refuses a later item of its conversation (`not_subscribed`).
 
 ### Relay queues
 
@@ -730,8 +734,23 @@ the request until the row expires. Everything held for a recipient, pending requ
 the invites ignored requests keep, takes at most 16 MiB: past it a new `DmInvite` is refused
 (`limited`) and a later item dropped. Only `DmRequestReceived` is pushed. An invite from a
 contact or a principal accepted before is recorded as a row accepted at once
-(`decided_at = created_at`), not listed by `dmRequests` and not counted by the limits, so every
-conversation R_B delivers for has a row and items of any other conversation are refused.
+(`decided_at = created_at`), keeping no card, not listed by `dmRequests` and not counted by the
+request limits, so every conversation R_B delivers for has a row and items of any other
+conversation are refused. Bob holds at most 5,000 accepted rows per host: past them such an invite
+is refused (`limited`). Accepting a request is never refused, and no row is evicted to make room.
+
+An accepted row expires 400 days after the last item R_B delivered for its conversation (the
+expiry moves at most once a day): over a year, so a conversation whose members write once a year
+stays open, while one gone silent, or whose home is gone, is let go. The next item of a
+conversation let go is refused (`not_subscribed`), and the home sends its `DmInvite` again (see
+"Outbox and `deliver`"), which R_B files like any invite: accepted at once for a contact or a
+principal accepted before, a request otherwise. The row is deleted when Bob
+leaves the conversation or is removed from it. A home that is also Bob's relay deletes it when it
+removes him. Another relay deletes it on the home's `MemberRemovedFromConversation` naming the id
+the home gives Bob, which it learns from the first event of the home on Bob's own `u:` stream that
+carries `user_id` and the conversation (`MlsWelcomeAvailable`, `ReadStateUpdated`,
+`NotificationDue`); the event itself still reaches Bob. Until R_B learns that id the expiry alone
+bounds the row.
 
 When the home and the recipient's relay are one server (Bob's relay hosts the conversation, and
 its creator is someone else, from another relay or not), the home files its own `DmInvite` for
@@ -1121,6 +1140,10 @@ CREATE TABLE relay_revocation_fanout (device_key_id uuid NOT NULL REFERENCES dev
     attempts integer NOT NULL DEFAULT 0, next_attempt_at timestamptz NOT NULL,
     ack_payload text NULL, ack_signature text NULL, PRIMARY KEY (device_key_id, host_server_id));
 
+-- add_relay_dm_request_host_user; also bounds accepted rows to 400 days and drops the card of
+-- rows accepted as they were filed
+ALTER TABLE relay_dm_request ADD COLUMN host_user_id uuid NULL;     -- the home's id for the user
+
 -- S5-6 add_relay_abuse; down refuses while either table has rows
 CREATE TABLE relay_principal_block (principal_id text PRIMARY KEY, reason text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now());
@@ -1231,6 +1254,7 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 | Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender and 1,000 per delivering host per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
+| Accepted conversations | 5,000 per recipient and host; 400 days after the last item delivered |
 | Stranger claims | Last-resort packages only; 20 per claimer per day |
 | Contacts | 1,000 per user |
 | Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h, rows kept 30 days (a remote user's while the user exists) |

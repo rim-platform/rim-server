@@ -19,6 +19,11 @@ pub(crate) const MAX_HELD_BYTES_PER_REQUEST: i64 = 1024 * 1024;
 /// it and never dropped to make room in it, so this cap does not follow the configured queue
 /// cap; it is a quarter of the public relay's (64 MiB).
 pub(crate) const MAX_HELD_BYTES_PER_USER: i64 = 16 * 1024 * 1024;
+/// Most accepted conversations a recipient holds from one host. Past it an invite the
+/// recipient's settings would deliver is refused (`limited`); accepting a request is not
+/// limited, and no row is evicted to make room. Far more conversations than a person keeps with
+/// the people of one server, while the rows stay a few MiB per recipient and host.
+pub(crate) const MAX_ACCEPTED_PER_HOST: i64 = 5000;
 /// The window a sender's daily request limit counts over.
 pub(crate) const SENDER_WINDOW: Duration = Duration::days(1);
 
@@ -84,6 +89,9 @@ pub(crate) struct InboxFacts {
     /// Requests the delivering host filed on this relay in the last day; 0 for this server's
     /// own events.
     pub filed_by_host_today: i64,
+    /// The recipient's accepted conversations from the item's host, counted for an invite the
+    /// policy delivers.
+    pub accepted_from_host: i64,
 }
 
 impl InboxFacts {
@@ -147,7 +155,13 @@ fn place(facts: &InboxFacts) -> Filing {
                 Filing::Refuse("not_subscribed")
             }
         }
-        None if facts.policy == DmPolicy::Deliver => Filing::FileAccepted,
+        None if facts.policy == DmPolicy::Deliver => {
+            if facts.accepted_from_host >= MAX_ACCEPTED_PER_HOST {
+                Filing::Refuse("limited")
+            } else {
+                Filing::FileAccepted
+            }
+        }
         None if facts.policy == DmPolicy::Refuse => Filing::Refuse("blocked"),
         None if request_limit(
             facts.pending_for_user,
@@ -187,6 +201,7 @@ mod tests {
             request_held_bytes: 0,
             user_held_bytes: 0,
             filed_by_host_today: 0,
+            accepted_from_host: 0,
         }
     }
 
@@ -308,6 +323,40 @@ mod tests {
             }),
             Filing::FileAccepted,
             "an invite the policy delivers is no request"
+        );
+    }
+
+    #[test]
+    fn a_delivered_invite_past_the_accepted_cap_is_refused() {
+        let delivered = |accepted_from_host| InboxFacts {
+            policy: DmPolicy::Deliver,
+            accepted_from_host,
+            ..invite()
+        };
+        assert_eq!(
+            file(&delivered(MAX_ACCEPTED_PER_HOST - 1)),
+            Filing::FileAccepted
+        );
+        assert_eq!(
+            file(&delivered(MAX_ACCEPTED_PER_HOST)),
+            Filing::Refuse("limited")
+        );
+        assert_eq!(
+            file(&InboxFacts {
+                accepted_from_host: MAX_ACCEPTED_PER_HOST,
+                ..invite()
+            }),
+            Filing::FileRequest,
+            "a request is counted by the request limits"
+        );
+        let id = DmRequestId::new();
+        assert_eq!(
+            file(&InboxFacts {
+                accepted_from_host: MAX_ACCEPTED_PER_HOST,
+                ..message(Some((id, DmRequestStatus::Accepted, 0)))
+            }),
+            Filing::Deliver,
+            "an accepted conversation keeps flowing"
         );
     }
 

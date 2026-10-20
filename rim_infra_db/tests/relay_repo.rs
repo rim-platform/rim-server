@@ -1353,3 +1353,172 @@ async fn a_hidden_conversation_stays_out_of_notifications_and_counts() {
         "only the request's holder is affected"
     );
 }
+
+#[tokio::test]
+async fn accepted_rows_are_counted_per_host_refreshed_bound_and_deleted() {
+    const OTHER_HOST: &str = "rims1_other";
+    let ctx = support::TestCtx::new().await;
+    let user = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let other = ctx.create_key_only_user("carol", "rimp1_carol").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let new = |status, user_id, host: &str, conversation_id| NewDmRequest {
+        status,
+        user_id,
+        from_principal_id: "rimp1_alice".to_string(),
+        card_payload: String::new(),
+        card_signature: String::new(),
+        host_server_id: host.to_string(),
+        conversation_id,
+        expires_at: Utc::now() + Duration::days(400),
+    };
+    let conversation = Uuid::now_v7();
+    let accepted = repo
+        .insert_request(new(DmRequestStatus::Accepted, user.id, HOST, conversation))
+        .await
+        .unwrap();
+    assert_eq!(accepted.host_user_id, None);
+    for (status, user_id, host) in [
+        (DmRequestStatus::Accepted, user.id, HOST),
+        (DmRequestStatus::Pending, user.id, HOST),
+        (DmRequestStatus::Accepted, user.id, OTHER_HOST),
+        (DmRequestStatus::Accepted, other.id, HOST),
+    ] {
+        repo.insert_request(new(status, user_id, host, Uuid::now_v7()))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        repo.count_accepted_requests(user.id, HOST).await.unwrap(),
+        2,
+        "only the user's accepted rows from that host count"
+    );
+
+    let later = Utc::now() + Duration::days(500);
+    let bound = Uuid::now_v7();
+    repo.refresh_request(accepted.id, Some(later), Some(bound))
+        .await
+        .unwrap();
+    repo.refresh_request(accepted.id, None, Some(Uuid::now_v7()))
+        .await
+        .unwrap();
+    let row = repo
+        .find_request(user.id, HOST, conversation)
+        .await
+        .unwrap()
+        .expect("row");
+    assert_eq!(row.host_user_id, Some(bound), "the first id named stays");
+    assert_eq!(row.expires_at.timestamp(), later.timestamp());
+
+    let pending = Uuid::now_v7();
+    repo.insert_request(new(DmRequestStatus::Pending, user.id, HOST, pending))
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.delete_accepted_request(user.id, HOST, pending)
+            .await
+            .unwrap(),
+        0,
+        "a pending request is not an accepted row"
+    );
+    assert_eq!(
+        repo.delete_accepted_request(user.id, OTHER_HOST, conversation)
+            .await
+            .unwrap(),
+        0,
+        "another host's conversation of the same id is another row"
+    );
+    assert_eq!(
+        repo.delete_accepted_request(user.id, HOST, conversation)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        repo.find_request(user.id, HOST, conversation)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        repo.count_accepted_requests(user.id, HOST).await.unwrap(),
+        1
+    );
+
+    assert_eq!(
+        repo.delete_expired_requests(Utc::now() + Duration::days(401))
+            .await
+            .unwrap(),
+        5,
+        "accepted rows expire with the others"
+    );
+}
+
+#[tokio::test]
+async fn the_host_user_migration_bounds_accepted_rows_kept_forever() {
+    const HOST_USER_MIGRATION: &str = "m20261019_214438_add_relay_dm_request_host_user";
+    let ctx = support::TestCtx::new().await;
+    let conn = support::db_conn().await;
+    let user = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let names: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
+    let index = names
+        .iter()
+        .position(|n| n == HOST_USER_MIGRATION)
+        .expect("migration must be registered");
+    let steps = u32::try_from(names.len() - index).expect("steps fit u32");
+    Migrator::down(&conn, Some(steps)).await.expect("down");
+
+    // Rows as a previous release wrote them: accepted for a hundred years, with the card.
+    let at_once = Uuid::now_v7();
+    let decided = Uuid::now_v7();
+    let pending = Uuid::now_v7();
+    for (id, status, decided_at) in [
+        (at_once, "accepted", "now()"),
+        (decided, "accepted", "now() + interval '1 hour'"),
+        (pending, "pending", "NULL"),
+    ] {
+        conn.execute_unprepared(&format!(
+            "INSERT INTO relay_dm_request (id, user_id, from_principal_id, card_payload, \
+             card_signature, host_server_id, conversation_id, status, created_at, decided_at, \
+             expires_at) VALUES ('{id}', '{}', 'rimp1_alice', '{{}}', 'ed25519:c', '{HOST}', \
+             gen_random_uuid(), '{status}', now(), {decided_at}, now() + interval '36500 days')",
+            Uuid::from(user.id)
+        ))
+        .await
+        .unwrap();
+    }
+    Migrator::up(&conn, None).await.expect("up");
+
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let row = |id: Uuid| {
+        let repo = &repo;
+        let user_id = user.id;
+        async move {
+            repo.get_request(user_id, id.into())
+                .await
+                .unwrap()
+                .expect("row")
+        }
+    };
+    let horizon = Utc::now() + Duration::days(401);
+    let at_once = row(at_once).await;
+    assert!(at_once.expires_at < horizon);
+    assert_eq!(
+        at_once.card_payload, "",
+        "a row accepted as it was filed drops the card"
+    );
+    let decided = row(decided).await;
+    assert!(decided.expires_at < horizon);
+    assert_eq!(
+        decided.card_payload, "{}",
+        "an accepted request keeps its card"
+    );
+    let pending = row(pending).await;
+    assert!(
+        pending.expires_at > horizon,
+        "only accepted rows are bounded by the migration"
+    );
+    assert_eq!(pending.host_user_id, None);
+}

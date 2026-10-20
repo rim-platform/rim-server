@@ -157,6 +157,30 @@ pub trait RelayRepository: Send + Sync {
 
     async fn delete_expired_requests(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 
+    /// How many of a user's conversations from a host are accepted.
+    async fn count_accepted_requests(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+    ) -> RepoResult<i64>;
+
+    /// Move a request's expiry to `expires_at` when one is given, and set the id its host gives
+    /// its user to `host_user_id` when one is given and none is set.
+    async fn refresh_request(
+        &self,
+        id: DmRequestId,
+        expires_at: Option<DateTime<Utc>>,
+        host_user_id: Option<Uuid>,
+    ) -> RepoResult<()>;
+
+    /// Delete a user's accepted row for a conversation of a host. Returns how many.
+    async fn delete_accepted_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        conversation_id: Uuid,
+    ) -> RepoResult<u64>;
+
     /// Local users whose request for a conversation of this server's direct space is pending,
     /// with their principal ids.
     async fn pending_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
