@@ -65,6 +65,8 @@ pub struct AppRuntime {
         Arc<dyn rim_services::workspace_plugin::service::PluginBundleService>,
     /// The instance's feature switches, for the upload routes and the discovery document.
     pub feature_gate: Arc<dyn FeatureGate>,
+    /// Sign-in and signups; the discovery document asks it whether registration is full.
+    pub auth_service: Arc<dyn rim_services::auth::service::AuthService>,
     pub s2s: S2sRuntime,
     /// The database connection pool the services share, closed once the server has stopped.
     pub db: DatabaseConnection,
@@ -937,6 +939,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         }),
     );
     let request_authenticator = service_provider.request_authenticator();
+    let auth_service = service_provider.auth_service();
 
     Ok(AppRuntime {
         schema,
@@ -947,6 +950,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         moderation_service,
         plugin_bundle_service,
         feature_gate,
+        auth_service,
         s2s,
         monitoring_repo: Arc::new(SeaOrmMonitoringRepository::new(
             raw_db_for_tasks.clone().into(),

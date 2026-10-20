@@ -297,6 +297,10 @@ pub struct RIMConfig {
     /// defaults to [`DEFAULT_PENDING_INVITES_PER_USER`], and 0 turns it off. Controlled by
     /// `RIM_LIMIT_PENDING_INVITES_PER_USER`.
     pub limit_pending_invites_per_user: Option<u32>,
+    /// Local accounts the instance holds, those waiting out a deletion grace period included;
+    /// at the cap every signup path is refused as full, an operator's instance invite too.
+    /// Controlled by `RIM_LIMIT_ACCOUNTS`.
+    pub limit_accounts: Option<u32>,
 
     // ── Probation of new accounts ───────────────────────────────────────────
     /// Hours after its creation during which an account cannot create a workspace or send a
@@ -517,6 +521,7 @@ impl Default for RIMConfig {
             limit_invite_max_uses: None,
             limit_message_bytes: None,
             limit_pending_invites_per_user: Some(DEFAULT_PENDING_INVITES_PER_USER),
+            limit_accounts: None,
             probation_hours: None,
             rate_probation_messages_per_min: None,
             account_deletion_grace_days: None,
@@ -1300,6 +1305,7 @@ impl RIMConfig {
             message_bytes,
             probation_hours: cap(self.probation_hours),
             pending_invites_per_user: cap(self.limit_pending_invites_per_user),
+            accounts: cap(self.limit_accounts),
         })
     }
 }
@@ -2298,6 +2304,7 @@ mod tests {
             ("RIM_LIMIT_INVITE_MAX_USES", "0"),
             ("RIM_LIMIT_MESSAGE_BYTES", "0"),
             ("RIM_LIMIT_PENDING_INVITES_PER_USER", "0"),
+            ("RIM_LIMIT_ACCOUNTS", "0"),
         ]))
         .expect("loads");
         assert_eq!(zero.instance_limits(), Ok(relay_only));
@@ -2320,6 +2327,7 @@ mod tests {
             ("RIM_LIMIT_INVITE_MAX_USES", "5"),
             ("RIM_LIMIT_MESSAGE_BYTES", "8192"),
             ("RIM_LIMIT_PENDING_INVITES_PER_USER", "20"),
+            ("RIM_LIMIT_ACCOUNTS", "1000"),
         ]))
         .expect("loads");
         assert_eq!(
@@ -2338,6 +2346,7 @@ mod tests {
                 message_bytes: Some(8192),
                 probation_hours: None,
                 pending_invites_per_user: Some(20),
+                accounts: Some(1000),
             })
         );
     }

@@ -159,7 +159,7 @@ fn server_info_sdl_matches_the_contract() {
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
          auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! \
          signupRequiresKeys: Boolean! dmInbound: DmInbound! dmOutbound: DmOutbound! \
-         dmPartners: [String!]! defaultWorkspace: ID }"
+         dmPartners: [String!]! defaultWorkspace: ID registrationFull: Boolean! }"
     ));
     assert!(sdl.contains("enum DmInbound { OPEN REQUESTS PARTNERS NONE }"));
     assert!(sdl.contains("enum DmOutbound { ALLOWED PARTNERS NONE }"));
@@ -168,7 +168,7 @@ fn server_info_sdl_matches_the_contract() {
          channelsPerWorkspace: Int devicesPerUser: Int dmRequestsPerDay: Int \
          macrosPerWorkspace: Int pipelinesPerWorkspace: Int pluginsPerWorkspace: Int \
          invitesPerUserPerDay: Int inviteMaxUses: Int messageBytes: Int probationHours: Int \
-         pendingInvitesPerUser: Int }"
+         pendingInvitesPerUser: Int accounts: Int }"
     ));
     assert!(sdl.contains(
         "type ServerFeatureInfo { key: String! state: ServerFeatureState! reason: String }"
@@ -279,7 +279,7 @@ async fn server_info_reports_the_instance_limits() {
                 "{ serverInfo { limits { workspacesPerUser membersPerWorkspace \
                  channelsPerWorkspace devicesPerUser dmRequestsPerDay macrosPerWorkspace \
                  pipelinesPerWorkspace pluginsPerWorkspace invitesPerUserPerDay inviteMaxUses \
-                 messageBytes probationHours pendingInvitesPerUser } } }",
+                 messageBytes probationHours pendingInvitesPerUser accounts } } }",
             )
             .data(rim_services::limits::InstanceLimits {
                 workspaces_per_user: Some(5),
@@ -289,6 +289,7 @@ async fn server_info_reports_the_instance_limits() {
                 message_bytes: Some(8192),
                 probation_hours: Some(24),
                 pending_invites_per_user: Some(50),
+                accounts: Some(1000),
                 ..Default::default()
             }),
         )
@@ -311,8 +312,34 @@ async fn server_info_reports_the_instance_limits() {
             "messageBytes": 8192,
             "probationHours": 24,
             "pendingInvitesPerUser": 50,
+            "accounts": 1000,
         })
     );
+}
+
+/// `serverInfo.registrationFull` is what the auth service answers, and false when it cannot
+/// tell, so the rest of `serverInfo` still answers.
+#[tokio::test]
+async fn server_info_says_whether_registration_is_full() {
+    for (answer, expected) in [(Ok(true), true), (Ok(false), false), (Err(()), false)] {
+        let mut auth = rim_services::auth::service::MockAuthService::new();
+        auth.expect_registration_full().times(1).returning(move || {
+            Box::pin(async move { answer.map_err(|()| rim_services::ServiceError::Unavailable) })
+        });
+        let schema = super::schema_with_mocks(
+            auth,
+            rim_services::conversation::service::MockConversationService::new(),
+            rim_services::message::service::MockMessageService::new(),
+            rim_services::message_attachment::service::MockMessageAttachmentService::new(),
+            rim_services::message_thread::service::MockThreadService::new(),
+        );
+        let res = schema
+            .execute(Request::new("{ serverInfo { version registrationFull } }"))
+            .await;
+        assert_no_errors(&res);
+        let data = res.data.into_json().expect("json");
+        assert_eq!(data["serverInfo"]["registrationFull"], expected);
+    }
 }
 
 /// `serverInfo` reports the operator's DM settings.

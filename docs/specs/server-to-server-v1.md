@@ -93,7 +93,8 @@ keyHash  = base64url(SHA-256(tagged key text))          (as device_key.key_hash)
 
 ```json
 {"rim":"server-discovery","keyLog":[{"payload":"…","signature":"…"}],"descriptor":{"payload":"…","signature":"…"},
- "features":{"attachments":{"state":"enabled"},"email":{"state":"unavailable","reason":"…"},"custom_emoji":{"state":"disabled"},…}}
+ "features":{"attachments":{"state":"enabled"},"email":{"state":"unavailable","reason":"…"},"custom_emoji":{"state":"disabled"},…},
+ "registration":{"full":false}}
 ```
 
 `features` is optional and unsigned: each optional feature of the instance (the names of
@@ -103,6 +104,13 @@ deciding what to offer; the server enforces the switches itself, so a changed co
 what a client shows. Readers ignore a missing `features` and names they do not know. It sits
 beside the descriptor rather than in it because the descriptor refuses unknown fields: an
 earlier server would refuse a descriptor that carried it.
+
+`registration` is optional and unsigned too: `full` is true while the server holds as many local
+accounts as it accepts (`RIM_LIMIT_ACCOUNTS`) and refuses every signup. It is advisory, since
+each signup counts afresh, and sits beside the descriptor for the reason `features` does and
+because it changes with signups and purges, which would otherwise re-sign the descriptor each
+time. The descriptor's `registration` still says how to sign up; readers ignore a missing
+`registration`.
 
 The descriptor is signed by the head server key over `rim.server-descriptor.v1\0 || payload`
 (at most 16 KiB):

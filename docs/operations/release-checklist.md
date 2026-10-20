@@ -34,7 +34,8 @@ release is announced (section 9). Later releases keep the order as written.
         `RIM_LIMIT_DM_REQUESTS_PER_DAY`, `RIM_LIMIT_MACROS_PER_WORKSPACE`,
         `RIM_LIMIT_PIPELINES_PER_WORKSPACE`, `RIM_LIMIT_PLUGINS_PER_WORKSPACE`,
         `RIM_LIMIT_INVITES_PER_USER_PER_DAY`, `RIM_LIMIT_INVITE_MAX_USES`,
-        `RIM_LIMIT_MESSAGE_BYTES`, `RIM_LIMIT_PENDING_INVITES_PER_USER`.
+        `RIM_LIMIT_MESSAGE_BYTES`, `RIM_LIMIT_PENDING_INVITES_PER_USER`, `RIM_LIMIT_ACCOUNTS`
+        (the public relay's is in `docs/operations/relay-public.md`, "The account cap").
       - Probation: `RIM_PROBATION_HOURS`, `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
 
       `deploy/.env.example`, "Request limits" and "Instance limits", says what each one limits.

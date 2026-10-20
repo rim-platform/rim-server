@@ -131,6 +131,8 @@ the **descriptor**: a statement signed by the current key with the server's role
 (`/api`, `/api/ws`, and `/s2s/v1` when server-to-server traffic is on), the protocol versions,
 MLS cipher suites, limits, registration mode and **handle domain**. The server signs a new
 descriptor with a higher `version` whenever its configuration changes it and after every rotation.
+Beside the descriptor, unsigned, the document lists the optional features and says whether
+registration is full (`RIM_LIMIT_ACCOUNTS`, `docs/api.md`).
 
 ### Handles and delegation
 
