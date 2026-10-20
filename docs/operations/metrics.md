@@ -338,6 +338,8 @@ users or queue items, so do not sum their identical gauges.
 | `rim_attachments_cleaned_total` | counter | | Attachment uploads the daily cleanup marked failed because they never completed (`docs/operations/background-jobs.md`). |
 | `rim_workspace_state_purged_total` | counter | | Expired workspace state entries the hourly purge deleted. |
 | `rim_conversation_invites_expired_total` | counter | | Expired conversation invitations the hourly purge deleted. |
+| `rim_remote_identities_purged_total` | counter | | Cached identities of people on other servers the hourly purge deleted, 30 days after they were fetched. |
+| `rim_peer_pins_forgotten_total` | counter | | Pins of other servers the hourly purge forgot after 90 idle days with nothing here referring to them. |
 
 ## Example alert rules
 

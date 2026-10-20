@@ -815,6 +815,28 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             shutdown_tx.subscribe(),
         ),
     );
+    // Background task: delete stale cached remote identities and forget idle peer pins hourly,
+    // keeping the peers the configuration names.
+    {
+        let settings = &s2s.state.settings;
+        let mut kept: Vec<String> = settings
+            .denied_peers
+            .iter()
+            .chain(&settings.allowed_relays)
+            .cloned()
+            .collect();
+        kept.extend(config.dm_policy().map(|p| p.partners).unwrap_or_default());
+        tokio::spawn(
+            rim_infra_services::scheduled_purges::run_remote_cache_purge(
+                Arc::clone(&repos.relay_repo),
+                Arc::new(SeaOrmPeerServerRepository::new(
+                    raw_db_for_tasks.clone().into(),
+                )),
+                kept,
+                shutdown_tx.subscribe(),
+            ),
+        );
+    }
     // Background task: end the WebSocket connections of sessions that ended where this
     // process did not hear of it (another process, expiry, a purge), every interval.
     if let Some(interval) = config.ws_session_recheck() {

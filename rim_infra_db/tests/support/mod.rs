@@ -169,6 +169,7 @@ TRUNCATE TABLE
   password_reset_token,
   peer_key_log_entry,
   peer_server,
+  peer_server_forgotten,
   pipeline,
   plugin_bundle,
   profile_card,

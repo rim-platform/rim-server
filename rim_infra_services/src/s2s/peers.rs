@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rim_core::s2s::model::{PeerPin, PeerRotationSigner, PeerServer, PeerStatus, SignedRecord};
+use rim_core::repository::error::RepoErrorKind;
+use rim_core::s2s::model::{
+    MAX_PEERS_PER_ORIGIN, PeerPin, PeerRotationSigner, PeerServer, PeerStatus, SignedRecord,
+};
 use rim_core::s2s::repository::PeerServerRepository;
 use rim_identity::SignedStatement;
 use rim_s2s::{
@@ -288,14 +291,48 @@ impl DefaultPeerService {
         verify_discovery(&bytes, origin, expected)
     }
 
-    /// Pin a peer not pinned before. A concurrent pin of the same peer wins and is returned.
+    /// Pin a peer not pinned now. A concurrent pin of the same peer wins and is returned. A peer
+    /// whose idle pin was forgotten is pinned `forked` when the served log does not hold the
+    /// forgotten head.
+    ///
+    /// # Errors
+    /// `Conflict` when the served log stops short of the forgotten head (it may be an older
+    /// view, or a log that never reached it), or when the origin has as many pins as allowed.
     async fn insert_pin(
         &self,
         origin: &str,
         found: &VerifiedDiscovery,
     ) -> ServiceResult<PeerServer> {
+        let server_id = &found.state.server_id;
+        let status = match self.repo.forgotten(server_id).await? {
+            None => PeerStatus::Active,
+            Some(head) => match usize::try_from(head.head_seq)
+                .ok()
+                .and_then(|seq| found.log.get(seq))
+            {
+                None => {
+                    return Err(ServiceError::Conflict(
+                        "the served key log stops short of the head pinned before".to_string(),
+                    ));
+                }
+                Some(entry) if entry.payload == head.head_payload => PeerStatus::Active,
+                Some(_) => PeerStatus::Forked,
+            },
+        };
         let pin = pin_from(origin, found, None);
-        match self.repo.insert(pin).await {
+        match self.repo.insert(pin, status).await {
+            Ok(peer) if peer.status == PeerStatus::Forked => {
+                tracing::error!(
+                    target: "audit",
+                    event = "s2s.peer_forked",
+                    peer_server_id = %peer.server_id,
+                    pinned_seq = peer.head_seq,
+                    "a peer server's key log does not extend the head pinned before its pin \
+                     was forgotten; refusing it until `rim_server peer reset` after an \
+                     out-of-band check"
+                );
+                Ok(peer)
+            }
             Ok(peer) => {
                 tracing::info!(
                     target: "audit",
@@ -306,11 +343,17 @@ impl DefaultPeerService {
                 );
                 Ok(peer)
             }
-            Err(e) if e.kind() == rim_core::repository::error::RepoErrorKind::Conflict => self
+            Err(e) if e.kind() == RepoErrorKind::Conflict => self
                 .repo
-                .find(&found.state.server_id)
+                .find(server_id)
                 .await?
                 .ok_or(ServiceError::Conflict("peer pin raced".to_string())),
+            Err(e) if e.kind() == RepoErrorKind::PreconditionFailed => {
+                Err(ServiceError::Conflict(format!(
+                    "{MAX_PEERS_PER_ORIGIN} servers are pinned at this origin already; \
+                     `rim_server peer reset` one of them"
+                )))
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -424,10 +467,18 @@ impl PeerService for DefaultPeerService {
                 return Ok(PeerLookup::Unknown);
             }
             return match self.fetch_verified(&origin, Some(server_id)).await {
-                Ok(found) => {
-                    let peer = self.insert_pin(&origin, &found).await?;
-                    Ok(lookup(&peer, Utc::now()))
-                }
+                Ok(found) => match self.insert_pin(&origin, &found).await {
+                    Ok(peer) => Ok(lookup(&peer, Utc::now())),
+                    Err(ServiceError::Conflict(reason)) => {
+                        tracing::warn!(
+                            peer_server_id = %server_id,
+                            reason = %reason,
+                            "could not pin an unknown peer"
+                        );
+                        Ok(PeerLookup::Unknown)
+                    }
+                    Err(e) => Err(e),
+                },
                 Err(reason) => {
                     tracing::warn!(
                         peer_server_id = %server_id,
@@ -467,7 +518,13 @@ impl PeerService for DefaultPeerService {
         let found = verify_discovery(&bytes, &origin, expected_server_id)
             .map_err(ServiceError::Validation)?;
         let peer = match self.repo.find(&found.state.server_id).await? {
-            None => self.insert_pin(&origin, &found).await?,
+            None => {
+                let peer = self.insert_pin(&origin, &found).await?;
+                if peer.status == PeerStatus::Forked {
+                    return Err(ServiceError::Forbidden("peer_forked".to_string()));
+                }
+                peer
+            }
             Some(peer) => match self.refresh_pinned(&peer).await {
                 Ok(fresh) => fresh,
                 Err(RefreshError::Forked) => {

@@ -19,7 +19,7 @@ use sea_orm::{
 
 /// S2S tables, cleared before each test so every server boots a fresh identity.
 pub const S2S_TABLES: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor, peer_key_log_entry, peer_server, \
-     s2s_nonce";
+     peer_server_forgotten, s2s_nonce";
 
 /// Connections each test server's pool opens at most.
 pub const SERVER_POOL: u32 = 5;

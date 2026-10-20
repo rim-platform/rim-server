@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
+use rim_core::repository::error::{RepoError, RepoResult};
+use rim_core::s2s::model::ForgottenPeer;
 use rim_s2s::{
     Endpoints, Limits, Registration, RegistrationMode, Role, ServerSigner, sign_descriptor,
     sign_inception, sign_rotation,
@@ -12,10 +13,12 @@ use super::*;
 
 const ORIGIN: &str = "https://peer.example";
 
-/// Pins in memory, with the conditional updates the database repository makes.
+/// Pins in memory, with the conditional updates, the origin limit and the forgotten heads the
+/// database repository keeps.
 #[derive(Default)]
 struct MemoryPeers {
     peers: Mutex<HashMap<String, (PeerServer, Vec<SignedRecord>)>>,
+    forgotten: Mutex<HashMap<String, ForgottenPeer>>,
 }
 
 impl MemoryPeers {
@@ -69,14 +72,55 @@ impl PeerServerRepository for MemoryPeers {
             .unwrap_or_default())
     }
 
-    async fn insert(&self, pin: PeerPin) -> RepoResult<PeerServer> {
+    async fn insert(&self, pin: PeerPin, status: PeerStatus) -> RepoResult<PeerServer> {
         let mut peers = self.peers.lock().expect("lock");
         if peers.contains_key(&pin.server_id) {
             return Err(RepoError::new(RepoErrorKind::Conflict));
         }
-        let peer = row(&pin, PeerStatus::Active);
+        if peers
+            .values()
+            .filter(|(p, _)| p.origin == pin.origin)
+            .count()
+            >= MAX_PEERS_PER_ORIGIN
+        {
+            return Err(RepoError::new(RepoErrorKind::PreconditionFailed));
+        }
+        let peer = row(&pin, status);
+        self.forgotten.lock().expect("lock").remove(&pin.server_id);
         peers.insert(pin.server_id.clone(), (peer.clone(), pin.log));
         Ok(peer)
+    }
+
+    async fn forgotten(&self, server_id: &str) -> RepoResult<Option<ForgottenPeer>> {
+        Ok(self.forgotten.lock().expect("lock").get(server_id).cloned())
+    }
+
+    async fn forget_idle(
+        &self,
+        idle_before: DateTime<Utc>,
+        kept: &[String],
+    ) -> RepoResult<Vec<String>> {
+        let mut peers = self.peers.lock().expect("lock");
+        let idle: Vec<String> = peers
+            .iter()
+            .filter(|(id, (p, _))| {
+                p.status == PeerStatus::Active && p.fetched_at < idle_before && !kept.contains(id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &idle {
+            if let Some((peer, log)) = peers.remove(id) {
+                self.forgotten.lock().expect("lock").insert(
+                    id.clone(),
+                    ForgottenPeer {
+                        server_id: id.clone(),
+                        head_seq: peer.head_seq,
+                        head_payload: log[peer.head_seq as usize].payload.clone(),
+                    },
+                );
+            }
+        }
+        Ok(idle)
     }
 
     async fn advance(&self, pin: PeerPin, expected: u32) -> RepoResult<Option<PeerServer>> {
@@ -138,7 +182,8 @@ impl PeerServerRepository for MemoryPeers {
     }
 
     async fn delete(&self, server_id: &str) -> RepoResult<bool> {
-        Ok(self.peers.lock().expect("lock").remove(server_id).is_some())
+        let head = self.forgotten.lock().expect("lock").remove(server_id);
+        Ok(self.peers.lock().expect("lock").remove(server_id).is_some() || head.is_some())
     }
 
     async fn touch(&self, _server_id: &str) -> RepoResult<()> {
@@ -537,4 +582,148 @@ async fn an_equal_log_takes_a_newer_descriptor() {
     );
     let stored = repo.find(&peer.id()).await.expect("find").expect("peer");
     assert_eq!(stored.descriptor_version, 5);
+}
+
+/// Forget every idle pin in `repo`, as the purge does once they have been idle long enough.
+async fn forget_all(repo: &MemoryPeers) -> Vec<String> {
+    repo.forget_idle(Utc::now() + chrono::Duration::seconds(1), &[])
+        .await
+        .expect("forget")
+}
+
+#[tokio::test]
+async fn a_forgotten_peer_whose_log_extends_its_head_is_pinned_again() {
+    let (service, repo, fetcher) = service();
+    let mut peer = Peer::new(1);
+    peer.rotate(11, ServerRotationSigner::Server);
+    peer.publish(&fetcher);
+    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    assert_eq!(forget_all(&repo).await, vec![peer.id()]);
+    assert!(repo.find(&peer.id()).await.expect("find").is_none());
+
+    peer.rotate(12, ServerRotationSigner::Server);
+    peer.publish(&fetcher);
+    let keys = ready(
+        service_over(&repo, &fetcher)
+            .resolve(&peer.id(), Some(ORIGIN), Some(2))
+            .await
+            .expect("resolve"),
+    );
+    assert_eq!(keys.head_seq, 2);
+    assert!(repo.forgotten(&peer.id()).await.expect("head").is_none());
+}
+
+#[tokio::test]
+async fn a_forgotten_peer_serving_another_history_is_pinned_forked_until_reset() {
+    let (service, repo, fetcher) = service();
+    let mut peer = Peer::new(1);
+    let mut fork = peer.clone();
+    peer.rotate(11, ServerRotationSigner::Server);
+    peer.publish(&fetcher);
+    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    forget_all(&repo).await;
+
+    fork.rotate(13, ServerRotationSigner::Server);
+    fork.rotate(14, ServerRotationSigner::Server);
+    fork.publish(&fetcher);
+    assert!(matches!(
+        service_over(&repo, &fetcher).pin(ORIGIN, None).await,
+        Err(ServiceError::Forbidden(_))
+    ));
+    assert!(service.reset(&peer.id()).await.expect("reset"));
+    peer.publish(&fetcher);
+    service
+        .pin(ORIGIN, Some(&peer.id()))
+        .await
+        .expect("pin again");
+    forget_all(&repo).await;
+    fork.publish(&fetcher);
+    assert_eq!(
+        service_over(&repo, &fetcher)
+            .resolve(&peer.id(), Some(ORIGIN), Some(2))
+            .await
+            .expect("resolve"),
+        PeerLookup::Forked
+    );
+    let stored = repo.find(&peer.id()).await.expect("find").expect("peer");
+    assert_eq!(stored.status, PeerStatus::Forked);
+
+    assert!(service.reset(&peer.id()).await.expect("reset"));
+    let keys = ready(
+        service_over(&repo, &fetcher)
+            .resolve(&fork.id(), Some(ORIGIN), Some(2))
+            .await
+            .expect("resolve"),
+    );
+    assert_eq!(keys.head_seq, 2);
+}
+
+#[tokio::test]
+async fn a_forgotten_peer_serving_a_log_short_of_its_head_is_not_pinned() {
+    let (service, repo, fetcher) = service();
+    let mut peer = Peer::new(1);
+    let older = peer.clone();
+    peer.rotate(11, ServerRotationSigner::Recovery);
+    peer.publish(&fetcher);
+    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    forget_all(&repo).await;
+
+    older.publish(&fetcher);
+    assert_eq!(
+        service_over(&repo, &fetcher)
+            .resolve(&peer.id(), Some(ORIGIN), Some(0))
+            .await
+            .expect("resolve"),
+        PeerLookup::Unknown
+    );
+    assert!(matches!(
+        service_over(&repo, &fetcher).pin(ORIGIN, None).await,
+        Err(ServiceError::Conflict(_))
+    ));
+    assert!(repo.find(&peer.id()).await.expect("find").is_none());
+    assert!(repo.forgotten(&peer.id()).await.expect("head").is_some());
+}
+
+#[tokio::test]
+async fn a_reset_forgets_a_forgotten_head_too() {
+    let (service, repo, fetcher) = service();
+    let peer = Peer::new(1);
+    peer.publish(&fetcher);
+    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    forget_all(&repo).await;
+    assert!(service.reset(&peer.id()).await.expect("reset"));
+    assert!(repo.forgotten(&peer.id()).await.expect("head").is_none());
+    assert!(!service.reset(&peer.id()).await.expect("reset"));
+}
+
+#[tokio::test]
+async fn an_origin_holds_at_most_its_limit_of_pins() {
+    let (_, repo, fetcher) = service();
+    let peers: Vec<Peer> = (1..=5).map(Peer::new).collect();
+    for peer in &peers[..MAX_PEERS_PER_ORIGIN] {
+        peer.publish(&fetcher);
+        service_over(&repo, &fetcher)
+            .pin(ORIGIN, None)
+            .await
+            .expect("pin");
+    }
+    let last = &peers[MAX_PEERS_PER_ORIGIN];
+    last.publish(&fetcher);
+    assert!(matches!(
+        service_over(&repo, &fetcher).pin(ORIGIN, None).await,
+        Err(ServiceError::Conflict(_))
+    ));
+    assert_eq!(
+        service_over(&repo, &fetcher)
+            .resolve(&last.id(), Some(ORIGIN), None)
+            .await
+            .expect("resolve"),
+        PeerLookup::Unknown
+    );
+    // A server pinned already is refreshed, not refused.
+    peers[0].publish(&fetcher);
+    service_over(&repo, &fetcher)
+        .pin(ORIGIN, None)
+        .await
+        .expect("refresh");
 }
