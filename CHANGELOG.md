@@ -263,6 +263,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   `chat.remove_conversation_member`, a `Restricted` one, or for an agent a `Mutating` one. That
   confirmation covers every step of the run, so such a macro no longer fails at the step; the
   `message` of the `CONFIRMATION_REQUIRED` answer names those steps.
+- `MlsPendingDevice.hasKeyPackage` is false for a device whose pending MLS Welcomes leave no
+  room for one more, the devices `claimMlsKeyPackages` leaves out, so a client no longer waits
+  to add a device that no claim serves (`docs/specs/e2ee-mls-v1.md`, "Key packages").
 
 ### Security
 

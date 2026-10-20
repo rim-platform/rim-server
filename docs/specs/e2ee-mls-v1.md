@@ -193,6 +193,8 @@ commits pending changes first, without waiting (the server refuses its message o
   `not_after` less than 14 days away is never handed out and counts as absent; a device with no
   package is left out of the answer, and so is a device whose pending Welcomes leave no room for
   one more of the largest size ("Welcome delivery and joining"), with its packages left unclaimed.
+  `MlsPendingDevice.hasKeyPackage` follows the same rules: it is false for a device the claim
+  would leave out, and true again once the device has room.
   For a **re-add target** the claim takes the newest one-time
   package uploaded after the `created_at` of the device's latest open re-add request, never the
   last-resort package; with none, `VALIDATION` (`the device has not uploaded key packages since
@@ -938,7 +940,8 @@ type MlsGroup {
   readdRequests: [MlsReaddRequest!]!
 }
 type MlsDevice { userId: ID!  principalId: String!  deviceId: ID!  addedEpoch: Int! }
-type MlsPendingDevice { userId: ID!  principalId: String!  deviceId: ID!  hasKeyPackage: Boolean! }
+type MlsPendingDevice { userId: ID!  principalId: String!  deviceId: ID!
+                        hasKeyPackage: Boolean! }  # a claim would serve it a package ("Key packages")
 type MlsReaddRequest { principalId: String!  deviceId: ID!  request: SignedStatement!  createdAt: DateTime! }
 
 type MessageEncryption {
