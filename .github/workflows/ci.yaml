@@ -22,7 +22,7 @@ jobs:
     name: Lint & Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           components: rustfmt, clippy
@@ -40,7 +40,7 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Test with coverage
@@ -73,7 +73,7 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Test with coverage
@@ -110,7 +110,7 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Test with coverage
@@ -134,7 +134,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [unit_tests, api_e2e_tests, repository_tests]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install lcov
         run: sudo apt-get update && sudo apt-get install -y lcov
       - uses: actions/download-artifact@v8
@@ -165,7 +165,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
       # Prebuilt binary: compiling cargo-audit from source took ~4 minutes per run.
       - uses: taiki-e/install-action@cargo-audit
@@ -178,7 +178,7 @@ jobs:
     name: Docker Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build Docker image
