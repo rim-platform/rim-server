@@ -26,7 +26,8 @@ fi
 drill_project=${RIM_DRILL_PROJECT:-rim-drill}
 [[ $drill_project != "$(project_name 2>/dev/null)" ]] || die "the drill project is the deployment's own project"
 
-# The drill's own env file: the deployment's images, nothing else of its settings.
+# The drill's own env file: the deployment's images and compose files, nothing else of its
+# settings.
 drill_env=$(mktemp)
 cat >"$drill_env" <<EOF
 POSTGRES_PASSWORD=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
@@ -39,6 +40,10 @@ RIM_WEB_IMAGE=$(setting RIM_WEB_IMAGE)
 RIM_HTTP_PORT=${RIM_DRILL_HTTP_PORT:-18080}
 RIM_HTTPS_PORT=${RIM_DRILL_HTTPS_PORT:-18443}
 EOF
+compose_files=$(setting COMPOSE_FILE)
+if [[ -n $compose_files ]]; then
+	printf 'COMPOSE_FILE=%s\n' "$compose_files" >>"$drill_env"
+fi
 RIM_BACKUP_AGE_IDENTITY=$(setting RIM_BACKUP_AGE_IDENTITY)
 export RIM_BACKUP_AGE_IDENTITY
 export COMPOSE_PROJECT_NAME=$drill_project RIM_ENV_FILE=$drill_env

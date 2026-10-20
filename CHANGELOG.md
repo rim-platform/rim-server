@@ -23,6 +23,22 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `deploy/upgrade.sh <version>`, the upgrade of `docs/operations/upgrade.md` in one script: it
+  checks that the version's images are published (exit 2 when one is not), verifies their
+  signatures against the release workflows, takes a backup, sets `RIM_VERSION` in
+  `deploy/.env`, pulls, migrates and starts, waits for `/readyz` and the public discovery
+  document, and rolls back to the version before when they do not answer. `--dry-run` checks
+  the images and prints the rest.
+- `deploy/rim-deploy.sh` with `deploy/systemd/rim-deploy.service` and `rim-deploy.timer`, the
+  unattended upgrade for a host that runs published images: every five minutes it installs the
+  latest published rim-server release that is not a pre-release from the tag's `deploy/` files
+  and its `upgrade.sh`, once the version's signed `rim-server` image proves an approved release
+  run. A `HOLD` file stops it, a failed version is held back in `FAILED`,
+  and `rim-deploy <version>` deploys or rolls back by hand. "Unattended upgrades from releases"
+  in `deploy/README.md` describes it.
+- The backup and upgrade scripts read `COMPOSE_FILE` from `deploy/.env` too, so a relay can name
+  its compose files there once.
+
 - `deploy/compose.monitoring-containers.yml`, an opt-in overlay on top of
   `compose.monitoring.yml` that adds cAdvisor, so Alloy also sends each compose service's CPU
   and memory use (job `cadvisor`). cAdvisor reaches the Docker and containerd sockets only
@@ -325,6 +341,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `rustls` 0.23.46: the TLS library behind outgoing HTTPS requests picks up the fixes for
   RUSTSEC-2026-0346, -0347, -0348 and -0349 (TLS secrets in `Debug` output, buffered data after
   an ECH rejection, certificate decompression memory, key-exchange downgrade).
+- `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10: outgoing HTTPS requests no longer trust
+  the distrusted emSign intermediates or accept other distrusted intermediates
+  (RUSTSEC-2026-0381, RUSTSEC-2026-0382).
 - A member removed from a workspace (kicked, banned) or from a conversation (left, removed)
   loses their notifications for it, and the email digest leaves out anything its recipient can
   no longer read. Before, a kicked member's pending notification was still emailed in the next
