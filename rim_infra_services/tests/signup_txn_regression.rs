@@ -111,6 +111,7 @@ async fn signup_with_instance_invite_rolls_back_on_conflict() {
             email: "new@example.com".to_string(),
             display_name: None,
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         })
         .await;
 
@@ -193,6 +194,7 @@ async fn signup_with_instance_invite_commits_atomically() {
             email: "invited@example.com".to_string(),
             display_name: None,
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         })
         .await;
 
@@ -252,6 +254,7 @@ async fn signup_open_commits_user_and_session_atomically() {
             email: "open@example.com".to_string(),
             display_name: None,
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         })
         .await;
 
@@ -413,6 +416,7 @@ async fn accept_invite_commits_user_session_and_invite_consumption_atomically() 
             username: "accepteduser".to_string(),
             password: "password1234".to_string(),
             terms_accepted_url: Some("https://rim.example.org/terms".to_string()),
+            confirmed_minimum_age: None,
         })
         .await;
 

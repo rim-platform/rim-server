@@ -78,6 +78,8 @@ pub struct AppRuntime {
     pub(crate) ip_deny_list: Arc<crate::edge::IpDenyList>,
     /// Where ended sessions are reported; each WebSocket connection watches its session here.
     pub session_revocations: Arc<dyn SessionRevocations>,
+    /// The terms page `RIM_TERMS_FILE` names; `None` when the server serves no terms.
+    pub(crate) terms_page: Option<Arc<crate::terms::TermsPage>>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -141,6 +143,7 @@ fn descriptor_settings(
     s2s_origin: Option<&str>,
     registration: &rim_services::auth::dto::RegistrationMode,
     handle_domain: String,
+    abuse_contact: Option<String>,
 ) -> DescriptorSettings {
     let origin = config.public_origin();
     let websocket = match origin.split_once("://") {
@@ -176,6 +179,7 @@ fn descriptor_settings(
         },
         mls_cipher_suites: rim_services::e2ee::ACCEPTED_CIPHER_SUITES.to_vec(),
         handle_domain: Some(handle_domain),
+        abuse_contact,
     }
 }
 
@@ -197,6 +201,7 @@ pub(crate) async fn build_s2s(
     let handle_domain = config
         .handle_domain()
         .map_err(io_error("RIM_HANDLE_DOMAIN"))?;
+    let abuse_contact = config.abuse_contact().map_err(std::io::Error::other)?;
     let s2s_origin = config.s2s_origin();
     let key_files = config.key_files();
     let identity_repo: Arc<dyn ServerIdentityRepository> =
@@ -210,6 +215,7 @@ pub(crate) async fn build_s2s(
         s2s_origin.as_deref(),
         registration,
         handle_domain,
+        abuse_contact,
     );
     let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
         .await
@@ -353,7 +359,10 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let audit_retention_days = config
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
-    let instance_policy = config.instance_policy().map_err(std::io::Error::other)?;
+    let terms_page = config.terms_page().map_err(std::io::Error::other)?;
+    let instance_policy = config
+        .instance_policy(terms_page.as_ref())
+        .map_err(std::io::Error::other)?;
     let instance_limits = config.instance_limits().map_err(std::io::Error::other)?;
     let dm_policy = config.dm_policy().map_err(std::io::Error::other)?;
     let account_deletion_grace_days = config
@@ -516,6 +525,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             dm_policy: dm_policy.clone(),
             default_workspace: instance_policy.default_workspace,
             handle_domain: s2s.descriptor_settings.handle_domain.clone(),
+            minimum_age: instance_policy.minimum_age,
         },
         Arc::clone(&feature_gate),
         instance_limits,
@@ -959,6 +969,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         shutdown_tx,
         ip_deny_list,
         session_revocations,
+        terms_page: terms_page.map(Arc::new),
     })
 }
 

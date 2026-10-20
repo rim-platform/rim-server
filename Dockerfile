@@ -146,6 +146,15 @@ USER rim
 #                           characters (default: none); longer stops the server at boot
 #   RIM_TERMS_URL         — absolute http(s) URL of the terms of service; set, every signup must
 #                           accept it (default: none); a malformed URL stops the server at boot
+#   RIM_TERMS_FILE        — path of a Markdown file of the terms of service, served at /api/terms,
+#                           which every signup then accepts (default: none); a missing, empty or
+#                           oversized file, a FILL: placeholder in it, or RIM_TERMS_URL set too
+#                           stops the server at boot
+#   RIM_ABUSE_CONTACT     — email address or https URL for abuse reports, in the signed
+#                           descriptor and serverInfo (default: none); anything else stops the
+#                           server at boot
+#   RIM_MINIMUM_AGE       — age, 13-21, every signup confirms the person has reached; self-
+#                           declared (default: none); outside the range stops the server at boot
 #   Instance limits, each off when unset or 0; past one a write answers VALIDATION:
 #   RIM_LIMIT_WORKSPACES_PER_USER — workspaces one user owns
 #   RIM_LIMIT_MEMBERS_PER_WORKSPACE — members of a workspace (the direct space has none)

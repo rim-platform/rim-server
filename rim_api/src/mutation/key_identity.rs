@@ -193,6 +193,7 @@ impl KeyIdentityMutations {
                 proof_of_work,
                 remote_ip: crate::auth_context::remote_ip(ctx),
                 terms_accepted_url: input.accepted_terms_url,
+                confirmed_minimum_age: input.confirmed_minimum_age,
             })
             .await
             .map_err(map_service_error)?;

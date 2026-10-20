@@ -159,7 +159,8 @@ fn server_info_sdl_matches_the_contract() {
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
          auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! \
          signupRequiresKeys: Boolean! dmInbound: DmInbound! dmOutbound: DmOutbound! \
-         dmPartners: [String!]! defaultWorkspace: ID registrationFull: Boolean! }"
+         dmPartners: [String!]! defaultWorkspace: ID registrationFull: Boolean! \
+         abuseContact: String minimumAge: Int }"
     ));
     assert!(sdl.contains("enum DmInbound { OPEN REQUESTS PARTNERS NONE }"));
     assert!(sdl.contains("enum DmOutbound { ALLOWED PARTNERS NONE }"));
@@ -222,8 +223,8 @@ async fn server_info_reports_the_audit_retention() {
     assert_eq!(data["serverInfo"]["auditRetentionDays"], 90);
 }
 
-/// `serverInfo.instanceNotice`, `termsUrl`, `signupRequiresKeys` and `defaultWorkspace` report
-/// the configured instance policy.
+/// `serverInfo.instanceNotice`, `termsUrl`, `signupRequiresKeys`, `defaultWorkspace`,
+/// `abuseContact` and `minimumAge` report the configured instance policy.
 #[tokio::test]
 async fn server_info_reports_the_instance_notice_and_terms() {
     let schema = schema_with_user_mock(MockUserService::new());
@@ -231,13 +232,16 @@ async fn server_info_reports_the_instance_notice_and_terms() {
     let res = schema
         .execute(
             Request::new(
-                "{ serverInfo { instanceNotice termsUrl signupRequiresKeys defaultWorkspace } }",
+                "{ serverInfo { instanceNotice termsUrl signupRequiresKeys defaultWorkspace \
+                 abuseContact minimumAge } }",
             )
             .data(crate::types::InstancePolicy {
                 notice: Some("Run by the Example club.".to_string()),
                 terms_url: Some("https://rim.example.org/terms".to_string()),
                 signup_requires_keys: true,
                 default_workspace: Some(workspace),
+                abuse_contact: Some("abuse@rim.example.org".to_string()),
+                minimum_age: Some(16),
             }),
         )
         .await;
@@ -250,23 +254,28 @@ async fn server_info_reports_the_instance_notice_and_terms() {
             "termsUrl": "https://rim.example.org/terms",
             "signupRequiresKeys": true,
             "defaultWorkspace": workspace.to_string(),
+            "abuseContact": "abuse@rim.example.org",
+            "minimumAge": 16,
         })
     );
 }
 
-/// `serverInfo.defaultWorkspace` is null when the server names no default workspace.
+/// `serverInfo.defaultWorkspace`, `abuseContact` and `minimumAge` are null when the server
+/// names none.
 #[tokio::test]
 async fn server_info_default_workspace_is_null_when_unset() {
     let schema = schema_with_user_mock(MockUserService::new());
     let res = schema
         .execute(
-            Request::new("{ serverInfo { defaultWorkspace } }")
+            Request::new("{ serverInfo { defaultWorkspace abuseContact minimumAge } }")
                 .data(crate::types::InstancePolicy::default()),
         )
         .await;
     assert_no_errors(&res);
     let data = res.data.into_json().expect("json");
     assert!(data["serverInfo"]["defaultWorkspace"].is_null());
+    assert!(data["serverInfo"]["abuseContact"].is_null());
+    assert!(data["serverInfo"]["minimumAge"].is_null());
 }
 
 /// `serverInfo.limits` reports the configured caps, null where none is set.
@@ -397,13 +406,14 @@ fn dm_policy_sdl_matches_the_contract() {
     }
 }
 
-/// Both signup inputs end with the optional `acceptedTermsUrl`.
+/// Both signup inputs end with the optional `acceptedTermsUrl` and `confirmedMinimumAge`.
 #[test]
 fn signup_inputs_take_the_accepted_terms_last() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
-        "instanceInviteToken: String workspaceInviteToken: String acceptedTermsUrl: String }",
-        "proofOfWork: String acceptedTermsUrl: String }",
+        "instanceInviteToken: String workspaceInviteToken: String acceptedTermsUrl: String \
+         confirmedMinimumAge: Int }",
+        "proofOfWork: String acceptedTermsUrl: String confirmedMinimumAge: Int }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }

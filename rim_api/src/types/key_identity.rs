@@ -199,6 +199,8 @@ pub struct SignupWithKeyInput {
     pub proof_of_work: Option<String>,
     /// The terms of service the person accepted, as for `signupWithInvite`.
     pub accepted_terms_url: Option<String>,
+    /// The minimum age the person confirmed reaching, as for `signupWithInvite`.
+    pub confirmed_minimum_age: Option<i32>,
 }
 
 #[derive(InputObject, Clone, Debug)]

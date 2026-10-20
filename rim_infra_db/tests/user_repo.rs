@@ -189,6 +189,37 @@ async fn record_terms_acceptance_stores_the_url_and_time() {
 }
 
 #[tokio::test]
+async fn record_minimum_age_confirmation_stores_the_age() {
+    use sea_orm::EntityTrait;
+
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
+    let user = ctx.create_user("u_test_age").await;
+    let untouched = ctx.create_user("u_test_no_age").await;
+
+    repo.record_minimum_age_confirmation(user.id, 16)
+        .await
+        .unwrap();
+
+    let row = |id: rim_core::user::model::UserId| {
+        entity::user::Entity::find_by_id(sea_orm::prelude::Uuid::from(id)).one(&ctx.db)
+    };
+    let confirmed = row(user.id).await.unwrap().unwrap();
+    assert_eq!(confirmed.minimum_age_confirmed, Some(16));
+    let other = row(untouched.id).await.unwrap().unwrap();
+    assert_eq!(other.minimum_age_confirmed, None);
+
+    let err = repo
+        .record_minimum_age_confirmation(rim_core::user::model::UserId::new(), 16)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err.kind(),
+        rim_core::repository::error::RepoErrorKind::NotFound
+    ));
+}
+
+#[tokio::test]
 async fn the_invite_chain_is_recorded_and_an_accounts_invites_are_listed_and_revoked() {
     use chrono::{Duration, Utc};
     use rim_core::auth::model::{NewInstanceInvite, NewInvite};

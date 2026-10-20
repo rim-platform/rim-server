@@ -46,6 +46,8 @@ pub struct Model {
     pub invited_by_user_id: Option<Uuid>,
     /// Whether the account may run the instance's moderation queue.
     pub instance_operator: bool,
+    /// The minimum age the account confirmed having reached at signup.
+    pub minimum_age_confirmed: Option<i16>,
     /// A remote user's username at their home relay; set together with `home_handle_domain`.
     #[sea_orm(column_type = "Text", nullable)]
     pub home_username: Option<String>,

@@ -104,6 +104,8 @@ deciding what to offer; the server enforces the switches itself, so a changed co
 what a client shows. Readers ignore a missing `features` and names they do not know. It sits
 beside the descriptor rather than in it because the descriptor refuses unknown fields: an
 earlier server would refuse a descriptor that carried it.
+`abuseContact` is in the descriptor, signed, so a copy cannot send reports elsewhere; it is
+left out when unset, so only a server that sets it needs peers that know the field.
 
 `registration` is optional and unsigned too: `full` is true while the server holds as many local
 accounts as it accepts (`RIM_LIMIT_ACCOUNTS`) and refuses every signup. It is advisory, since
@@ -132,6 +134,7 @@ The descriptor is signed by the head server key over `rim.server-descriptor.v1\0
 | `mlsCipherSuites` | What `uploadMlsKeyPackages` accepts |
 | `registration` | `mode` `invite`, `open` or `pow`; `powBits` only in `pow` mode |
 | `handleDomain` | The domain of the server's handles ("Handles"): a lowercase DNS name of at most 253 bytes, labels of 1 to 63 letters, digits and hyphens, no leading or trailing hyphen, no trailing dot. Optional: a descriptor without it declares no handles, and is still valid. Placed before `issuedAt` |
+| `abuseContact` | Optional, after `issuedAt`: where to report abuse on the server, an email address or an https URL (`RIM_ABUSE_CONTACT`), 1 to 512 bytes. Left out of the payload when the operator names none, so such a descriptor is byte for byte what it was before the field existed |
 
 The decision record wrote `/.well-known/rim/server` as an illustration; one well-known name is
 simpler. Rejected: an unsigned descriptor (anyone proxying the fetch, a relay included, could change
@@ -383,6 +386,7 @@ Actix's request types.
 | `RIM_RELAY_QUEUE_BYTES_PER_USER` | 268435456 | Queued bytes per local user |
 | `RIM_RELAY_RETENTION_DAYS` | 30 | Queue and DM request retention |
 | `RIM_REGISTRATION_POW_BITS` | unset | Turns on `pow` registration (1 to 40); wins over `RIM_OPEN_REGISTRATION` |
+| `RIM_ABUSE_CONTACT` | unset | The descriptor's `abuseContact`: an email address or an https URL |
 | `RIM_RELAY_CARD_MAX_BYTES` | 131072 | Largest card a local user publishes (at most 128 KiB) |
 | `RIM_RELAY_KEY_PACKAGES_PER_DEVICE` | 100 | Unclaimed one-time key packages per device and suite |
 | `RIM_RELAY_DEVICES_PER_USER` | 32 | Devices per local user, revoked ones not counted |

@@ -99,6 +99,7 @@ pub async fn serve(
     let schema_handle = schema.clone();
     let request_authenticator = runtime.request_authenticator;
     let session_revocations = runtime.session_revocations;
+    let terms_page = runtime.terms_page;
     let storage_backend = runtime.storage_backend;
     let storage_service = runtime.storage_service;
     let message_attachment_service = runtime.message_attachment_service;
@@ -175,6 +176,13 @@ pub async fn serve(
 
         if enable_graphiql {
             api = api.service(index_graphiql);
+        }
+        if let Some(page) = &terms_page {
+            api = api.service(
+                web::resource(crate::terms::TERMS_PATH)
+                    .app_data(web::Data::new(Arc::clone(page)))
+                    .route(web::get().to(crate::terms::handle)),
+            );
         }
 
         // Server-to-server routes sit outside CORS: peers send no `Origin`, and the discovery

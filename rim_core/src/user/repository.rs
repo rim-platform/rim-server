@@ -63,6 +63,13 @@ pub trait UserRepository: Send + Sync {
         accepted_at: DateTime<Utc>,
     ) -> RepoResult<()>;
 
+    /// Record that the user confirmed at signup having reached `age`, the instance's minimum
+    /// age.
+    ///
+    /// # Errors
+    /// `NotFound` when no user has `id`.
+    async fn record_minimum_age_confirmation(&self, id: UserId, age: u8) -> RepoResult<()>;
+
     /// Record the invite the account `id` signed up with and that invite's creator.
     ///
     /// # Errors

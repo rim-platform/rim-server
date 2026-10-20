@@ -2174,6 +2174,7 @@ mod tests {
             proof_of_work: None,
             remote_ip: IP.to_string(),
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         }
     }
 
@@ -2312,6 +2313,7 @@ mod tests {
                 .svc
                 .signup_with_key(SignupWithKeyCmd {
                     terms_accepted_url: sent.map(str::to_string),
+                    confirmed_minimum_age: None,
                     ..open_cmd(&p, "ada")
                 })
                 .await
@@ -2326,6 +2328,7 @@ mod tests {
             .svc
             .signup_with_key(SignupWithKeyCmd {
                 terms_accepted_url: Some(terms.to_string()),
+                confirmed_minimum_age: None,
                 ..open_cmd(&p, "ada")
             })
             .await
@@ -2346,6 +2349,7 @@ mod tests {
             .svc
             .signup_with_key(SignupWithKeyCmd {
                 terms_accepted_url: Some(terms.to_string()),
+                confirmed_minimum_age: None,
                 ..open_cmd(&p, "grace")
             })
             .await
