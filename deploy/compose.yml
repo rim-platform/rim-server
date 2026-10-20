@@ -2,7 +2,9 @@
 # RIM — one self-hosted server: rim-server (role `both`), PostgreSQL 17, the
 # web client, and Caddy terminating TLS for one domain. Client and API share
 # that origin: Caddy sends the API, discovery, server-to-server and probe paths
-# to rim-server and everything else to the web client.
+# to rim-server and everything else to the web client. With RIM_WEB_DOMAIN set
+# in deploy/.env the web client moves to that domain and calls the API there;
+# RIM_DOMAIN stays the server's name and sends browsers to the web domain.
 #
 #   cp deploy/.env.example deploy/.env      # then fill it in
 #   docker compose -f deploy/compose.yml up -d
@@ -81,9 +83,12 @@ services:
       # The https origin clients and other servers reach this server at. Left out of
       # deploy/.env it follows RIM_DOMAIN; set empty, server-to-server traffic is off.
       RIM_PUBLIC_BASE_URL: ${RIM_PUBLIC_BASE_URL-https://${RIM_DOMAIN:?set RIM_DOMAIN in deploy/.env}}
-      # The server accepts its own origin, RIM_PUBLIC_BASE_URL's, without configuration. One
-      # more origin may be allowed, such as a client served from another domain:
-      # RIM_CORS_ALLOWED_ORIGIN: https://app.example.org
+      # The server accepts its own origin, RIM_PUBLIC_BASE_URL's, without configuration, and
+      # one more: RIM_CORS_ALLOWED_ORIGIN when set, else the web client's on RIM_WEB_DOMAIN.
+      RIM_CORS_ALLOWED_ORIGIN: ${RIM_CORS_ALLOWED_ORIGIN:-${RIM_WEB_DOMAIN:+https://${RIM_WEB_DOMAIN}}}
+      # The hosts a key login may name. Left out of deploy/.env it is RIM_PUBLIC_BASE_URL's host,
+      # or with RIM_WEB_DOMAIN set both domains, since the web client names the page's host.
+      RIM_KEY_LOGIN_AUDIENCES: ${RIM_KEY_LOGIN_AUDIENCES:-${RIM_WEB_DOMAIN:+${RIM_DOMAIN},${RIM_WEB_DOMAIN}}}
       # Server key, recovery key (until moved offline), franking keys and uploads.
       RIM_DATA_DIR: /data
       RIM_STORAGE_LOCAL_PATH: /data/uploads
@@ -95,7 +100,6 @@ services:
       # Peers refused before they are ever pinned, comma-separated server ids.
       RIM_S2S_DENIED_PEERS: ${RIM_S2S_DENIED_PEERS:-}
       # Passed through only when set in deploy/.env; deploy/.env.example describes each.
-      RIM_KEY_LOGIN_AUDIENCES:
       RIM_OPEN_REGISTRATION:
       RIM_REGISTRATION_POW_BITS:
       RIM_SIGNUP_REQUIRE_KEYS:
@@ -215,6 +219,7 @@ services:
     user: "65534:65534"
     environment:
       RIM_DOMAIN: ${RIM_DOMAIN:?set RIM_DOMAIN in deploy/.env}
+      RIM_WEB_DOMAIN: ${RIM_WEB_DOMAIN:-}
     ports:
       - "${RIM_HTTP_PORT:-80}:80"
       - "${RIM_HTTPS_PORT:-443}:443"

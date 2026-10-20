@@ -3,8 +3,9 @@
 `deploy/compose.yml` runs one RIM server on one domain: rim-server with `RIM_ROLE=both` (it
 hosts workspaces and is its users' relay), PostgreSQL 17, the web client, and Caddy terminating
 TLS. Caddy sends `/api` (with `/api/ws`), `/.well-known/…` and `/s2s/…` to rim-server and every
-other path to the web client, so the client and the API share one origin. The health probes
-stay inside the compose network.
+other path to the web client, so the client and the API share one origin, unless the web client
+gets a domain of its own ("The web client on its own domain"). The health probes stay inside
+the compose network.
 A public relay is the same file with `deploy/compose.relay.yml` on top; `deploy/README.md`
 covers it.
 
@@ -89,8 +90,33 @@ only with `RIM_TRUST_FORWARDED_HEADERS=true`). Any other origin gets `400 Origin
 allowed`, with two exceptions: the packaged desktop app's origins (`tauri://localhost` on macOS
 and Linux, `http://tauri.localhost` on Windows), which no web page can carry, and one extra
 origin named by `RIM_CORS_ALLOWED_ORIGIN`, such as a client served from another domain or the
-desktop development app at `http://localhost:1420`. The compose file leaves it as a commented
-example.
+desktop development app at `http://localhost:1420`. Left out of `deploy/.env` there is none, or
+the web domain's origin when `RIM_WEB_DOMAIN` is set (next section).
+
+### The web client on its own domain
+
+`RIM_WEB_DOMAIN` in `deploy/.env` serves the web client on a second domain, such as
+`chat.example.org` next to `RIM_DOMAIN=rim.example.org`; its DNS records point at the same host.
+`RIM_DOMAIN` stays the server's name: `RIM_PUBLIC_BASE_URL` follows it, apps sign in to it,
+other servers reach it, and the discovery document names it. `deploy/Caddyfile` then answers
+for both names:
+
+- on the web domain, `/api` (with `/api/ws`) and `/.well-known/rim-server` go to rim-server and
+  every other path to the web client, so the page calls the API on its own origin and its
+  content security policy, `connect-src 'self'`, holds; server-to-server paths are not served
+  there;
+- on `RIM_DOMAIN`, the API, discovery and server-to-server paths go to rim-server as before, and
+  every other path is redirected (`302`) to the web domain with its path and query, so the
+  invite, owner claim and password reset links the server builds on `RIM_PUBLIC_BASE_URL` open
+  the web client.
+
+The compose file derives two server settings from it. `RIM_CORS_ALLOWED_ORIGIN` becomes
+`https://<RIM_WEB_DOMAIN>`, since the browser sends that `Origin` with the client's requests,
+WebSocket included. `RIM_KEY_LOGIN_AUDIENCES` becomes `<RIM_DOMAIN>,<RIM_WEB_DOMAIN>`, since the
+web client names the host of the page in its key login proofs, while the desktop app names
+`RIM_DOMAIN`; both are this server, so a proof still cannot be replayed on another one. Setting
+either variable in `deploy/.env` replaces the derived value. The session cookies are set by the
+origin that answers the login, the web domain for the web client, with no `Domain` attribute.
 
 ## First start
 
@@ -167,7 +193,7 @@ cannot sign up with a key.
 ```sh
 dc exec rim curl -fsS http://localhost:8080/readyz; echo
 curl -s https://rim.example.org/.well-known/rim-server | head -c 300; echo
-curl -sI https://rim.example.org/ | head -n 1                 # the web client
+curl -sI https://rim.example.org/ | head -n 1                 # the web client (302 with RIM_WEB_DOMAIN)
 dc exec rim /app/rim-server --version
 ```
 
@@ -411,7 +437,9 @@ purge writes `account.purged` to the audit log. `dc exec rim /app/rim-server acc
 Caddy is an example. Any TLS proxy works if it:
 
 - sends `/api` (with `/api/ws` as a WebSocket upgrade), `/.well-known/…` and `/s2s/…` to
-  `rim:8080` unchanged, and the rest to `web:80`;
+  `rim:8080` unchanged, and the rest to `web:80`; with a web domain, it sends that domain's
+  `/api` and `/.well-known/rim-server` to `rim:8080` and the rest to `web:80`, and redirects the
+  server domain's other paths there;
 - keeps `/healthz` and `/readyz` off the public side;
 - accepts bodies up to 32 MiB;
 - sets `X-Forwarded-For` itself, replacing what the client sent;
