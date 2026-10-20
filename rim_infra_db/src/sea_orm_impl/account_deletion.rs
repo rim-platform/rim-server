@@ -641,6 +641,7 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                        display_name = $4, email = NULL, password_hash = NULL, avatar_url = NULL,
                        status_text = NULL, bio = NULL, timezone = NULL, last_login_at = NULL,
                        terms_accepted_at = NULL, terms_accepted_url = NULL,
+                       minimum_age_confirmed = NULL,
                        identity_key = NULL, home_relay = NULL
                    WHERE id = $1"#,
                 vec![

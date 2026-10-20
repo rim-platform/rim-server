@@ -45,6 +45,7 @@ fn open_signup(n: usize) -> SignupOpenCmd {
         email: format!("racer{n}@example.com"),
         display_name: None,
         terms_accepted_url: None,
+        confirmed_minimum_age: None,
     }
 }
 

@@ -49,6 +49,12 @@ pub struct ServerInfo {
     /// signup: the one `RIM_DEFAULT_WORKSPACE` names, or the one an owner claimed from the
     /// definition file; null when there is none.
     pub default_workspace: Option<ID>,
+    /// Where to report abuse on this server; served after `registrationFull`.
+    #[graphql(skip)]
+    pub abuse_contact: Option<String>,
+    /// The age every signup confirms; served after `registrationFull`.
+    #[graphql(skip)]
+    pub minimum_age: Option<i32>,
 }
 
 /// The instance-wide caps; each is null when this instance sets none, but devices and DM
@@ -117,8 +123,8 @@ impl From<&InstanceLimits> for ServerLimits {
 pub struct AuditRetention(pub Option<u32>);
 
 /// What the operator publishes about the instance, held in the schema data: the notice shown
-/// to people, the terms URL every signup accepts, whether signups need a key and the workspace
-/// every new account joins.
+/// to people, the terms URL every signup accepts, whether signups need a key, the workspace
+/// every new account joins, the abuse contact and the minimum age signups confirm.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InstancePolicy {
     /// The instance notice; `None` when there is none.
@@ -130,6 +136,10 @@ pub struct InstancePolicy {
     /// The workspace every new account joins as a Member, when configured by id; `None` leaves
     /// `serverInfo` to the workspace an owner claimed from the definition file, if any.
     pub default_workspace: Option<rim_core::server::model::ServerId>,
+    /// Where to report abuse; `None` when the operator names none.
+    pub abuse_contact: Option<String>,
+    /// The age every signup confirms; `None` when signups confirm none.
+    pub minimum_age: Option<u8>,
 }
 
 #[ComplexObject]
@@ -146,6 +156,19 @@ impl ServerInfo {
             tracing::warn!(error = %e, "could not tell whether registration is full");
             false
         })
+    }
+
+    /// Where to report abuse on this server: an email address or an https URL; null when the
+    /// operator names none (`RIM_ABUSE_CONTACT`).
+    async fn abuse_contact(&self) -> Option<&str> {
+        self.abuse_contact.as_deref()
+    }
+
+    /// The age every signup confirms the person has reached, self-declared; null when the
+    /// server asks for none (`RIM_MINIMUM_AGE`). A signup sends it back as
+    /// `confirmedMinimumAge`.
+    async fn minimum_age(&self) -> Option<i32> {
+        self.minimum_age
     }
 }
 
@@ -178,6 +201,8 @@ impl ServerInfo {
             default_workspace: policy
                 .default_workspace
                 .map(|workspace| ID(workspace.to_string())),
+            abuse_contact: policy.abuse_contact.clone(),
+            minimum_age: policy.minimum_age.map(i32::from),
         }
     }
 }

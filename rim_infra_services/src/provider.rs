@@ -79,6 +79,8 @@ pub struct FederationHooks {
     /// The workspace every new account joins as a Member, and the definition an owner claim
     /// creates it from.
     pub default_workspace: crate::default_workspace::DefaultWorkspace,
+    /// The minimum age every signup must confirm; `None` when there is none.
+    pub minimum_age: Option<u8>,
 }
 
 #[derive(Clone)]
@@ -169,6 +171,7 @@ impl DefaultAppServiceProvider {
             .with_password_hashing(federation.password_hashing.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
+            .with_minimum_age(federation.minimum_age)
             .with_signup_requires_keys(federation.signup_requires_keys)
             .with_default_workspace(federation.default_workspace.clone())
             .with_account_cap(account_cap.clone()),
@@ -205,6 +208,7 @@ impl DefaultAppServiceProvider {
             .with_reserved_names(federation.reserved_names.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
+            .with_minimum_age(federation.minimum_age)
             .with_default_workspace(federation.default_workspace.clone())
             .with_account_cap(account_cap);
         if let Some(host) = &federation.host_service {

@@ -446,6 +446,30 @@ impl TestCtx {
         )
     }
 
+    /// Build the schema on an instance whose signups confirm `minimum_age`, as
+    /// `RIM_MINIMUM_AGE` does, in open registration.
+    pub fn build_schema_with_minimum_age(&self, minimum_age: u8) -> rim_api::AppSchema {
+        let (provider, observers) = test_provider(
+            &self.conn,
+            std::sync::Arc::new(NoopBroadcaster),
+            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+            rim_infra_services::FederationHooks {
+                minimum_age: Some(minimum_age),
+                ..Default::default()
+            },
+            rim_services::limits::InstanceLimits::default(),
+        );
+        schema_with_policy(
+            std::sync::Arc::new(provider),
+            observers,
+            rim_services::auth::dto::RegistrationMode::Open,
+            rim_api::types::InstancePolicy {
+                minimum_age: Some(minimum_age),
+                ..Default::default()
+            },
+        )
+    }
+
     /// Build the schema on an instance whose every new account joins `workspace`, as
     /// `RIM_DEFAULT_WORKSPACE` does, in `registration_mode`.
     pub fn build_schema_with_default_workspace(

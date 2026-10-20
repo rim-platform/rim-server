@@ -380,15 +380,68 @@ Outgoing requests ignore proxy environment variables.
 ## Notice and terms
 
 `RIM_INSTANCE_NOTICE` is a short text, at most 500 characters, that clients show people on
-your server, such as who runs it and how to reach you. `RIM_TERMS_URL` is the address of your
-terms of service; once it is set, every signup has to accept those terms and the server records
-on the account when it did and which URL it accepted. Both are commented out in
-`deploy/.env.example` and reach the `rim` service when set; clients read them from
-`serverInfo`. A notice over 500 characters or a terms URL that is not an absolute http(s) URL
-stops the server at boot. Changing the terms URL does not ask existing accounts to accept again.
+your server, such as who runs it and how to reach you. Once your server has terms of service,
+every signup has to accept them and the server records on the account when it did and which
+URL it accepted. The terms come from one of two settings, never both (both set stops the
+server at boot):
+
+- `RIM_TERMS_FILE`, a Markdown file the server reads at start and serves as a page at
+  `https://<your domain>/api/terms`. `compose.yml` mounts `deploy/terms.md` at
+  `/config/terms.md`; that file is the public RIM server's terms, so rewrite it for your
+  server, then set `RIM_TERMS_FILE=/config/terms.md`. The page shows headings, paragraphs,
+  lists, bold and italic text, code and links (https, http and mailto); any HTML in the file
+  is shown as text, and `<!-- -->` comments are left out. The terms URL carries a short hash
+  of the file (`/api/terms?v=…`), so after an edit and `dc restart rim` new signups accept the
+  new version and each account records which one it accepted. A missing, unreadable, empty or
+  larger than 64 KiB file, or a `FILL:` placeholder left outside a comment, stops the server at
+  boot.
+- `RIM_TERMS_URL`, the address of terms you host elsewhere, an absolute http(s) URL.
+
+`RIM_ABUSE_CONTACT` is where to report abuse on your server: an email address or an https URL.
+The server publishes it in its signed descriptor, so other servers can find it, and clients
+show it. Anything else stops the server at boot.
+
+`RIM_MINIMUM_AGE` (13 to 21) asks every signup to confirm that the person has reached that
+age: clients show "I am at least 16" beside the terms, and a signup without the confirmation
+is refused. The age is self-declared. Nothing checks it and the account records only the age it
+confirmed, next to its acceptance of the terms.
+
+All of these are commented out in `deploy/.env.example` and reach the `rim` service when set;
+clients read them from `serverInfo`. A notice over 500 characters or a terms URL that is not an
+absolute http(s) URL stops the server at boot. Changing the terms does not ask existing
+accounts to accept again.
+
 `RIM_RESERVED_NAMES` (commented out in `deploy/.env.example`) lists usernames and display names
 that signups and profile edits refuse, ignoring case, so nobody can pose as your maintainers;
 set it once their accounts exist, since it refuses those names to new signups too.
+
+## Legal duties of an operator
+
+Running a server that strangers can sign up on makes you a hosting provider for what they post,
+with duties that a server for your own team or friends mostly does not have. This is not legal
+advice; the rules depend on where you and your server are.
+
+- **Keep signups invite-only unless you mean otherwise.** It is the default: nobody signs up
+  without a link you issued, unless `RIM_OPEN_REGISTRATION` or `RIM_REGISTRATION_POW_BITS` is
+  set. Opening registration is what turns your server into a public service.
+- **Be reachable for abuse reports.** Set `RIM_ABUSE_CONTACT` and read what arrives there, as
+  well as the reports people file from the app; "Abuse policy" in
+  `docs/operations/relay-public.md` has a policy text to start from. In the European Union the
+  Digital Services Act expects a hosting provider to have a point of contact and to act on
+  notices of illegal content.
+- **Act on illegal content.** Remove it and block the account once you know of it
+  (`rim-server principal block`, `rim-server abuse-reports`, or instance moderation in the
+  app, `docs/api.md`). Child sexual abuse material is removed at once and reported to the
+  police; keep only what the police ask you to keep.
+- **Know what you can see.** Workspace channels are stored readable on your server; direct
+  messages and encrypted groups are not, so you cannot moderate their content, only the accounts
+  and the reports people send you.
+- **Publish terms and, if your law asks for one, a minimum age.** `RIM_TERMS_FILE` and
+  `RIM_MINIMUM_AGE` ("Notice and terms" above). Under the GDPR the age below which a parent
+  has to consent to a child's use of such a service is set by each country, between 13 and 16.
+- **RIM never asks anyone for an ID.** RIM has no identity check and collects no ID documents;
+  the minimum age is a statement the person makes, and the account records only that they made
+  it.
 
 ## A default workspace
 

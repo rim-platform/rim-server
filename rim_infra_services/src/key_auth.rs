@@ -30,7 +30,7 @@ use rim_identity::{
 };
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::auth::dto::{AuthSessionDto, LoginResultDto, RegistrationMode, SignupResultDto};
-use rim_services::auth::terms::accepted_terms;
+use rim_services::auth::terms::{accepted_terms, confirmed_minimum_age};
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::events::Observers;
 use rim_services::host::dto::IdentityRefresh;
@@ -144,6 +144,8 @@ pub struct DefaultKeyAuthService {
     session_revocations: Arc<dyn SessionRevocations>,
     /// The terms of service URL every signup must accept; `None` when there are none.
     terms_url: Option<String>,
+    /// The minimum age every signup must confirm; `None` when there is none.
+    minimum_age: Option<u8>,
     /// The workspace every new account joins as a Member, and the definition an owner claim
     /// creates it from.
     default_workspace: default_workspace::DefaultWorkspace,
@@ -288,6 +290,7 @@ impl DefaultKeyAuthService {
             reserved_names: ReservedNames::default(),
             session_revocations: crate::session_revocation::unshared(),
             terms_url: None,
+            minimum_age: None,
             default_workspace: default_workspace::DefaultWorkspace::None,
             account_cap: AccountCap::default(),
         }
@@ -327,6 +330,12 @@ impl DefaultKeyAuthService {
     /// Requires every signup to accept the terms at `terms_url`.
     pub fn with_terms_url(mut self, terms_url: Option<String>) -> Self {
         self.terms_url = terms_url;
+        self
+    }
+
+    /// Requires every signup to confirm the person has reached `minimum_age`.
+    pub fn with_minimum_age(mut self, minimum_age: Option<u8>) -> Self {
+        self.minimum_age = minimum_age;
         self
     }
 
@@ -1040,6 +1049,7 @@ impl KeyAuthService for DefaultKeyAuthService {
     async fn signup_with_key(&self, cmd: SignupWithKeyCmd) -> ServiceResult<SignupResultDto> {
         let terms_accepted_url =
             accepted_terms(self.terms_url.as_deref(), cmd.terms_accepted_url.as_deref())?;
+        let confirmed_age = confirmed_minimum_age(self.minimum_age, cmd.confirmed_minimum_age)?;
         // The same mode rules as `signupWithInvite`, checked here too so the service never
         // relies on the resolver alone. In pow mode a proof-of-work stands in for the token.
         let refuse = |why: &str| Err(ServiceError::Validation(why.to_string()));
@@ -1157,7 +1167,13 @@ impl KeyAuthService for DefaultKeyAuthService {
             .get_by_id(user_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
-        signup::record_terms(repos.user_repo.as_ref(), user.id, terms_accepted_url).await?;
+        signup::record_terms(
+            repos.user_repo.as_ref(),
+            user.id,
+            terms_accepted_url,
+            confirmed_age,
+        )
+        .await?;
         let server_id = match &token {
             Some(token) => {
                 signup::claim_token(

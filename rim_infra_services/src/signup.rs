@@ -431,8 +431,8 @@ pub(crate) async fn check_signup_email(
     Ok(())
 }
 
-/// Record on `user_id` the terms URL the signup accepted, stamped now; nothing when it accepted
-/// none. Runs on the signup's transaction.
+/// Record on `user_id` the terms URL the signup accepted, stamped now, and the minimum age it
+/// confirmed; nothing for either it did not give. Runs on the signup's transaction.
 ///
 /// # Errors
 /// Propagates storage errors.
@@ -440,10 +440,16 @@ pub(crate) async fn record_terms(
     user_repo: &dyn UserRepository,
     user_id: UserId,
     accepted: Option<String>,
+    minimum_age: Option<u8>,
 ) -> ServiceResult<()> {
     if let Some(url) = accepted {
         user_repo
             .record_terms_acceptance(user_id, url, Utc::now())
+            .await?;
+    }
+    if let Some(age) = minimum_age {
+        user_repo
+            .record_minimum_age_confirmation(user_id, age)
             .await?;
     }
     Ok(())

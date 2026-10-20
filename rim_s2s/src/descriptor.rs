@@ -9,6 +9,9 @@ use crate::statement::{STATEMENT_VERSION, ServerStatement, parse_payload, verify
 /// Largest descriptor `version`.
 pub const MAX_DESCRIPTOR_VERSION: u32 = i32::MAX as u32;
 
+/// Longest descriptor `abuseContact`, in bytes.
+pub const MAX_ABUSE_CONTACT_BYTES: usize = 512;
+
 /// A role a server runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,6 +84,10 @@ pub struct ServerDescriptor {
     pub limits: Limits,
     pub registration: Registration,
     pub issued_at: String,
+    /// Where to report abuse on this server: an email address or an https URL. Left out of the
+    /// payload when the operator names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abuse_contact: Option<String>,
 }
 
 const DESCRIPTOR_TYPE: &str = "server-descriptor";
@@ -112,7 +119,14 @@ impl ServerDescriptor {
             limits,
             registration,
             issued_at,
+            abuse_contact: None,
         }
+    }
+
+    /// This descriptor naming `abuse_contact` as where to report abuse.
+    pub fn with_abuse_contact(mut self, abuse_contact: Option<String>) -> Self {
+        self.abuse_contact = abuse_contact;
+        self
     }
 
     /// Whether two descriptors say the same thing, ignoring `version` and `issuedAt`.
@@ -153,6 +167,13 @@ impl ServerDescriptor {
             return Err(StatementError::invalid(
                 "powBits is set exactly in pow registration mode",
             ));
+        }
+        if let Some(contact) = &self.abuse_contact
+            && (contact.trim().is_empty() || contact.len() > MAX_ABUSE_CONTACT_BYTES)
+        {
+            return Err(StatementError::invalid(format!(
+                "abuseContact must be 1 to {MAX_ABUSE_CONTACT_BYTES} bytes"
+            )));
         }
         Ok(())
     }
@@ -294,6 +315,30 @@ mod tests {
         assert!(verify_descriptor(&rotated, &wrong_key).is_err());
         let right = sign_descriptor(&next_key, &d).expect("sign");
         assert!(verify_descriptor(&rotated, &right).is_ok());
+    }
+
+    #[test]
+    fn abuse_contact_is_signed_when_set_and_left_out_when_not() {
+        let (state, signer) = state();
+        let plain = sign_descriptor(&signer, &descriptor(&state)).expect("sign");
+        assert!(!plain.payload.contains("abuseContact"));
+        let d = descriptor(&state).with_abuse_contact(Some("abuse@a.example".into()));
+        let signed = sign_descriptor(&signer, &d).expect("sign");
+        assert!(
+            signed.payload.ends_with(
+                r#""issuedAt":"2026-10-09T00:00:00Z","abuseContact":"abuse@a.example"}"#
+            )
+        );
+        assert_eq!(verify_descriptor(&state, &signed), Ok(d.clone()));
+        assert!(!d.same_content(&descriptor(&state)));
+        for bad in [
+            String::new(),
+            " ".into(),
+            "a".repeat(MAX_ABUSE_CONTACT_BYTES + 1),
+        ] {
+            let d = descriptor(&state).with_abuse_contact(Some(bad));
+            assert!(sign_descriptor(&signer, &d).is_err());
+        }
     }
 
     #[test]

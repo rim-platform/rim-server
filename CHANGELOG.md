@@ -34,6 +34,19 @@ tag `v<version>`, the version every crate in the workspace carries.
   on. The signup through the claim link
   answers the new workspace as `serverId`, and `serverInfo.defaultWorkspace` names it from then
   on. "A default workspace" in `docs/self-hosting.md` describes it.
+- `RIM_TERMS_FILE`: the terms of service as a Markdown file the server serves as a page at
+  `/api/terms?v=<hash>`, which is then `serverInfo.termsUrl` and the URL every signup accepts.
+  A missing, empty or oversized file, a `FILL:` placeholder in it, or `RIM_TERMS_URL` set too
+  stops the server at boot. `deploy/terms.md` holds the public RIM server's terms and an example
+  for self-hosters; `compose.yml` mounts it read-only at `/config/terms.md`.
+- `RIM_ABUSE_CONTACT`: where to report abuse, an email address or an https URL, published as
+  `abuseContact` in the signed server descriptor (`docs/specs/server-to-server-v1.md`) and as
+  `serverInfo.abuseContact`.
+- `RIM_MINIMUM_AGE` (13 to 21): every signup confirms the person has reached that age.
+  `serverInfo.minimumAge` names it and `signupWithInvite` and `signupWithKey` take
+  `confirmedMinimumAge`; a signup without it answers `VALIDATION`. The account records only the
+  age confirmed. The migration adds a nullable `user.minimum_age_confirmed` column.
+- "Legal duties of an operator" in `docs/self-hosting.md`.
 - `RIM_WEB_DOMAIN` in `deploy/.env` serves the web client on a domain of its own with
   `deploy/Caddyfile`, such as `chat.example.org` next to `RIM_DOMAIN`. The client calls the API
   on that origin; `RIM_DOMAIN` stays the server's name for apps, other servers and the discovery
