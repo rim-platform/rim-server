@@ -2,21 +2,29 @@
 The terms of use of the public RIM server, and an example for your own. The server serves this
 file at /api/terms when RIM_TERMS_FILE names it (compose.yml mounts it at /config/terms.md),
 and every signup accepts it. Running your own server: rewrite it for your server before you
-set RIM_TERMS_FILE; it names the public server's operator, not you. The server refuses to
-start while a FILL: placeholder is left outside these comments. Comments like this one are not
-shown on the page.
+set RIM_TERMS_FILE; it describes the RIM project's test server, not yours. The server refuses
+to start while a FILL: placeholder is left outside these comments. Comments like this one are
+not shown on the page.
 -->
 
 # Terms of use
 
 These terms apply to this RIM server. By creating an account you agree to them.
 
-## Who runs it
+## What this server is
 
-This server is run by FILL: operator's legal name, as volunteers, free of charge. It is hosted
-in the European Union, on a virtual server from vpsFree.cz in the Czech Republic.
+This server is a first test run of the RIM project. It is provided as it is, with no
+guarantee that it is available and no guarantee against data loss. Accounts and data may be
+reset or deleted at any time, and the service may end without notice. Keep your own copies of
+anything important.
 
-Contact and abuse reports: FILL: abuse contact address.
+## Contact
+
+Questions about the server go to <https://github.com/rim-platform/rim-server/issues>. Issues
+there are public: do not post personal details.
+
+To report a message, content or a person, use the report function in the app. Reports reach
+the people who moderate and run this server, and nothing in them is made public.
 
 ## Who may use it
 
@@ -34,7 +42,10 @@ for your password or your keys.
 - Harass, threaten or impersonate anyone.
 - Attack, overload or probe this server or the people using it.
 
-## What the server stores and can read
+Content that breaks these rules may be removed, and accounts suspended or deleted, without
+notice.
+
+## What the server can and cannot read
 
 - Your account: username, display name, profile, public keys and devices, and when you
   accepted these terms.
@@ -46,31 +57,10 @@ for your password or your keys.
 - The IP addresses you connect from appear in the server's logs, which are kept for a limited
   time to keep the service running and to fight abuse.
 
-Nothing is sold or shared with advertisers.
-
-## Moderation and removal
-
-Report abuse to the contact above, or from the app. The people running this server may remove
-content and suspend or delete accounts that break these terms, and may do so without notice
-when a case is urgent or illegal. Illegal content is reported to the authorities where the law
-requires it.
-
-You can delete your account at any time from the app. It is erased after a short grace
-period during which you can still cancel.
-
-## No warranty
-
-The service is provided as it is, with no warranty and no promise of uptime. It may be slow,
-go down or lose data. Keep copies of anything you cannot afford to lose.
-
-## If the service ends
-
-This server may close. If it does, it will be announced in advance where possible. Your
-account's identity is your key, not this server: you can move to another RIM server without
-losing it, and your message history stays on your devices. Workspaces hosted on this server
-close with it.
+Nothing is sold or shared with advertisers. You can delete your account at any time from the
+app.
 
 ## Changes to these terms
 
-These terms may change. Changes are announced in the app before they take effect. New
-signups accept the current version; the server records which version each account accepted.
+These terms may change. New signups accept the current version, and the server records which
+version each account accepted.

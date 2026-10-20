@@ -184,8 +184,10 @@ The public relay keeps the DM defaults, `RIM_DM_INBOUND=requests` and
 A DM" in `docs/messaging.md`).
 
 The public relay serves `deploy/terms.md` as its terms of use (`RIM_TERMS_FILE=/config/terms.md`),
-publishes where to report abuse (`RIM_ABUSE_CONTACT`) and asks every signup to confirm an age of
-16 (`RIM_MINIMUM_AGE=16`), all set in `deploy/.env`. After editing `deploy/terms.md`,
+publishes where to reach its operators
+(`RIM_ABUSE_CONTACT=https://github.com/rim-platform/rim-server/issues`, public; reports about
+content or a person go through the app's report function) and asks every signup to confirm an
+age of 16 (`RIM_MINIMUM_AGE=16`), all set in `deploy/.env`. After editing `deploy/terms.md`,
 `dc restart rim` serves the new text; its URL changes with it, so new signups accept the new
 version.
 
