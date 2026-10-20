@@ -1,0 +1,11 @@
+# Runs rim-deploy.service every five minutes, and once at boot when a run was missed.
+[Unit]
+Description=Check for a new rim-server release every five minutes
+Documentation=https://github.com/rim-platform/rim-server/blob/master/deploy/README.md
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

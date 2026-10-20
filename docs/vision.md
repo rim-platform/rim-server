@@ -23,12 +23,13 @@ workflow instead of adapting to the platform.
 ## Who RIM Is For
 
 RIM is not trying to replace Discord, Slack or Matrix. It is for people who want something
-those platforms do not offer: a communication workspace they can program. Gaming communities,
-developer teams, friend groups and ops teams all fit, and each shapes the workspace
+those platforms do not offer: a communication workspace they can program. Developer teams,
+open-source communities and privacy-minded groups come first, and each shapes the workspace
 differently through commands, keybinds, macros, pipelines and plugins, without RIM shipping a
 feature for each of them. A developer adds a panel that shows the pods in their Kubernetes
-cluster; a community adds its own commands and automations; a privacy-minded group runs it on
-their own box.
+cluster; an open-source community adds its own commands and automations; a privacy-minded
+group runs it on their own box. Gaming communities fit once a voice bridge plugin exists,
+since RIM does not build voice or video itself.
 
 Pitch: *the self-hosted communication workspace you program.* A bring-your-own-model AI agent
 acts through the same command registry under a human confirmation gate, so it can operate
@@ -50,19 +51,18 @@ compatible with them.
 
 ## Core Differentiators
 
-These are the capabilities that no competing product offers together:
+These are the capabilities RIM is built around:
 
 1. **Command palette** — a universal, fuzzy-searchable action launcher for every
    operation in the app. Not a channel switcher. Not slash commands. A true command
    palette like VS Code's Ctrl+Shift+P.
 
 2. **User-defined keybinds** — any action can be bound to any key combination,
-   scoped by context (global, composer, message list, thread view, panel). No other
-   team chat app allows this.
+   scoped by context (global, composer, message list, thread view, panel).
 
 3. **User commands and macros** — users compose multi-step workflows from individual
    commands. A user command bound to a keystroke runs all its steps; a macro runs its
-   steps from Settings or `/macro` in the composer. No other team chat app offers this.
+   steps from Settings or `/macro` in the composer.
 
 4. **Client-side plugin system** — plugins extend the application itself (new panels,
    commands, context actions, behaviors), not just post messages into channels.
@@ -91,8 +91,9 @@ RIM is built for people who:
 - Want to customize their tools (keybinds, macros, workflows).
 - Value extensibility and are willing to install or build plugins.
 - Care about performance and resource efficiency.
-- Run a community or a team and want to shape the tool around it: gamers, developers,
-  ops teams, friend groups.
+- Run a team or a community and want to shape the tool around it: developer and ops teams,
+  open-source communities, privacy-minded groups; gaming communities once a voice bridge
+  plugin exists.
 - Prefer to self-host their communication, or at least to be able to.
 
 RIM is not built for people who want the simplest possible chat experience or who
@@ -100,17 +101,18 @@ need an enterprise platform with thousands of pre-built integrations.
 
 ## Competitive Landscape
 
-No competing team-chat product combines a command palette, custom keybinds,
-macro commands, and client-side plugins.
+Most of RIM's pieces exist somewhere else: Slack ships AI agents and MCP; Mattermost, Zulip
+and Element run on your own server; Mattermost has client plugins; Element encrypts end to end;
+Discord lets users rebind keys. A feature checklist ages with every release, so the difference
+RIM claims is the one that lasts: the four below together, in a workspace its community runs
+and programs itself.
 
-| Feature               | Slack | Discord | Mattermost | Zulip | Element | RIM   |
-|-----------------------|-------|---------|------------|-------|---------|-------|
-| Command palette       | ❌    | ❌      | ❌         | ❌    | ❌      | ✅    |
-| Custom keybinds       | ❌    | 🔧     | ❌         | ❌    | ❌      | ✅    |
-| Macro commands        | ❌    | ❌      | ❌         | ❌    | ❌      | ✅    |
-| Client-side plugins   | ❌    | ❌      | ✅         | ❌    | ❌      | ✅    |
-| Non-Electron desktop  | ❌    | ❌      | ❌         | ❌    | ❌      | ✅    |
-| Text E2EE             | ❌    | ❌      | ❌         | ❌    | ✅      | ✅ *  |
+| What lasts                         | What it means in RIM                                        |
+|------------------------------------|-------------------------------------------------------------|
+| Self-hosted                        | One box holds the workspace, its data and its audit log; any server can be a person's relay or a workspace's host, so none is central. DMs and private groups are end-to-end encrypted. \* |
+| Bring-your-own-model AI            | The agent talks to the provider and model the user picks, with the user's own key; RIM ships neither a model nor a key. |
+| Plugins that extend the client     | Plugins add panels, commands, context actions and behaviors to the application itself, under capability-based permissions and per-workspace registries of signed plugins. |
+| A programmable command registry with a confirmation gate | Every action is a command that the palette, keybinds, macros, plugins and the agent all call; the agent acts only through it, and anything mutating or dangerous waits for a person to confirm. |
 
 \* DMs and private groups, with MLS (`docs/specs/e2ee-mls-v1.md`). Channels stay plaintext so
 server search, pipelines and AI grounding keep working there; in encrypted conversations those
