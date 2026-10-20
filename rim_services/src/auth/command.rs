@@ -67,6 +67,10 @@ pub struct AcceptInviteCmd {
     /// terms and this is not their URL, and records it on the new account; without instance
     /// terms it is ignored.
     pub terms_accepted_url: Option<String>,
+    /// The minimum age the person confirmed reaching. The service refuses the signup when the
+    /// instance has a minimum age and this is not it, and records it on the new account;
+    /// without one it is ignored.
+    pub confirmed_minimum_age: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +104,10 @@ pub struct SignupWithInstanceInviteCmd {
     /// terms and this is not their URL, and records it on the new account; without instance
     /// terms it is ignored.
     pub terms_accepted_url: Option<String>,
+    /// The minimum age the person confirmed reaching. The service refuses the signup when the
+    /// instance has a minimum age and this is not it, and records it on the new account;
+    /// without one it is ignored.
+    pub confirmed_minimum_age: Option<i32>,
 }
 
 /// Command for open-mode signup (no token required).
@@ -122,6 +130,10 @@ pub struct SignupOpenCmd {
     /// terms and this is not their URL, and records it on the new account; without instance
     /// terms it is ignored.
     pub terms_accepted_url: Option<String>,
+    /// The minimum age the person confirmed reaching. The service refuses the signup when the
+    /// instance has a minimum age and this is not it, and records it on the new account;
+    /// without one it is ignored.
+    pub confirmed_minimum_age: Option<i32>,
 }
 
 /// Query to preview a registration token (instance or workspace invite).

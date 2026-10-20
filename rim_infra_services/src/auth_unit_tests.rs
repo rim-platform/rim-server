@@ -1012,6 +1012,7 @@ mod tests {
                 username: "taken".to_string(),
                 password: "password123".to_string(),
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -1103,6 +1104,7 @@ mod tests {
                 email: "alice@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap();
@@ -1175,6 +1177,7 @@ mod tests {
                 email: "bob@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await;
         assert!(res.is_ok(), "first use should succeed");
@@ -1188,6 +1191,7 @@ mod tests {
                 email: "carol@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -1250,6 +1254,7 @@ mod tests {
                 email: "user@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap();
@@ -1263,6 +1268,7 @@ mod tests {
                 email: "user4@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -1295,6 +1301,7 @@ mod tests {
                 email: "alice@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -1325,6 +1332,7 @@ mod tests {
                 email: "alice@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -1376,6 +1384,7 @@ mod tests {
                 email: "carol@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap();
@@ -1452,6 +1461,7 @@ mod tests {
                 email: "carol@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: Some(TERMS.to_string()),
+                confirmed_minimum_age: None,
             })
             .await
             .expect("open signup");
@@ -1482,6 +1492,7 @@ mod tests {
                 email: "alice@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: Some(TERMS.to_string()),
+                confirmed_minimum_age: None,
             })
             .await
             .expect("instance invite signup");
@@ -1502,6 +1513,7 @@ mod tests {
                 email: "carol@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: accepted.clone(),
+                confirmed_minimum_age: None,
             })
             .await
             .map(|_| ());
@@ -1513,6 +1525,7 @@ mod tests {
                 email: "carol@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: accepted.clone(),
+                confirmed_minimum_age: None,
             })
             .await
             .map(|_| ());
@@ -1522,6 +1535,7 @@ mod tests {
                 username: "carol".to_string(),
                 password: "s3cur3p4ss!".to_string(),
                 terms_accepted_url: accepted,
+                confirmed_minimum_age: None,
             })
             .await
             .map(|_| ());
@@ -1635,6 +1649,7 @@ mod tests {
                 email: "alice@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -1665,6 +1680,7 @@ mod tests {
                 email: "alice@example.com".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -1699,6 +1715,7 @@ mod tests {
             email: "carol@example.com".to_string(),
             display_name: display_name.map(str::to_string),
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         };
         let refusals = [
             svc.signup_open(open("rim-team", None)).await,
@@ -1712,6 +1729,7 @@ mod tests {
                 email: "carol@example.com".to_string(),
                 display_name: Some("Rim Support".to_string()),
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await;
         let accepted = svc
@@ -1720,6 +1738,7 @@ mod tests {
                 username: "admin_2".to_string(),
                 password: "password123".to_string(),
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .map(|_| ());
@@ -2084,6 +2103,7 @@ mod tests {
                 email: "  Foo@Bar.COM ".to_string(), // whitespace + mixed case
                 display_name: Some("Alice Smith".to_string()),
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap();
@@ -2131,6 +2151,7 @@ mod tests {
                 email: "X@Y.ZZ".to_string(),
                 display_name: None,
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -2175,6 +2196,7 @@ mod tests {
                     email: bad_email.to_string(),
                     display_name: None,
                     terms_accepted_url: None,
+                    confirmed_minimum_age: None,
                 })
                 .await
                 .unwrap_err();
@@ -2251,6 +2273,7 @@ mod tests {
             email: "alice@example.com".to_string(),
             display_name: None,
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         })
         .await
         .unwrap();
@@ -2323,6 +2346,7 @@ mod tests {
             email: "alice@example.com".to_string(),
             display_name: Some("   ".to_string()), // blank after trim → falls back to username
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         })
         .await
         .unwrap();
@@ -2351,6 +2375,7 @@ mod tests {
                 email: "alice@example.com".to_string(),
                 display_name: Some(long_name),
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .unwrap_err();
@@ -3271,6 +3296,7 @@ mod tests {
                         email: "carol@example.com".to_string(),
                         display_name: None,
                         terms_accepted_url: None,
+                        confirmed_minimum_age: None,
                     })
                     .await
                     .expect("open signup");
@@ -3283,6 +3309,7 @@ mod tests {
                         email: "carol@example.com".to_string(),
                         display_name: None,
                         terms_accepted_url: None,
+                        confirmed_minimum_age: None,
                     })
                     .await
                     .expect("instance invite signup");
@@ -3293,6 +3320,7 @@ mod tests {
                         username: "carol".to_string(),
                         password: "s3cur3p4ss!".to_string(),
                         terms_accepted_url: None,
+                        confirmed_minimum_age: None,
                     })
                     .await
                     .expect("workspace invite signup");
@@ -3327,6 +3355,7 @@ mod tests {
             username: "carol".to_string(),
             password: "s3cur3p4ss!".to_string(),
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         })
         .await
         .expect("workspace invite signup");
@@ -3355,6 +3384,7 @@ mod tests {
             email: "carol@example.com".to_string(),
             display_name: None,
             terms_accepted_url: None,
+            confirmed_minimum_age: None,
         })
         .await
         .expect("open signup");

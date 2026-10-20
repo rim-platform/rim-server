@@ -24,6 +24,7 @@ mod remote_handlers;
 mod s2s;
 pub mod server;
 pub mod server_key_cmd;
+pub(crate) mod terms;
 pub(crate) mod ws;
 
 pub use s2s::{S2sSettings, S2sState};

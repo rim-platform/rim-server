@@ -77,6 +77,8 @@ pub struct FederationHooks {
     pub dm_policy: rim_services::dm_policy::dto::DmOperatorPolicy,
     /// The workspace every new account joins as a Member; `None` when there is none.
     pub default_workspace: Option<rim_core::server::model::ServerId>,
+    /// The minimum age every signup must confirm; `None` when there is none.
+    pub minimum_age: Option<u8>,
 }
 
 #[derive(Clone)]
@@ -166,6 +168,7 @@ impl DefaultAppServiceProvider {
             .with_password_hashing(federation.password_hashing.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
+            .with_minimum_age(federation.minimum_age)
             .with_signup_requires_keys(federation.signup_requires_keys)
             .with_default_workspace(federation.default_workspace)
             .with_account_cap(account_cap.clone()),
@@ -202,6 +205,7 @@ impl DefaultAppServiceProvider {
             .with_reserved_names(federation.reserved_names.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
+            .with_minimum_age(federation.minimum_age)
             .with_default_workspace(federation.default_workspace)
             .with_account_cap(account_cap);
         if let Some(host) = &federation.host_service {

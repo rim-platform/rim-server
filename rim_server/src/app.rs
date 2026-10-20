@@ -78,6 +78,8 @@ pub struct AppRuntime {
     pub(crate) ip_deny_list: Arc<crate::edge::IpDenyList>,
     /// Where ended sessions are reported; each WebSocket connection watches its session here.
     pub session_revocations: Arc<dyn SessionRevocations>,
+    /// The terms page `RIM_TERMS_FILE` names; `None` when the server serves no terms.
+    pub(crate) terms_page: Option<Arc<crate::terms::TermsPage>>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -140,6 +142,7 @@ fn descriptor_settings(
     role: ServerRole,
     s2s_origin: Option<&str>,
     registration: &rim_services::auth::dto::RegistrationMode,
+    abuse_contact: Option<String>,
 ) -> DescriptorSettings {
     let origin = config.public_origin();
     let websocket = match origin.split_once("://") {
@@ -174,6 +177,7 @@ fn descriptor_settings(
             },
         },
         mls_cipher_suites: rim_services::e2ee::ACCEPTED_CIPHER_SUITES.to_vec(),
+        abuse_contact,
     }
 }
 
@@ -192,6 +196,7 @@ pub(crate) async fn build_s2s(
         .host_allowed_relays()
         .map_err(io_error("RIM_HOST_ALLOWED_RELAYS"))?;
     let dm_policy = config.dm_policy().map_err(io_error("RIM_DM_*"))?;
+    let abuse_contact = config.abuse_contact().map_err(std::io::Error::other)?;
     let s2s_origin = config.s2s_origin();
     let key_files = config.key_files();
     let identity_repo: Arc<dyn ServerIdentityRepository> =
@@ -199,7 +204,13 @@ pub(crate) async fn build_s2s(
     let loaded = server_key::load_or_create(identity_repo.as_ref(), &key_files)
         .await
         .map_err(|e| io_error("server key")(format!("{e:#}")))?;
-    let settings = descriptor_settings(config, role, s2s_origin.as_deref(), registration);
+    let settings = descriptor_settings(
+        config,
+        role,
+        s2s_origin.as_deref(),
+        registration,
+        abuse_contact,
+    );
     let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
         .await
         .map_err(|e| io_error("server descriptor")(format!("{e:#}")))?;
@@ -341,7 +352,10 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let audit_retention_days = config
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
-    let instance_policy = config.instance_policy().map_err(std::io::Error::other)?;
+    let terms_page = config.terms_page().map_err(std::io::Error::other)?;
+    let instance_policy = config
+        .instance_policy(terms_page.as_ref())
+        .map_err(std::io::Error::other)?;
     let instance_limits = config.instance_limits().map_err(std::io::Error::other)?;
     let dm_policy = config.dm_policy().map_err(std::io::Error::other)?;
     let account_deletion_grace_days = config
@@ -503,6 +517,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             signup_requires_keys: instance_policy.signup_requires_keys,
             dm_policy: dm_policy.clone(),
             default_workspace: instance_policy.default_workspace,
+            minimum_age: instance_policy.minimum_age,
         },
         Arc::clone(&feature_gate),
         instance_limits,
@@ -946,6 +961,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         shutdown_tx,
         ip_deny_list,
         session_revocations,
+        terms_page: terms_page.map(Arc::new),
     })
 }
 

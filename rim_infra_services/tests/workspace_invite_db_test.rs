@@ -196,6 +196,7 @@ impl Race {
                 username: "newcomer".to_string(),
                 password: "password1234".to_string(),
                 terms_accepted_url: None,
+                confirmed_minimum_age: None,
             })
             .await
             .map(|_| ());

@@ -126,6 +126,7 @@ impl InviteMutations {
             input.workspace_invite_token,
         )?;
         let terms_accepted_url = input.accepted_terms_url;
+        let confirmed_minimum_age = input.confirmed_minimum_age;
 
         // Normalise email at the resolver boundary (trim + lowercase) as
         // defence in depth; the service also validates on the way in.
@@ -141,6 +142,7 @@ impl InviteMutations {
                         email,
                         display_name: input.display_name,
                         terms_accepted_url,
+                        confirmed_minimum_age,
                     })
                     .await
                     .map_err(map_service_error)?;
@@ -159,6 +161,7 @@ impl InviteMutations {
                         username: input.username,
                         password: input.password,
                         terms_accepted_url,
+                        confirmed_minimum_age,
                     })
                     .await
                     .map_err(map_service_error)?;
@@ -181,6 +184,7 @@ impl InviteMutations {
                         email,
                         display_name: input.display_name,
                         terms_accepted_url,
+                        confirmed_minimum_age,
                     })
                     .await
                     .map_err(map_service_error)?;
@@ -287,6 +291,10 @@ pub struct SignupWithInviteInput {
     /// Required when the server has terms (`VALIDATION` when missing or different); ignored
     /// when it has none.
     pub accepted_terms_url: Option<String>,
+    /// The minimum age the person confirmed reaching: `serverInfo.minimumAge`, sent back
+    /// unchanged once they confirm it. Required when the server has a minimum age
+    /// (`VALIDATION` when missing or different); ignored when it has none.
+    pub confirmed_minimum_age: Option<i32>,
 }
 
 #[cfg(test)]

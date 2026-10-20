@@ -46,6 +46,8 @@ pub struct Model {
     pub invited_by_user_id: Option<Uuid>,
     /// Whether the account may run the instance's moderation queue.
     pub instance_operator: bool,
+    /// The minimum age the account confirmed having reached at signup.
+    pub minimum_age_confirmed: Option<i16>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
