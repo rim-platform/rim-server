@@ -109,8 +109,10 @@ A host that runs the published images needs no checkout: one directory holds the
 the Caddyfiles, the scripts and `.env`, and `rim-deploy` keeps it on the latest release. On the
 project's relay that directory is `/srv/rim-server`. Every five minutes `rim-deploy.timer` runs
 `rim-deploy --check`, which asks the GitHub API for the latest published release of rim-server
-that is not a pre-release. When that version is not `RIM_VERSION` in `.env`, it downloads the
-tag's source tarball, copies its `deploy/` files over the directory, writes `SOURCE` (the tag,
+that is not a pre-release. When that version is not `RIM_VERSION` in `.env`, it first checks
+with cosign that the version's `rim-server` image carries the signature of that tag's release
+workflow, since the tag's files run as root: a tag without an approved release run installs
+nothing. Then it downloads the tag's source tarball, copies its `deploy/` files over the directory, writes `SOURCE` (the tag,
 the time and the tarball's SHA-256) and runs the tag's `upgrade.sh <version>` there
 (`docs/operations/upgrade.md`): the signatures, the backup, the migrations, the start and the
 rollback are its steps. Nothing in GitHub reaches the host, and no git runs on it. A release is

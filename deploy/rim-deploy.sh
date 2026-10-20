@@ -13,6 +13,9 @@
 # tried again once the file is gone or by hand. When upgrade.sh finds the version's images not
 # published yet (its exit 2) the check ends quietly and the next one tries again.
 #
+# Before anything is fetched, the version's rim-server image must carry the signature of the
+# release workflow of its tag, since the tag's files run as root.
+#
 # The fetched files replace those of the same name in the directory; .env and .env.previous
 # are never touched, SOURCE records the tag, and when the upgrade does not complete the files
 # from before come back. One deploy runs at a time, under a lock on RIM_DEPLOY_LOCK
@@ -59,12 +62,34 @@ restore_files() {
 	restore=0
 }
 
+# Whether the rim-server image of version $1 is published and signed by the rim-server release
+# workflow of tag v$1. Returns 1 with `status` set to 2 when it is not published yet; exits
+# when its signature does not verify.
+signed_release() {
+	local image=ghcr.io/$repo:$1
+	if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+		say "$image is not published yet"
+		status=2
+		return 1
+	fi
+	command -v cosign >/dev/null || die "cosign is not installed"
+	cosign verify "$image" \
+		--certificate-identity "https://github.com/$repo/.github/workflows/release.yaml@refs/tags/v$1" \
+		--certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null ||
+		die "$image is not signed by the release workflow of v$1; nothing from the tag runs"
+}
+
 # Downloads the tag v<version>, puts its deploy/ files into the directory and runs their
 # upgrade.sh, whose exit status it leaves in `status`; the files from before come back unless
 # that is 0.
 deploy() {
 	local version=$1 url file
 	url=https://github.com/$repo/archive/refs/tags/v$version.tar.gz
+
+	# The tag's files run as root, so they are fetched only for a version whose image an
+	# approved release run signed: a tag on its own installs nothing.
+	status=0
+	signed_release "$version" || return 0
 
 	say "fetching $url"
 	curl -fsSL --retry 3 -o "$work/source.tar.gz" "$url" || die "could not download $url"

@@ -434,6 +434,26 @@ expect_stderr "the next check tries again" "not published yet"
 expect_files_of_010 "not published yet"
 [[ ! -e $srv/FAILED ]] || fail "not published yet: FAILED written"
 
+# The rim-server image not published yet: nothing is fetched and the check ends quietly.
+setup_srv
+STUB_UNPUBLISHED=$server:0.2.0
+rim_deploy --check || fail "server image not published: $(cat "$work/stderr")"
+expect_stderr "the next check tries again" "server image not published"
+not_called ".tar.gz" || fail "server image not published: the tarball was fetched"
+[[ ! -e $srv/FAILED ]] || fail "server image not published: FAILED written"
+STUB_UNPUBLISHED=""
+
+# An image without the release workflow's signature: nothing from the tag is fetched or run.
+setup_srv
+STUB_UNSIGNED=$server:0.2.0
+if rim_deploy --check; then fail "unsigned image: the check passed"; fi
+expect_stderr "is not signed by the release workflow of v0.2.0" "unsigned image"
+not_called ".tar.gz" || fail "unsigned image: the tarball was fetched"
+not_called "upgrade.sh" || fail "unsigned image: upgrade.sh ran"
+called "cosign verify $server:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
+  fail "unsigned image: cosign was not asked for the release workflow's identity"
+STUB_UNSIGNED=""
+
 # A failed upgrade: exit 1, the files from before, and FAILED holds the version back.
 setup_srv
 STUB_UPGRADE_EXIT=1
