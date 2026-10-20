@@ -117,6 +117,7 @@ USER rim
 #   RIM_S2S_DEVICE_RATE_PER_MIN — Forwarded requests per device per minute (default: 120)
 #   RIM_S2S_SUBSCRIPTIONS_PER_PEER — Delegations one relay may hold on this host (default: 10000)
 #   RIM_S2S_MAX_BODY_BYTES — Largest server-to-server request body (default: 8388608)
+#   RIM_S2S_PEER_DEAD_AFTER_HOURS — Hours of failed deliveries before a relay is dead and gets nothing queued, 1 to 168 (default: 24)
 #   RIM_S2S_ALLOW_HTTP    — Allow server-to-server traffic over http when true; development only
 #   RIM_S2S_ALLOW_PRIVATE_ADDRESSES — Allow peers on private addresses when true; development only
 #   RIM_METRICS_ADDR      — ip:port of the Prometheus /metrics listener (default: off). In a
