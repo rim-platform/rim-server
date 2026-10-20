@@ -72,7 +72,7 @@ rim-link:1:AAECAwQFBgcICQoLDA0ODw:ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8:ht
 | Version | `1`, decimal. The version of everything in this document: offer, answer, `info`, AAD |
 | Link id | 16 bytes, unpadded base64url, exactly 22 characters |
 | Secret | 32 bytes from the OS random generator, unpadded base64url, exactly 43 characters |
-| Endpoint | The old device's GraphQL endpoint as configured, trailing `/` removed |
+| Endpoint | The GraphQL endpoint of the old device's server, trailing `/` removed: the endpoint as configured, or, for a web client served on another origin than its server's identity origin (the base of `endpoints.s2s` in its discovery document), that origin followed by `/api`. A web client that cannot read its identity origin writes its own endpoint |
 
 Readers:
 
@@ -402,8 +402,10 @@ the certificate with its non-extractable identity key. A web client that is itse
 device holds no identity key and links no other device. As the new device, it follows the new
 desktop device, except:
 
-- It only takes a pasted code, and only for its own GraphQL endpoint (cookies and CORS would fail
-  for another).
+- It only takes a pasted code, and only for its own server: a code naming its own GraphQL
+  endpoint, or its server's identity origin followed by `/api` when the web client is served on
+  another origin (cookies and CORS would fail for another server). Its requests and its key store
+  keep using its own endpoint.
 - The device key is a WebCrypto Ed25519 key generated with `extractable: false` and kept as a
   `CryptoKey` in IndexedDB; the public key is exported raw and tagged `ed25519:`. A browser
   without Ed25519 in WebCrypto cannot be linked; there is no fallback to extractable keys.
