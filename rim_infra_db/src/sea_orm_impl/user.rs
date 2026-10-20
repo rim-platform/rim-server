@@ -31,6 +31,11 @@ struct IdRow {
 }
 
 #[derive(FromQueryResult)]
+struct CountRow {
+    n: i64,
+}
+
+#[derive(FromQueryResult)]
 struct CreatedInviteRow {
     id: Uuid,
     kind: String,
@@ -373,5 +378,29 @@ impl UserRepository for SeaOrmUserRepository {
             .await
             .map_err(map_db_err)?;
         Ok(models.into_iter().map(Into::into).collect())
+    }
+
+    async fn lock_account_creation(&self) -> RepoResult<()> {
+        self.db
+            .execute_raw(statement(
+                "SELECT pg_advisory_xact_lock(hashtext('user.account_creation'))",
+                vec![],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        Ok(())
+    }
+
+    async fn count_local_accounts(&self, at_most: u64) -> RepoResult<u64> {
+        let limit = i64::try_from(at_most).unwrap_or(i64::MAX);
+        let row = CountRow::find_by_statement(statement(
+            r#"SELECT count(*) AS n FROM (SELECT 1 FROM "user"
+               WHERE kind = 'local' AND deleted_at IS NULL LIMIT $1) AS local_accounts"#,
+            vec![limit.into()],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(row.map_or(0, |r| u64::try_from(r.n).unwrap_or(0)))
     }
 }

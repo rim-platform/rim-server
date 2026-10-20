@@ -130,7 +130,9 @@ For local development bind `RIM_SERVER_HOST=127.0.0.1`, or set
 the **descriptor**: a statement signed by the current key with the server's roles, its endpoints
 (`/api`, `/api/ws`, and `/s2s/v1` when server-to-server traffic is on), the protocol versions,
 MLS cipher suites, limits and registration mode. The server signs a new descriptor with a higher
-`version` whenever its configuration changes it and after every rotation.
+`version` whenever its configuration changes it and after every rotation. Beside the descriptor,
+unsigned, the document lists the optional features and says whether registration is full
+(`RIM_LIMIT_ACCOUNTS`, `docs/api.md`).
 
 ## Roles and server-to-server configuration
 

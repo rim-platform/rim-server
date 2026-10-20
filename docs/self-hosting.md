@@ -324,6 +324,16 @@ encrypted conversations one person holds, so nobody can be buried in them, and
 `RIM_LIMIT_INVITES_PER_USER_PER_DAY` (50) bounds the workspace invites one person creates and
 the invite emails they send in 24 hours, so nobody can use the server to mail strangers in bulk.
 
+`RIM_LIMIT_ACCOUNTS` caps the accounts the server holds, for an instance that must not outgrow
+its host or its budget. It counts the people who signed up here, those waiting out their
+deletion grace period included, since they can still cancel; people from other servers held
+here and purged accounts do not count, so a purge frees a place. At the cap every signup is
+refused with a message that the server is full and that they can run their own server or sign
+up on another one, an invite you created included: raise the cap to let someone in. Clients
+read `serverInfo.registrationFull` and can say so before anyone tries. Signups check the cap one
+at a time, so two at once never pass it. Lowering it below the accounts there are refuses new
+signups only; nobody loses an account.
+
 `RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
 an account cannot create a workspace or send a DM request to someone it shares no workspace
 with and does not know (a contact who lists it too, or someone either of them accepted a DM

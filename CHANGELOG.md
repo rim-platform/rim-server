@@ -175,6 +175,15 @@ tag `v<version>`, the version every crate in the workspace carries.
   `WorkspaceInviteCursorOutput`, never with their tokens; the new `revokeInvite(inviteId)`
   stops an invite admitting anyone, while members who joined with it stay ("Workspace invites"
   in `docs/messaging.md`).
+- `RIM_LIMIT_ACCOUNTS` caps the local accounts a server holds, those waiting out their deletion
+  grace period included; people from other servers and purged accounts do not count. Off when
+  unset or 0. At the cap every signup, password or key, with an invite, open or with a
+  proof-of-work, is refused with the new GraphQL error code `REGISTRATION_FULL` and a message
+  that the server is full and points to running a server or signing up on another one. The new
+  `ServerInfo.registrationFull` and `ServerLimits.accounts`, and `registration.full` in the
+  discovery document beside the descriptor (`server-to-server-v1.md`), say so before anyone
+  tries. `docs/operations/relay-public.md` says who pays for the public relay, what it costs
+  and what happens if it shuts down.
 
 ### Changed
 
