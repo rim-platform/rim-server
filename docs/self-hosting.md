@@ -102,6 +102,16 @@ dc logs -f rim
 The `migrate` service applies the migrations and exits; the server starts after it. `dc ps`
 shows `rim` as `healthy` once `/readyz` passes.
 
+Every service but `caddy-init` runs as an unprivileged user (PostgreSQL as `postgres`,
+rim-server and `migrate` as `rim`, the web client as `nginx`, Caddy as `nobody`). None can gain
+privileges, and each has a read-only root filesystem, so the data lives only on the named
+volumes. Only Caddy holds a capability, `NET_BIND_SERVICE`, which the binary in its image needs
+to start and which allows nothing more inside a container. `caddy-init` runs before Caddy at
+every start: as root, able only to read directories and change owners, it gives `caddy_data`
+and `caddy_config` to `nobody` and exits, so volumes an earlier root Caddy wrote keep working.
+`dc cp` refuses a read-only container; pass a file in with
+`dc exec -T rim sh -c 'cat > /tmp/<file>' < <file>`.
+
 ### The server recovery key
 
 On its first start the server creates its key and writes the recovery key to

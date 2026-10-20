@@ -15,6 +15,11 @@
 # rim-web at RIM_VERSION (default latest; pin it in deploy/.env).
 # RIM_SERVER_IMAGE and RIM_WEB_IMAGE name other images. compose.dev.yml on top
 # builds both from local checkouts instead.
+#
+# Every container has a read-only root filesystem and cannot gain privileges:
+# it writes only to its named volumes and to the tmpfs paths listed with it.
+# The services run as unprivileged users; only caddy-init, which exits after
+# one command, runs as root. No capability is held but those under cap_add.
 # =============================================================================
 
 name: rim
@@ -24,12 +29,22 @@ x-database-url: &database-url "postgres://rim:${POSTGRES_PASSWORD:?set POSTGRES_
 services:
   postgres:
     image: postgres:17-alpine
+    # The image's postgres user (uid 70), which owns the data directory; the entrypoint
+    # then starts the server without switching users.
+    user: postgres
     environment:
       POSTGRES_USER: rim
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
       POSTGRES_DB: rim
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # The server's socket and its lock file, in a directory postgres owns.
+    tmpfs:
+      - /var/run/postgresql:uid=70,gid=70
+      - /tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks: [internal]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rim -d rim"]
@@ -50,6 +65,10 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    tmpfs: [/tmp]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   rim:
     image: ${RIM_SERVER_IMAGE:-ghcr.io/rim-platform/rim-server:${RIM_VERSION:-latest}}
@@ -137,8 +156,13 @@ services:
       # custom_emoji, workspace_plugins, ai_commands. A switched-off feature's API fails with
       # FEATURE_DISABLED.
       # RIM_FEATURES_DISABLED: attachments,custom_emoji
+    # The image's rim user (uid 1001) writes only to this volume and /tmp.
     volumes:
       - rim_data:/data
+    tmpfs: [/tmp]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     # `egress` lets it reach other servers; no port is published, so only Caddy reaches it.
     networks: [internal, egress]
     depends_on:
@@ -157,11 +181,38 @@ services:
   # GraphQL endpoint `/api`, this origin, so one image serves any domain.
   web:
     image: ${RIM_WEB_IMAGE:-ghcr.io/rim-platform/rim-web:${RIM_VERSION:-latest}}
+    # nginx runs as the image's nginx user (uid 101); its temporary files and its pid and
+    # lock files go to tmpfs directories it owns.
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101
+      - /run:uid=101,gid=101
+      - /tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks: [internal]
     restart: unless-stopped
 
+  # Hands Caddy's volumes to the user Caddy runs as, then exits; Caddy starts after it
+  # succeeded. Root, with only the capabilities that change and traverse other users' files.
+  caddy-init:
+    image: caddy:2
+    user: "0:0"
+    entrypoint: ["chown", "-R", "65534:65534", "/data", "/config"]
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    network_mode: none
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+
   caddy:
     image: caddy:2
+    # The image's nobody user. Docker lets any user of a container bind ports below 1024.
+    user: "65534:65534"
     environment:
       RIM_DOMAIN: ${RIM_DOMAIN:?set RIM_DOMAIN in deploy/.env}
     ports:
@@ -170,10 +221,23 @@ services:
       - "${RIM_HTTPS_PORT:-443}:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and the CA in /data/caddy, the autosaved configuration in /config/caddy.
       - caddy_data:/data
       - caddy_config:/config
+    tmpfs: [/tmp]
+    read_only: true
+    cap_drop: [ALL]
+    # The image's caddy binary carries the file capability cap_net_bind_service, and the
+    # kernel refuses to run it in a container that may not hold it. It is the one capability
+    # Caddy holds, and it allows nothing any user in the container may not do already.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
     networks: [internal, egress]
-    depends_on: [rim]
+    depends_on:
+      caddy-init:
+        condition: service_completed_successfully
+      rim:
+        condition: service_started
     restart: unless-stopped
 
 networks:
