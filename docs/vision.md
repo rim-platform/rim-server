@@ -51,19 +51,18 @@ compatible with them.
 
 ## Core Differentiators
 
-These are the capabilities that no competing product offers together:
+These are the capabilities RIM is built around:
 
 1. **Command palette** — a universal, fuzzy-searchable action launcher for every
    operation in the app. Not a channel switcher. Not slash commands. A true command
    palette like VS Code's Ctrl+Shift+P.
 
 2. **User-defined keybinds** — any action can be bound to any key combination,
-   scoped by context (global, composer, message list, thread view, panel). No other
-   team chat app allows this.
+   scoped by context (global, composer, message list, thread view, panel).
 
 3. **User commands and macros** — users compose multi-step workflows from individual
    commands. A user command bound to a keystroke runs all its steps; a macro runs its
-   steps from Settings or `/macro` in the composer. No other team chat app offers this.
+   steps from Settings or `/macro` in the composer.
 
 4. **Client-side plugin system** — plugins extend the application itself (new panels,
    commands, context actions, behaviors), not just post messages into channels.
