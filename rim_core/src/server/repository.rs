@@ -12,6 +12,9 @@ pub trait ServerRepository: Send + Sync {
 
     async fn create_server(&self, name: &str) -> RepoResult<Server>;
 
+    /// Give the workspace `id` the name `name`. Returns whether it exists.
+    async fn rename(&self, id: ServerId, name: &str) -> RepoResult<bool>;
+
     async fn get_servers_for_user(&self, user_id: UserId) -> RepoResult<Vec<Server>>;
 
     /// The workspace `owner` owns whose trimmed name equals `name` ignoring case.

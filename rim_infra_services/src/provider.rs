@@ -11,6 +11,7 @@ use rim_services::channel_lens::service::ChannelLensService;
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
 use rim_services::custom_emoji::service::CustomEmojiService;
+use rim_services::default_workspace::DefaultWorkspaceService;
 use rim_services::device_link::service::DeviceLinkService;
 use rim_services::events::Observers;
 use rim_services::feature::service::FeatureGate;
@@ -75,8 +76,9 @@ pub struct FederationHooks {
     pub signup_requires_keys: bool,
     /// The operator's DM settings.
     pub dm_policy: rim_services::dm_policy::dto::DmOperatorPolicy,
-    /// The workspace every new account joins as a Member; `None` when there is none.
-    pub default_workspace: Option<rim_core::server::model::ServerId>,
+    /// The workspace every new account joins as a Member, and the definition an owner claim
+    /// creates it from.
+    pub default_workspace: crate::default_workspace::DefaultWorkspace,
 }
 
 #[derive(Clone)]
@@ -119,6 +121,7 @@ pub struct DefaultAppServiceProvider {
     ip_block_service: Arc<dyn IpBlockService>,
     instance_operator_service: Arc<dyn InstanceOperatorService>,
     dm_policy_service: Arc<dyn rim_services::dm_policy::service::DmPolicyService>,
+    default_workspace_service: Arc<dyn DefaultWorkspaceService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -165,7 +168,7 @@ impl DefaultAppServiceProvider {
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
             .with_signup_requires_keys(federation.signup_requires_keys)
-            .with_default_workspace(federation.default_workspace),
+            .with_default_workspace(federation.default_workspace.clone()),
         );
         let account_deletion = DefaultAccountDeletionService::new(
             Arc::new(
@@ -199,7 +202,7 @@ impl DefaultAppServiceProvider {
             .with_reserved_names(federation.reserved_names.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
             .with_terms_url(federation.terms_url.clone())
-            .with_default_workspace(federation.default_workspace);
+            .with_default_workspace(federation.default_workspace.clone());
         if let Some(host) = &federation.host_service {
             key_auth = key_auth.with_host_service(Arc::clone(host));
         }
@@ -488,6 +491,12 @@ impl DefaultAppServiceProvider {
         let instance_operator_service: Arc<dyn InstanceOperatorService> = Arc::new(
             crate::operator::DefaultInstanceOperatorService::new(repos.for_relay_abuse()),
         );
+        let default_workspace_service: Arc<dyn DefaultWorkspaceService> = Arc::new(
+            crate::default_workspace::DefaultDefaultWorkspaceService::new(
+                federation.default_workspace.clone(),
+                Arc::clone(&repos.default_workspace_repo),
+            ),
+        );
         let dm_policy_service: Arc<dyn rim_services::dm_policy::service::DmPolicyService> =
             Arc::new(crate::dm_policy::DefaultDmPolicyService::new(
                 Arc::clone(&repos.dm_policy_repo),
@@ -534,6 +543,7 @@ impl DefaultAppServiceProvider {
             ip_block_service,
             instance_operator_service,
             dm_policy_service,
+            default_workspace_service,
         }
     }
 
@@ -679,5 +689,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn dm_policy_service(&self) -> Arc<dyn rim_services::dm_policy::service::DmPolicyService> {
         Arc::clone(&self.dm_policy_service)
+    }
+
+    fn default_workspace_service(&self) -> Arc<dyn DefaultWorkspaceService> {
+        Arc::clone(&self.default_workspace_service)
     }
 }

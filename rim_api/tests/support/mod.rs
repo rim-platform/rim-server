@@ -186,6 +186,7 @@ TRUNCATE TABLE
   relay_abuse_report,
   session,
   key_challenge,
+  instance_default_workspace,
   instance_invite,
   invite,
   server_member,
@@ -449,7 +450,7 @@ impl TestCtx {
             std::sync::Arc::new(NoopBroadcaster),
             rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
             rim_infra_services::FederationHooks {
-                default_workspace: Some(workspace),
+                default_workspace: Some(workspace).into(),
                 ..Default::default()
             },
             rim_services::limits::InstanceLimits::default(),
@@ -463,6 +464,28 @@ impl TestCtx {
                 ..Default::default()
             },
         )
+    }
+
+    /// Build the schema on an instance whose default workspace is the one `defined` describes,
+    /// as `RIM_DEFAULT_WORKSPACE_FILE` does, in `registration_mode`.
+    pub fn build_schema_with_defined_workspace(
+        &self,
+        defined: rim_infra_services::default_workspace::DefinedWorkspace,
+        registration_mode: rim_services::auth::dto::RegistrationMode,
+    ) -> rim_api::AppSchema {
+        let (provider, observers) = test_provider(
+            &self.conn,
+            std::sync::Arc::new(NoopBroadcaster),
+            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+            rim_infra_services::FederationHooks {
+                default_workspace: rim_infra_services::default_workspace::DefaultWorkspace::Defined(
+                    std::sync::Arc::new(defined),
+                ),
+                ..Default::default()
+            },
+            rim_services::limits::InstanceLimits::default(),
+        );
+        schema_for(std::sync::Arc::new(provider), observers, registration_mode)
     }
 
     /// Build a full [`AppSchema`][rim_api::AppSchema] backed by real services
@@ -711,6 +734,11 @@ fn test_provider(
         ),
         dm_policy_repo: Arc::new(
             rim_infra_db::sea_orm_impl::dm_policy::SeaOrmDmPolicyRepository::new(db.clone()),
+        ),
+        default_workspace_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::default_workspace::SeaOrmDefaultWorkspaceRepository::new(
+                db.clone(),
+            ),
         ),
         invite_repo: Arc::new(SeaOrmInviteRepository::new(db.clone())),
         link_preview_repo: Arc::new(

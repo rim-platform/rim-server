@@ -6,6 +6,8 @@ pub mod channel_lens;
 pub mod command;
 pub mod conversation;
 pub mod custom_emoji;
+// pub: rim_infra_services implements it, rim_api reports it in serverInfo.
+pub mod default_workspace;
 pub mod device_link;
 // pub: rim_infra_services implements it, rim_api serves it, rim_server configures it.
 pub mod dm_policy;

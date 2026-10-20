@@ -8,6 +8,8 @@ pub mod conversation;
 pub mod conversation_member;
 pub mod conversation_read_state;
 pub mod custom_emoji;
+// pub: rim_infra_db stores it, rim_infra_services claims and reads it.
+pub mod default_workspace;
 pub mod device_link;
 // pub: rim_infra_db stores it, rim_services and rim_infra_services apply it, rim_api shows it.
 pub mod dm_policy;

@@ -143,8 +143,9 @@ pub struct DefaultKeyAuthService {
     session_revocations: Arc<dyn SessionRevocations>,
     /// The terms of service URL every signup must accept; `None` when there are none.
     terms_url: Option<String>,
-    /// The workspace every new account joins as a Member; `None` when there is none.
-    default_workspace: Option<rim_core::server::model::ServerId>,
+    /// The workspace every new account joins as a Member, and the definition an owner claim
+    /// creates it from.
+    default_workspace: default_workspace::DefaultWorkspace,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -284,7 +285,7 @@ impl DefaultKeyAuthService {
             reserved_names: ReservedNames::default(),
             session_revocations: crate::session_revocation::unshared(),
             terms_url: None,
-            default_workspace: None,
+            default_workspace: default_workspace::DefaultWorkspace::None,
         }
     }
 
@@ -315,12 +316,13 @@ impl DefaultKeyAuthService {
         self
     }
 
-    /// Makes every new account a Member of `workspace`.
+    /// Makes every new account a Member of `workspace`: a workspace id, or a definition an owner
+    /// claim creates the workspace from.
     pub fn with_default_workspace(
         mut self,
-        workspace: Option<rim_core::server::model::ServerId>,
+        workspace: impl Into<default_workspace::DefaultWorkspace>,
     ) -> Self {
-        self.default_workspace = workspace;
+        self.default_workspace = workspace.into();
         self
     }
 
@@ -1152,8 +1154,16 @@ impl KeyAuthService for DefaultKeyAuthService {
             }
             None => None,
         };
+        let claimed = default_workspace::claim(
+            &repos.signup,
+            &self.default_workspace,
+            token.as_ref(),
+            user.id,
+        )
+        .await?;
+        let server_id = server_id.or(claimed.as_ref().map(|c| c.workspace_id));
         let joined_default =
-            default_workspace::join(&repos.signup, self.default_workspace, user.id).await?;
+            default_workspace::join(&repos.signup, &self.default_workspace, user.id).await?;
         let (session, session_token, csrf_token) = signup::create_session(
             repos.session_repo.as_ref(),
             self.session_ttl,
@@ -1190,6 +1200,7 @@ impl KeyAuthService for DefaultKeyAuthService {
                 "user created via open signup"
             ),
         }
+        default_workspace::announce_claim(claimed, user.id, &self.observers);
         default_workspace::announce(joined_default, user.id, username, &self.observers);
         info!(
             target: "audit",

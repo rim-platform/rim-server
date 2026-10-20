@@ -118,7 +118,8 @@ pub struct InstancePolicy {
     pub terms_url: Option<String>,
     /// Whether password signups are refused.
     pub signup_requires_keys: bool,
-    /// The workspace every new account joins as a Member; `None` when there is none.
+    /// The workspace every new account joins as a Member, when configured by id; `None` leaves
+    /// `serverInfo` to the workspace an owner claimed from the definition file, if any.
     pub default_workspace: Option<rim_core::server::model::ServerId>,
 }
 

@@ -560,6 +560,12 @@ mod tests {
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             moderation_repo: Arc::new(MockModerationRepository::new()),
             user_repo: Arc::new(MockUserRepository::new()),
+            dm_policy_repo: Arc::new(
+                rim_core::dm_policy::repository::MockDmPolicyRepository::new(),
+            ),
+            default_workspace_repo: Arc::new(
+                rim_core::default_workspace::repository::MockDefaultWorkspaceRepository::new(),
+            ),
         }
     }
 
@@ -3192,6 +3198,12 @@ mod tests {
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             moderation_repo: Arc::new(MockModerationRepository::permissive()),
             user_repo: Arc::new(users),
+            dm_policy_repo: Arc::new(
+                rim_core::dm_policy::repository::MockDmPolicyRepository::new(),
+            ),
+            default_workspace_repo: Arc::new(
+                rim_core::default_workspace::repository::MockDefaultWorkspaceRepository::new(),
+            ),
         };
         (signup, log)
     }

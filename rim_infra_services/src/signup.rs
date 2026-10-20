@@ -13,6 +13,8 @@ use rim_core::auth::model::{InstanceInvite, Invite, NewSession, Session};
 use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository, SessionRepository};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
+use rim_core::default_workspace::repository::DefaultWorkspaceRepository;
+use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 use rim_core::server::model::ServerId;
@@ -42,8 +44,13 @@ pub struct SignupRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     /// Ban checks on the workspace-invite join.
     pub moderation_repo: Arc<dyn ModerationRepository>,
-    /// Records the invite chain on the new account.
+    /// Records the invite chain on the new account, and grants the instance operator role an
+    /// owner claim carries.
     pub user_repo: Arc<dyn UserRepository>,
+    /// The DM policy a claimed default workspace starts with.
+    pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
+    /// The claimed default workspace and its owner claim.
+    pub default_workspace_repo: Arc<dyn DefaultWorkspaceRepository>,
 }
 
 /// A registration token that passed its checks before the transaction, to be claimed inside it.
@@ -513,6 +520,12 @@ pub(crate) mod tests {
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             moderation_repo: Arc::new(MockModerationRepository::new()),
             user_repo: Arc::new(MockUserRepository::new()),
+            dm_policy_repo: Arc::new(
+                rim_core::dm_policy::repository::MockDmPolicyRepository::new(),
+            ),
+            default_workspace_repo: Arc::new(
+                rim_core::default_workspace::repository::MockDefaultWorkspaceRepository::new(),
+            ),
         }
     }
 

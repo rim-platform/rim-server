@@ -78,4 +78,8 @@ pub trait AppServiceProvider: Send + Sync {
     fn instance_operator_service(&self) -> Arc<dyn InstanceOperatorService>;
     /// Workspaces' DM rules and each person's choice of who may start a DM with them.
     fn dm_policy_service(&self) -> Arc<dyn crate::dm_policy::service::DmPolicyService>;
+    /// The workspace new accounts join.
+    fn default_workspace_service(
+        &self,
+    ) -> Arc<dyn crate::default_workspace::DefaultWorkspaceService>;
 }
