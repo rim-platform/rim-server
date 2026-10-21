@@ -28,7 +28,8 @@ the people who moderate and run this server, and nothing in them is made public.
 
 ## Your account
 
-Nobody running this server will ever ask for your password or your keys.
+Your account is held by the keys on your devices and your recovery kit. Nobody running this
+server will ever ask you to send them your keys, your recovery kit or a password.
 
 ## What you may not do
 
