@@ -159,6 +159,20 @@ mutating-call cap. Palette and keybind still run them in one step.
 | `chat.mark_as_read` | `server_id`, `conversation_id` | `Mutating` | yes | |
 | `chat.create_group` | `server_id`, `member_ids`, `title?` | `Mutating` | yes | `member_ids` is a JSON array or one comma-separated string |
 
+The `state.*` commands and the GraphQL roots `workspaceState`, `workspaceStateList`,
+`setWorkspaceState` and `deleteWorkspaceState` follow the same rules. Every member reads the
+workspace scope (`scope: server`) and reads and writes their own user scope. Writing the
+workspace scope takes a Member, Moderator or Owner who is not timed out and whose account is out
+of probation; a guest gets `FORBIDDEN`. A Member overwrites and deletes only the keys they
+created and increments any numeric key, so a shared counter takes everyone's count; Owners and
+Moderators change every key. A Member creates at most 100 workspace-scoped entries per
+workspace, holding at most 1 MiB of values; a workspace holds at most 10,000, a user scope
+1,000, and a value at most 64 KiB. Each user makes at most 60 writes (sets, increments and
+deletes, either scope) a minute in bursts of up to 30, however they reach the service (GraphQL,
+a command, a macro or pipe step, a pipeline); past that a write answers `RATE_LIMITED` with
+`retryAfterSeconds`. `WorkspaceStateChanged` names the key, scope and version
+but not the value, which a client reads again.
+
 Data the agent sends to its model provider grows with this set: `state.get` and `state.list` return
 stored values, including the caller's own `scope: user` entries, and nothing redacts secrets kept
 in workspace state. Kept off the AI surface on purpose: `chat.edit_message`,

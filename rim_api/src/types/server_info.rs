@@ -61,20 +61,22 @@ pub struct ServerInfo {
 /// requests always have one. Creating one more past a cap answers `VALIDATION` naming it.
 #[derive(SimpleObject, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServerLimits {
-    /// Workspaces one user owns.
+    /// Workspaces one user owns, created or handed over to them.
     pub workspaces_per_user: Option<u32>,
     /// Members of one workspace; the direct space has no cap.
     pub members_per_workspace: Option<u32>,
-    /// Channels of one workspace, public and private.
+    /// Unarchived channels of one workspace, public and private; unarchiving one needs room.
     pub channels_per_workspace: Option<u32>,
     /// Devices on one account: the stricter of the instance cap and the relay quota.
     pub devices_per_user: Option<u32>,
     /// DM requests one user sends to strangers per day: the stricter of the instance cap and
     /// the relay quota.
     pub dm_requests_per_day: Option<u32>,
-    /// Macros of one workspace.
+    /// Macros of one workspace; a member who is neither Owner nor Moderator holds at most a
+    /// fifth of them.
     pub macros_per_workspace: Option<u32>,
-    /// Pipelines of one workspace.
+    /// Pipelines of one workspace; a member who is neither Owner nor Moderator holds at most
+    /// a fifth of them.
     pub pipelines_per_workspace: Option<u32>,
     /// Plugins of one workspace's registry.
     pub plugins_per_workspace: Option<u32>,

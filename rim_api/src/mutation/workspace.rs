@@ -54,7 +54,8 @@ impl WorkspaceOwnerMutations {
     /// - `UNAUTHENTICATED`: no session.
     /// - `FORBIDDEN`: the caller is not the owner.
     /// - `NOT_FOUND`: `userId` is not a member.
-    /// - `VALIDATION`: the direct space, a guest as the new owner, or the caller themself.
+    /// - `VALIDATION`: the direct space, a guest as the new owner, the caller themself, or a new
+    ///   owner who already owns as many workspaces as the instance allows.
     async fn transfer_workspace_ownership(
         &self,
         ctx: &Context<'_>,

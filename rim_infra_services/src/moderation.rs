@@ -16,6 +16,7 @@ use tracing::info;
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
+use rim_core::macro_def::repository::MacroRepository;
 use rim_core::message::repository::MessageRepository;
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::moderation::model::{
@@ -23,6 +24,7 @@ use rim_core::moderation::model::{
 };
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::notification::repository::NotificationRepository;
+use rim_core::pipeline::repository::PipelineRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
@@ -223,6 +225,10 @@ pub struct ModerationRepos {
     pub moderation_repo: Arc<dyn ModerationRepository>,
     /// Drops a removed member's notifications for the workspace.
     pub notification_repo: Arc<dyn NotificationRepository>,
+    /// Drops a removed member's macros in the workspace.
+    pub macro_repo: Arc<dyn MacroRepository>,
+    /// Drops the pipelines a removed member created in the workspace.
+    pub pipeline_repo: Arc<dyn PipelineRepository>,
 }
 
 /// The `blobSha256` values (unpadded base64url) of a verified content's `attachments`. The
@@ -364,8 +370,8 @@ impl DefaultModerationService {
     }
 
     /// Removes the user from the workspace and from every conversation of it (so a later
-    /// re-join does not restore private-channel access), deletes their notifications there,
-    /// then announces `MemberLeft`.
+    /// re-join does not restore private-channel access), deletes their notifications, macros and
+    /// pipelines there, then announces `MemberLeft`.
     async fn remove_from_workspace(
         &self,
         server_id: ServerId,
@@ -412,6 +418,14 @@ impl DefaultModerationService {
         self.repos
             .notification_repo
             .delete_for_user_in_server(user_id, server_id)
+            .await?;
+        self.repos
+            .macro_repo
+            .delete_for_user(server_id, user_id)
+            .await?;
+        self.repos
+            .pipeline_repo
+            .delete_for_user(server_id, user_id)
             .await?;
         self.observers.emit(WorkspaceEvent::MemberLeft {
             workspace_id: server_id,

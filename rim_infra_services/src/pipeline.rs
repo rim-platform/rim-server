@@ -26,7 +26,7 @@ use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::command::service::CommandService;
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
-use rim_services::limits::{InstanceLimits, ensure_below};
+use rim_services::limits::{InstanceLimits, ensure_below, member_share};
 use rim_services::pipeline::dto::{
     FilterConditionDto, PipelineActionDto, PipelineDto, PipelineFilterDto, PipelineFiredResult,
     PipelineTriggerDto,
@@ -554,16 +554,26 @@ impl PipelineService for DefaultPipelineService {
         )?;
 
         // Quota check
+        let is_moderator = self
+            .repos
+            .server_member_repo
+            .get_member(cmd.server_id, cmd.actor.user_id)
+            .await?
+            .is_some_and(|m| m.member_role.is_moderator());
+        let per_user = member_share(
+            self.limits.pipelines_per_workspace,
+            MAX_PIPELINES_PER_USER_PER_SERVER,
+            is_moderator,
+        );
         let count = self
             .repos
             .pipeline_repo
             .count_for_user(cmd.server_id, cmd.actor.user_id)
             .await?;
 
-        if count >= MAX_PIPELINES_PER_USER_PER_SERVER {
+        if count >= per_user {
             return Err(ServiceError::Validation(format!(
-                "quota exceeded: maximum {} pipelines per user per server",
-                MAX_PIPELINES_PER_USER_PER_SERVER
+                "quota exceeded: maximum {per_user} pipelines per user per server"
             )));
         }
         if self.limits.pipelines_per_workspace.is_some() {
@@ -991,6 +1001,7 @@ mod tests {
             async fn set_enabled(&self, id: PipelineId, enabled: bool) -> RepoResult<Pipeline>;
             async fn set_last_fired_at(&self, id: PipelineId, fired_at: chrono::DateTime<chrono::Utc>) -> RepoResult<()>;
             async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64>;
+            async fn delete_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
         }
     }
 
@@ -1013,8 +1024,23 @@ mod tests {
     }
 
     fn make_member_repo() -> MockServerMemberRepository {
+        make_member_repo_as(ServerMemberRole::Member)
+    }
+
+    /// A member repository where everyone is a member with `role`.
+    fn make_member_repo_as(role: ServerMemberRole) -> MockServerMemberRepository {
         let mut repo = MockServerMemberRepository::new();
         repo.expect_is_member().returning(|_, _| Ok(true));
+        repo.expect_get_member()
+            .returning(move |server_id, user_id| {
+                Ok(Some(ServerMember {
+                    id: rim_core::server_member::model::ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role: role,
+                    joined_at: chrono::Utc::now(),
+                }))
+            });
         repo
     }
 
@@ -1179,6 +1205,58 @@ mod tests {
                 Err(ServiceError::Validation(message)) => {
                     assert!(!allowed, "{cap:?} {in_workspace:?}");
                     assert_eq!(message, "this instance allows 50 pipelines per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_member_holds_a_fifth_of_the_pipelines_per_workspace_cap() {
+        for (role, held, allowed) in [
+            (ServerMemberRole::Member, 9, true),
+            (ServerMemberRole::Member, 10, false),
+            (ServerMemberRole::Moderator, 10, true),
+            (ServerMemberRole::Owner, 49, true),
+        ] {
+            let mut repo = MockPipelineRepository::new();
+            repo.expect_count_for_user().returning(move |_, _| Ok(held));
+            repo.expect_count_for_server().returning(|_| Ok(0));
+            repo.expect_create()
+                .times(usize::from(allowed))
+                .returning(|p| Ok(p.clone()));
+            let svc = make_service(repo, make_member_repo_as(role)).with_limits(
+                rim_services::limits::InstanceLimits {
+                    pipelines_per_workspace: Some(50),
+                    ..Default::default()
+                },
+            );
+            let result = svc
+                .create(CreatePipelineCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    name: "Shared".to_string(),
+                    description: None,
+                    trigger: PipelineTriggerDto {
+                        kind: PipelineTriggerKindDto::NewMessage,
+                        conversation_id: None,
+                    },
+                    filter: None,
+                    actions: vec![PipelineActionDto::ExecuteCommand {
+                        command_id: "test.cmd".to_string(),
+                        args: None,
+                    }],
+                    cooldown_secs: None,
+                })
+                .await;
+            match result {
+                Ok(_) => assert!(allowed, "{role:?} {held}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{role:?} {held}");
+                    assert_eq!(
+                        message,
+                        "quota exceeded: maximum 10 pipelines per user per server"
+                    );
                 }
                 Err(other) => panic!("unexpected {other:?}"),
             }
@@ -1388,7 +1466,6 @@ mod tests {
             WorkspaceEvent::WorkspaceStateChanged {
                 workspace_id: self.server_id,
                 key: "hello world".to_string(),
-                value: serde_json::json!("hello world"),
                 scope: rim_services::workspace_state::dto::WorkspaceStateScopeDto::Server,
                 user_id: Some(self.author_id),
                 version: 1,
@@ -2173,7 +2250,6 @@ mod tests {
         let state = |scope, user_id| WorkspaceEvent::WorkspaceStateChanged {
             workspace_id: world.server_id,
             key: "k".to_string(),
-            value: serde_json::json!(1),
             scope,
             user_id,
             version: 1,

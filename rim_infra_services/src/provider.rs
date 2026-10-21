@@ -232,6 +232,12 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&audit_log_repo),
                 Arc::clone(&capability_service),
             ));
+        let default_workspace_service: Arc<dyn DefaultWorkspaceService> = Arc::new(
+            crate::default_workspace::DefaultDefaultWorkspaceService::new(
+                federation.default_workspace.clone(),
+                Arc::clone(&repos.default_workspace_repo),
+            ),
+        );
         let conversation_service: Arc<dyn ConversationService> = Arc::new(
             crate::conversation::DefaultConversationService::new(
                 repos.for_conversation(),
@@ -239,13 +245,8 @@ impl DefaultAppServiceProvider {
             )
             .with_e2ee_repo(Arc::clone(&repos.e2ee_repo))
             .with_direct_space(federation.direct_space_id)
-            .with_limits(limits),
-        );
-        let default_workspace_service: Arc<dyn DefaultWorkspaceService> = Arc::new(
-            crate::default_workspace::DefaultDefaultWorkspaceService::new(
-                federation.default_workspace.clone(),
-                Arc::clone(&repos.default_workspace_repo),
-            ),
+            .with_limits(limits)
+            .with_default_workspace(Arc::clone(&default_workspace_service)),
         );
         let notification_service: Arc<dyn NotificationService> = Arc::new(
             crate::notification::DefaultNotificationService::new(
@@ -384,7 +385,8 @@ impl DefaultAppServiceProvider {
                 repos.for_workspace_state(),
                 ws_state_broadcaster,
             )
-            .with_direct_space(federation.direct_space_id),
+            .with_direct_space(federation.direct_space_id)
+            .with_limits(limits),
         );
         // Shared confirmation store — same instance used by command_service and
         // macro_service so that a proof issued by command_service can be verified

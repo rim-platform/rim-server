@@ -4,12 +4,13 @@ use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_core::workspace_state::model::{
-    NewWorkspaceState, WorkspaceState, WorkspaceStateId, WorkspaceStateScope,
+    NewWorkspaceState, WorkspaceState, WorkspaceStateId, WorkspaceStateScope, WorkspaceStateUsage,
 };
 use rim_core::workspace_state::repository::WorkspaceStateRepository;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, Condition, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect,
 };
 
 use crate::DbHandle;
@@ -101,6 +102,39 @@ impl WorkspaceStateRepository for SeaOrmWorkspaceStateRepository {
             .await
             .map_err(map_db_err)?;
         Ok(count)
+    }
+
+    async fn creator_usage(
+        &self,
+        server_id: ServerId,
+        creator: UserId,
+    ) -> RepoResult<WorkspaceStateUsage> {
+        #[derive(sea_orm::FromQueryResult)]
+        struct Usage {
+            entries: i64,
+            bytes: i64,
+        }
+        let usage = Usage::find_by_statement(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Postgres,
+            r#"
+            SELECT count(*) AS entries, coalesce(sum(octet_length(value::text)), 0)::bigint AS bytes
+            FROM workspace_state
+            WHERE server_id = $1 AND scope = 'server' AND user_id IS NULL AND created_by = $2
+              AND (expires_at IS NULL OR expires_at > now())
+            "#,
+            [
+                sea_orm::Value::Uuid(Some(server_id.into())),
+                sea_orm::Value::Uuid(Some(creator.into())),
+            ],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?
+        .ok_or_else(|| RepoError::new(RepoErrorKind::Internal))?;
+        Ok(WorkspaceStateUsage {
+            entries: u64::try_from(usage.entries).unwrap_or(0),
+            bytes: u64::try_from(usage.bytes).unwrap_or(0),
+        })
     }
 
     async fn upsert(&self, new: NewWorkspaceState) -> RepoResult<WorkspaceState> {

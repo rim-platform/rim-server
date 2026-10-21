@@ -35,6 +35,17 @@ mod tests {
     use crate::ConversationRepos;
     use crate::conversation::DefaultConversationService;
 
+    /// A default workspace service that answers `current`.
+    fn default_workspace_service(
+        current: Option<ServerId>,
+    ) -> rim_services::default_workspace::MockDefaultWorkspaceService {
+        let mut service = rim_services::default_workspace::MockDefaultWorkspaceService::new();
+        service
+            .expect_current()
+            .returning(move || Box::pin(async move { Ok(current) }));
+        service
+    }
+
     fn base_repos() -> (
         MockConversationRepository,
         MockConversationMemberRepository,
@@ -674,6 +685,10 @@ mod tests {
         events: Arc<RecordingBroadcaster>,
         /// `(user, conversation)` pairs whose notifications were deleted.
         cleared_notifications: Arc<Mutex<Vec<(UserId, ConversationId)>>>,
+        /// Whether the workspace is the server's default workspace.
+        default_workspace: bool,
+        /// The unarchived channels the workspace holds.
+        channels: u64,
     }
 
     impl Fx {
@@ -695,7 +710,22 @@ mod tests {
                 timed_out: vec![],
                 events: Arc::new(RecordingBroadcaster::default()),
                 cleared_notifications: Arc::default(),
+                default_workspace: false,
+                channels: 0,
             }
+        }
+
+        /// Makes the workspace the server's default workspace.
+        fn default_workspace(mut self) -> Self {
+            self.default_workspace = true;
+            self
+        }
+
+        /// Caps channels per workspace at `cap` while the workspace holds `channels`.
+        fn channel_cap(mut self, cap: u32, channels: u64) -> Self {
+            self.limits.channels_per_workspace = Some(cap);
+            self.channels = channels;
+            self
         }
 
         fn with_workspace_member(mut self, user: UserId, role: ServerMemberRole) -> Self {
@@ -823,6 +853,13 @@ mod tests {
                     c.encrypted_at = new.encrypted.then(chrono::Utc::now);
                     Box::pin(async move { Ok(c) })
                 });
+            let channels = self.channels;
+            conversation_repo
+                .expect_count_channels()
+                .returning(move |_| Box::pin(async move { Ok(channels) }));
+            conversation_repo
+                .expect_exists_channel_by_title()
+                .returning(|_, _| Box::pin(async { Ok(false) }));
             let set = Arc::clone(&stored);
             conversation_repo
                 .expect_set_archived()
@@ -973,6 +1010,9 @@ mod tests {
             )
             .with_e2ee_repo(Arc::new(e2ee_repo))
             .with_limits(self.limits)
+            .with_default_workspace(Arc::new(default_workspace_service(
+                self.default_workspace.then_some(self.server_id),
+            )))
         }
 
         fn invite_cmd(&self, actor: UserId) -> ConversationInviteCmd {
@@ -1439,6 +1479,76 @@ mod tests {
             group.set_archived(owner, true).await,
             Err(ServiceError::Validation(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn unarchiving_a_channel_follows_the_channels_per_workspace_cap() {
+        let [owner] = users();
+        for (channels, allowed) in [(29, true), (30, false)] {
+            let fx = Fx::new(ConversationType::Channel, false, &[])
+                .with_workspace_member(owner, ServerMemberRole::Owner)
+                .archived()
+                .channel_cap(30, channels);
+            match fx.set_archived(owner, false).await {
+                Ok(archived) => assert!(allowed && !archived, "{channels}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{channels}");
+                    assert_eq!(message, "this instance allows 30 channels per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+        // Archiving never counts.
+        let fx = Fx::new(ConversationType::Channel, false, &[])
+            .with_workspace_member(owner, ServerMemberRole::Owner)
+            .channel_cap(30, 30);
+        assert!(fx.set_archived(owner, true).await.expect("archive"));
+    }
+
+    #[tokio::test]
+    async fn in_the_default_workspace_only_owners_and_moderators_create_channels() {
+        let [member, guest, moderator, owner] = users();
+        let fx = |default: bool| {
+            let fx = Fx::new(ConversationType::Channel, false, &[])
+                .with_workspace_member(member, ServerMemberRole::Member)
+                .with_workspace_member(guest, ServerMemberRole::Guest)
+                .with_workspace_member(moderator, ServerMemberRole::Moderator)
+                .with_workspace_member(owner, ServerMemberRole::Owner);
+            if default { fx.default_workspace() } else { fx }
+        };
+        let create = |fx: &Fx, actor: UserId, is_private: bool| {
+            let svc = fx.service();
+            let server_id = fx.server_id;
+            async move {
+                svc.create_conversation(CreateConversationCmd {
+                    actor: Actor::new(actor),
+                    server_id,
+                    participants: ConversationParticipants::Channel,
+                    title: Some("news".to_string()),
+                    is_private,
+                    encrypted: false,
+                })
+                .await
+            }
+        };
+
+        let default = fx(true);
+        for (actor, is_private) in [(member, false), (member, true)] {
+            assert!(matches!(
+                create(&default, actor, is_private).await,
+                Err(ServiceError::Forbidden(m)) if m.contains("only the owner and moderators")
+            ));
+        }
+        assert!(matches!(
+            create(&default, guest, false).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        for actor in [moderator, owner] {
+            create(&default, actor, true).await.expect("staff creates");
+        }
+        create(&fx(false), member, true)
+            .await
+            .expect("a member creates channels in any other workspace");
     }
 
     #[tokio::test]

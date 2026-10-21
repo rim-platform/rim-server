@@ -268,6 +268,23 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- Workspace-scoped workspace state (`setWorkspaceState`, `deleteWorkspaceState`, `state.set`,
+  `state.incr`, `state.delete` with the `SERVER` scope) takes a Member, Moderator or Owner who
+  is not timed out and whose account is out of probation; a guest gets `FORBIDDEN`. A Member
+  overwrites and deletes only the keys they created (`FORBIDDEN` otherwise) and increments any
+  numeric key; Owners and Moderators change every key. A Member creates at most 100 such
+  entries per workspace, holding at most 1 MiB of values (`VALIDATION`). Each user makes at
+  most 60 workspace state writes a minute in bursts of up to 30, through GraphQL, commands,
+  macros and pipelines alike (`RATE_LIMITED`). Every member still reads the workspace scope and
+  writes their own user scope. The `WorkspaceStateChanged` event of `workspaceEvents` no longer
+  carries `value`; a client reads the entry again.
+- In the default workspace only the Owner and Moderators create channels; a member gets
+  `FORBIDDEN` and still starts DMs and groups. A later start of `RIM_DEFAULT_WORKSPACE_FILE`
+  leaves alone a channel of a file's name that someone else created, and the log names it.
+- `RIM_LIMIT_MACROS_PER_WORKSPACE` and `RIM_LIMIT_PIPELINES_PER_WORKSPACE` also bound each
+  member: one who is neither Owner nor Moderator holds at most a fifth of the cap (at least
+  one), so one member cannot fill it. Kicking or banning a member deletes their macros and
+  pipelines in that workspace.
 - **Upgrade:** the audit file is now one file per UTC day, `audit.<YYYY-MM-DD>.log` in the
   directory of `RIM_AUDIT_LOG_PATH`, and the server deletes the files older than
   `RIM_AUDIT_LOG_RETENTION_DAYS` (1 to 3650, default 90) daily. A logrotate rule for
@@ -398,6 +415,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   returns a page, with `after` (the last report's id) and `limit` (default 100, at most 500),
   and `abuse-reports list` takes `--after` and `--limit`. Before, one account could report the
   same request without end, and every open report came back in one list.
+- `RIM_LIMIT_WORKSPACES_PER_USER` holds when an account creates several workspaces at once, and
+  `transferWorkspaceOwnership` refuses a new owner who already owns as many (`VALIDATION`).
+- `RIM_LIMIT_CHANNELS_PER_WORKSPACE` counts unarchived channels only, so archiving one frees its
+  place; unarchiving a channel needs room under the cap (`VALIDATION`).
 - `RIM_FEATURES_DISABLED` and `RIM_AUDIT_RETENTION_DAYS` set in `deploy/.env` reach the server:
   `deploy/compose.yml` passes both through like every other setting. Before, the two lines were
   commented out in the `rim` service and a value in `.env` was silently ignored, so every

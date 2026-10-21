@@ -402,6 +402,7 @@ impl Start {
             server_repo: Arc::new(self.servers),
             conversation_repo: Arc::new(MockConversationRepository::new()),
             dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
         }
     }
 }

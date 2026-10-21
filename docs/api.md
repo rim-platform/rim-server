@@ -277,7 +277,8 @@ A workspace has exactly one owner. `transferWorkspaceOwnership(input: { serverId
 makes another member the owner and the caller a moderator, in one step, and answers the
 workspace; both changes are announced with `MemberRoleChanged`. Only the owner may call it, the
 new owner must be a member and not a guest (`NOT_FOUND`, `VALIDATION`), and `setMemberRole` still
-never grants the owner role.
+never grants the owner role. Under `RIM_LIMIT_WORKSPACES_PER_USER` a new owner who already owns as
+many workspaces as the cap is refused (`VALIDATION`).
 
 `deleteWorkspace(input: { serverId, confirmName })` deletes the workspace for good, with its
 members, channels and conversations, their messages, files, pins and threads, invites, workspace
@@ -397,13 +398,13 @@ naming the cap, such as "this instance allows 5 workspaces per user".
 
 | Variable | `serverInfo.limits` | Caps |
 |---|---|---|
-| `RIM_LIMIT_WORKSPACES_PER_USER` | `workspacesPerUser` | Workspaces one user owns. |
+| `RIM_LIMIT_WORKSPACES_PER_USER` | `workspacesPerUser` | Workspaces one user owns, created or handed over to them: `transferWorkspaceOwnership` to someone at the cap answers `VALIDATION`. |
 | `RIM_LIMIT_MEMBERS_PER_WORKSPACE` | `membersPerWorkspace` | Members of a workspace, by invite or signup; the direct space has none. |
-| `RIM_LIMIT_CHANNELS_PER_WORKSPACE` | `channelsPerWorkspace` | Channels of a workspace, public and private; a new workspace gets only the default channels the cap allows. |
+| `RIM_LIMIT_CHANNELS_PER_WORKSPACE` | `channelsPerWorkspace` | Unarchived channels of a workspace, public and private; a new workspace gets only the default channels the cap allows. Archiving a channel frees its place, and unarchiving one needs room. |
 | `RIM_LIMIT_DEVICES_PER_USER` | `devicesPerUser` | Devices on one account. |
 | `RIM_LIMIT_DM_REQUESTS_PER_DAY` | `dmRequestsPerDay` | DM requests one user sends to strangers per day. |
-| `RIM_LIMIT_MACROS_PER_WORKSPACE` | `macrosPerWorkspace` | Macros of a workspace. |
-| `RIM_LIMIT_PIPELINES_PER_WORKSPACE` | `pipelinesPerWorkspace` | Pipelines of a workspace. |
+| `RIM_LIMIT_MACROS_PER_WORKSPACE` | `macrosPerWorkspace` | Macros of a workspace. A member who is neither Owner nor Moderator holds at most a fifth of them (at least one, and never more than the 50 everyone may hold). |
+| `RIM_LIMIT_PIPELINES_PER_WORKSPACE` | `pipelinesPerWorkspace` | Pipelines of a workspace, with the same fifth for a member who is neither Owner nor Moderator. |
 | `RIM_LIMIT_PLUGINS_PER_WORKSPACE` | `pluginsPerWorkspace` | Plugins of a workspace's registry, at most the built-in 100. |
 | `RIM_LIMIT_INVITES_PER_USER_PER_DAY` | `invitesPerUserPerDay` | Workspace invites one user creates in the last 24 hours, and invite emails (`recipientEmail`) one user sends in the last 24 hours. Unlike most caps it defaults to 50; 0 turns it off. |
 | `RIM_LIMIT_INVITE_MAX_USES` | `inviteMaxUses` | The uses one invite may have. |
@@ -422,14 +423,15 @@ unset or 0 turns it off, and an account older than the setting is judged by its 
 other. The instance operator is never on probation: the role (from the default workspace's owner
 claim with `claimGrantsOperator`, or `rim_server operator grant`) is read at each request, so an
 account is out of probation from the moment it holds it. During probation an account cannot
-create a workspace or start a DM with a stranger, in the direct space or in a workspace, someone
-it does not know (a contact who lists it too, or someone either of them accepted a DM request
-from: "Who May Start A DM" in `docs/messaging.md`) and shares no workspace with but the server's
-default workspace, which every new account joins (`serverInfo.defaultWorkspace`); an account
-without a key is known only through a workspace. Both answer `VALIDATION` saying when it can, in
-minutes rounded up ("a new account can create a workspace in 42 minutes"). Its messages follow
-`RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a burst of the same size, instead of
-`RIM_RATE_MESSAGES_PER_MIN_PER_USER`; unset, the normal rate applies. The `probationHours` of
+create a workspace, write a workspace's shared state, or start a DM with a stranger, in the
+direct space or in a workspace, someone it does not know (a contact who lists it too, or someone
+either of them accepted a DM request from: "Who May Start A DM" in `docs/messaging.md`) and
+shares no workspace with but the server's default workspace, which every new account joins
+(`serverInfo.defaultWorkspace`); an account without a key is known only through a workspace.
+Each answers `VALIDATION` saying when it can, in minutes rounded up ("a new account can create
+a workspace in 42 minutes"). Its messages follow `RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a
+burst of the same size, instead of `RIM_RATE_MESSAGES_PER_MIN_PER_USER`; unset, the normal rate
+applies. The `probationHours` of
 `serverInfo.limits` reports the setting, null when off, and `me { probationEndsAt }` tells the
 signed-in caller when theirs ends, null once it has and for an instance operator.
 

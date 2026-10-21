@@ -181,4 +181,14 @@ impl PipelineRepository for SeaOrmPipelineRepository {
             .await
             .map_err(map_db_err)
     }
+
+    async fn delete_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64> {
+        let result = pipeline::Entity::delete_many()
+            .filter(pipeline::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(pipeline::Column::CreatedBy.eq::<Uuid>(user_id.into()))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(result.rows_affected)
+    }
 }

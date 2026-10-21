@@ -325,6 +325,8 @@ impl AppRepos {
             message_attachment_repo: Arc::clone(&self.message_attachment_repo),
             moderation_repo: Arc::clone(&self.moderation_repo),
             notification_repo: Arc::clone(&self.notification_repo),
+            macro_repo: Arc::clone(&self.macro_repo),
+            pipeline_repo: Arc::clone(&self.pipeline_repo),
         }
     }
 
@@ -575,6 +577,7 @@ impl AppRepos {
         crate::workspace_state::WorkspaceStateRepos {
             workspace_state_repo: Arc::clone(&self.workspace_state_repo),
             server_member_repo: Arc::clone(&self.server_member_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 

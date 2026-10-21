@@ -300,12 +300,13 @@ pub struct RIMConfig {
     // Each caps one thing across the instance; 0 sets no cap, and so does unset unless the cap
     // names a default. See
     // [`RIMConfig::instance_limits`].
-    /// Workspaces one user owns. Controlled by `RIM_LIMIT_WORKSPACES_PER_USER`.
+    /// Workspaces one user owns, created or handed over to them. Controlled by
+    /// `RIM_LIMIT_WORKSPACES_PER_USER`.
     pub limit_workspaces_per_user: Option<u32>,
     /// Members of one workspace; the direct space has no cap. Controlled by
     /// `RIM_LIMIT_MEMBERS_PER_WORKSPACE`.
     pub limit_members_per_workspace: Option<u32>,
-    /// Channels of one workspace, public and private. Controlled by
+    /// Unarchived channels of one workspace, public and private. Controlled by
     /// `RIM_LIMIT_CHANNELS_PER_WORKSPACE`.
     pub limit_channels_per_workspace: Option<u32>,
     /// Devices on one account; the stricter of this and `RIM_RELAY_DEVICES_PER_USER` applies.
@@ -314,9 +315,11 @@ pub struct RIMConfig {
     /// DM requests one user sends to strangers per day; the stricter of this and
     /// `RIM_RELAY_DM_REQUESTS_PER_DAY` applies. Controlled by `RIM_LIMIT_DM_REQUESTS_PER_DAY`.
     pub limit_dm_requests_per_day: Option<u32>,
-    /// Macros of one workspace. Controlled by `RIM_LIMIT_MACROS_PER_WORKSPACE`.
+    /// Macros of one workspace; a member who is neither Owner nor Moderator holds at most a
+    /// fifth of them. Controlled by `RIM_LIMIT_MACROS_PER_WORKSPACE`.
     pub limit_macros_per_workspace: Option<u32>,
-    /// Pipelines of one workspace. Controlled by `RIM_LIMIT_PIPELINES_PER_WORKSPACE`.
+    /// Pipelines of one workspace; a member who is neither Owner nor Moderator holds at most
+    /// a fifth of them. Controlled by `RIM_LIMIT_PIPELINES_PER_WORKSPACE`.
     pub limit_pipelines_per_workspace: Option<u32>,
     /// Plugins of one workspace's registry. Controlled by `RIM_LIMIT_PLUGINS_PER_WORKSPACE`.
     pub limit_plugins_per_workspace: Option<u32>,
@@ -338,8 +341,9 @@ pub struct RIMConfig {
     pub limit_accounts: Option<u32>,
 
     // ── Probation of new accounts ───────────────────────────────────────────
-    /// Hours after its creation during which an account cannot create a workspace or send a
-    /// DM request to a stranger; an instance operator is never on probation. Unset or 0 turns
+    /// Hours after its creation during which an account cannot create a workspace, write a
+    /// workspace's shared state or send a DM request to a stranger; an instance operator is
+    /// never on probation. Unset or 0 turns
     /// probation off. Controlled by `RIM_PROBATION_HOURS`.
     pub probation_hours: Option<u32>,
     /// Messages an account in probation sends per minute, with a burst of the same size,

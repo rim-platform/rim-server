@@ -221,10 +221,11 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
     },
+    /// A workspace state key was written. The value is not carried: a client that shows it
+    /// reads it again.
     WorkspaceStateChanged {
         workspace_id: ServerId,
         key: String,
-        value: serde_json::Value,
         scope: WorkspaceStateScopeDto,
         user_id: Option<UserId>,
         version: i64,

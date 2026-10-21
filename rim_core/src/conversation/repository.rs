@@ -151,6 +151,6 @@ pub trait ConversationRepository: Send + Sync {
         seconds: i32,
     ) -> RepoResult<Conversation>;
 
-    /// How many channels `server_id` has, public and private, archived ones included.
+    /// How many unarchived channels `server_id` has, public and private.
     async fn count_channels(&self, server_id: ServerId) -> RepoResult<u64>;
 }

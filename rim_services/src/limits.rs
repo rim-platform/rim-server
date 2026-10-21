@@ -8,11 +8,11 @@ use crate::ServiceError;
 /// The instance's caps; a `None` cap is off.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InstanceLimits {
-    /// Workspaces one user owns.
+    /// Workspaces one user owns, created or handed over to them.
     pub workspaces_per_user: Option<u32>,
     /// Members of one workspace; the direct space has no cap.
     pub members_per_workspace: Option<u32>,
-    /// Channels of one workspace, public and private.
+    /// Unarchived channels of one workspace, public and private.
     pub channels_per_workspace: Option<u32>,
     /// Devices on one account: the stricter of `RIM_LIMIT_DEVICES_PER_USER` and the relay
     /// quota.
@@ -20,9 +20,9 @@ pub struct InstanceLimits {
     /// DM requests one user sends to strangers per day: the stricter of
     /// `RIM_LIMIT_DM_REQUESTS_PER_DAY` and the relay quota.
     pub dm_requests_per_day: Option<u32>,
-    /// Macros of one workspace.
+    /// Macros of one workspace; a member holds the share [`member_share`] gives.
     pub macros_per_workspace: Option<u32>,
-    /// Pipelines of one workspace.
+    /// Pipelines of one workspace; a member holds the share [`member_share`] gives.
     pub pipelines_per_workspace: Option<u32>,
     /// Plugins of one workspace's registry.
     pub plugins_per_workspace: Option<u32>,
@@ -32,9 +32,9 @@ pub struct InstanceLimits {
     pub invite_max_uses: Option<u32>,
     /// Bytes of one message's text.
     pub message_bytes: Option<u32>,
-    /// Hours after its creation during which an account cannot create a workspace or send a
-    /// DM request to a stranger, and sends messages at the probation rate; an instance
-    /// operator is never on probation.
+    /// Hours after its creation during which an account cannot create a workspace, write a
+    /// workspace's shared state or send a DM request to a stranger, and sends messages at the
+    /// probation rate; an instance operator is never on probation.
     pub probation_hours: Option<u32>,
     /// Pending invitations to encrypted conversations one user holds.
     pub pending_invites_per_user: Option<u32>,
@@ -76,6 +76,16 @@ impl InstanceLimits {
     }
 }
 
+/// How many of a workspace's macros or pipelines one member may hold: `per_user` for an Owner
+/// or Moderator; for anyone else a fifth of `workspace_cap` (at least one) when the workspace
+/// has a cap, and never more than `per_user`. One member then cannot fill a workspace's cap.
+pub fn member_share(workspace_cap: Option<u32>, per_user: u64, is_moderator: bool) -> u64 {
+    match workspace_cap {
+        Some(cap) if !is_moderator => (u64::from(cap) / 5).clamp(1, per_user),
+        _ => per_user,
+    }
+}
+
 /// The refusal of a write that would pass `cap`, naming the cap and what it counts, e.g.
 /// "this instance allows 5 workspaces per user".
 pub fn limit_reached(cap: u32, what: &str) -> ServiceError {
@@ -107,6 +117,15 @@ mod tests {
         ));
         assert!(ensure_below(Some(5), 9, "workspaces per user").is_err());
         assert!(ensure_below(None, u64::MAX, "workspaces per user").is_ok());
+    }
+
+    #[test]
+    fn a_member_holds_a_fifth_of_the_workspace_cap_and_staff_the_per_user_number() {
+        assert_eq!(member_share(Some(50), 50, false), 10);
+        assert_eq!(member_share(Some(3), 50, false), 1);
+        assert_eq!(member_share(Some(1000), 50, false), 50);
+        assert_eq!(member_share(None, 50, false), 50);
+        assert_eq!(member_share(Some(50), 50, true), 50);
     }
 
     #[test]

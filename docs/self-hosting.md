@@ -358,7 +358,10 @@ channels per workspace, devices per account, DM requests to strangers per day, m
 pipelines and plugins per workspace, invites per user per day, uses per invite and the bytes
 of a message. Each is a `RIM_LIMIT_*` variable, off until set (the "Instance limits" block of
 `deploy/.env.example` has values for a small test instance); past one a write is refused with
-a message naming the cap, and clients read every cap from `serverInfo.limits`. Devices and DM
+a message naming the cap, and clients read every cap from `serverInfo.limits`. Channels count
+while unarchived. A member who is neither Owner nor Moderator holds at most a fifth of a
+workspace's macro and pipeline caps, so no one member fills them, and loses theirs when kicked
+or banned. A workspace handed over counts against its new owner's cap. Devices and DM
 requests also follow the relay quotas `RIM_RELAY_DEVICES_PER_USER` and
 `RIM_RELAY_DM_REQUESTS_PER_DAY`: the stricter number applies. A negative or non-numeric value,
 or `RIM_LIMIT_MESSAGE_BYTES` above 65536, stops the server at boot. Two caps are on by default,
@@ -378,10 +381,10 @@ at a time, so two at once never pass it. Lowering it below the accounts there ar
 signups only; nobody loses an account.
 
 `RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
-an account cannot create a workspace or send a DM request to someone it shares no workspace with
-and does not know (a contact who lists it too, or someone either of them accepted a DM request
-from; adding someone as a contact alone is not enough), and with
-`RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
+an account cannot create a workspace, write a workspace's shared state, or send a DM request to
+someone it shares no workspace with and does not know (a contact who lists it too, or someone
+either of them accepted a DM request from; adding someone as a contact alone is not enough), and
+with `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
 are judged by their age, so turning it on does not hold back anyone older than the setting. The
 default workspace ("A default workspace" below) is left out of the workspaces it shares, since
 every new account joins it, and a DM in it meets probation like one in the direct space. The
@@ -534,7 +537,9 @@ when the name changed, creates the channels missing by name (with no members; ne
 the public ones), sets the topics the file gives and the DM policy. It never deletes a channel
 or a member, never changes a channel's privacy and never moves ownership (the Owner transfers
 it in the app). A channel renamed in the file is a new channel: rename it in the app first, then
-in the file. A channel or topic made in the app and left out of the file stays as it is. When
+in the file. A channel or topic made in the app and left out of the file stays as it is. A
+channel of a file's name that someone other than the Owner or a Moderator created is left alone,
+topic included, and the log names it: give the file's channel another name. When
 the claimed workspace is deleted, the next start offers a new claim. Unsetting the variable
 stops the default workspace (signups join nothing) and revokes a waiting claim link; the
 workspace itself stays.
@@ -556,7 +561,9 @@ the next start refuses its id.
 
 ### Either way
 
-An account already in the workspace, or banned from it, is left as it is.
+An account already in the workspace, or banned from it, is left as it is. In the default
+workspace only the Owner and Moderators create channels; members start DMs and groups as
+anywhere else.
 `RIM_LIMIT_MEMBERS_PER_WORKSPACE` does not keep a new account out of the default workspace, but
 an invite to it still follows the cap. The workspace's channels are ordinary plaintext channels;
 DMs and encrypted groups are untouched, and other servers see an ordinary membership.
