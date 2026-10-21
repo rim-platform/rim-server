@@ -323,6 +323,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- `RIM_FEATURES_DISABLED` and `RIM_AUDIT_RETENTION_DAYS` set in `deploy/.env` reach the server:
+  `deploy/compose.yml` passes both through like every other setting. Before, the two lines were
+  commented out in the `rim` service and a value in `.env` was silently ignored, so every
+  feature stayed on.
 - The `TypingStarted` event of `workspaceEvents` carries the typing user's `username` and
   `display_name`, so a client can say who is typing.
 - A local account's first use of the direct space, any operation that needs membership there,
