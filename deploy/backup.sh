@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Backs up a running RIM deployment into one timestamped archive under RIM_BACKUP_DIR
 # (./backups): a custom-format pg_dump of the database, a tar of the rim data volume (server
-# key, franking keys, uploads, audit log and exports) and the env file. With
+# key, franking keys, uploads, audit files and exports) and the env file. With
 # RIM_BACKUP_AGE_RECIPIENT set the archive is encrypted with age and nothing unencrypted stays
-# on disk. The server recovery key file is never included.
+# on disk. The server recovery key file is never included. With RIM_BACKUP_KEEP_DAYS set, a
+# backup that succeeded then deletes this deployment's backups in RIM_BACKUP_DIR older than that
+# many days; unset, every backup is kept.
 #
 #   deploy/backup.sh
 #   COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh
@@ -16,6 +18,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/backup-lib.sh"
 
 backup_dir=$(setting RIM_BACKUP_DIR ./backups)
 recipient=$(setting RIM_BACKUP_AGE_RECIPIENT)
+keep_days=$(setting RIM_BACKUP_KEEP_DAYS)
+
+if [[ -n $keep_days && ! $keep_days =~ ^[1-9][0-9]*$ ]]; then
+	die "RIM_BACKUP_KEEP_DAYS=$keep_days is not a whole number of days, at least 1"
+fi
 
 if [[ -n $recipient ]]; then
 	command -v age >/dev/null || die "RIM_BACKUP_AGE_RECIPIENT is set and age is not installed"
@@ -78,6 +85,14 @@ chmod 600 "$work/archive"
 mv "$work/archive" "$out"
 
 say "wrote $out"
+if [[ -n $keep_days ]]; then
+	say "deleting backups of $project older than $keep_days days"
+	# This project's archives only: a timestamp follows the name, so rim's never match rim-relay's.
+	d='[0-9]'
+	find "$backup_dir" -maxdepth 1 -type f ! -path "$out" \
+		-name "rim-backup-$project-$d$d$d$d$d$d$d${d}T$d$d$d$d$d${d}Z.tar*" \
+		-mtime +$((keep_days - 1)) -print -delete >&2
+fi
 (cd "$set_dir" && du -h -- *)
 du -h "$out"
 printf '%s\n' "$out"

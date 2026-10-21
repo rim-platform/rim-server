@@ -253,6 +253,11 @@ The scripts read `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` the way docker compos
 15 3 * * * cd /srv/rim-server && deploy/backup.sh >>/var/log/rim-backup.log 2>&1
 ```
 
+**How long.** With `RIM_BACKUP_KEEP_DAYS` set, each backup that succeeded deletes this
+deployment's archives in `RIM_BACKUP_DIR` older than that many days; unset, every archive is
+kept. Archives hold the audit files, and with them IP addresses, so keep them no longer than you
+keep those.
+
 **Where copies go.** Off the host, encrypted: **FILL** the destination (object storage, another
 machine) and how long copies are kept. The archive holds the server's private key and every
 user's data; treat it like the host itself.
