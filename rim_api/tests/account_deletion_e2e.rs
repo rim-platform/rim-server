@@ -9,11 +9,14 @@
 
 mod support;
 
+use std::path::PathBuf;
+
 use chrono::{DateTime, Duration, Utc};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 
 use rim_core::server_member::model::ServerMemberRole;
+use rim_core::user::model::UserId;
 use rim_infra_services::scheduled_purges::purge_deleted_accounts;
 use rim_services::auth::dto::RegistrationMode;
 
@@ -65,6 +68,12 @@ const SEARCH: &str = r#"query($s: ID!, $q: String!) {
 
 const MEMBERS: &str = "query($s: ID!) { serverMembers(serverId: $s) { userId memberRole } }";
 
+const SET_AVATAR: &str =
+    "mutation($u: String!) { updateMyProfile(input: { avatarUrl: $u }) { avatarUrl } }";
+
+/// Where the test provider's local storage keeps uploaded files.
+const STORAGE_ROOT: &str = "/tmp/rim_api_e2e_test_storage";
+
 const GROUP: &str = r#"query($s: ID!, $c: ID!) {
   conversation(serverId: $s, conversationId: $c) {
     mlsGroup { pendingRemoves { principalId deviceId } }
@@ -81,6 +90,32 @@ fn scheduled_for(data: &Value) -> DateTime<Utc> {
         .expect("scheduledFor")
         .parse()
         .expect("RFC 3339")
+}
+
+/// The directory holding `user_id`'s avatar files.
+fn avatar_dir(user_id: UserId) -> PathBuf {
+    PathBuf::from(STORAGE_ROOT).join(format!("avatars/{user_id}"))
+}
+
+/// Store a file named each of `names` in `user_id`'s avatar directory.
+fn store_avatars(user_id: UserId, names: &[&str]) {
+    let dir = avatar_dir(user_id);
+    std::fs::create_dir_all(&dir).expect("avatar dir");
+    for name in names {
+        std::fs::write(dir.join(name), b"x").expect("avatar file");
+    }
+}
+
+/// The names of the files in `user_id`'s avatar directory, sorted.
+fn avatar_files(user_id: UserId) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(avatar_dir(user_id)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .map(|e| e.expect("entry").file_name().into_string().expect("utf-8"))
+        .collect();
+    names.sort();
+    names
 }
 
 /// The first row's first column of `sql`, as text.
@@ -368,4 +403,55 @@ async fn a_purged_key_identity_leaves_its_groups_and_cannot_sign_up_again() {
     .await;
     assert_eq!(code, "VALIDATION");
     assert!(message.contains("deleted"), "{message}");
+}
+
+/// Setting the avatar keeps the file it names and deletes the account's other avatar files,
+/// clearing it deletes them all, and another account's avatar URL is refused. The purge deletes
+/// every file in the account's avatar directory, whatever its avatar URL names, and leaves the
+/// avatar of the account that URL belongs to alone.
+#[tokio::test]
+async fn avatar_files_go_with_a_changed_avatar_and_with_the_account() {
+    let ctx = TestCtx::new().await;
+    let (schema, provider) =
+        ctx.build_with_deletion_grace(Duration::zero(), RegistrationMode::InviteOnly);
+    let alice_user = ctx.create_password_user("alice").await;
+    let bob_user = ctx.create_user("bob").await;
+    let alice = ctx.caller(&alice_user).await;
+    let (a, b) = (alice_user.id, bob_user.id);
+    store_avatars(a, &["avatar.gif", "avatar.jpg", "avatar.png"]);
+    store_avatars(b, &["avatar.png"]);
+    let set = |url: String| alice.request(SET_AVATAR, json!({ "u": url }));
+
+    let (code, message) =
+        exec_err(&schema, set(format!("/api/files/avatars/{b}/avatar.png"))).await;
+    assert_eq!(code, "VALIDATION");
+    assert!(message.contains("avatar_url"), "{message}");
+    assert_eq!(avatar_files(a), ["avatar.gif", "avatar.jpg", "avatar.png"]);
+
+    let own = format!("/api/files/avatars/{a}/avatar.gif");
+    let data = exec_ok(&schema, set(own.clone())).await;
+    assert_eq!(data["updateMyProfile"]["avatarUrl"], json!(own));
+    assert_eq!(avatar_files(a), ["avatar.gif"]);
+
+    let data = exec_ok(&schema, set(String::new())).await;
+    assert_eq!(data["updateMyProfile"]["avatarUrl"], Value::Null);
+    assert_eq!(avatar_files(a), Vec::<String>::new());
+
+    // An avatar URL naming another account's file, which the mutation refuses but a row may hold.
+    store_avatars(a, &["avatar.png", "avatar.webp"]);
+    ctx.conn
+        .execute_unprepared(&format!(
+            "UPDATE \"user\" SET avatar_url = '/api/files/avatars/{b}/avatar.png' WHERE id = '{a}'"
+        ))
+        .await
+        .expect("avatar url");
+    exec_ok(&schema, request_as(&alice, "alice")).await;
+    let run = purge_deleted_accounts(provider.account_deletion_service().as_ref())
+        .await
+        .expect("run");
+    assert_eq!(run.failed, vec![]);
+    assert_eq!(run.purged.len(), 1);
+    assert_eq!(run.purged[0].files, 2);
+    assert_eq!(avatar_files(a), Vec::<String>::new());
+    assert_eq!(avatar_files(b), ["avatar.png"]);
 }

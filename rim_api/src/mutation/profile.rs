@@ -28,7 +28,9 @@ impl ProfileMutations {
     /// - `FORBIDDEN` — `displayName` from a member whose relay is another server; their
     ///   display name comes from their profile card.
     /// - `VALIDATION` — `displayName` > 64 chars, `statusText` > 256 chars,
-    ///   `bio` > 2000 chars, or `avatarUrl` not under `/api/files/`.
+    ///   `bio` > 2000 chars, or `avatarUrl` neither empty nor the URL of one of the caller's own
+    ///   uploaded avatars (`/api/files/avatars/<caller id>/avatar.<png|jpeg|gif|webp>`, as
+    ///   `POST /api/files/avatar` answers it).
     /// - `NOT_FOUND` — caller's user row missing (should not happen in practice).
     /// - `INTERNAL` — repository failure.
     ///
@@ -75,6 +77,9 @@ impl ProfileMutations {
 /// Each field is independently optional. Omitting a field leaves the existing
 /// value unchanged. Sending an explicit empty string clears the field
 /// (after trim + control-char strip).
+///
+/// `avatarUrl` is empty or the `url` that `POST /api/files/avatar` answered the caller.
+/// Setting it deletes the caller's other stored avatar files; clearing it deletes all of them.
 #[derive(InputObject)]
 pub struct UpdateMyProfileInput {
     pub display_name: Option<String>,

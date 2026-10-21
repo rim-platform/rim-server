@@ -8,6 +8,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
+use rim_core::user::avatar::{AvatarFormat, avatar_key, file_url};
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::feature::service::FeatureGate;
 use rim_services::message_attachment::service::MessageAttachmentService;
@@ -94,9 +95,6 @@ const ENCRYPTED_BLOB_MIME: &str = "application/octet-stream";
 
 /// The file name every encrypted blob is downloaded under; the real one is in the message.
 const ENCRYPTED_BLOB_FILENAME: &str = "encrypted.bin";
-
-/// MIME types allowed for avatar uploads.
-const ALLOWED_AVATAR_MIMES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 use rim_core::util::sanitize_filename;
 
@@ -387,6 +385,7 @@ pub(crate) async fn file_download_as(
 
     HttpResponse::Ok()
         .content_type(content_type)
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .insert_header((
             "Content-Disposition",
             format!("attachment; filename=\"{}\"", safe_name),
@@ -576,8 +575,9 @@ pub async fn handle_avatar_upload(
     avatar_upload_as(user_id, payload, storage_service.get_ref().as_ref()).await
 }
 
-/// Store `user_id`'s avatar: the session path above and forwarded requests from another relay
-/// share it.
+/// Store `user_id`'s avatar, then delete the user's other avatar files: the session path above
+/// and forwarded requests from another relay share it. The declared type must be png, jpeg, gif
+/// or webp and the bytes must start with that format's signature, or the answer is 415.
 pub(crate) async fn avatar_upload_as(
     user_id: rim_core::user::model::UserId,
     payload: Multipart,
@@ -588,35 +588,44 @@ pub(crate) async fn avatar_upload_as(
         Err(resp) => return resp,
     };
 
-    if !is_mime_allowed(&upload.content_type, ALLOWED_AVATAR_MIMES) {
+    let Some(format) = AvatarFormat::from_content_type(&upload.content_type) else {
         return HttpResponse::UnsupportedMediaType()
             .json(serde_json::json!({"error": "avatar must be an image (png, jpeg, gif, webp)"}));
+    };
+    if !format.matches_signature(&upload.data) {
+        return HttpResponse::UnsupportedMediaType()
+            .json(serde_json::json!({"error": "avatar content does not match its type"}));
     }
 
-    // Extension from the vetted content type, never the client filename, so each user has at
-    // most one avatar file per allowed type instead of one per invented extension.
-    let content_type = upload.content_type.to_lowercase();
-    let ext = ALLOWED_AVATAR_MIMES
-        .iter()
-        .find(|mime| content_type.starts_with(**mime))
-        .and_then(|mime| mime.strip_prefix("image/"))
-        .unwrap_or("png");
-    let storage_key = format!("avatars/{}/avatar.{}", user_id, ext);
-
-    match storage_service
-        .upload_file(&storage_key, &upload.data, &upload.content_type)
+    // The key comes from the vetted type, never the client filename, so each user has at most
+    // one avatar file per accepted type.
+    let storage_key = avatar_key(user_id, format);
+    let stored = match storage_service
+        .upload_file(&storage_key, &upload.data, format.mime())
         .await
     {
-        Ok(stored) => HttpResponse::Ok().json(serde_json::json!({
-            "path": stored.key,
-            "size_bytes": stored.size_bytes,
-            "url": format!("/api/files/{}", stored.key),
-        })),
+        Ok(stored) => stored,
         Err(e) => {
             tracing::error!(error = %e, "avatar upload failed");
-            HttpResponse::InternalServerError().json(serde_json::json!({"error": "upload failed"}))
+            return HttpResponse::InternalServerError()
+                .json(serde_json::json!({"error": "upload failed"}));
         }
+    };
+
+    // The new file is stored; a leftover that cannot be deleted now goes with the next upload,
+    // the next profile change or the account.
+    if let Err(e) = storage_service
+        .delete_avatar_files(user_id, Some(stored.key.clone()))
+        .await
+    {
+        tracing::warn!(user_id = %user_id, error = %e, "could not delete the previous avatar files");
     }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "path": stored.key,
+        "size_bytes": stored.size_bytes,
+        "url": file_url(&stored.key),
+    }))
 }
 
 #[cfg(test)]
@@ -646,6 +655,9 @@ mod tests {
     const BOUNDARY: &str = "rimboundary";
     const BLOB: &[u8] = b"opaque blob";
     const AVATAR: &[u8] = b"\x89PNG avatar";
+    /// The first bytes of a PNG and of a JPEG file.
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\npng";
+    const JPEG: &[u8] = b"\xFF\xD8\xFF\xE0jpeg";
     /// Unpadded base64url of 32 bytes of 0x07.
     const BLOB_SHA256: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 
@@ -669,6 +681,10 @@ mod tests {
 
         async fn delete(&self, _: &str) -> Result<(), StorageError> {
             Ok(())
+        }
+
+        async fn list(&self, _: &str) -> Result<Vec<String>, StorageError> {
+            Ok(Vec::new())
         }
     }
 
@@ -1210,8 +1226,8 @@ mod tests {
         }
     }
 
-    /// An avatar is served with the type its extension implies and its file name; a missing one
-    /// answers 404 and a signed-out caller 401.
+    /// An avatar is served with the type its extension implies, `nosniff` and its file name; a
+    /// missing one answers 404 and a signed-out caller 401.
     #[actix_web::test]
     async fn avatar_download_serves_the_file_or_answers_404() {
         let app = app!(Deps::new());
@@ -1225,6 +1241,12 @@ mod tests {
         assert_eq!(
             headers.get(header::CONTENT_TYPE).expect("type"),
             "image/png"
+        );
+        assert_eq!(
+            headers
+                .get(header::X_CONTENT_TYPE_OPTIONS)
+                .expect("nosniff"),
+            "nosniff"
         );
         assert_eq!(
             headers
@@ -1312,17 +1334,30 @@ mod tests {
 
     // ── Avatar upload ───────────────────────────────────────────────────────
 
+    /// Storage that stores every upload as asked.
+    fn storing(deps: &mut Deps) {
+        deps.storage.expect_upload_file().returning(|k, data, _| {
+            let stored = StoredFile {
+                key: k.to_string(),
+                size_bytes: data.len() as u64,
+            };
+            Box::pin(async move { Ok(stored) })
+        });
+    }
+
     /// An avatar is stored under the caller's key with the extension of its content type, not of
-    /// the client's file name, and the answer carries its path, size and URL.
+    /// the client's file name, the caller's other avatar files are deleted, and the answer
+    /// carries its path, size and URL.
     #[actix_web::test]
     async fn avatar_upload_stores_under_the_callers_key_by_type() {
         let mut deps = Deps::new();
-        let key = format!("avatars/{}/avatar.jpeg", deps.user_id);
+        let user_id = deps.user_id;
+        let key = format!("avatars/{user_id}/avatar.jpeg");
         let expected = key.clone();
         deps.storage
             .expect_upload_file()
             .withf(move |k, data, content_type| {
-                k == expected && data == b"jpeg" && content_type == "image/jpeg"
+                k == expected && data == JPEG && content_type == "image/jpeg"
             })
             .times(1)
             .returning(|k, data, _| {
@@ -1332,19 +1367,74 @@ mod tests {
                 };
                 Box::pin(async move { Ok(stored) })
             });
+        let kept = key.clone();
+        deps.storage
+            .expect_delete_avatar_files()
+            .withf(move |id, keep| *id == user_id && keep.as_deref() == Some(kept.as_str()))
+            .times(1)
+            .returning(move |id, _| {
+                let deleted = vec![format!("avatars/{id}/avatar.png")];
+                Box::pin(async move { Ok(deleted) })
+            });
         let app = app!(deps);
 
         let req = post(
             "/api/files/avatar",
-            &[Part::File("me.png", "image/jpeg", b"jpeg")],
+            &[Part::File("me.png", "image/jpeg", JPEG)],
         );
         assert_eq!(
             status_and_body!(&app, req),
             (
                 200,
-                json!({ "path": key, "size_bytes": 4, "url": format!("/api/files/{key}") })
+                json!({ "path": key, "size_bytes": JPEG.len(), "url": format!("/api/files/{key}") })
             )
         );
+    }
+
+    /// A stored avatar is answered with 200 even when the caller's other avatar files cannot be
+    /// deleted.
+    #[actix_web::test]
+    async fn avatar_upload_succeeds_when_the_old_files_cannot_be_deleted() {
+        let mut deps = Deps::new();
+        storing(&mut deps);
+        deps.storage
+            .expect_delete_avatar_files()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+        let app = app!(deps);
+
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.png", "image/png", PNG)],
+        );
+        assert_eq!(status_and_body!(&app, req).0, 200);
+    }
+
+    /// Bytes that do not start with the declared format's signature answer 415 before anything
+    /// is stored or deleted.
+    #[actix_web::test]
+    async fn avatar_upload_refuses_bytes_that_are_not_the_declared_format() {
+        let app = app!(Deps::new());
+        let mismatch = json!({ "error": "avatar content does not match its type" });
+        let cases: [(&str, &[u8]); 6] = [
+            ("image/png", JPEG),
+            ("image/jpeg", PNG),
+            ("image/gif", b"GIF88a"),
+            ("image/webp", b"RIFF\x10\0\0\0WAVEfmt "),
+            ("image/png", b"<svg onload=alert(1)>"),
+            ("image/png", b""),
+        ];
+        for (content_type, data) in cases {
+            let req = post(
+                "/api/files/avatar",
+                &[Part::File("me.png", content_type, data)],
+            );
+            assert_eq!(
+                status_and_body!(&app, req),
+                (415, mismatch.clone()),
+                "{content_type} {data:?}"
+            );
+        }
     }
 
     /// An avatar must be a png, jpeg, gif or webp image of at most 2 MiB; a storage failure
@@ -1386,7 +1476,7 @@ mod tests {
 
         let req = post(
             "/api/files/avatar",
-            &[Part::File("me.png", "image/png", b"png")],
+            &[Part::File("me.png", "image/png", PNG)],
         );
         assert_eq!(
             status_and_body!(&app, req),

@@ -80,14 +80,6 @@ pub fn tombstone_username_candidates(id: UserId) -> Vec<String> {
         .collect()
 }
 
-/// The storage key of an avatar URL this server serves (`/api/files/<key>`); `None` for any
-/// other URL.
-pub fn avatar_storage_key(avatar_url: &str) -> Option<&str> {
-    avatar_url
-        .strip_prefix("/api/files/")
-        .filter(|key| !key.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,16 +103,6 @@ mod tests {
                 .iter()
                 .all(|name| name.len() <= 32)
         );
-    }
-
-    #[test]
-    fn only_avatars_served_here_have_a_storage_key() {
-        assert_eq!(
-            avatar_storage_key("/api/files/avatars/u/avatar.png"),
-            Some("avatars/u/avatar.png")
-        );
-        assert_eq!(avatar_storage_key("/api/files/"), None);
-        assert_eq!(avatar_storage_key("https://example.com/a.png"), None);
     }
 
     #[test]

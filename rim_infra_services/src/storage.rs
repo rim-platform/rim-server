@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::server::model::ServerId;
 use rim_core::storage::{StorageBackend, StorageError, StoredFile};
+use rim_core::user::avatar::avatar_dir;
+use rim_core::user::model::UserId;
 use rim_core::workspace_plugin::repository::WorkspacePluginRepository;
 use rim_services::message_attachment::{MAX_ATTACHMENT_BYTES, UPLOAD_TICKET_TTL_MINUTES};
 use rim_services::storage::service::{QuotaUsage, StorageService};
@@ -111,6 +113,32 @@ impl StorageService for DefaultStorageService {
             file_count: usage.count,
         })
     }
+
+    async fn list_files(&self, dir: &str) -> ServiceResult<Vec<String>> {
+        self.backend.list(dir).await.map_err(map_storage_error)
+    }
+
+    async fn delete_avatar_files(
+        &self,
+        user_id: UserId,
+        keep: Option<String>,
+    ) -> ServiceResult<Vec<String>> {
+        let mut deleted = Vec::new();
+        for key in self.list_files(&avatar_dir(user_id)).await? {
+            if keep.as_deref() == Some(key.as_str()) {
+                continue;
+            }
+            match self.backend.delete(&key).await {
+                Ok(()) => deleted.push(key),
+                Err(StorageError::NotFound(_)) => {}
+                Err(e) => return Err(map_storage_error(e)),
+            }
+        }
+        if !deleted.is_empty() {
+            tracing::info!(user_id = %user_id, files = ?deleted, "deleted avatar files");
+        }
+        Ok(deleted)
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +206,46 @@ mod tests {
 
         let err = backend.get("to_delete.txt").await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn avatar_cleanup_deletes_the_users_other_files_only() {
+        let tmp = TempDir::new().unwrap();
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(LocalFileStorage::new(tmp.path().to_path_buf()));
+        let svc = service(Arc::clone(&backend), AttachmentUsage::default());
+        let user_id = UserId::new();
+        let other = UserId::new();
+        let dir = avatar_dir(user_id);
+        let keys = [
+            format!("{dir}/avatar.gif"),
+            format!("{dir}/avatar.jpg"),
+            format!("{dir}/avatar.png"),
+        ];
+        let others = format!("{}/avatar.png", avatar_dir(other));
+        for key in keys.iter().chain([&others]) {
+            backend.put(key, b"x", "image/png").await.unwrap();
+        }
+
+        let deleted = svc
+            .delete_avatar_files(user_id, Some(keys[2].clone()))
+            .await
+            .unwrap();
+        assert_eq!(deleted, keys[..2]);
+        assert_eq!(svc.list_files(&dir).await.unwrap(), vec![keys[2].clone()]);
+
+        assert_eq!(
+            svc.delete_avatar_files(user_id, None).await.unwrap(),
+            vec![keys[2].clone()]
+        );
+        assert!(svc.list_files(&dir).await.unwrap().is_empty());
+        assert!(
+            svc.delete_avatar_files(user_id, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(backend.get(&others).await.unwrap(), b"x");
     }
 
     #[tokio::test]

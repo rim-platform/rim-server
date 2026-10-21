@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 use rim_core::account_deletion::model::PurgeStep;
 use rim_core::account_deletion::repository::AccountDeletionRepository;
 use rim_core::auth::repository::SessionRepository;
+use rim_core::user::avatar::avatar_dir;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
 use rim_infra_db::sea_orm_impl::account_deletion::SeaOrmAccountDeletionRepository;
@@ -141,6 +142,9 @@ impl DefaultAccountDeletionService {
         done.absorb(repo.purge_relay_state(user_id).await?);
         done.absorb(repo.tombstone(user_id, now).await?);
         drop(repo);
+        // Every file in the account's avatar directory goes, whatever its avatar URL named.
+        done.storage_keys
+            .extend(self.storage.list_files(&avatar_dir(user_id)).await?);
 
         let files = u64::try_from(done.storage_keys.len()).unwrap_or(u64::MAX);
         if dry_run {
@@ -371,17 +375,27 @@ mod tests {
         }
     }
 
-    /// The service over `repo` and `sessions`, with storage that deletes anything and a clock
-    /// fixed at [`fixed_now`].
+    /// The service over `repo` and `sessions`, with storage that deletes anything and holds
+    /// two avatar files for every account, and a clock fixed at [`fixed_now`].
     fn service(
         repo: MockAccountDeletionRepository,
         sessions: MockSessionRepository,
     ) -> DefaultAccountDeletionService {
-        let mut storage = MockStorageService::new();
+        let mut storage = holding_avatars();
         storage
             .expect_delete_file()
             .returning(|_| Box::pin(async { Ok(()) }));
         service_with(repo, sessions, storage, Arc::new(Recorder::default()))
+    }
+
+    /// Storage whose avatar directory of each account holds a png and a gif.
+    fn holding_avatars() -> MockStorageService {
+        let mut storage = MockStorageService::new();
+        storage.expect_list_files().returning(|dir| {
+            let keys = vec![format!("{dir}/avatar.gif"), format!("{dir}/avatar.png")];
+            Box::pin(async move { Ok(keys) })
+        });
+        storage
     }
 
     fn service_with(
@@ -673,13 +687,7 @@ mod tests {
         let c = Arc::clone(&calls);
         repo.expect_tombstone().returning(move |id, _| {
             record(&c, id, "tombstone");
-            Box::pin(async {
-                Ok(PurgeStep {
-                    counts: vec![("tombstone", 1)],
-                    storage_keys: vec!["avatars/u/avatar.png".to_string()],
-                    ..PurgeStep::default()
-                })
-            })
+            Box::pin(async { Ok(PurgeStep::counted(vec![("tombstone", 1)])) })
         });
         repo
     }
@@ -707,7 +715,7 @@ mod tests {
         let user_id = UserId::new();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let repo = purging(vec![user_id], None, Arc::clone(&calls));
-        let mut storage = MockStorageService::new();
+        let mut storage = holding_avatars();
         let deleted = Arc::new(Mutex::new(Vec::new()));
         let d = Arc::clone(&deleted);
         storage.expect_delete_file().returning(move |key| {
@@ -748,10 +756,15 @@ mod tests {
                 ("tombstone", 1),
             ]
         );
-        assert_eq!(purged.files, 3);
+        assert_eq!(purged.files, 4);
         assert_eq!(
             *deleted.lock().expect("lock"),
-            vec!["custom-emoji/a.png", "uploads/a", "avatars/u/avatar.png"]
+            vec![
+                "custom-emoji/a.png".to_string(),
+                "uploads/a".to_string(),
+                format!("avatars/{user_id}/avatar.gif"),
+                format!("avatars/{user_id}/avatar.png"),
+            ]
         );
         let events = events.0.lock().expect("lock");
         assert!(matches!(
@@ -816,7 +829,7 @@ mod tests {
     async fn a_dry_run_counts_but_deletes_no_file_tells_nobody_and_leaves_no_relay() {
         let user_id = UserId::new();
         let repo = purging(vec![user_id], None, Arc::new(Mutex::new(Vec::new())));
-        let mut storage = MockStorageService::new();
+        let mut storage = holding_avatars();
         storage.expect_delete_file().never();
         let mut relay = MockWorkspaceRelayService::new();
         relay.expect_leave_relay().never();
@@ -836,8 +849,33 @@ mod tests {
         assert!(!connection.has_ended(), "a dry run closes no connection");
         assert!(run.dry_run);
         assert_eq!(run.purged.len(), 1);
-        assert_eq!(run.purged[0].files, 3);
+        assert_eq!(run.purged[0].files, 4);
         assert!(events.0.lock().expect("lock").is_empty());
+    }
+
+    /// When the account's avatar directory cannot be listed, the account fails and no file is
+    /// deleted, so the next run purges it again.
+    #[tokio::test]
+    async fn an_unlistable_avatar_directory_fails_the_account() {
+        let user_id = UserId::new();
+        let repo = purging(vec![user_id], None, Arc::new(Mutex::new(Vec::new())));
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_list_files()
+            .returning(|_| Box::pin(async { Err(ServiceError::Unavailable) }));
+        storage.expect_delete_file().never();
+        let run = service_with(
+            repo,
+            MockSessionRepository::new(),
+            storage,
+            Arc::new(Recorder::default()),
+        )
+        .purge_due(fixed_now(), false)
+        .await
+        .expect("run");
+        assert_eq!(run.purged, vec![]);
+        assert_eq!(run.failed.len(), 1);
+        assert_eq!(run.failed[0].user_id, user_id);
     }
 
     #[tokio::test]

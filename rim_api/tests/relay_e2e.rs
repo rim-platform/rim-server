@@ -942,6 +942,21 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         .await
         .expect("json");
     let alice_path = format!("/api/files/{}", stored["path"].as_str().expect("path"));
+    let direct = alice
+        .http
+        .get(format!("{}{alice_path}", a.origin))
+        .header("cookie", format!("rim_session={}", alice.session))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(direct.status(), 200);
+    assert_eq!(
+        direct
+            .headers()
+            .get("x-content-type-options")
+            .map(|v| v.as_bytes()),
+        Some(b"nosniff".as_slice())
+    );
     let (downloaded, _) = bob
         .forward(&a, "GET", &alice_path, Vec::new(), None, None)
         .await;
@@ -959,6 +974,50 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         )
         .await;
     assert_eq!(own.bytes, png);
+
+    // A GIF takes its place and the PNG goes; bytes that are not the declared type are refused.
+    let gif = b"GIF89abob";
+    let (as_gif, _) = bob
+        .forward_typed(
+            &a,
+            "POST",
+            "/api/files/avatar",
+            multipart_file(BOUNDARY, "me.gif", "image/gif", gif),
+            None,
+            None,
+            &multipart,
+        )
+        .await;
+    assert_eq!(as_gif.status, 200, "{}", as_gif.body);
+    assert_eq!(
+        as_gif.body["path"],
+        json!(format!("avatars/{bob_on_a}/avatar.gif"))
+    );
+    for (ext, status) in [("png", 404), ("gif", 200)] {
+        let (got, _) = bob
+            .forward(
+                &a,
+                "GET",
+                &format!("/api/files/avatars/{bob_on_a}/avatar.{ext}"),
+                Vec::new(),
+                None,
+                None,
+            )
+            .await;
+        assert_eq!(got.status, status, "{ext}");
+    }
+    let (mismatched, _) = bob
+        .forward_typed(
+            &a,
+            "POST",
+            "/api/files/avatar",
+            multipart_file(BOUNDARY, "me.gif", "image/gif", png),
+            None,
+            None,
+            &multipart,
+        )
+        .await;
+    assert_eq!(mismatched.status, 415, "{}", mismatched.body);
 
     // Only avatars are served.
     for path in ["/api/files/other/x", "/api/files/uploads/x"] {

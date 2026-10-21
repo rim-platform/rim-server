@@ -4,6 +4,7 @@ mod tests {
 
     use rim_core::user::model::{UpdateProfilePatch, User, UserId};
     use rim_core::user::repository::MockUserRepository;
+    use rim_services::storage::service::MockStorageService;
     use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
     use rim_services::user::service::UserService;
     use rim_services::{Actor, ServiceError};
@@ -193,24 +194,121 @@ mod tests {
         assert!(matches!(err, ServiceError::Validation(_)));
     }
 
-    #[tokio::test]
-    async fn update_profile_rejects_external_avatar_url() {
-        let user_repo = MockUserRepository::new();
-        let svc = DefaultUserService::new(UserRepos {
-            user_repo: Arc::new(user_repo),
-        });
+    fn set_avatar(id: UserId, avatar_url: &str) -> UpdateMyProfileCmd {
+        UpdateMyProfileCmd {
+            actor: Actor::new(id),
+            display_name: None,
+            status_text: None,
+            avatar_url: Some(avatar_url.to_string()),
+            bio: None,
+        }
+    }
 
-        let err = svc
-            .update_my_profile(UpdateMyProfileCmd {
-                actor: Actor::new(UserId::new()),
-                display_name: None,
-                status_text: None,
-                avatar_url: Some("https://evil.com/avatar.png".to_string()),
-                bio: None,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Validation(_)));
+    /// A user service over one account `id` that saves the avatar URL it is given, deleting
+    /// files through `storage`.
+    fn avatar_svc(id: UserId, storage: MockStorageService) -> DefaultUserService {
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_update_profile()
+            .returning(move |_, patch: UpdateProfilePatch| {
+                Ok(User {
+                    avatar_url: patch.avatar_url.flatten(),
+                    ..user(id)
+                })
+            });
+        DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(user_repo),
+        })
+        .with_storage(Arc::new(storage))
+    }
+
+    /// Only the caller's own avatar URL, or an empty one, is accepted: an external URL, another
+    /// user's avatar, any other stored file and an unknown extension are refused before the
+    /// profile is saved or a file deleted.
+    #[tokio::test]
+    async fn update_profile_accepts_only_the_callers_own_avatar_url() {
+        let id = UserId::new();
+        let other = UserId::new();
+        let svc = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(MockUserRepository::new()),
+        })
+        .with_storage(Arc::new(MockStorageService::new()));
+
+        for url in [
+            "https://evil.com/avatar.png".to_string(),
+            format!("/api/files/avatars/{other}/avatar.png"),
+            format!("/api/files/avatars/{id}/avatar.svg"),
+            format!("/api/files/avatars/{id}/../{other}/avatar.png"),
+            format!("/api/files/uploads/{id}/a.png"),
+            "/api/files/".to_string(),
+        ] {
+            let err = svc
+                .update_my_profile(set_avatar(id, &url))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(msg) if msg.contains("avatar_url")),
+                "{url}: {err:?}"
+            );
+        }
+    }
+
+    /// Setting the avatar to one of the caller's files keeps that file and deletes the caller's
+    /// other avatar files.
+    #[tokio::test]
+    async fn setting_the_avatar_deletes_the_callers_other_avatar_files() {
+        let id = UserId::new();
+        let key = format!("avatars/{id}/avatar.webp");
+        let kept = key.clone();
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_delete_avatar_files()
+            .withf(move |user_id, keep| *user_id == id && keep.as_deref() == Some(kept.as_str()))
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+        let svc = avatar_svc(id, storage);
+
+        let url = format!(" /api/files/{key} ");
+        let dto = svc.update_my_profile(set_avatar(id, &url)).await.unwrap();
+        assert_eq!(dto.avatar_url, Some(format!("/api/files/{key}")));
+    }
+
+    /// Clearing the avatar deletes every avatar file of the caller; a storage failure is logged
+    /// and the cleared profile still returned.
+    #[tokio::test]
+    async fn clearing_the_avatar_deletes_all_the_callers_avatar_files() {
+        let id = UserId::new();
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_delete_avatar_files()
+            .withf(move |user_id, keep| *user_id == id && keep.is_none())
+            .times(2)
+            .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+        let svc = avatar_svc(id, storage);
+
+        for url in ["", "  "] {
+            let dto = svc.update_my_profile(set_avatar(id, url)).await.unwrap();
+            assert_eq!(dto.avatar_url, None, "{url:?}");
+        }
+    }
+
+    /// A profile change without an avatar URL deletes no file.
+    #[tokio::test]
+    async fn a_profile_change_without_an_avatar_url_deletes_no_file() {
+        let id = UserId::new();
+        let mut storage = MockStorageService::new();
+        storage.expect_delete_avatar_files().never();
+        let svc = avatar_svc(id, storage);
+
+        svc.update_my_profile(UpdateMyProfileCmd {
+            actor: Actor::new(id),
+            display_name: None,
+            status_text: Some("away".to_string()),
+            avatar_url: None,
+            bio: None,
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

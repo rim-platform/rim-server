@@ -4,6 +4,7 @@ use mockall::automock;
 
 use rim_core::server::model::ServerId;
 use rim_core::storage::StoredFile;
+use rim_core::user::model::UserId;
 
 use crate::ServiceResult;
 
@@ -30,4 +31,21 @@ pub trait StorageService: Send + Sync {
     async fn download_file(&self, key: &str) -> ServiceResult<Vec<u8>>;
 
     async fn get_quota_usage(&self, workspace_id: ServerId) -> ServiceResult<QuotaUsage>;
+
+    /// The keys of the files stored directly in the directory `dir`, sorted; empty when it
+    /// holds none.
+    async fn list_files(&self, dir: &str) -> ServiceResult<Vec<String>>;
+
+    /// Delete every file in `user_id`'s avatar directory except the one stored under `keep`,
+    /// and return the keys deleted. A file already gone is skipped.
+    ///
+    /// # Errors
+    ///
+    /// The storage error of the listing or of the first file that could not be deleted; the
+    /// files before it are deleted.
+    async fn delete_avatar_files(
+        &self,
+        user_id: UserId,
+        keep: Option<String>,
+    ) -> ServiceResult<Vec<String>>;
 }

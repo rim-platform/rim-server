@@ -421,8 +421,8 @@ email mutations, `createServer` and bot mutations. Identity changes arrive by `P
 /identity` and `POST /revocations`.
 
 `updateMyProfile` sets what the host stores per member and the card does not carry: the avatar
-(uploaded with `POST /api/files/avatar` on the forward path, then named by `avatarUrl`), status
-text and bio. A `displayName` in it is `FORBIDDEN` (`a remote member's display name comes from
+(uploaded with `POST /api/files/avatar` on the forward path, then named by `avatarUrl`, which
+takes only the `url` that upload answered or an empty value), status text and bio. A `displayName` in it is `FORBIDDEN` (`a remote member's display name comes from
 their profile card`); the name changes with the next card the host receives.
 
 ## Statements added by this document

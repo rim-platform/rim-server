@@ -581,8 +581,8 @@ People delete their own account from the client. The account is purged once a gr
 ends, `RIM_ACCOUNT_DELETION_GRACE_DAYS` days after the request (default 14, 0 to 30; 0 purges at
 the next hourly run; commented out in `deploy/.env.example`); until then the person can cancel.
 The purge removes the account's sessions, devices and keys, memberships, plaintext messages with
-their files, its avatar, settings and personal automations, and deletes the workspaces where it
-was the only member. What remains is a tombstone row with the same id, named `deleted-` and the
+their files, every file in its avatar directory (`avatars/<user id>/` under the uploads), settings
+and personal automations, and deletes the workspaces where it was the only member. What remains is a tombstone row with the same id, named `deleted-` and the
 start of the id, shown as "Deleted account", with no email, password or key: it cannot sign in,
 shows in no member list or search, and stays the author of the account's encrypted messages
 (their ciphertext is kept), of messages others replied to (shown as deleted), and of the

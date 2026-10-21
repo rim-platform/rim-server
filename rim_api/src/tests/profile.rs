@@ -151,7 +151,7 @@ async fn update_my_profile_mutation_maps_validation_error() {
     user.expect_update_my_profile().returning(|_cmd| {
         Box::pin(async move {
             Err(ServiceError::Validation(
-                "avatar_url must start with /api/files/".to_string(),
+                "avatar_url must be the URL of your own uploaded avatar".to_string(),
             ))
         })
     });
