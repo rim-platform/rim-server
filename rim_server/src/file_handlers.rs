@@ -351,7 +351,11 @@ pub async fn handle_file_download(
     req: HttpRequest,
     path: web::Path<String>,
     storage_backend: web::Data<Arc<dyn StorageBackend>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
 ) -> HttpResponse {
+    if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Avatars) {
+        return resp;
+    }
     if let Err(resp) = require_auth(&req).await {
         return resp;
     }
@@ -556,7 +560,11 @@ pub async fn handle_avatar_upload(
     req: HttpRequest,
     payload: Multipart,
     storage_service: web::Data<Arc<dyn StorageService>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
 ) -> HttpResponse {
+    if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Avatars) {
+        return resp;
+    }
     if let Err(resp) = require_csrf(&req) {
         return resp;
     }
@@ -1073,6 +1081,27 @@ mod tests {
             assert_eq!(status, 403);
             assert_eq!(body["code"], "FEATURE_DISABLED");
             assert_eq!(body["feature"], "attachments");
+        }
+    }
+
+    /// With avatars off, avatar upload and stored-file download answer 403 with the feature
+    /// before the session is looked at, and storage is never reached.
+    #[actix_web::test]
+    async fn a_disabled_feature_refuses_avatar_upload_and_download() {
+        let mut deps = Deps::new();
+        deps.disabled = vec![ServerFeature::Avatars];
+        let app = app!(deps);
+        let upload = post_body(
+            "/api/files/avatar",
+            multipart_body(&[Part::File("a.png", "image/png", b"x")]),
+            false,
+        );
+        let download = get("/api/files/avatars/u/avatar.png", false);
+        for req in [upload, download] {
+            let (status, body) = status_and_body!(&app, req);
+            assert_eq!(status, 403);
+            assert_eq!(body["code"], "FEATURE_DISABLED");
+            assert_eq!(body["feature"], "avatars");
         }
     }
 

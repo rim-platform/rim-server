@@ -126,7 +126,7 @@ pub use server_info::{
     ServerLimits,
 };
 pub use thread::Thread;
-pub use user::{PresenceStatus, User, UserPresenceGql};
+pub use user::{AvatarUrl, PresenceStatus, User, UserPresenceGql};
 pub use workspace::{
     DeleteWorkspaceInput, DeleteWorkspacePayload, Server, ServerMember, ServerMemberRoleGql,
     TransferWorkspaceOwnershipInput,

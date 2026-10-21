@@ -1,11 +1,54 @@
-use async_graphql::{Enum, SimpleObject};
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use async_graphql::parser::types::Field;
+use async_graphql::{
+    ContextSelectionSet, Enum, OutputType, Positioned, ServerResult, SimpleObject, Value, registry,
+};
+use rim_core::server_feature::model::ServerFeature;
+use rim_services::feature::service::FeatureGate;
+
+/// A stored profile picture's URL as the instance shows it: the URL while the `avatars` feature
+/// is enabled, null while it is not. The schema declares it as a nullable `String`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AvatarUrl(pub Option<String>);
+
+impl OutputType for AvatarUrl {
+    fn type_name() -> Cow<'static, str> {
+        <Option<String> as OutputType>::type_name()
+    }
+
+    fn qualified_type_name() -> String {
+        <Option<String> as OutputType>::qualified_type_name()
+    }
+
+    fn create_type_info(registry: &mut registry::Registry) -> String {
+        <Option<String> as OutputType>::create_type_info(registry)
+    }
+
+    async fn resolve(
+        &self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> ServerResult<Value> {
+        let gate = ctx
+            .data::<Arc<dyn FeatureGate>>()
+            .map_err(|e| e.into_server_error(field.pos))?;
+        if gate.state(ServerFeature::Avatars).is_enabled() {
+            OutputType::resolve(&self.0, ctx, field).await
+        } else {
+            Ok(Value::Null)
+        }
+    }
+}
 
 #[derive(SimpleObject, Clone, Debug)]
 pub struct User {
     pub id: async_graphql::ID,
     pub username: String,
     pub display_name: Option<String>,
-    pub avatar_url: Option<String>,
+    /// The profile picture's URL; null while the instance has the `avatars` feature off.
+    pub avatar_url: AvatarUrl,
     pub status_text: Option<String>,
     pub bio: Option<String>,
     /// Key-based principal id (`rimp1_...`) once the account enrolled a key; null before. Plugins
@@ -37,7 +80,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             id: async_graphql::ID(value.id.to_string()),
             username: value.username,
             display_name: value.display_name,
-            avatar_url: value.avatar_url,
+            avatar_url: AvatarUrl(value.avatar_url),
             status_text: value.status_text,
             bio: value.bio,
             principal_id: value.principal_id,

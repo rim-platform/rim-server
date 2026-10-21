@@ -211,8 +211,8 @@ impl ServerInfo {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ServerFeatureInfo {
     /// The feature's name, as `RIM_FEATURES_DISABLED` takes it: `attachments`, `link_previews`,
-    /// `email`, `custom_emoji`, `workspace_plugins` or `ai_commands`. A client ignores a name
-    /// it does not know.
+    /// `email`, `custom_emoji`, `workspace_plugins`, `ai_commands` or `avatars`. A client
+    /// ignores a name it does not know.
     pub key: String,
     pub state: ServerFeatureState,
     /// Why an unavailable feature is unavailable; null otherwise.

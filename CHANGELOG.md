@@ -256,6 +256,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `RIM_BACKUP_HEARTBEAT_URL` for `deploy/backup.sh`: an https URL it fetches after each backup
   that succeeded, for a monitor such as healthchecks.io that alerts when a night is missed. A
   failed ping is a warning, not a failed backup.
+- The `avatars` feature for `RIM_FEATURES_DISABLED`: while it is off, `POST /api/files/avatar`
+  and `GET /api/files/{path}` (also when forwarded) answer 403 `FEATURE_DISABLED`,
+  `updateMyProfile` with an `avatarUrl` answers `FEATURE_DISABLED`, and GraphQL `User.avatarUrl`
+  and `ServerMember.avatarUrl` read as null. Stored avatars are kept. `serverInfo.features` and
+  the discovery document list `avatars`; a client hides the profile picture upload while it is
+  not enabled.
 
 ### Changed
 

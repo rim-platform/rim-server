@@ -1,7 +1,8 @@
 //! Instance feature flags on a real server started with
-//! `RIM_FEATURES_DISABLED=attachments,custom_emoji`: `serverInfo.features` and the discovery
-//! document report them, the attachment upload route and a custom emoji mutation answer
-//! `FEATURE_DISABLED`, and the descriptor still verifies.
+//! `RIM_FEATURES_DISABLED=attachments,custom_emoji,avatars`: `serverInfo.features` and the
+//! discovery document report them, the attachment and avatar routes, a custom emoji mutation and
+//! setting an avatar answer `FEATURE_DISABLED`, a stored avatar URL reads as null, and the
+//! descriptor still verifies.
 //!
 //! Run with:
 //! ```sh
@@ -13,11 +14,11 @@ mod support;
 
 use rim_identity::SignedStatement;
 use rim_s2s::{ServerKeyState, verify_descriptor};
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 
 use support::nodes::start;
-use support::relay::{RESET, open_registration, sign_up, signed};
+use support::relay::{RESET, open_registration, sign_up, signed, user_id};
 
 const SERVER_INFO: &str = "{ serverInfo { features { key state reason } } }";
 
@@ -31,7 +32,7 @@ async fn disabled_features_are_reported_and_refused() {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
     let node = start(&url, |config| {
         open_registration(config);
-        config.features_disabled = Some("attachments, custom_emoji".to_string());
+        config.features_disabled = Some("attachments, custom_emoji, avatars".to_string());
     })
     .await;
     let http = reqwest::Client::new();
@@ -62,6 +63,7 @@ async fn disabled_features_are_reported_and_refused() {
         json!({ "key": "attachments", "state": "DISABLED", "reason": null })
     );
     assert_eq!(state("custom_emoji")["state"], "DISABLED");
+    assert_eq!(state("avatars")["state"], "DISABLED");
     assert_eq!(state("email")["state"], "UNAVAILABLE");
     assert!(
         state("email")["reason"]
@@ -143,6 +145,55 @@ async fn disabled_features_are_reported_and_refused() {
         )
         .await;
     assert_eq!(code, "FEATURE_DISABLED");
+
+    // Avatar upload and download answer 403 with the feature, and setting one is refused.
+    let cookie = format!("rim_session={}; rim_csrf={}", person.session, person.csrf);
+    let avatar = person
+        .http
+        .post(format!("{}/api/files/avatar", node.origin))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &person.csrf)
+        .header("content-type", "multipart/form-data; boundary=rimboundary")
+        .body(
+            "--rimboundary\r\nContent-Disposition: form-data; name=\"file\"; \
+             filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\npng\r\n--rimboundary--\r\n",
+        )
+        .send()
+        .await
+        .expect("avatar upload");
+    let download = person
+        .http
+        .get(format!("{}/api/files/avatars/u/avatar.png", node.origin))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .expect("avatar download");
+    for resp in [avatar, download] {
+        assert_eq!(resp.status().as_u16(), 403);
+        let body: Value = resp.json().await.expect("json");
+        assert_eq!(body["code"], "FEATURE_DISABLED");
+        assert_eq!(body["feature"], "avatars");
+    }
+    let code = person
+        .err(
+            "mutation { updateMyProfile(input: { avatarUrl: \"/api/files/avatars/u/avatar.png\" }) { id } }",
+            json!({}),
+        )
+        .await;
+    assert_eq!(code, "FEATURE_DISABLED");
+
+    // An avatar stored before the switch reads as null.
+    let id = user_id(&node, &person.principal()).await;
+    node.db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"UPDATE "user" SET avatar_url = '/api/files/avatars/u/avatar.png' WHERE id = $1"#,
+            [uuid::Uuid::from(id).into()],
+        ))
+        .await
+        .expect("set avatar");
+    let me = person.ok("{ me { avatarUrl } }", json!({})).await;
+    assert_eq!(me["me"]["avatarUrl"], Value::Null);
 
     node.stop().await;
     ctx.conn.close().await.expect("close");

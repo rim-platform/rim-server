@@ -19,17 +19,21 @@ pub enum ServerFeature {
     /// The surface an AI agent uses: command discovery, the agent-facing command metadata and
     /// commands or macros run with an agent initiator.
     AiCommands,
+    /// Profile pictures: the avatar upload and download routes and the avatar URLs of users
+    /// and members.
+    Avatars,
 }
 
 impl ServerFeature {
     /// Every known feature, in display order.
-    pub const ALL: [ServerFeature; 6] = [
+    pub const ALL: [ServerFeature; 7] = [
         ServerFeature::Attachments,
         ServerFeature::LinkPreviews,
         ServerFeature::Email,
         ServerFeature::CustomEmoji,
         ServerFeature::WorkspacePlugins,
         ServerFeature::AiCommands,
+        ServerFeature::Avatars,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -40,6 +44,7 @@ impl ServerFeature {
             ServerFeature::CustomEmoji => "custom_emoji",
             ServerFeature::WorkspacePlugins => "workspace_plugins",
             ServerFeature::AiCommands => "ai_commands",
+            ServerFeature::Avatars => "avatars",
         }
     }
 

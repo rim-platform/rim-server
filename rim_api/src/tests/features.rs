@@ -167,6 +167,103 @@ async fn ai_command_resolvers_answer_feature_disabled() {
     .await;
 }
 
+#[tokio::test]
+async fn setting_an_avatar_answers_feature_disabled() {
+    assert_feature_disabled(
+        r#"mutation { updateMyProfile(input: { avatarUrl: "/api/files/avatars/u/avatar.png" }) { id } }"#,
+        ServerFeature::Avatars,
+    )
+    .await;
+    assert_feature_disabled(
+        r#"mutation { updateMyProfile(input: { avatarUrl: "", statusText: "away" }) { id } }"#,
+        ServerFeature::Avatars,
+    )
+    .await;
+}
+
+/// With avatars off, profile edits without an avatar still go through.
+#[tokio::test]
+async fn profile_edits_without_an_avatar_pass_while_avatars_are_off() {
+    let mut user = MockUserService::new();
+    user.expect_update_my_profile()
+        .withf(|cmd| cmd.avatar_url.is_none())
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(test_user_dto()) }));
+    let res = schema_with_user_mock(user)
+        .execute(with_features_disabled(
+            authed_request(
+                r#"mutation { updateMyProfile(input: { statusText: "away" }) { id } }"#,
+                UserId::new(),
+            ),
+            &[ServerFeature::Avatars],
+        ))
+        .await;
+    assert_no_errors(&res);
+}
+
+/// A stored avatar URL reads as null on users and members while avatars are off.
+#[tokio::test]
+async fn avatar_urls_read_null_while_avatars_are_off() {
+    const URL: &str = "/api/files/avatars/u/avatar.png";
+    let mut user = MockUserService::new();
+    user.expect_get_me().returning(|_| {
+        Box::pin(async {
+            Ok(rim_services::user::dto::UserDto {
+                avatar_url: Some(URL.to_string()),
+                ..test_user_dto()
+            })
+        })
+    });
+    let schema = schema_with_user_mock(user);
+    let query = "{ me { username avatarUrl } }";
+
+    let res = schema.execute(authed_request(query, UserId::new())).await;
+    assert_no_errors(&res);
+    assert_eq!(res.data.into_json().expect("json")["me"]["avatarUrl"], URL);
+
+    let res = schema
+        .execute(with_features_disabled(
+            authed_request(query, UserId::new()),
+            &[ServerFeature::Avatars],
+        ))
+        .await;
+    assert_no_errors(&res);
+    let off = res.data.into_json().expect("json");
+    assert_eq!(off["me"]["username"], "testuser");
+    assert!(off["me"]["avatarUrl"].is_null());
+
+    let mut members = MockServerMemberService::new();
+    members.expect_list_members().returning(|_| {
+        Box::pin(async {
+            Ok(vec![rim_services::server_member::dto::ServerMemberDto {
+                avatar_url: Some(URL.to_string()),
+                ..test_server_member_dto()
+            }])
+        })
+    });
+    let schema = schema_with_server_mocks(MockServerService::new(), members);
+    let query = format!(
+        r#"{{ serverMembers(serverId: "{}") {{ username avatarUrl }} }}"#,
+        ServerId::new()
+    );
+    let res = schema.execute(authed_request(&query, UserId::new())).await;
+    assert_no_errors(&res);
+    assert_eq!(
+        res.data.into_json().expect("json")["serverMembers"][0]["avatarUrl"],
+        URL
+    );
+    let res = schema
+        .execute(with_features_disabled(
+            authed_request(&query, UserId::new()),
+            &[ServerFeature::Avatars],
+        ))
+        .await;
+    assert_no_errors(&res);
+    let off = res.data.into_json().expect("json");
+    assert_eq!(off["serverMembers"][0]["username"], "testuser");
+    assert!(off["serverMembers"][0]["avatarUrl"].is_null());
+}
+
 /// With the AI surface off, the palette still lists commands, without their agent-facing
 /// metadata.
 #[tokio::test]

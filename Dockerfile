@@ -133,8 +133,8 @@ USER rim
 #   RIM_AUDIT_RETENTION_DAYS — days command audit rows are kept, 1-3650 (default: forever); older
 #                           rows are exported to $RIM_DATA_DIR/audit-exports and deleted daily
 #   RIM_FEATURES_DISABLED — comma-separated optional features to switch off: attachments,
-#                           link_previews, email, custom_emoji, workspace_plugins, ai_commands
-#                           (default: none); an unknown name stops the server at boot
+#                           link_previews, email, custom_emoji, workspace_plugins, ai_commands,
+#                           avatars (default: none); an unknown name stops the server at boot
 #   RIM_LINK_PREVIEW_CONCURRENCY — link preview fetches the server runs at once, 1-64
 #                           (default: 8); outside the range stops the server at boot
 #   RIM_RATE_REQUESTS_PER_MIN_PER_IP — requests per client address per minute to /api routes,
