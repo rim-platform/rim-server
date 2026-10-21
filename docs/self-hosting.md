@@ -226,7 +226,7 @@ read in `CHANGELOG.md` first, and the rollback.
 | File | What |
 |---|---|
 | `rim.dump` | `pg_dump -Fc` of the database, checked to read back |
-| `rim-data.tgz` | the `rim_data` volume: server key, franking keys, uploads, the audit log and audit exports |
+| `rim-data.tgz` | the `rim_data` volume: server key, franking keys, uploads, the audit files and audit exports |
 | `env` | `deploy/.env` |
 | `MANIFEST`, `SHA256SUMS` | project, time, server version, checksums |
 
@@ -252,6 +252,11 @@ The scripts read `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` the way docker compos
 ```cron
 15 3 * * * cd /srv/rim-server && deploy/backup.sh >>/var/log/rim-backup.log 2>&1
 ```
+
+**How long.** With `RIM_BACKUP_KEEP_DAYS` set, each backup that succeeded deletes this
+deployment's archives in `RIM_BACKUP_DIR` older than that many days; unset, every archive is
+kept. Archives hold the audit files, and with them IP addresses, so keep them no longer than you
+keep those.
 
 **Where copies go.** Off the host, encrypted: **FILL** the destination (object storage, another
 machine) and how long copies are kept. The archive holds the server's private key and every
@@ -315,8 +320,11 @@ production's. Record each drill: **FILL** where.
   adds each container's CPU and memory. `docs/operations/metrics.md` lists the metrics, what
   the collector sends and what to alert on.
 - **Logs.** JSON on stdout: `dc logs --since 1h rim`. Audit events (`"target":"audit"`) also go
-  to `/data/audit.log`; `docs/operations/audit-retention.md` covers its rotation and
-  `RIM_AUDIT_RETENTION_DAYS` for the audit table.
+  to the daily files `/data/audit.<YYYY-MM-DD>.log`, deleted after `RIM_AUDIT_LOG_RETENTION_DAYS`
+  (default 90); `docs/operations/audit-retention.md` covers them, `RIM_AUDIT_RETENTION_DAYS`
+  for the audit table and `RIM_AUDIT_EXPORT_RETENTION_DAYS` for the rows it exports. Docker keeps about 100 MB of each service's output, in five files of
+  20 MB (the `logging` options in the compose files), and deletes it with the container; ship it
+  to your own log store to keep more.
 - **Background jobs.** `docs/operations/background-jobs.md` lists what the server runs on a
   timer, how often, and the setting that changes it.
 - **Disk.** The `postgres_data` and `rim_data` volumes, and `RIM_BACKUP_DIR`.

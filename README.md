@@ -68,7 +68,7 @@ repository.
 | `rim_auth` | Password hashing, session and CSRF tokens |
 | `rim_identity` | Key identity statements: key logs, device certificates, profile cards, login proofs |
 | `rim_s2s` | Server identity and the signed server-to-server transport (RFC 9421 profile) |
-| `rim_logging` | Structured tracing setup and the audit log file |
+| `rim_logging` | Structured tracing setup and the daily audit files |
 
 Layering rules and their two documented exceptions are in `CLAUDE.md` and
 `docs/architecture.md`.
@@ -159,7 +159,8 @@ or needed rarely:
 | `RIM_TRUST_FORWARDED_HEADERS` | `true` behind a reverse proxy that is the only way in, so per-IP limits see the client's address |
 | `RIM_FORCE_SECURE_COOKIES` | `true` marks session and CSRF cookies `Secure` whatever the request scheme |
 | `RIM_DATABASE_MAX_CONNECTIONS` | Size of the PostgreSQL pool (default 10) |
-| `RIM_AUDIT_LOG_PATH` | Directory of `audit.log` (default: the working directory) |
+| `RIM_AUDIT_LOG_PATH` | Directory of the daily audit files `audit.<YYYY-MM-DD>.log` (default: the working directory) |
+| `RIM_AUDIT_LOG_RETENTION_DAYS` | Days the audit files are kept, 1 to 3650 (default 90) |
 
 ## Development
 

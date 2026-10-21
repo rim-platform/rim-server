@@ -66,7 +66,9 @@ USER rim
 #                           (default: false)
 #   RIM_FORCE_SECURE_COOKIES — Mark session and CSRF cookies Secure whatever the request scheme
 #                           when true (default: false)
-#   RIM_AUDIT_LOG_PATH    — Directory of audit.log (default: the working directory)
+#   RIM_AUDIT_LOG_PATH    — Directory of the daily audit files audit.<YYYY-MM-DD>.log
+#                           (default: the working directory)
+#   RIM_AUDIT_LOG_RETENTION_DAYS — Days the audit files are kept (default: 90)
 #   RIM_SESSION_TTL_DAYS  — Session lifetime (default: 30)
 #   RIM_SERVER_KEY_FILE   — Server key file (default: $RIM_DATA_DIR/server-key.json); keep the
 #                           data directory on a volume, the key is the server's identity

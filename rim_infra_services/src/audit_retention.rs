@@ -1,12 +1,13 @@
 //! The command audit log retention purge. Rows older than the retention are first written as
 //! gzipped JSON Lines to `<data dir>/audit-exports/`, the file is synced, and only then are the
-//! exported rows deleted, a bounded batch per statement.
+//! exported rows deleted, a bounded batch per statement. A separate optional job deletes the
+//! export files written longer ago than their own retention.
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use flate2::Compression;
@@ -396,6 +397,112 @@ pub async fn run_daily(
     }
 }
 
+/// Whether `name` is an export file name: `audit-<oldest>-<newest>.jsonl.gz`, with or without
+/// the `-N` suffix of a taken name.
+pub fn is_export_file_name(name: &str) -> bool {
+    let is_time = |s: &str| chrono::NaiveDateTime::parse_from_str(s, NAME_TIME_FORMAT).is_ok();
+    let Some(rest) = name
+        .strip_prefix("audit-")
+        .and_then(|rest| rest.strip_suffix(".jsonl.gz"))
+    else {
+        return false;
+    };
+    let (Some(oldest), Some(rest)) = (rest.get(..16), rest.get(16..)) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('-') else {
+        return false;
+    };
+    let (Some(newest), Some(suffix)) = (rest.get(..16), rest.get(16..)) else {
+        return false;
+    };
+    let suffix_ok = suffix.is_empty()
+        || suffix
+            .strip_prefix('-')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    is_time(oldest) && is_time(newest) && suffix_ok
+}
+
+/// Delete the export files in `dir` written more than `retention_days` before `now`, read from
+/// each file's modification time, which is when the export was written. Files of any other
+/// name are never touched; a file that cannot be deleted is logged and skipped. A missing
+/// directory has nothing to delete. Returns the deleted paths.
+///
+/// # Errors
+/// When `dir` exists and cannot be read.
+pub fn prune_exports(dir: &Path, retention_days: u32, now: SystemTime) -> io::Result<Vec<PathBuf>> {
+    let retention = Duration::from_secs(u64::from(retention_days) * 24 * 60 * 60);
+    let Some(oldest_kept) = now.checked_sub(retention) else {
+        return Ok(Vec::new());
+    };
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut deleted = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_name().to_str().is_some_and(is_export_file_name) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.modified().is_ok_and(|at| at >= oldest_kept) {
+            continue;
+        }
+        let path = entry.path();
+        match fs::remove_file(&path) {
+            Ok(()) => deleted.push(path),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "could not delete an old audit export");
+            }
+        }
+    }
+    deleted.sort();
+    Ok(deleted)
+}
+
+/// Run [`prune_exports`] on `dir` a minute after boot and then once a day, until `shutdown`
+/// changes or its sender is dropped. Logs and counts the files each run deleted, and logs a
+/// failed run.
+pub async fn run_export_prune_daily(
+    dir: PathBuf,
+    retention_days: u32,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut tick =
+        tokio::time::interval_at(tokio::time::Instant::now() + FIRST_RUN_DELAY, RUN_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                let target = dir.clone();
+                let run = blocking(move || prune_exports(&target, retention_days, SystemTime::now()));
+                match run.await {
+                    Ok(deleted) => {
+                        crate::metrics::audit_exports_deleted(deleted.len() as u64);
+                        if !deleted.is_empty() {
+                            tracing::info!(
+                                count = deleted.len(),
+                                retention_days,
+                                "deleted audit exports past their retention"
+                            );
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        dir = %dir.display(),
+                        %error,
+                        "could not read the audit export directory"
+                    ),
+                }
+            }
+            _ = shutdown.changed() => break,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader};
@@ -548,6 +655,81 @@ mod tests {
             second.to_string_lossy().ends_with("-2.jsonl.gz"),
             "{second:?}"
         );
+    }
+
+    #[test]
+    fn export_file_names_are_recognised_and_nothing_else() {
+        for name in [
+            "audit-20260712T030000Z-20260713T025959Z.jsonl.gz",
+            "audit-20260712T030000Z-20260713T025959Z-2.jsonl.gz",
+            "audit-20260712T030000Z-20260713T025959Z-17.jsonl.gz",
+        ] {
+            assert!(is_export_file_name(name), "{name}");
+        }
+        for name in [
+            ".audit-export-0192.partial",
+            "audit-20260712T030000Z-20260713T025959Z.jsonl",
+            "audit-20260712T030000Z-20260713T025959Z-.jsonl.gz",
+            "audit-20260712T030000Z-20260713T025959Z-x.jsonl.gz",
+            "audit-20261312T030000Z-20260713T025959Z.jsonl.gz",
+            "audit-20260712T030000Z.jsonl.gz",
+            "audit.2026-07-12.log",
+            "notes.jsonl.gz",
+        ] {
+            assert!(!is_export_file_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn prune_exports_deletes_the_exports_written_before_the_retention_and_nothing_else() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let now = SystemTime::now();
+        let days_ago = |days: u64| now - Duration::from_secs(days * 24 * 60 * 60);
+        let write = |name: &str, modified: SystemTime| {
+            let file = File::create(dir.path().join(name)).expect("create");
+            file.set_modified(modified).expect("set mtime");
+        };
+        let old = "audit-20260101T000000Z-20260102T000000Z.jsonl.gz";
+        let old_suffixed = "audit-20260101T000000Z-20260102T000000Z-2.jsonl.gz";
+        let recent = "audit-20250101T000000Z-20250102T000000Z.jsonl.gz";
+        write(old, days_ago(91));
+        write(old_suffixed, days_ago(200));
+        write(recent, days_ago(89));
+        write("notes.txt", days_ago(400));
+        write(".audit-export-0192.partial", days_ago(400));
+
+        let deleted = prune_exports(dir.path(), 90, now).expect("prune");
+
+        assert_eq!(
+            deleted,
+            vec![dir.path().join(old_suffixed), dir.path().join(old)]
+        );
+        assert_eq!(
+            files_in(dir.path()),
+            [".audit-export-0192.partial", recent, "notes.txt"]
+        );
+    }
+
+    #[test]
+    fn prune_exports_finds_nothing_in_a_missing_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join(EXPORT_DIR_NAME);
+        assert_eq!(
+            prune_exports(&missing, 90, SystemTime::now()).expect("prune"),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_export_prune_stops_on_shutdown_before_its_first_run() {
+        let (tx, rx) = watch::channel(false);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let task = tokio::spawn(run_export_prune_daily(dir.path().to_path_buf(), 90, rx));
+        tx.send(true).expect("send");
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("stopped")
+            .expect("joined");
     }
 
     #[test]

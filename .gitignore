@@ -37,6 +37,7 @@ data/
 
 # Local tooling and generated output
 audit.log
+audit.*.log
 coverage/
 .claude/
 .codex

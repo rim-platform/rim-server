@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests deploy/upgrade.sh and deploy/rim-deploy.sh with stub docker, cosign, curl and sleep
-# commands in PATH, on throwaway deployment directories.
+# Tests deploy/upgrade.sh, deploy/rim-deploy.sh and the pruning of deploy/backup.sh with stub
+# docker, cosign, curl and sleep commands in PATH, on throwaway deployment directories.
 #
 #   scripts/deploy/test-deploy.sh
 #
@@ -53,6 +53,7 @@ config) printf 'name: rim\nservices: {}\n' ;;
 */readyz) [[ $version != "${STUB_BAD_VERSION:-}" ]] && printf '{"status":"ok"}\n' ;;
 */healthz) printf '{"status":"ok","version":"%s"}\n' "$version" ;;
 "ps --status running -q caddy") printf 'c0ffee\n' ;;
+"ps --status running -q postgres") [[ ${STUB_POSTGRES:-0} != 1 ]] || printf 'c0ffee\n' ;;
 "ps --status running -q "*) ;;
 *) [[ ${STUB_FAIL:-} != "${1:-}" ]] ;;
 esac
@@ -308,6 +309,40 @@ if (source "$d/backup-lib.sh" && RIM_READY_TIMEOUT=9 wait_ready) 2>"$work/stderr
 fi
 expect_stderr "the server was not ready within 9s" "wait_ready"
 [[ $(grep -c '/readyz$' "$work/calls") == 4 ]] || fail "wait_ready: $(grep -c '/readyz$' "$work/calls") probes, not 3 and the last"
+
+# --- backup.sh -----------------------------------------------------------------------------
+
+# With RIM_BACKUP_KEEP_DAYS, a backup deletes this project's backups older than that many days
+# and keeps newer ones, other projects' and other files.
+b=$work/backup
+mkdir -p "$b/backups"
+cp "$root/deploy/backup.sh" "$root/deploy/backup-lib.sh" "$b/"
+printf 'POSTGRES_PASSWORD=secret\nRIM_BACKUP_DIR=%s\nRIM_BACKUP_KEEP_DAYS=30\n' "$b/backups" >"$b/.env"
+old_backups=(rim-backup-rim-20260801T031500Z.tar.age rim-backup-rim-20260820T031500Z.tar)
+kept_backups=(rim-backup-rim-20260920T031500Z.tar rim-backup-rim-relay-20260801T031500Z.tar notes.txt)
+for name in "${old_backups[@]}"; do touch -d '31 days ago' "$b/backups/$name"; done
+for name in "${kept_backups[@]:1}"; do touch -d '40 days ago' "$b/backups/$name"; done
+touch -d '29 days ago' "$b/backups/${kept_backups[0]}"
+: >"$work/calls"
+STUB_POSTGRES=1 STUB_VOLUME=rim_rim_data STUB_FAIL="" "$b/backup.sh" >"$work/stdout" 2>"$work/stderr" ||
+  fail "backup with RIM_BACKUP_KEEP_DAYS: $(cat "$work/stderr")"
+new_backup=$(tail -n 1 "$work/stdout")
+[[ -f $new_backup ]] || fail "backup with RIM_BACKUP_KEEP_DAYS: no new archive ($new_backup)"
+for name in "${old_backups[@]}"; do
+  [[ ! -e $b/backups/$name ]] || fail "backup with RIM_BACKUP_KEEP_DAYS: $name was kept"
+done
+for name in "${kept_backups[@]}"; do
+  [[ -e $b/backups/$name ]] || fail "backup with RIM_BACKUP_KEEP_DAYS: $name was deleted"
+done
+
+# A keep that is not a whole number of days stops the script before it backs anything up.
+printf 'RIM_BACKUP_KEEP_DAYS=0\n' >>"$b/.env"
+: >"$work/calls"
+if STUB_POSTGRES=1 STUB_VOLUME=rim_rim_data "$b/backup.sh" >"$work/stdout" 2>"$work/stderr"; then
+  fail "RIM_BACKUP_KEEP_DAYS=0 was accepted"
+fi
+expect_stderr "RIM_BACKUP_KEEP_DAYS=0 is not a whole number of days" "RIM_BACKUP_KEEP_DAYS=0"
+[[ ! -s $work/calls ]] || fail "RIM_BACKUP_KEEP_DAYS=0: commands ran: $(cat "$work/calls")"
 
 # --- rim-deploy.sh -------------------------------------------------------------------------
 

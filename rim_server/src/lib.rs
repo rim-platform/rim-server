@@ -7,6 +7,7 @@ pub mod abuse_cmd;
 pub mod account_cmd;
 pub mod app;
 pub mod audit_cmd;
+pub(crate) mod audit_file;
 mod body;
 pub mod config;
 mod edge;

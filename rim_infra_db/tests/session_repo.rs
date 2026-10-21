@@ -255,3 +255,46 @@ async fn get_many_returns_the_stored_sessions_among_the_ids() {
     assert!(!found.iter().any(|(id, _)| *id == not_asked.id));
     assert!(session_repo.get_many(&[]).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn delete_ended_removes_revoked_and_expired_sessions_and_keeps_live_ones() {
+    let ctx = support::TestCtx::new().await;
+
+    let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
+    let user = ctx.create_user("ended").await;
+    // Whole microseconds, as the column stores them, so the session expiring now matches.
+    let now = chrono::SubsecRound::trunc_subsecs(chrono::Utc::now(), 6);
+
+    let session = |token_hash: &str, expires_at| NewSession {
+        user_id: user.id,
+        token_hash: token_hash.to_string(),
+        expires_at,
+        user_agent: None,
+        ip: None,
+    };
+    let live = session_repo
+        .create_session(session("live", now + chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+    let revoked = session_repo
+        .create_session(session("revoked", now + chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+    session_repo.revoke_session(revoked.id).await.unwrap();
+    let expired = session_repo
+        .create_session(session("expired", now - chrono::Duration::minutes(1)))
+        .await
+        .unwrap();
+    let expiring_now = session_repo
+        .create_session(session("expiring-now", now))
+        .await
+        .unwrap();
+
+    assert_eq!(session_repo.delete_ended(now).await.unwrap(), 3);
+
+    assert!(session_repo.get_by_id(live.id).await.unwrap().is_some());
+    for gone in [revoked.id, expired.id, expiring_now.id] {
+        assert!(session_repo.get_by_id(gone).await.unwrap().is_none());
+    }
+    assert_eq!(session_repo.delete_ended(now).await.unwrap(), 0);
+}

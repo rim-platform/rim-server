@@ -244,9 +244,27 @@ tag `v<version>`, the version every crate in the workspace carries.
   discovery document beside the descriptor (`server-to-server-v1.md`), say so before anyone
   tries. `docs/operations/relay-public.md` says the public relay is a first test run with no
   guarantee against data loss, and what happens if it shuts down.
+- An hourly purge deletes the sessions that sign nobody in any more, revoked or past their
+  expiry, and counts them in `rim_sessions_purged_total`; until now their rows stayed forever.
+- `RIM_AUDIT_EXPORT_RETENTION_DAYS` (1 to 3650): the server deletes the audit export files in
+  `<RIM_DATA_DIR>/audit-exports/` written more than that many days ago, a minute after boot and
+  daily, and counts them in `rim_audit_exports_deleted_total`. Unset keeps every export.
+  `deploy/compose.relay.yml` sets it to 90, so on a public relay a command audit row is gone
+  completely after about 180 days.
+- `RIM_BACKUP_KEEP_DAYS` for `deploy/backup.sh`: after a backup that succeeded, the deployment's
+  archives in `RIM_BACKUP_DIR` older than that many days are deleted. Unset keeps every archive.
 
 ### Changed
 
+- **Upgrade:** the audit file is now one file per UTC day, `audit.<YYYY-MM-DD>.log` in the
+  directory of `RIM_AUDIT_LOG_PATH`, and the server deletes the files older than
+  `RIM_AUDIT_LOG_RETENTION_DAYS` (1 to 3650, default 90) daily. A logrotate rule for
+  `audit.log` is no longer needed; the old `audit.log` is left as it is, to be deleted by hand.
+  Set `RIM_AUDIT_LOG_RETENTION_DAYS` in `deploy/.env` to keep the files longer.
+- Every container in the compose files keeps about 100 MB of log per service, in five
+  json-file files of 20 MB, instead of one file that grows without end.
+- `deploy/compose.relay.yml` sets `RIM_AUDIT_RETENTION_DAYS` to 90: a public relay exports and
+  deletes command audit rows after 90 days unless `deploy/.env` sets another value.
 - **Upgrade:** `deploy/compose.relay.yml` no longer sets `RIM_ROLE=relay` and the Caddyfile
   itself: set `RIM_ROLE` (`relay`, or `both` to host workspaces) and `RIM_CADDYFILE`
   (`./Caddyfile.relay`, or `./Caddyfile` with the web client and `COMPOSE_PROFILES=web`) in

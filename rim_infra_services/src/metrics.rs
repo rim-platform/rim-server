@@ -36,6 +36,8 @@ pub const OUTBOX_DEAD_PEERS: &str = "rim_outbox_dead_peers";
 pub const OUTBOX_NOT_QUEUED: &str = "rim_outbox_not_queued_rows_total";
 /// Audit log rows deleted by the retention purge.
 pub const AUDIT_ROWS_PURGED: &str = "rim_audit_rows_purged_total";
+/// Audit export files the daily export retention deleted.
+pub const AUDIT_EXPORTS_DELETED: &str = "rim_audit_exports_deleted_total";
 /// The configured audit retention in days, 0 when rows are kept forever.
 pub const AUDIT_RETENTION_DAYS: &str = "rim_audit_retention_days";
 /// Stale attachment uploads the daily cleanup marked failed.
@@ -48,6 +50,8 @@ pub const CONVERSATION_INVITES_EXPIRED: &str = "rim_conversation_invites_expired
 pub const REMOTE_IDENTITIES_PURGED: &str = "rim_remote_identities_purged_total";
 /// Idle peer pins the hourly purge forgot.
 pub const PEER_PINS_FORGOTTEN: &str = "rim_peer_pins_forgotten_total";
+/// Revoked and expired sessions the hourly purge deleted.
+pub const SESSIONS_PURGED: &str = "rim_sessions_purged_total";
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
@@ -123,6 +127,11 @@ pub fn describe() {
         Unit::Count,
         "Audit log rows deleted by the retention purge."
     );
+    describe_counter!(
+        AUDIT_EXPORTS_DELETED,
+        Unit::Count,
+        "Audit export files the daily export retention deleted."
+    );
     describe_gauge!(
         AUDIT_RETENTION_DAYS,
         Unit::Count,
@@ -152,6 +161,11 @@ pub fn describe() {
         PEER_PINS_FORGOTTEN,
         Unit::Count,
         "Idle peer pins the hourly purge forgot."
+    );
+    describe_counter!(
+        SESSIONS_PURGED,
+        Unit::Count,
+        "Revoked and expired sessions the hourly purge deleted."
     );
 }
 
@@ -186,6 +200,11 @@ pub fn audit_rows_purged(n: u64) {
     counter!(AUDIT_ROWS_PURGED).increment(n);
 }
 
+/// Count `n` audit export files the export retention deleted.
+pub fn audit_exports_deleted(n: u64) {
+    counter!(AUDIT_EXPORTS_DELETED).increment(n);
+}
+
 /// Count `n` stale attachment uploads the cleanup marked failed.
 pub fn attachments_cleaned(n: u64) {
     counter!(ATTACHMENTS_CLEANED).increment(n);
@@ -209,6 +228,11 @@ pub fn remote_identities_purged(n: u64) {
 /// Count `n` idle peer pins the purge forgot.
 pub fn peer_pins_forgotten(n: u64) {
     counter!(PEER_PINS_FORGOTTEN).increment(n);
+}
+
+/// Count `n` revoked or expired sessions the purge deleted.
+pub fn sessions_purged(n: u64) {
+    counter!(SESSIONS_PURGED).increment(n);
 }
 
 /// Set the audit retention gauge; `None` (keep forever) is recorded as 0.

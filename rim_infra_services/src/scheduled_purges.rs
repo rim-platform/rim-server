@@ -1,8 +1,8 @@
 //! Background purges the composition root runs on a timer: stale attachment uploads are marked
-//! failed daily, expired workspace state and conversation invitations are deleted hourly,
-//! accounts whose deletion grace period ended are purged hourly, and stale remote identities and
-//! idle peer pins are dropped hourly. Each runs first a few minutes after boot and stops when the
-//! shutdown signal changes.
+//! failed daily, expired workspace state, conversation invitations and ended sessions are deleted
+//! hourly, accounts whose deletion grace period ended are purged hourly, and stale remote
+//! identities and idle peer pins are dropped hourly. Each runs first a few minutes after boot and
+//! stops when the shutdown signal changes.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
+use rim_core::auth::repository::SessionRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::relay::repository::RelayRepository;
 use rim_core::s2s::repository::PeerServerRepository;
@@ -39,6 +40,8 @@ pub const REMOTE_CACHE_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub const REMOTE_IDENTITY_RETENTION: chrono::Duration = chrono::Duration::days(30);
 /// How long a peer's pin goes without a fetch or a request before it may be forgotten.
 pub const PEER_PIN_IDLE: chrono::Duration = chrono::Duration::days(90);
+/// Interval of the purge of revoked and expired sessions.
+pub const SESSION_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// Run `job` after [`FIRST_RUN_DELAY`] and then every `interval` until `shutdown` changes. A run
 /// that falls behind delays the next one rather than bunching them.
@@ -109,6 +112,22 @@ pub async fn purge_expired_conversation_invites(
         }
         Err(e) => {
             tracing::error!(error = %e, "conversation invitation expiry purge failed");
+            None
+        }
+    }
+}
+
+/// Delete the sessions that sign nobody in any more: revoked ones and those past their expiry.
+/// Returns how many, `None` when the purge failed (logged).
+pub async fn purge_ended_sessions(repo: &dyn SessionRepository) -> Option<u64> {
+    match repo.delete_ended(chrono::Utc::now()).await {
+        Ok(count) => {
+            crate::metrics::sessions_purged(count);
+            tracing::info!(count, "purged revoked and expired sessions");
+            Some(count)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "session purge failed");
             None
         }
     }
@@ -261,8 +280,20 @@ pub async fn run_conversation_invite_purge(
     .await;
 }
 
+/// Run [`purge_ended_sessions`] hourly until `shutdown` changes.
+pub async fn run_session_purge(repo: Arc<dyn SessionRepository>, shutdown: watch::Receiver<bool>) {
+    every(SESSION_PURGE_INTERVAL, shutdown, || {
+        let repo = Arc::clone(&repo);
+        async move {
+            purge_ended_sessions(repo.as_ref()).await;
+        }
+    })
+    .await;
+}
+
 #[cfg(test)]
 mod tests {
+    use rim_core::auth::repository::MockSessionRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::relay::repository::MockRelayRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -276,7 +307,7 @@ mod tests {
     use crate::metrics::test_support::{block_on, recorded};
     use crate::metrics::{
         ATTACHMENTS_CLEANED, CONVERSATION_INVITES_EXPIRED, PEER_PINS_FORGOTTEN,
-        REMOTE_IDENTITIES_PURGED, WORKSPACE_STATE_PURGED,
+        REMOTE_IDENTITIES_PURGED, SESSIONS_PURGED, WORKSPACE_STATE_PURGED,
     };
 
     #[test]
@@ -404,6 +435,28 @@ mod tests {
         let (count, got) = recorded(|| block_on(forget_idle_peers(&repo, &[])));
         assert_eq!(count, None);
         assert_eq!(got.counter(PEER_PINS_FORGOTTEN, &[]), 0);
+    }
+
+    #[test]
+    fn the_session_purge_deletes_those_ended_by_now_and_counts_them() {
+        let mut repo = MockSessionRepository::new();
+        repo.expect_delete_ended()
+            .withf(|now| is_ago(*now, chrono::Duration::zero()))
+            .times(1)
+            .returning(|_| Ok(5));
+        let (count, got) = recorded(|| block_on(purge_ended_sessions(&repo)));
+        assert_eq!(count, Some(5));
+        assert_eq!(got.counter(SESSIONS_PURGED, &[]), 5);
+    }
+
+    #[test]
+    fn a_failed_session_purge_counts_nothing() {
+        let mut repo = MockSessionRepository::new();
+        repo.expect_delete_ended()
+            .returning(|_| Err(RepoError::new(RepoErrorKind::Internal)));
+        let (count, got) = recorded(|| block_on(purge_ended_sessions(&repo)));
+        assert_eq!(count, None);
+        assert_eq!(got.counter(SESSIONS_PURGED, &[]), 0);
     }
 
     #[tokio::test]

@@ -180,7 +180,7 @@ Leaf crates with no database or HTTP code:
 
 ### `rim_logging`
 
-Structured JSON logging and the audit log file.
+Structured JSON logging and the daily audit files.
 
 ### `entity`
 

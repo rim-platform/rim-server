@@ -21,6 +21,13 @@
 # published and none of the three has a way out.
 # =============================================================================
 
+# The containers' logs are bounded as in compose.yml.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
+
 services:
   alloy:
     volumes:
@@ -45,6 +52,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [docker-api]
     restart: unless-stopped
+    logging: *logging
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -68,6 +76,7 @@ services:
       - containerd_api:/run/containerd-proxy
     network_mode: none
     restart: unless-stopped
+    logging: *logging
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -92,6 +101,7 @@ services:
     networks: [internal, docker-api]
     depends_on: [docker-proxy, containerd-proxy]
     restart: unless-stopped
+    logging: *logging
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

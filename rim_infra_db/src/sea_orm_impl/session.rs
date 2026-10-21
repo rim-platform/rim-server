@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::session;
 use sea_orm::prelude::Expr;
-use sea_orm::{ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, QueryFilter, Set, Statement};
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait, QueryFilter, Set, Statement,
+};
 
 use crate::DbHandle;
 
@@ -161,6 +163,19 @@ impl SessionRepository for SeaOrmSessionRepository {
             .filter(session::Column::Id.ne(sea_orm::Value::Uuid(Some(keep.into()))))
             .filter(session::Column::RevokedAt.is_null())
             .col_expr(session::Column::RevokedAt, Expr::value(now))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected)
+    }
+
+    async fn delete_ended(&self, now: DateTime<Utc>) -> RepoResult<u64> {
+        let res = session::Entity::delete_many()
+            .filter(
+                Condition::any()
+                    .add(session::Column::RevokedAt.is_not_null())
+                    .add(session::Column::ExpiresAt.lte(now)),
+            )
             .exec(&self.db)
             .await
             .map_err(map_db_err)?;

@@ -1,13 +1,17 @@
 # Audit retention
 
-rim-server keeps two audit records, and retention treats them differently:
+rim-server keeps its audit records in three places, and retention treats them differently:
 
 | Record | Where | Retention |
 |---|---|---|
 | Command audit log | the `command_audit_log` table, read by the admin audit view (`listAuditLog`) | `RIM_AUDIT_RETENTION_DAYS`, this page |
-| Audit file | `audit.log` in `RIM_AUDIT_LOG_PATH` (and every audit event on stdout) | the operator's own log; rotate it with logrotate, below |
+| Audit exports | `audit-exports/` in `RIM_DATA_DIR`, the rows the purge took from the table | `RIM_AUDIT_EXPORT_RETENTION_DAYS`; "Deleting old exports", below |
+| Audit files | `audit.<YYYY-MM-DD>.log` in `RIM_AUDIT_LOG_PATH` (and every audit event on stdout) | `RIM_AUDIT_LOG_RETENTION_DAYS`, default 90; "The audit files", below |
 
-Unset, nothing changes: the table keeps every row forever.
+With `RIM_AUDIT_RETENTION_DAYS` unset the table keeps every row forever, and with
+`RIM_AUDIT_EXPORT_RETENTION_DAYS` unset every export is kept. The public relay's overlay,
+`deploy/compose.relay.yml`, sets both to 90, so a command audit row is gone completely about
+180 days after it was written.
 
 The admin audit view shows the retention in force. It reads `serverInfo.auditRetentionDays`,
 readable without a session: the configured days, or null when rows are kept forever.
@@ -51,9 +55,24 @@ Read one with:
 zcat audit-20260712T030000Z-20260713T025959Z.jsonl.gz | jq .
 ```
 
-The server never deletes an export. They hold user and workspace ids and the redacted command
-arguments: keep them where the backups go, encrypted, and delete them when your own retention
-for archived audit data runs out (**FILL**: how long, and where they are copied).
+Exports hold user and workspace ids and the redacted command arguments, and no IP addresses.
+They are in every backup of the data directory; keep copies made elsewhere encrypted.
+
+### Deleting old exports
+
+| Variable | Meaning |
+|---|---|
+| `RIM_AUDIT_EXPORT_RETENTION_DAYS` | Days an export file is kept after it was written, 1 to 3650. Unset (the default) keeps every export. A value outside the range, or one that is not a whole number, stops the server at boot. |
+
+With it set, the server deletes the export files written more than that many days ago, a minute
+after it starts and then every 24 hours. When a file was written is read from its modification
+time, not from the timestamps in its name: those are the `created_at` of the rows inside, which
+are already past `RIM_AUDIT_RETENTION_DAYS` when the file is written, so counting from them would
+take that many days off each export's time, and delete it at once when the two retentions are
+equal. The purge writes the file once and never touches it
+again, and the backup and restore scripts keep the time. Only names of the export form,
+`audit-<oldest>-<newest>.jsonl.gz` with or without a `-N` suffix, are deleted. Each run that
+deleted something logs the count, and `rim_audit_exports_deleted_total` adds it up.
 
 Each run is on record itself: an audit event `audit.retention.purged` (`target` `audit`) with
 `trigger` (`job` or `cli`), `cutoff`, `exported`, `deleted` and `export_path` (empty when nothing
@@ -97,23 +116,23 @@ failed export), 2 on a usage error.
 Both need `RIM_METRICS_ADDR` (`docs/operations/metrics.md`). A purge run from the command line
 is a separate process and is not counted.
 
-## The audit file
+## The audit files
 
-`audit.log` is appended to for as long as the server runs and is never trimmed by it. The server
-keeps the file open, so rotate it with `copytruncate`:
+The server writes the audit events (`"target":"audit"`) to one file per UTC day,
+`audit.<YYYY-MM-DD>.log`, in the directory `RIM_AUDIT_LOG_PATH` names (a file path there means
+its directory; unset, the working directory). Every audit event is on stdout as well.
 
-```text
-/data/audit.log {
-    daily
-    rotate 90
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-}
-```
+| Variable | Meaning |
+|---|---|
+| `RIM_AUDIT_LOG_RETENTION_DAYS` | Days the audit files are kept, 1 to 3650, default 90. A value outside the range, or one that is not a whole number, stops the server at boot. |
 
-In the compose deployments the file is in the `rim_rim_data` volume (`rim-relay_rim_data` on a
-relay); run logrotate on the host against the volume's mount point, or ship stdout to your log
-store and keep the file short.
+A minute after it starts and then every 24 hours, the server deletes the audit files whose day
+is more than that many days back: a line is deleted between that many days and two days more
+after it was written.
+Only names of that form are touched: an `audit.log` left by an older server is not written to
+any more and is never deleted; delete it once its retention for you has run out. The audit
+files hold IP addresses: the signup, login and rate-limit events carry the client's
+`remote_ip`.
+
+In the compose deployments the files are in `/data`, the `rim_data` volume
+(`rim-relay_rim_data` on a relay), and so in every backup.
