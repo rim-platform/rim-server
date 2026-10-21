@@ -83,9 +83,29 @@ relay still answers.
 | Franking keys | `/data/franking-key.json` | with every dump |
 | Workspace content: channels, their messages, members | the database | nightly backup, "Backups" |
 | Uploads (avatars, attachments in channels) | `/data/uploads` in volume `rim-relay_rim_data` | with every dump |
-| Audit log | `/data/audit.log`, and every audit event on stdout too; rotated by logrotate (`docs/operations/audit-retention.md`) | with every dump |
+| Audit files | `/data/audit.<YYYY-MM-DD>.log`, one per day, and every audit event on stdout too (`docs/operations/audit-retention.md`) | with every dump |
 | Audit exports | `/data/audit-exports/`, command audit rows past `RIM_AUDIT_RETENTION_DAYS` | with every dump |
 | TLS certificates | volume `rim-relay_caddy_data` | not needed: Caddy gets new ones |
+
+### How long personal data and logs are kept
+
+The terms tell people that the addresses they connect from appear in the server's logs, which
+are kept only as long as needed to run the service and fight abuse. These are the places that
+hold addresses or logs, how long each keeps them and what deletes them. Nothing here sends logs
+off the host: Alloy sends metrics only.
+
+| What | IP addresses | Kept | Deleted by |
+|---|---|---|---|
+| Container logs (`dc logs`) | the server's audit events for signups, logins and refusals carry `remote_ip`; the web client's nginx logs each request with the address Caddy forwards; Caddy logs the request, address included, of a request it could not serve | at most three files of 10 MB per container, and never longer than the container | Docker, when the newest file fills (the `logging` options in the compose files); a deploy that replaces a container's image starts its log afresh |
+| Audit files, `/data/audit.<YYYY-MM-DD>.log` | the same audit events as on stdout | 90 days (`RIM_AUDIT_LOG_RETENTION_DAYS`, default 90) | the server, daily |
+| Command audit rows, the `command_audit_log` table | none | 90 days (`RIM_AUDIT_RETENTION_DAYS`, 90 in `deploy/compose.relay.yml`) | the server, daily, after it exported them to `/data/audit-exports/` |
+| Audit exports, `/data/audit-exports/` | none: user and workspace ids, redacted arguments | until the operator deletes them (**FILL**: how long) | the operator |
+| Sessions, the `session` table | none: its `ip` column is never filled | until revoked (sign-out, a revoked device, a block) or expired, 30 days after sign-in (`RIM_SESSION_TTL_DAYS`); use does not extend it | the server, within an hour |
+| Rate limits and the known sign-in addresses | the addresses themselves, in memory | minutes for the rate windows; a known sign-in address counts for 30 days; none outlives a restart | the server; every restart clears them |
+| IP blocks, the `ip_block` table | the blocked ranges | until the block's expiry, or until `rim-relay ip unblock` for one without | the server, within 30 seconds of the expiry |
+| Caddy access log | every request's address | off; switched on only during an incident ("Monitoring"), and then part of Caddy's container log above | the operator, by removing `log` again |
+| Backups | those in the audit files of the backed-up `/data` | `RIM_BACKUP_KEEP_DAYS` days in `deploy/.env` (**FILL**: the days) | `deploy/backup.sh`, after each backup that succeeded; copies off the host: **FILL** |
+| The host's own logs (journald: SSH, fail2ban, the firewall) | addresses that connect to the host itself | **FILL**: journald's retention on the host | journald |
 
 ## Keys
 
@@ -178,7 +198,8 @@ first and then in the file. Ownership moves in the app.
 
 Nightly (**FILL**: the time and the cron or timer that runs it), before every update and right
 after every key rotation; encrypted with `age` to **FILL**: the recipient, whose identity is held
-by **FILL**; copied off the host to **FILL**: the destination; kept for **FILL** days.
+by **FILL**; copied off the host to **FILL**: the destination; kept for **FILL** days, with
+`RIM_BACKUP_KEEP_DAYS` set to that number in `deploy/.env` so each backup deletes the older ones.
 
 ```sh
 RIM_BACKUP_AGE_RECIPIENT=age1… deploy/backup.sh       # or set it in deploy/.env
@@ -330,9 +351,9 @@ with it.
 
 ## Monitoring
 
-Logs are JSON on stdout (`dc logs rim`); audit events (`"target":"audit"`) also go to
-`/data/audit.log`. The database answers what logs do not. Alert thresholds are **FILL** until a
-month of normal traffic shows the baseline.
+Logs are JSON on stdout (`dc logs rim`); audit events (`"target":"audit"`) also go to the
+daily files `/data/audit.<YYYY-MM-DD>.log`, kept 90 days. The database answers what logs do not.
+Alert thresholds are **FILL** until a month of normal traffic shows the baseline.
 
 | Watch | How | Alert at |
 |---|---|---|
@@ -519,5 +540,4 @@ account a block reaches, `cascade` true for those after the first),
 `server`, with the `user_id`). The principal, report and IP lines carry `actor_id`: `cli` for
 the command line, the operator's user id for a change made in the app. `audit purge` writes
 `audit.retention.purged` (`trigger` `cli`), the same event the daily purge writes; the purge, its
-export files and the logrotate setup for `/data/audit.log` are in
-`docs/operations/audit-retention.md`.
+export files and the retention of the audit files are in `docs/operations/audit-retention.md`.
