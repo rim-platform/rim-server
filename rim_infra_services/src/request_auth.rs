@@ -106,6 +106,7 @@ mod tests {
             async fn revoke_all_for_user_except(&self, user_id: UserId, keep: SessionId) -> RepoResult<u64>;
             async fn bind_device(&self, id: SessionId, device_key_id: DeviceKeyId) -> RepoResult<()>;
             async fn revoke_all_for_device(&self, device_key_id: DeviceKeyId) -> RepoResult<u64>;
+            async fn delete_ended(&self, now: chrono::DateTime<chrono::Utc>) -> RepoResult<u64>;
         }
     }
 

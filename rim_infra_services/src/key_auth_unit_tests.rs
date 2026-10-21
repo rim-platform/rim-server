@@ -499,6 +499,13 @@ mod tests {
             }
             Ok(n)
         }
+
+        async fn delete_ended(&self, now: DateTime<Utc>) -> RepoResult<u64> {
+            let mut s = self.0.lock().unwrap();
+            let before = s.sessions.len();
+            s.sessions.retain(|(session, _)| session.is_live(now));
+            Ok((before - s.sessions.len()) as u64)
+        }
     }
 
     // ── Harness ───────────────────────────────────────────────────────────────────────────

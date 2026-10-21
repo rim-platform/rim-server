@@ -919,6 +919,11 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             shutdown_tx.subscribe(),
         ),
     );
+    // Background task: delete revoked and expired sessions hourly.
+    tokio::spawn(rim_infra_services::scheduled_purges::run_session_purge(
+        Arc::clone(&repos.session_repo),
+        shutdown_tx.subscribe(),
+    ));
     // Background task: delete stale cached remote identities and forget idle peer pins hourly,
     // keeping the peers the configuration names.
     {

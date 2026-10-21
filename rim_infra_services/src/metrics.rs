@@ -48,6 +48,8 @@ pub const CONVERSATION_INVITES_EXPIRED: &str = "rim_conversation_invites_expired
 pub const REMOTE_IDENTITIES_PURGED: &str = "rim_remote_identities_purged_total";
 /// Idle peer pins the hourly purge forgot.
 pub const PEER_PINS_FORGOTTEN: &str = "rim_peer_pins_forgotten_total";
+/// Revoked and expired sessions the hourly purge deleted.
+pub const SESSIONS_PURGED: &str = "rim_sessions_purged_total";
 
 /// Register the help text and units of the metrics above with the installed recorder.
 pub fn describe() {
@@ -153,6 +155,11 @@ pub fn describe() {
         Unit::Count,
         "Idle peer pins the hourly purge forgot."
     );
+    describe_counter!(
+        SESSIONS_PURGED,
+        Unit::Count,
+        "Revoked and expired sessions the hourly purge deleted."
+    );
 }
 
 /// Count one newly committed message.
@@ -209,6 +216,11 @@ pub fn remote_identities_purged(n: u64) {
 /// Count `n` idle peer pins the purge forgot.
 pub fn peer_pins_forgotten(n: u64) {
     counter!(PEER_PINS_FORGOTTEN).increment(n);
+}
+
+/// Count `n` revoked or expired sessions the purge deleted.
+pub fn sessions_purged(n: u64) {
+    counter!(SESSIONS_PURGED).increment(n);
 }
 
 /// Set the audit retention gauge; `None` (keep forever) is recorded as 0.
