@@ -429,6 +429,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let audit_retention_days = config
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
+    let audit_log_retention_days = config
+        .audit_log_retention_days()
+        .map_err(std::io::Error::other)?;
     let terms_page = config.terms_page().map_err(std::io::Error::other)?;
     let instance_policy = config
         .instance_policy(terms_page.as_ref())
@@ -882,6 +885,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             shutdown_tx.subscribe(),
         ));
     }
+
+    // Background task: delete the daily audit files past `RIM_AUDIT_LOG_RETENTION_DAYS`, a
+    // minute after boot and then daily.
+    tokio::spawn(crate::audit_file::run_daily(
+        rim_logging::audit_log_dir(),
+        audit_log_retention_days,
+        shutdown_tx.subscribe(),
+    ));
 
     let message_attachment_service = service_provider.message_attachment_service();
 

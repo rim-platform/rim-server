@@ -5,9 +5,10 @@ rim-server keeps two audit records, and retention treats them differently:
 | Record | Where | Retention |
 |---|---|---|
 | Command audit log | the `command_audit_log` table, read by the admin audit view (`listAuditLog`) | `RIM_AUDIT_RETENTION_DAYS`, this page |
-| Audit file | `audit.log` in `RIM_AUDIT_LOG_PATH` (and every audit event on stdout) | the operator's own log; rotate it with logrotate, below |
+| Audit files | `audit.<YYYY-MM-DD>.log` in `RIM_AUDIT_LOG_PATH` (and every audit event on stdout) | `RIM_AUDIT_LOG_RETENTION_DAYS`, default 90; "The audit files", below |
 
-Unset, nothing changes: the table keeps every row forever.
+With `RIM_AUDIT_RETENTION_DAYS` unset the table keeps every row forever. The public relay's
+overlay, `deploy/compose.relay.yml`, sets it to 90.
 
 The admin audit view shows the retention in force. It reads `serverInfo.auditRetentionDays`,
 readable without a session: the configured days, or null when rows are kept forever.
@@ -97,23 +98,23 @@ failed export), 2 on a usage error.
 Both need `RIM_METRICS_ADDR` (`docs/operations/metrics.md`). A purge run from the command line
 is a separate process and is not counted.
 
-## The audit file
+## The audit files
 
-`audit.log` is appended to for as long as the server runs and is never trimmed by it. The server
-keeps the file open, so rotate it with `copytruncate`:
+The server writes the audit events (`"target":"audit"`) to one file per UTC day,
+`audit.<YYYY-MM-DD>.log`, in the directory `RIM_AUDIT_LOG_PATH` names (a file path there means
+its directory; unset, the working directory). Every audit event is on stdout as well.
 
-```text
-/data/audit.log {
-    daily
-    rotate 90
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-}
-```
+| Variable | Meaning |
+|---|---|
+| `RIM_AUDIT_LOG_RETENTION_DAYS` | Days the audit files are kept, 1 to 3650, default 90. A value outside the range, or one that is not a whole number, stops the server at boot. |
 
-In the compose deployments the file is in the `rim_rim_data` volume (`rim-relay_rim_data` on a
-relay); run logrotate on the host against the volume's mount point, or ship stdout to your log
-store and keep the file short.
+A minute after it starts and then every 24 hours, the server deletes the audit files whose day
+is more than that many days back: a line is deleted between that many days and two days more
+after it was written.
+Only names of that form are touched: an `audit.log` left by an older server is not written to
+any more and is never deleted; delete it once its retention for you has run out. The audit
+files hold IP addresses: the signup, login and rate-limit events carry the client's
+`remote_ip`.
+
+In the compose deployments the files are in `/data`, the `rim_data` volume
+(`rim-relay_rim_data` on a relay), and so in every backup.

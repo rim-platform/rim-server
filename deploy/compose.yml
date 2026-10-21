@@ -26,6 +26,15 @@
 
 name: rim
 
+# Every container's output goes to Docker's json-file log, at most three files of 10 MB: the
+# oldest file is deleted when the newest fills, and the log goes with the container when it is
+# recreated.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 x-database-url: &database-url "postgres://rim:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/rim"
 
 services:
@@ -55,6 +64,7 @@ services:
       retries: 10
       start_period: 5s
     restart: unless-stopped
+    logging: *logging
 
   # Runs the migrations, then exits; the server starts after it succeeded.
   migrate:
@@ -67,6 +77,7 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    logging: *logging
     tmpfs: [/tmp]
     read_only: true
     cap_drop: [ALL]
@@ -92,8 +103,9 @@ services:
       # Server key, recovery key (until moved offline), franking keys and uploads.
       RIM_DATA_DIR: /data
       RIM_STORAGE_LOCAL_PATH: /data/uploads
-      # Audit events also go to stdout; this file keeps them across container restarts.
-      RIM_AUDIT_LOG_PATH: /data/audit.log
+      # Audit events also go to stdout; the daily files /data/audit.<YYYY-MM-DD>.log keep them
+      # across container restarts, for RIM_AUDIT_LOG_RETENTION_DAYS (default 90).
+      RIM_AUDIT_LOG_PATH: /data
       # Caddy is the only way in and sets X-Forwarded-For itself.
       RIM_TRUST_FORWARDED_HEADERS: "true"
       RIM_FORCE_SECURE_COOKIES: "true"
@@ -153,6 +165,7 @@ services:
       RIM_PROBATION_HOURS:
       RIM_RATE_PROBATION_MESSAGES_PER_MIN:
       RIM_ACCOUNT_DELETION_GRACE_DAYS:
+      RIM_AUDIT_LOG_RETENTION_DAYS:
       RIM_RESERVED_NAMES:
       RIM_LINK_PREVIEW_CONCURRENCY:
       RIM_PASSWORD_HASH_CONCURRENCY:
@@ -191,6 +204,7 @@ services:
       retries: 3
       start_period: 20s
     restart: unless-stopped
+    logging: *logging
 
   # The web client: static files behind nginx. The published image is built with the
   # GraphQL endpoint `/api`, this origin, so one image serves any domain.
@@ -207,6 +221,7 @@ services:
     security_opt: [no-new-privileges:true]
     networks: [internal]
     restart: unless-stopped
+    logging: *logging
 
   # Hands Caddy's volumes to the user Caddy runs as, then exits; Caddy starts after it
   # succeeded. Root, with only the capabilities that change and traverse other users' files.
@@ -219,6 +234,7 @@ services:
       - caddy_config:/config
     network_mode: none
     restart: "no"
+    logging: *logging
     read_only: true
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_READ_SEARCH]
@@ -255,6 +271,7 @@ services:
       rim:
         condition: service_started
     restart: unless-stopped
+    logging: *logging
 
 networks:
   # No way out: the database talks to the server and the migrations only.

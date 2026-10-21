@@ -16,6 +16,13 @@
 # Alloy only connects out.
 # =============================================================================
 
+# The containers' logs are bounded as in compose.yml.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   rim:
     environment:
@@ -50,6 +57,7 @@ services:
     # `internal` reaches rim-server, `egress` the remote-write endpoint.
     networks: [internal, egress]
     restart: unless-stopped
+    logging: *logging
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
