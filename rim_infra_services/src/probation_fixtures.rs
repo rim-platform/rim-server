@@ -25,9 +25,20 @@ pub(crate) fn account(id: UserId, created_at: DateTime<Utc>, principal_id: Optio
     }
 }
 
-/// A user repository that finds each of `accounts` by id and nobody else.
+/// A user repository that finds each of `accounts` by id and nobody else, none of them an
+/// instance operator.
 pub(crate) fn users(accounts: Vec<User>) -> MockUserRepository {
+    users_and_operators(accounts, Vec::new())
+}
+
+/// [`users`] where the accounts in `operators` hold the instance operator role.
+pub(crate) fn users_and_operators(
+    accounts: Vec<User>,
+    operators: Vec<UserId>,
+) -> MockUserRepository {
     let mut repo = MockUserRepository::new();
+    repo.expect_is_instance_operator()
+        .returning(move |id| Ok(operators.contains(&id)));
     let by_id = accounts.clone();
     repo.expect_get_by_id()
         .returning(move |id| Ok(by_id.iter().find(|u| u.id == id).cloned()));

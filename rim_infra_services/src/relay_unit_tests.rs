@@ -2585,13 +2585,18 @@ fn probation_host(
     accounts: Vec<rim_core::user::model::User>,
     now: chrono::DateTime<Utc>,
 ) -> DefaultHostService {
-    knowing_host(ada, accounts, now, MockPeerService::new())
+    knowing_host(
+        ada,
+        crate::probation_fixtures::users(accounts),
+        now,
+        MockPeerService::new(),
+    )
 }
 
-/// [`probation_host`] pinning other servers through `peers`.
+/// [`probation_host`] over the accounts of `users`, pinning other servers through `peers`.
 fn knowing_host(
     ada: UserId,
-    accounts: Vec<rim_core::user::model::User>,
+    users: MockUserRepository,
     now: chrono::DateTime<Utc>,
     peers: MockPeerService,
 ) -> DefaultHostService {
@@ -2624,7 +2629,7 @@ fn knowing_host(
             relay_repo: Arc::new(relay),
             key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
             e2ee_repo: Arc::new(MockE2eeRepository::new()),
-            user_repo: Arc::new(crate::probation_fixtures::users(accounts)),
+            user_repo: Arc::new(users),
             conversation_repo: Arc::new(MockConversationRepository::new()),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
@@ -2731,18 +2736,52 @@ async fn an_account_in_probation_sends_no_dm_request_to_a_stranger() {
 }
 
 #[tokio::test]
+async fn an_instance_operator_sends_a_dm_request_to_a_stranger_however_new_the_account() {
+    use crate::probation_fixtures::{account, users_and_operators};
+    let created = Utc::now();
+    let (ada, stranger) = (UserId::new(), UserId::new());
+    let accounts = vec![
+        account(ada, created, Some(&TestIdentity::new(60).principal_id())),
+        account(
+            stranger,
+            created,
+            Some(&TestIdentity::new(63).principal_id()),
+        ),
+    ];
+    let host = knowing_host(
+        ada,
+        users_and_operators(accounts, vec![ada]),
+        created + Duration::minutes(20),
+        MockPeerService::new(),
+    );
+    host.ensure_may_request(
+        Actor::new(ada),
+        host.direct_space_id(),
+        vec![stranger],
+        false,
+    )
+    .await
+    .expect("an instance operator is never on probation");
+}
+
+#[tokio::test]
 async fn only_people_a_user_knows_skip_the_daily_invites_to_other_servers() {
     let ada = UserId::new();
     let mut peers = MockPeerService::new();
     peers
         .expect_pin()
         .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
-    let host = knowing_host(ada, Vec::new(), Utc::now(), peers)
-        .with_limits(rim_services::limits::InstanceLimits::default())
-        .with_quotas(Quotas {
-            dm_requests_per_day: 1,
-            ..Quotas::default()
-        });
+    let host = knowing_host(
+        ada,
+        crate::probation_fixtures::users(Vec::new()),
+        Utc::now(),
+        peers,
+    )
+    .with_limits(rim_services::limits::InstanceLimits::default())
+    .with_quotas(Quotas {
+        dm_requests_per_day: 1,
+        ..Quotas::default()
+    });
     let invite = |seed: u8| {
         host.ensure_remote_member(
             Actor::new(ada),

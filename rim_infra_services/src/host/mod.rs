@@ -365,9 +365,9 @@ impl DefaultHostService {
         self
     }
 
-    /// `Validation` while `actor`'s account is in probation and the holder of one of
-    /// `principal_ids` is a stranger to them: someone they do not know (see
-    /// [`RelayRepository::knows`]) who is not in a workspace with them.
+    /// `Validation` while `actor`'s account is in probation (an instance operator never is) and
+    /// the holder of one of `principal_ids` is a stranger to them: someone they do not know
+    /// (see [`RelayRepository::knows`]) who is not in a workspace with them.
     async fn refuse_strangers_in_probation(
         &self,
         actor: Actor,
@@ -383,10 +383,14 @@ impl DefaultHostService {
             .await?
             .ok_or(ServiceError::NotFound)?;
         let now = self.clock.now();
-        if self
-            .limits
-            .probation_ends_at(user.created_at, now)
-            .is_none()
+        if crate::probation::probation_ends_at(
+            &self.limits,
+            self.repos.user_repo.as_ref(),
+            &user,
+            now,
+        )
+        .await?
+        .is_none()
         {
             return Ok(());
         }

@@ -2,7 +2,8 @@
 //! workspace, devices per user and message bytes refuses the write past each cap with
 //! `VALIDATION` naming it, and allows the writes within it. With a one-hour probation, a new
 //! account creates no workspace and sends no DM request to a stranger, a contact it added on
-//! its own included, and `me` says when its probation ends.
+//! its own included, and `me` says when its probation ends; an instance operator is never on
+//! probation.
 //!
 //! Run with:
 //! ```sh
@@ -19,8 +20,10 @@ use uuid::Uuid;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::user::repository::UserRepository;
 use rim_identity::testing::signing_key;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use support::graphql::{exec_err, exec_ok};
 use support::identity::statement;
 use support::nodes::{S2S_TABLES, start};
@@ -206,6 +209,31 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
         .await
         .expect("join");
     exec_ok(schema, dm()).await;
+
+    // An instance operator is never on probation: an account as new as the newcomer's, granted
+    // the role after its creation, has no probation end from then on, creates a workspace and
+    // sends a DM request to Ada, a stranger.
+    let operator = ctx.create_user("operator").await;
+    let op = ctx.caller(&operator).await;
+    let before = exec_ok(schema, op.request(PROBATION_ENDS, json!({}))).await;
+    assert!(before["me"]["probationEndsAt"].is_string(), "{before}");
+    assert!(
+        SeaOrmUserRepository::new(ctx.db.clone())
+            .set_instance_operator(operator.id, true)
+            .await
+            .expect("grant")
+    );
+    let after = exec_ok(schema, op.request(PROBATION_ENDS, json!({}))).await;
+    assert!(after["me"]["probationEndsAt"].is_null(), "{after}");
+    exec_ok(schema, op.request(CREATE_SERVER, json!({ "name": "ops" }))).await;
+    exec_ok(
+        schema,
+        op.request(
+            CREATE_DM,
+            json!({ "s": node.s2s.direct_space_id.to_string(), "u": ada.user.id.to_string() }),
+        ),
+    )
+    .await;
 
     node.stop().await;
 }

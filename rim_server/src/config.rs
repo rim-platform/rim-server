@@ -338,8 +338,8 @@ pub struct RIMConfig {
 
     // ── Probation of new accounts ───────────────────────────────────────────
     /// Hours after its creation during which an account cannot create a workspace or send a
-    /// DM request to a stranger; unset or 0 turns probation off. Controlled by
-    /// `RIM_PROBATION_HOURS`.
+    /// DM request to a stranger; an instance operator is never on probation. Unset or 0 turns
+    /// probation off. Controlled by `RIM_PROBATION_HOURS`.
     pub probation_hours: Option<u32>,
     /// Messages an account in probation sends per minute, with a burst of the same size,
     /// instead of the normal message rate; unset or 0 keeps the normal rate. Controlled by

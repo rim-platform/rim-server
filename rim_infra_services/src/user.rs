@@ -144,9 +144,13 @@ impl UserService for DefaultUserService {
             .get_by_id(query.actor.user_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
-        Ok(self
-            .limits
-            .probation_ends_at(user.created_at, self.clock.now()))
+        crate::probation::probation_ends_at(
+            &self.limits,
+            self.repos.user_repo.as_ref(),
+            &user,
+            self.clock.now(),
+        )
+        .await
     }
 
     async fn get_users_by_ids(

@@ -33,7 +33,8 @@ pub struct InstanceLimits {
     /// Bytes of one message's text.
     pub message_bytes: Option<u32>,
     /// Hours after its creation during which an account cannot create a workspace or send a
-    /// DM request to a stranger, and sends messages at the probation rate.
+    /// DM request to a stranger, and sends messages at the probation rate; an instance
+    /// operator is never on probation.
     pub probation_hours: Option<u32>,
     /// Pending invitations to encrypted conversations one user holds.
     pub pending_invites_per_user: Option<u32>,

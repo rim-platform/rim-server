@@ -180,7 +180,8 @@ USER rim
 #   RIM_LIMIT_ACCOUNTS    — local accounts the instance holds, those in their deletion grace
 #                           period included; at it every signup answers REGISTRATION_FULL
 #   RIM_PROBATION_HOURS   — hours after creation during which an account creates no workspace
-#                           and sends no DM request to a stranger (default: off)
+#                           and sends no DM request to a stranger; never an instance operator
+#                           (default: off)
 #   RIM_RATE_PROBATION_MESSAGES_PER_MIN — messages per minute of an account in probation,
 #                           instead of the normal rate (default: the normal rate)
 #   RIM_ACCOUNT_DELETION_GRACE_DAYS — days between an account's deletion request and its purge,

@@ -191,10 +191,14 @@ impl DefaultMessageService {
         if let Some(probation) = &self.probation_budget
             && self.limits.probation_hours.is_some()
             && let Some(user) = self.repos.user_repo.get_by_id(author).await?
-            && self
-                .limits
-                .probation_ends_at(user.created_at, self.clock.now())
-                .is_some()
+            && crate::probation::probation_ends_at(
+                &self.limits,
+                self.repos.user_repo.as_ref(),
+                &user,
+                self.clock.now(),
+            )
+            .await?
+            .is_some()
         {
             return Ok(Some(probation));
         }
