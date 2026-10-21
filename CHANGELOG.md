@@ -253,6 +253,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   completely after about 180 days.
 - `RIM_BACKUP_KEEP_DAYS` for `deploy/backup.sh`: after a backup that succeeded, the deployment's
   archives in `RIM_BACKUP_DIR` older than that many days are deleted. Unset keeps every archive.
+- `RIM_BACKUP_HEARTBEAT_URL` for `deploy/backup.sh`: an https URL it fetches after each backup
+  that succeeded, for a monitor such as healthchecks.io that alerts when a night is missed. A
+  failed ping is a warning, not a failed backup.
 
 ### Changed
 
