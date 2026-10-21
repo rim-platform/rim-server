@@ -1,8 +1,7 @@
 # End-to-end encryption with MLS v1
 
-_Status: implemented, normative. Library, providers, cipher suite and test vectors:
-`docs/decisions/mls-library-2026-10-09.md`. Read `key-identity-v1.md` (keys, tagged encodings,
-statements) and `device-linking-v1.md` first. This document is the contract between the server
+_Status: implemented, normative. Read `key-identity-v1.md` (keys, tagged encodings, statements)
+and `device-linking-v1.md` first. This document is the contract between the server
 (`E2eeService`), the `rim_mls` crate in rim-ui, the desktop client and the web client. Labels of
 the form S4-n below name the change that built an item: S4-1 the server, S4-2 the `rim_mls`
 crate, S4-3 to S4-5 the desktop client, S4-6 the web client._
@@ -424,7 +423,7 @@ already sees every message of the epoch it ended.
   a generation gap is not an error. Withheld Commits are detected (epochs are consecutive and a
   later application message names a higher epoch); withheld application messages can only be
   detected by the feed's cursor contract, not proven. A relay (Stage 5) that withholds them is
-  the residual risk `relay-proxied-workspaces-2026-10-09.md` accepts.
+  a residual risk the relay design accepts.
 
 ## The message envelope
 
@@ -1097,7 +1096,7 @@ tampered content, wrong key, message deleted first); plaintext writes refused; p
 blocks a send until committed; `forwardMessage` refused; search returns nothing encrypted; digests
 say "Encrypted message"; appendix A receipt and attachment hash.
 
-**Crate (S4-2).** The ADR's vector table; appendix A byte for byte; both providers create and process
+**Crate (S4-2).** The test vectors of the chosen library and suite; appendix A byte for byte; both providers create and process
 0x004F groups and interoperate; multi-device simulations against an in-process sequencer: 3 users ×
 3 devices, link and revoke devices, members leave and join, racing committers with ranking, a
 device offline past retention re-added, lost state, a Commit that cannot be processed, an

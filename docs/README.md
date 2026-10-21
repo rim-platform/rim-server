@@ -61,17 +61,7 @@ Normative, versioned contracts in `specs/`:
 - `security-overview.md`: what RIM protects and from whom, the threat model, the known gaps and
   the review status, for someone deciding whether to run or join a server.
 - `security/audit-access-matrix.md`: who can read which audit rows.
+- `security/nested-resolver-access.md`: which nested GraphQL fields load other objects and what
+  check stops a viewer from reading what the matching root would refuse.
 - `security/crypto-review-brief-2026-10.md`: the brief for the outside cryptographic review,
   pinned to the commits it describes.
-- `security/env-history-purge-runbook.md`: removing `.env` from the published git history.
-
-## Records
-
-Dated documents that describe a point in time and are not updated:
-
-- `decisions/`: sealed decision records (`decisions/README.md` indexes them).
-- `testing/manual-test-plan-2026-10-10.md`: the manual test run for key identity, encryption
-  and two servers.
-- `testing/manual-test-plan-2026-10-12.md`: the manual test run for the public launch: a packaged
-  app against a remote server, the notice and terms, direct messages at sign-in, command
-  visibility, rate limits, bans and the IP deny list, backups, the operator routine.
