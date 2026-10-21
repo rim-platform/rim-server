@@ -9,7 +9,11 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::repos::MentionRepos;
 
-/// Regex-free mention parser: extracts user IDs from `<@uuid>` tokens.
+/// Most distinct users one message mentions; later `<@uuid>` tokens stay plain text.
+pub const MAX_MENTIONS: usize = 50;
+
+/// Regex-free mention parser: extracts the first [`MAX_MENTIONS`] distinct user IDs from
+/// `<@uuid>` tokens.
 pub fn parse_mention_ids(text: &str) -> Vec<UserId> {
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
@@ -27,6 +31,9 @@ pub fn parse_mention_ids(text: &str) -> Vec<UserId> {
                     let id = UserId::from(uuid);
                     if seen.insert(id) {
                         result.push(id);
+                        if result.len() == MAX_MENTIONS {
+                            break;
+                        }
                     }
                 }
                 i = start + end_offset + 1;
@@ -107,6 +114,24 @@ mod tests {
         let text = "<@550e8400-e29b-41d4-a716-446655440000";
         let ids = parse_mention_ids(text);
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn parse_keeps_the_first_max_mentions_distinct_users() {
+        let ids: Vec<uuid::Uuid> = (0..MAX_MENTIONS + 5)
+            .map(|_| uuid::Uuid::new_v4())
+            .collect();
+        let text = ids
+            .iter()
+            .chain(ids.iter().take(3))
+            .map(|id| format!("<@{id}>"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let parsed: Vec<uuid::Uuid> = parse_mention_ids(&text)
+            .into_iter()
+            .map(uuid::Uuid::from)
+            .collect();
+        assert_eq!(parsed, ids[..MAX_MENTIONS]);
     }
 
     #[test]

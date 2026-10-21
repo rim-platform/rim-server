@@ -211,7 +211,8 @@ fn reaction_row(
 }
 
 /// A reaction inserts one row; a later reaction replaces its emoji and reactor, marks it
-/// unread and moves it to the top; a row the message already has for another reason stays.
+/// unread and moves it to the top, and says when the row it replaced surfaced while it was
+/// unread; a row the message already has for another reason stays.
 #[tokio::test]
 async fn reaction_notification_is_inserted_then_resurfaced_never_replacing_another_reason() {
     let ctx = support::TestCtx::new().await;
@@ -234,6 +235,8 @@ async fn reaction_notification_is_inserted_then_resurfaced_never_replacing_anoth
         .await
         .unwrap()
         .expect("inserted");
+    assert_eq!(first.replaced_unread_at, None, "a new row");
+    let first = first.notification;
     assert_eq!(first.reason, NotificationReason::Reaction);
     assert_eq!(
         first.reaction,
@@ -257,6 +260,8 @@ async fn reaction_notification_is_inserted_then_resurfaced_never_replacing_anoth
         .await
         .unwrap()
         .expect("re-surfaced");
+    assert_eq!(second.replaced_unread_at, None, "the replaced row was read");
+    let second = second.notification;
     assert_eq!(second.id, first.id, "the same row");
     assert_eq!(second.read_at, None);
     assert_eq!(second.created_at, later);
@@ -268,6 +273,23 @@ async fn reaction_notification_is_inserted_then_resurfaced_never_replacing_anoth
         })
     );
     assert_eq!(repo.unread_count(author, server.id).await.unwrap(), 1);
+
+    let latest = t(1);
+    let third = repo
+        .upsert_reaction_notification(
+            reaction_row(author, server.id, &conv, msg.id, "\u{1f680}", bob),
+            latest,
+        )
+        .await
+        .unwrap()
+        .expect("replaced");
+    assert_eq!(
+        third.replaced_unread_at,
+        Some(later),
+        "the replaced row was unread"
+    );
+    assert_eq!(third.notification.id, first.id);
+    assert_eq!(third.notification.created_at, latest);
 
     // A message bob was mentioned in keeps its mention row when someone reacts.
     let mention = ctx.create_message(conv.id, author, "<@bob>").await;

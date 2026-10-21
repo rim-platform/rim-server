@@ -21,6 +21,7 @@ use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
+use rim_services::default_workspace::DefaultWorkspaceService;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::notification::command::{
     GetConversationNotificationLevelQuery, GetNotificationSettingsQuery, ListNotificationsQuery,
@@ -44,6 +45,9 @@ use crate::util::{
 const MAX_PAGE_LIMIT: u32 = 100;
 /// Most ids one `mark_read` call accepts.
 const MAX_MARK_READ_IDS: usize = 500;
+/// Minutes a reaction notification that is still unread stays quiet: a reaction replacing it
+/// within them updates the row without another `NotificationDue`.
+const REACTION_QUIET_MINUTES: i64 = 10;
 
 #[derive(Clone)]
 pub struct NotificationRepos {
@@ -59,11 +63,47 @@ pub struct NotificationRepos {
 pub struct DefaultNotificationService {
     repos: NotificationRepos,
     observers: Observers,
+    /// The server's default workspace, whose members who never saved settings get `MENTIONS`.
+    /// `None` treats no workspace as the default one.
+    default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
 }
 
 impl DefaultNotificationService {
     pub fn new(repos: NotificationRepos, observers: Observers) -> Self {
-        Self { repos, observers }
+        Self {
+            repos,
+            observers,
+            default_workspace: None,
+        }
+    }
+
+    /// Give members of the server's default workspace who never saved settings the default
+    /// level `MENTIONS`, so a plain message there stores no row per member.
+    pub fn with_default_workspace(
+        mut self,
+        default_workspace: Arc<dyn DefaultWorkspaceService>,
+    ) -> Self {
+        self.default_workspace = Some(default_workspace);
+        self
+    }
+
+    /// The settings of a member of `server_id` who never saved any: `MENTIONS` in the default
+    /// workspace, else [`UserNotificationSettings::defaults`].
+    ///
+    /// # Errors
+    /// Storage errors reading the default workspace.
+    async fn unsaved_settings(
+        &self,
+        user_id: UserId,
+        server_id: ServerId,
+    ) -> ServiceResult<UserNotificationSettings> {
+        let mut settings = UserNotificationSettings::defaults(user_id, server_id, Utc::now());
+        if let Some(default_workspace) = &self.default_workspace
+            && default_workspace.current().await? == Some(server_id)
+        {
+            settings.default_level = NotificationLevel::Mentions;
+        }
+        Ok(settings)
     }
 
     async fn load_settings(
@@ -71,12 +111,15 @@ impl DefaultNotificationService {
         user_id: UserId,
         server_id: ServerId,
     ) -> ServiceResult<UserNotificationSettings> {
-        Ok(self
+        match self
             .repos
             .notification_repo
             .get_settings(user_id, server_id)
             .await?
-            .unwrap_or_else(|| UserNotificationSettings::defaults(user_id, server_id, Utc::now())))
+        {
+            Some(settings) => Ok(settings),
+            None => self.unsaved_settings(user_id, server_id).await,
+        }
     }
 
     async fn level_dto(
@@ -400,7 +443,7 @@ impl NotificationService for DefaultNotificationService {
             .into_iter()
             .map(|p| (p.user_id, p))
             .collect();
-        let settings_by_user: HashMap<UserId, UserNotificationSettings> = self
+        let mut settings_by_user: HashMap<UserId, UserNotificationSettings> = self
             .repos
             .notification_repo
             .get_settings_for_users(cmd.server_id, &candidates)
@@ -408,6 +451,19 @@ impl NotificationService for DefaultNotificationService {
             .into_iter()
             .map(|s| (s.user_id, s))
             .collect();
+        if settings_by_user.len() < candidates.len() {
+            let unsaved = self.unsaved_settings(author, cmd.server_id).await?;
+            if unsaved.default_level != NotificationLevel::All {
+                for user_id in &candidates {
+                    settings_by_user
+                        .entry(*user_id)
+                        .or_insert_with(|| UserNotificationSettings {
+                            user_id: *user_id,
+                            ..unsaved.clone()
+                        });
+                }
+            }
+        }
 
         let now = Utc::now();
         let decisions = decide(&DecisionInput {
@@ -488,7 +544,7 @@ impl NotificationService for DefaultNotificationService {
             return Ok(false);
         };
 
-        let Some(row) = self
+        let Some(stored) = self
             .repos
             .notification_repo
             .upsert_reaction_notification(
@@ -508,6 +564,13 @@ impl NotificationService for DefaultNotificationService {
         else {
             return Ok(false);
         };
+        if stored
+            .replaced_unread_at
+            .is_some_and(|at| now - at < chrono::Duration::minutes(REACTION_QUIET_MINUTES))
+        {
+            return Ok(true);
+        }
+        let row = stored.notification;
         let reaction = row.reaction.clone();
         self.observers.emit(WorkspaceEvent::NotificationDue {
             workspace_id: row.server_id,

@@ -13,8 +13,8 @@ use rim_core::message::repository::MockMessageRepository;
 use rim_core::message_thread::model::MessageThreadId;
 use rim_core::notification::model::{
     DigestFrequency, DndPause, DndWindow, NewReactionNotification, NewUserNotification,
-    NotificationLevel, NotificationReaction, NotificationReason, UserNotification,
-    UserNotificationId, UserNotificationSettings,
+    NotificationLevel, NotificationReaction, NotificationReason, StoredReactionNotification,
+    UserNotification, UserNotificationId, UserNotificationSettings,
 };
 use rim_core::notification::repository::MockNotificationRepository;
 use rim_core::notification_preference::model::NotificationPreference;
@@ -22,10 +22,11 @@ use rim_core::notification_preference::repository::MockNotificationPreferenceRep
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::MockServerMemberRepository;
 use rim_core::user::model::UserId;
+use rim_services::default_workspace::MockDefaultWorkspaceService;
 use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
 use rim_services::notification::command::{
-    MarkNotificationsReadCmd, MarkNotificationsReadTarget, NotifyForMessageCmd,
-    NotifyForReactionCmd, SetDndPauseCmd, UpdateNotificationSettingsCmd,
+    GetNotificationSettingsQuery, MarkNotificationsReadCmd, MarkNotificationsReadTarget,
+    NotifyForMessageCmd, NotifyForReactionCmd, SetDndPauseCmd, UpdateNotificationSettingsCmd,
 };
 use rim_services::notification::service::NotificationService;
 use rim_services::{Actor, ServiceError};
@@ -46,6 +47,8 @@ struct Mocks {
     preference_repo: MockNotificationPreferenceRepository,
     server_member_repo: MockServerMemberRepository,
     message_repo: MockMessageRepository,
+    /// The server's default workspace; `None` wires no default workspace service.
+    default_workspace: Option<ServerId>,
 }
 
 impl Mocks {
@@ -55,7 +58,13 @@ impl Mocks {
             preference_repo: MockNotificationPreferenceRepository::new(),
             server_member_repo: MockServerMemberRepository::new(),
             message_repo: MockMessageRepository::new(),
+            default_workspace: None,
         }
+    }
+
+    fn default_workspace(mut self, workspace: ServerId) -> Self {
+        self.default_workspace = Some(workspace);
+        self
     }
 
     fn member(mut self, is_member: bool) -> Self {
@@ -81,6 +90,16 @@ impl Mocks {
             },
             Observers::new(Arc::clone(&broadcaster) as Arc<dyn Broadcaster>),
         );
+        let svc = match self.default_workspace {
+            Some(workspace) => {
+                let mut default_workspace = MockDefaultWorkspaceService::new();
+                default_workspace
+                    .expect_current()
+                    .returning(move || Box::pin(async move { Ok(Some(workspace)) }));
+                svc.with_default_workspace(Arc::new(default_workspace))
+            }
+            None => svc,
+        };
         (svc, broadcaster)
     }
 }
@@ -567,19 +586,22 @@ async fn forget_message_deletes_unread_rows() {
     assert_eq!(svc.forget_message(message_id).await.expect("forget"), 2);
 }
 
-/// The row `upsert_reaction_notification` stores for `new`.
-fn stored_reaction(new: &NewReactionNotification) -> UserNotification {
-    UserNotification {
-        id: UserNotificationId::new(),
-        user_id: new.user_id,
-        server_id: new.server_id,
-        conversation_id: new.conversation_id,
-        message_id: new.message_id,
-        reason: NotificationReason::Reaction,
-        created_at: Utc::now(),
-        read_at: None,
-        emailed_at: None,
-        reaction: Some(new.reaction.clone()),
+/// The row `upsert_reaction_notification` stores for `new`, inserted or replacing a read one.
+fn stored_reaction(new: &NewReactionNotification) -> StoredReactionNotification {
+    StoredReactionNotification {
+        notification: UserNotification {
+            id: UserNotificationId::new(),
+            user_id: new.user_id,
+            server_id: new.server_id,
+            conversation_id: new.conversation_id,
+            message_id: new.message_id,
+            reason: NotificationReason::Reaction,
+            created_at: Utc::now(),
+            read_at: None,
+            emailed_at: None,
+            reaction: Some(new.reaction.clone()),
+        },
+        replaced_unread_at: None,
     }
 }
 
@@ -777,5 +799,164 @@ async fn update_settings_keeps_reactions_unless_given() {
             .await
             .expect("update");
         assert_eq!(dto.reactions, expected);
+    }
+}
+
+/// A reaction replacing a notification still unread from the last ten minutes updates the row
+/// without announcing it; one replacing an older unread row, a read row or none is announced.
+#[tokio::test]
+async fn reaction_replacing_a_recent_unread_notification_is_not_announced_again() {
+    for (replaced_minutes_ago, announced) in [(Some(2), false), (Some(11), true), (None, true)] {
+        let s = reaction_setup();
+        let mut mocks = reaction_mocks(None);
+        mocks
+            .notification_repo
+            .expect_upsert_reaction_notification()
+            .times(1)
+            .returning(move |n, now| {
+                let row = StoredReactionNotification {
+                    replaced_unread_at: replaced_minutes_ago.map(|m| now - Duration::minutes(m)),
+                    ..stored_reaction(&n)
+                };
+                Box::pin(async move { Ok(Some(row)) })
+            });
+        let (svc, events) = mocks.build();
+        assert!(svc.notify_for_reaction(s.cmd).await.expect("notify"));
+        assert_eq!(
+            events.0.lock().expect("lock").len(),
+            usize::from(announced),
+            "replaced {replaced_minutes_ago:?} minutes ago"
+        );
+    }
+}
+
+/// In the default workspace a member who never saved settings is at `MENTIONS`: a plain
+/// message reaches only members who chose `ALL`, in their settings or for the conversation.
+/// In any other workspace the same member is at `ALL`.
+#[tokio::test]
+async fn the_default_workspace_defaults_members_without_settings_to_mentions() {
+    for in_default_workspace in [true, false] {
+        let server_id = ServerId::new();
+        let conv = conversation(server_id, ConversationType::Channel);
+        let (alice, bob, carol, dave, erin) = (
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+        );
+        let msg = message(conv.id, alice, &format!("hey <@{bob}>"));
+        let mut mocks = Mocks::new().default_workspace(if in_default_workspace {
+            server_id
+        } else {
+            ServerId::new()
+        });
+        let conv_id = conv.id;
+        mocks
+            .preference_repo
+            .expect_list_for_conversation()
+            .returning(move |_, _| {
+                let prefs = vec![NotificationPreference {
+                    user_id: erin,
+                    conversation_id: conv_id,
+                    muted_until: None,
+                    level: Some(NotificationLevel::All),
+                }];
+                Box::pin(async move { Ok(prefs) })
+            });
+        mocks
+            .notification_repo
+            .expect_get_settings_for_users()
+            .returning(move |server, _| {
+                let saved = vec![UserNotificationSettings {
+                    default_level: NotificationLevel::All,
+                    ..UserNotificationSettings::defaults(dave, server, Utc::now())
+                }];
+                Box::pin(async move { Ok(saved) })
+            });
+        mocks
+            .notification_repo
+            .expect_create_notifications()
+            .times(1)
+            .returning(|rows, _| {
+                let out: Vec<_> = rows.iter().map(stored).collect();
+                Box::pin(async move { Ok(out) })
+            });
+        let (svc, events) = mocks.build();
+        svc.notify_for_message(NotifyForMessageCmd {
+            server_id,
+            conversation: conv,
+            message: msg,
+            member_user_ids: vec![alice, bob, carol, dave, erin],
+            encrypted_mentions: None,
+        })
+        .await
+        .expect("notify");
+
+        let mut told: Vec<(UserId, String)> = events
+            .0
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|event| match event {
+                WorkspaceEvent::NotificationDue {
+                    user_id, reason, ..
+                } => (*user_id, reason.clone()),
+                other => panic!("unexpected event {other:?}"),
+            })
+            .collect();
+        told.sort_by_key(|(u, _)| u.to_string());
+        let mut expected = vec![
+            (bob, "mention".to_string()),
+            (dave, "all".to_string()),
+            (erin, "all".to_string()),
+        ];
+        if !in_default_workspace {
+            expected.push((carol, "all".to_string()));
+        }
+        expected.sort_by_key(|(u, _)| u.to_string());
+        assert_eq!(
+            told, expected,
+            "in the default workspace: {in_default_workspace}"
+        );
+    }
+}
+
+/// The settings of a member who never saved any read `MENTIONS` in the default workspace and
+/// `ALL` elsewhere; saved settings are returned as saved.
+#[tokio::test]
+async fn unsaved_settings_follow_the_default_workspace() {
+    let default_workspace = ServerId::new();
+    for (server_id, saved, expected) in [
+        (default_workspace, None, NotificationLevel::Mentions),
+        (ServerId::new(), None, NotificationLevel::All),
+        (
+            default_workspace,
+            Some(NotificationLevel::All),
+            NotificationLevel::All,
+        ),
+    ] {
+        let mut mocks = Mocks::new()
+            .member(true)
+            .default_workspace(default_workspace);
+        mocks
+            .notification_repo
+            .expect_get_settings()
+            .returning(move |user, server| {
+                let s = saved.map(|level| UserNotificationSettings {
+                    default_level: level,
+                    ..UserNotificationSettings::defaults(user, server, Utc::now())
+                });
+                Box::pin(async move { Ok(s) })
+            });
+        let (svc, _) = mocks.build();
+        let dto = svc
+            .get_settings(GetNotificationSettingsQuery {
+                actor: Actor::new(UserId::new()),
+                server_id,
+            })
+            .await
+            .expect("settings");
+        assert_eq!(dto.default_level, expected);
     }
 }

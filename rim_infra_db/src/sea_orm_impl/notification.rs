@@ -5,7 +5,8 @@ use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::notification::model::{
     DigestCandidate, DigestFrequency, DndPause, NewReactionNotification, NewUserNotification,
-    NotificationReason, UserNotification, UserNotificationId, UserNotificationSettings,
+    NotificationReason, StoredReactionNotification, UserNotification, UserNotificationId,
+    UserNotificationSettings,
 };
 use rim_core::notification::repository::{
     ListUserNotificationsParams, NotificationRepository, UserNotificationCursor,
@@ -194,39 +195,58 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         &self,
         notification: NewReactionNotification,
         created_at: DateTime<Utc>,
-    ) -> RepoResult<Option<UserNotification>> {
+    ) -> RepoResult<Option<StoredReactionNotification>> {
         let created_at: DateTimeWithTimeZone = created_at.into();
         // The conditional update leaves a row with another reason alone and returns nothing.
-        let model = user_notification::Model::find_by_statement(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            r#"INSERT INTO user_notification
-                   (id, user_id, server_id, conversation_id, message_id, reason, created_at,
-                    reaction_emoji, reaction_by)
-               VALUES ($1, $2, $3, $4, $5, $6::notification_reason, $7, $8, $9)
-               ON CONFLICT (user_id, message_id) DO UPDATE
-               SET reaction_emoji = EXCLUDED.reaction_emoji,
-                   reaction_by = EXCLUDED.reaction_by,
-                   created_at = EXCLUDED.created_at,
-                   read_at = NULL
-               WHERE user_notification.reason = EXCLUDED.reason
-               RETURNING id, user_id, server_id, conversation_id, message_id, reason, created_at,
-                         read_at, emailed_at, reaction_emoji, reaction_by"#,
-            [
-                Uuid::from(UserNotificationId::new()).into(),
-                Uuid::from(notification.user_id).into(),
-                Uuid::from(notification.server_id).into(),
-                Uuid::from(notification.conversation_id).into(),
-                Uuid::from(notification.message_id).into(),
-                NotificationReason::Reaction.as_str().into(),
-                created_at.into(),
-                notification.reaction.emoji.into(),
-                Uuid::from(notification.reaction.by).into(),
-            ],
-        ))
-        .one(&self.db)
-        .await
-        .map_err(map_db_err)?;
-        Ok(model.map(Into::into))
+        // `prev` reads the row as it was before the statement, so `replaced_unread_at` is the
+        // replaced row's `created_at` while it was unread.
+        let row = self
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"WITH prev AS (
+                       SELECT created_at FROM user_notification
+                       WHERE user_id = $2 AND message_id = $5
+                         AND reason = $6::notification_reason AND read_at IS NULL
+                   ), up AS (
+                       INSERT INTO user_notification
+                           (id, user_id, server_id, conversation_id, message_id, reason,
+                            created_at, reaction_emoji, reaction_by)
+                       VALUES ($1, $2, $3, $4, $5, $6::notification_reason, $7, $8, $9)
+                       ON CONFLICT (user_id, message_id) DO UPDATE
+                       SET reaction_emoji = EXCLUDED.reaction_emoji,
+                           reaction_by = EXCLUDED.reaction_by,
+                           created_at = EXCLUDED.created_at,
+                           read_at = NULL
+                       WHERE user_notification.reason = EXCLUDED.reason
+                       RETURNING id, user_id, server_id, conversation_id, message_id, reason,
+                                 created_at, read_at, emailed_at, reaction_emoji, reaction_by
+                   )
+                   SELECT up.*, (SELECT created_at FROM prev) AS replaced_unread_at FROM up"#,
+                [
+                    Uuid::from(UserNotificationId::new()).into(),
+                    Uuid::from(notification.user_id).into(),
+                    Uuid::from(notification.server_id).into(),
+                    Uuid::from(notification.conversation_id).into(),
+                    Uuid::from(notification.message_id).into(),
+                    NotificationReason::Reaction.as_str().into(),
+                    created_at.into(),
+                    notification.reaction.emoji.into(),
+                    Uuid::from(notification.reaction.by).into(),
+                ],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let model = user_notification::Model::from_query_result(&row, "").map_err(map_db_err)?;
+        let replaced_unread_at: Option<DateTimeWithTimeZone> =
+            row.try_get("", "replaced_unread_at").map_err(map_db_err)?;
+        Ok(Some(StoredReactionNotification {
+            notification: model.into(),
+            replaced_unread_at: replaced_unread_at.map(Into::into),
+        }))
     }
 
     async fn list_notifications(

@@ -342,6 +342,15 @@ pub struct NewReactionNotification {
     pub reaction: NotificationReaction,
 }
 
+/// A stored reaction notification, and whether the row it replaced was still unread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredReactionNotification {
+    pub notification: UserNotification,
+    /// The `created_at` of the row it replaced when that row was unread; `None` when the row
+    /// was inserted or replaced a read one.
+    pub replaced_unread_at: Option<DateTime<Utc>>,
+}
+
 /// A `(user, workspace)` that has unread, un-emailed notifications and a digest frequency other
 /// than `off`: what the digest job's due predicate decides on.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1586,7 +1586,8 @@ const REACT: &str = "mutation($s: ID!, $c: ID!, $m: ID!, $emoji: String!) { \
      { emoji } }";
 
 /// Message text holds at most 10,000 characters. A reply and an edit need text; a new message
-/// may have none, since its attachments are added after it. An emoji is 1 to 32 characters.
+/// may have none, since its attachments are added after it. An emoji is 1 to 32 characters of
+/// a Unicode emoji or a `:name:` shortcode.
 #[tokio::test]
 async fn message_text_and_emoji_are_bounded() {
     let f = setup().await;
@@ -1611,9 +1612,65 @@ async fn message_text_and_emoji_are_bounded() {
     let textless = f.send(&f.alice, &f.channel_id, "  ").await;
     assert_eq!(textless.text, None);
 
-    let emojis = [json!({ "emoji": " " }), json!({ "emoji": "x".repeat(33) })];
+    let emojis = [
+        json!({ "emoji": " " }),
+        json!({ "emoji": "x".repeat(33) }),
+        json!({ "emoji": "verify at evil.co" }),
+        json!({ "emoji": "42" }),
+    ];
     let calls: Vec<_> = emojis.into_iter().map(|emoji| with(REACT, emoji)).collect();
     assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;
+}
+
+/// A message carries at most 20 different emoji and 10 reactions per user: adding past either
+/// answers `VALIDATION`, while joining an emoji the message has and removing a reaction work.
+#[tokio::test]
+async fn reactions_on_one_message_are_capped() {
+    let f = setup().await;
+    let msg = f.send(&f.alice, &f.channel_id, "react to me").await;
+    let emoji: Vec<String> = ('\u{1f600}'..).take(21).map(String::from).collect();
+    let react = |who: &Caller, emoji: &str| {
+        who.request(
+            TOGGLE_REACTION,
+            json!({ "input": {
+                "serverId": f.server_id, "conversationId": f.channel_id, "messageId": msg.id,
+                "emoji": emoji,
+            } }),
+        )
+    };
+
+    for e in &emoji[..10] {
+        f.react(&f.alice, &msg, e).await;
+    }
+    assert_eq!(
+        exec_err_code(&f.schema, react(&f.alice, &emoji[10])).await,
+        "VALIDATION",
+        "an eleventh reaction by one user"
+    );
+    for e in &emoji[10..20] {
+        f.react(&f.bob, &msg, e).await;
+    }
+    assert_eq!(
+        exec_err_code(&f.schema, react(&f.carol, &emoji[20])).await,
+        "VALIDATION",
+        "a twenty-first emoji"
+    );
+    f.react(&f.carol, &msg, &emoji[0]).await;
+    f.react(&f.alice, &msg, &emoji[1]).await;
+    f.react(&f.carol, &msg, &emoji[20]).await;
+
+    let seen = f.nested(&f.alice).await;
+    let groups = seen[&msg.id]["reactions"].as_array().expect("reactions");
+    assert_eq!(groups.len(), 20);
+    let count = |e: &str| {
+        groups
+            .iter()
+            .find(|g| g["emoji"] == e)
+            .map(|g| g["count"].clone())
+    };
+    assert_eq!(count(&emoji[0]), Some(json!(2)));
+    assert_eq!(count(&emoji[1]), None, "removed");
+    assert_eq!(count(&emoji[20]), Some(json!(1)));
 }
 
 /// A page size of zero or less reads one item on every message list instead of failing.

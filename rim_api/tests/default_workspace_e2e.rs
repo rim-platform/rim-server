@@ -44,11 +44,24 @@ query Channels($serverId: ID!) {
 
 const SERVER_INFO: &str = "{ serverInfo { defaultWorkspace } }";
 
+const SEND_MESSAGE: &str = r#"
+mutation Send($input: SendMessageInput!) { msg: sendMessage(input: $input) { id } }"#;
+
+const SET_LEVEL: &str = r#"
+mutation SetLevel($serverId: ID!, $conversationId: ID!, $level: NotificationLevel) {
+  setConversationNotificationLevel(serverId: $serverId, conversationId: $conversationId,
+                                   level: $level) { effectiveLevel }
+}"#;
+
+const SETTINGS: &str = r#"
+query Settings($serverId: ID!) { myNotificationSettings(serverId: $serverId) { defaultLevel } }"#;
+
 /// A workspace with an owner, a public channel `general` and a private channel `staff`.
 struct Workspace {
     id: String,
     general: String,
     staff: String,
+    owner: Caller,
 }
 
 async fn workspace(ctx: &TestCtx, schema: &AppSchema) -> Workspace {
@@ -73,7 +86,12 @@ async fn workspace(ctx: &TestCtx, schema: &AppSchema) -> Workspace {
         .as_str()
         .expect("staff id")
         .to_string();
-    Workspace { id, general, staff }
+    Workspace {
+        id,
+        general,
+        staff,
+        owner,
+    }
 }
 
 /// A caller acting as the account `user_id` a signup returned.
@@ -221,4 +239,84 @@ async fn without_a_default_workspace_a_signup_joins_nothing() {
     assert_eq!(member_role(&ctx, &ws.id, user_id).await, None);
     let who = caller_for(&ctx, user_id).await;
     assert!(my_servers(&schema, &who).await.is_empty());
+}
+
+/// The users holding a notification for `message_id`, by id.
+async fn notified(ctx: &TestCtx, message_id: &str) -> Vec<String> {
+    ctx.conn
+        .query_all_raw(Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "SELECT user_id::text AS user_id FROM user_notification \
+             WHERE message_id = $1::uuid ORDER BY user_id",
+            [message_id.into()],
+        ))
+        .await
+        .expect("query notifications")
+        .iter()
+        .map(|r| r.try_get::<String>("", "user_id").expect("user_id"))
+        .collect()
+}
+
+/// In the default workspace a member who never saved notification settings is at `MENTIONS`:
+/// a plain message in a public channel stores no notification for them, a mention does, and a
+/// member who sets the channel to `ALL` is told about every message.
+#[tokio::test]
+async fn the_default_workspace_notifies_plain_messages_only_to_members_who_chose_all() {
+    let ctx = TestCtx::new().await;
+    let probe = ctx.build_schema(RegistrationMode::Open).await;
+    let ws = workspace(&ctx, &probe).await;
+    let server_id: uuid::Uuid = ws.id.parse().expect("workspace uuid");
+    let schema = ctx.build_schema_with_default_workspace(server_id.into(), RegistrationMode::Open);
+
+    let mut members = Vec::new();
+    for username in ["dw-quiet", "dw-loud"] {
+        let data = exec_ok(&schema, password_signup(username, json!({}))).await;
+        let user_id = data["signupWithInvite"]["userId"].clone();
+        members.push((
+            user_id.as_str().expect("userId").to_string(),
+            caller_for(&ctx, &user_id).await,
+        ));
+    }
+    let (quiet_id, quiet) = &members[0];
+    let (loud_id, loud) = &members[1];
+
+    let settings = exec_ok(
+        &schema,
+        quiet.request(SETTINGS, json!({ "serverId": ws.id })),
+    )
+    .await;
+    assert_eq!(
+        settings["myNotificationSettings"]["defaultLevel"],
+        "MENTIONS"
+    );
+    let level = exec_ok(
+        &schema,
+        loud.request(
+            SET_LEVEL,
+            json!({ "serverId": ws.id, "conversationId": ws.general, "level": "ALL" }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        level["setConversationNotificationLevel"]["effectiveLevel"],
+        "ALL"
+    );
+
+    let send = |text: String| {
+        ws.owner.request(
+            SEND_MESSAGE,
+            json!({ "input": {
+                "serverId": ws.id, "conversationId": ws.general, "text": text,
+            } }),
+        )
+    };
+    let plain = exec_ok(&schema, send("hello everyone".to_string())).await;
+    let plain = plain["msg"]["id"].as_str().expect("id");
+    assert_eq!(notified(&ctx, plain).await, vec![loud_id.clone()]);
+
+    let mention = exec_ok(&schema, send(format!("ping <@{quiet_id}>"))).await;
+    let mention = mention["msg"]["id"].as_str().expect("id");
+    let mut expected = vec![quiet_id.clone(), loud_id.clone()];
+    expected.sort();
+    assert_eq!(notified(&ctx, mention).await, expected);
 }

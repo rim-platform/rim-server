@@ -355,6 +355,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   (`/api/files/avatars/<their id>/avatar.<png|jpeg|gif|webp>`); any other path, another user's
   avatar included, answers `VALIDATION`. `POST /api/files/avatar` answers 415 when the file's
   bytes do not start with the signature of its declared type.
+- In the server's default workspace a member who never saved notification settings has the
+  default level `MENTIONS` instead of `ALL`: a plain message there no longer stores a
+  notification and sends `NotificationDue` to every member, only to those who chose `ALL` for
+  the workspace or the conversation. `myNotificationSettings` and
+  `Conversation.effectiveNotificationLevel` report it. Saved settings are kept as saved.
+- `editMessage` draws on the message budget (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`, and the
+  probation rate for an account in probation) like a sent message, and answers `RATE_LIMITED`
+  past it.
 
 ### Removed
 
@@ -363,6 +371,18 @@ tag `v<version>`, the version every crate in the workspace carries.
   access reference moved to `docs/security/nested-resolver-access.md`.
 
 ### Fixed
+
+- `toggleReaction` accepts only a Unicode emoji or a custom emoji's `:name:`, and a message
+  carries at most 20 different emoji and 10 reactions per user; adding past either answers
+  `VALIDATION`, while joining an existing emoji and removing a reaction still work. Before, any
+  text of up to 32 characters showed as a reaction pill and the reaction groups of a message,
+  sent to every member on each toggle, grew without bound.
+- A reaction replacing the author's reaction notification while it is unread and less than 10
+  minutes old updates it without another `NotificationDue`, so adding and removing a reaction
+  in a loop no longer makes the author's client toast and play a sound each time.
+- A message mentions at most 50 distinct users; later `<@user>` tokens stay plain text. The
+  mentions are checked against the conversation's members and, for a public channel, in one
+  query for the rest, instead of one or two queries each.
 
 - `RIM_FEATURES_DISABLED` and `RIM_AUDIT_RETENTION_DAYS` set in `deploy/.env` reach the server:
   `deploy/compose.yml` passes both through like every other setting. Before, the two lines were

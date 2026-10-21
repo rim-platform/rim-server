@@ -1236,7 +1236,8 @@ async fn muted_conversations_stay_in_their_workspace() {
 
 /// Alice reacting to bob's message tells bob: a `NotificationDue` with the emoji and the
 /// reactor, and one `REACTION` entry. Carol's later reaction re-surfaces that same entry unread
-/// with her emoji. Removing a reaction and reacting to one's own message tell nobody.
+/// with her emoji. Removing a reaction and reacting to one's own message tell nobody, and a
+/// reaction replacing the entry while it is unread and recent updates it without an event.
 #[tokio::test]
 async fn reactions_notify_the_author_with_one_resurfacing_entry() {
     let f = setup().await;
@@ -1295,6 +1296,17 @@ async fn reactions_notify_the_author_with_one_resurfacing_entry() {
     );
     assert_eq!(f.notifications(&f.bob).await.len(), 1);
     assert_eq!(f.unread_count(&f.bob).await, 1);
+
+    // Reacting again while the entry is unread and recent updates it without another event.
+    f.react(&f.alice, &f.general, &msg, "\u{1f44d}").await;
+    assert!(
+        f.notification_events()[before..].is_empty(),
+        "an unread entry from the last minutes is updated silently"
+    );
+    let entries = f.notifications(&f.bob).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["reactionEmoji"], "\u{1f44d}");
+    assert_eq!(entries[0]["reactedBy"]["username"], "nt-alice");
 }
 
 /// With `reactions: false` a reaction stores and announces nothing; leaving the field out of a

@@ -1137,7 +1137,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_message_budget_is_per_user_and_covers_replies_forwards_and_encrypted_sends() {
+    async fn the_message_budget_is_per_user_and_covers_replies_forwards_edits_and_encrypted_sends()
+    {
         use rim_core::server_member::model::ServerMemberRole;
         let (svc, server_id, conv_id) =
             slow_mode_service(ServerMemberRole::Owner, 0, chrono::Duration::seconds(1));
@@ -1178,6 +1179,16 @@ mod tests {
                 source_conversation_id: conv_id,
                 target_conversation_id: conv_id,
                 message_id: MessageId::new(),
+            })
+            .await,
+        );
+        assert_limited(
+            svc.edit_message(rim_services::message::command::EditMessageCmd {
+                actor,
+                server_id,
+                conversation_id: conv_id,
+                message_id: MessageId::new(),
+                text: "edited".to_string(),
             })
             .await,
         );

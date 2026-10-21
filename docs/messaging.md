@@ -40,7 +40,9 @@ This document describes the backend contract for conversations, messages, thread
   they are not in); everyone else only themselves.
 - DMs and groups are unchanged: non-members get `FORBIDDEN`.
 - Mentions (`<@user>`) are stored and notified (`UserMentioned`) only for users who can read the
-  conversation: any workspace member for a public channel, members otherwise.
+  conversation: any workspace member but a guest for a public channel, members otherwise. A
+  message mentions at most 50 distinct users; later `<@user>` tokens stay plain text, are not
+  stored and notify nobody. An edit replaces the message's mentions.
 - Realtime: events of a private channel, DM or group reach only its members; public-channel
   events reach the whole workspace. The visibility fields on `WorkspaceEvent` (`is_private`,
   `member_user_ids`, and `conversation_type` where it was not already serialized) are
@@ -287,6 +289,23 @@ A subscription that falls behind loses events, possibly these two. Before it del
 event it reads the subscriber's membership and role again: it ends when they are no longer a
 member (or the read fails), and otherwise goes on with the visibility of their current role.
 
+## Reactions
+
+`toggleReaction(serverId, conversationId, messageId, emoji)` adds the caller's reaction with
+that emoji, or removes it when they already have it, and answers the message's reaction groups.
+It needs write access to the conversation and a message that is not deleted.
+
+- `emoji`, trimmed, is 1 to 32 characters and is either a Unicode emoji (pictographs with the
+  components that join, modify or tag them: zero-width joiner, variation selectors, skin tones,
+  hair, keycaps, regional indicators, tags; digits, `#` and `*` alone are not one) or a custom
+  emoji's `:name:`, the name made of letters, digits and underscores. Anything else answers
+  `VALIDATION`.
+- A message carries at most 20 different emoji, and one user puts at most 10 reactions on one
+  message. Adding past either answers `VALIDATION`; joining an emoji the message already has
+  (under the first cap) and removing a reaction always work.
+- Every toggle sends `ReactionsUpdated` to the conversation's members with all of the
+  message's reaction groups, which the caps bound.
+
 ## Notification Rules
 
 The server decides, once per message, who is told about it, and tells a message's author when
@@ -302,7 +321,9 @@ Sound and preview stay device-local client settings.
   `Conversation.effectiveNotificationLevel` is what applies now: `NONE` while a timed mute is in
   effect, else the conversation level, else the workspace default.
 - **Workspace settings** (`myNotificationSettings`, `updateNotificationSettings`), per user and
-  workspace: `defaultLevel` (default `ALL`), `keywords` (at most 20, each 2 to 40 characters after
+  workspace: `defaultLevel` (default `ALL`; in the server's default workspace, which every
+  account joins, `MENTIONS`, so a plain message there stores no notification per member unless
+  they chose `ALL`, here or for the conversation), `keywords` (at most 20, each 2 to 40 characters after
   trimming, stored lower-cased and deduplicated), a daily do-not-disturb window `dnd`
   (`start`/`end` as `"HH:MM"` in an IANA `timezone`; crosses midnight when `end < start`; `start`
   must differ from `end`), `digest` (`OFF`, `HOURLY`, `DAILY`; `docs/email.md`), and
@@ -345,8 +366,11 @@ with reason `reaction`:
 3. Inside do-not-disturb it is stored and the event is `quiet`, as for messages.
 4. The author has at most one reaction notification per message. The first reaction inserts it;
    each later one replaces its emoji and reactor, marks it unread and moves its `createdAt` to
-   now, so the entry surfaces again. A notification the message already has for another reason
-   (a mention, say) is left as it is, and no event is sent.
+   now, so the entry surfaces again. `NotificationDue` is sent when the entry is new, was read,
+   or was last surfaced more than 10 minutes ago; a reaction replacing an unread entry from the
+   last 10 minutes updates it silently, so reacting and un-reacting in a loop cannot make the
+   author's client toast. A notification the message already has for another reason (a
+   mention, say) is left as it is, and no event is sent.
 5. Best-effort, after the reaction commits: a failure is logged and never fails the reaction.
 
 Digest emails list messages only: reaction notifications never trigger, nor appear in, a
