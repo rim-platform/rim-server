@@ -380,7 +380,7 @@ are judged by their age, so turning it on does not hold back anyone older than t
 ## Optional features
 
 Attachments, link previews, email, custom emoji, workspace plugins and the AI command surface
-can be switched off with `RIM_FEATURES_DISABLED` (commented out in the `rim` service);
+can be switched off with `RIM_FEATURES_DISABLED` in `deploy/.env`;
 `docs/operations/features.md` lists what each one covers and what clients see.
 `RIM_LINK_PREVIEW_CONCURRENCY` (default 8) caps the link preview fetches running at once.
 Outgoing requests ignore proxy environment variables.

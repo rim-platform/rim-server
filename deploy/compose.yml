@@ -172,7 +172,7 @@ services:
       RIM_PASSWORD_HASH_CONCURRENCY:
       # Days command audit rows are kept; older ones are exported to /data/audit-exports and
       # deleted daily. Unset keeps them forever.
-      # RIM_AUDIT_RETENTION_DAYS: 365
+      RIM_AUDIT_RETENTION_DAYS:
       # Prometheus metrics at /metrics on their own port. The port stays unpublished and must
       # stay on the internal network: scrape it from a Prometheus container attached there,
       # never route it through Caddy.
@@ -180,7 +180,7 @@ services:
       # Optional features switched off, comma-separated: attachments, link_previews, email,
       # custom_emoji, workspace_plugins, ai_commands. A switched-off feature's API fails with
       # FEATURE_DISABLED.
-      # RIM_FEATURES_DISABLED: attachments,custom_emoji
+      RIM_FEATURES_DISABLED:
     # The image's rim user (uid 1001) writes only to this volume and /tmp. The terms of use
     # are read from /config/terms.md when RIM_TERMS_FILE names it, and the default workspace's
     # definition from /config/default-workspace.json when RIM_DEFAULT_WORKSPACE_FILE names it.

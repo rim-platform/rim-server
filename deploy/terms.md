@@ -35,7 +35,7 @@ Nobody running this server will ever ask for your password or your keys.
 - Post or share anything illegal under the law of the Czech Republic or of the European
   Union.
 - Post, share or link to child sexual abuse material. It is removed, the account is deleted
-  and the case is reported to the police.
+  and the case may be reported to the authorities.
 - Send spam, advertising nobody asked for, or messages in bulk.
 - Harass, threaten or impersonate anyone.
 - Attack, overload or probe this server or the people using it.
@@ -53,8 +53,8 @@ notice.
   not marked as encrypted is stored readable, like a channel.
 - Messages in workspace channels are not end-to-end encrypted. The server stores them and can
   read them, and so can the people who run it.
-- The IP addresses you connect from appear in the server's logs, which are kept for a limited
-  time to keep the service running and to fight abuse.
+- The IP addresses you connect from appear in the server's logs, which are kept only as long
+  as they are needed to keep the service running and to fight abuse.
 
 Nothing is sold or shared with advertisers. You can delete your account at any time from the
 app.
