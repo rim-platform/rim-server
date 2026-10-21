@@ -258,6 +258,11 @@ deployment's archives in `RIM_BACKUP_DIR` older than that many days; unset, ever
 kept. Archives hold the audit files, and with them IP addresses, so keep them no longer than you
 keep those.
 
+**Knowing it ran.** With `RIM_BACKUP_HEARTBEAT_URL` set to an https URL, each backup that
+succeeded fetches it at the end. Point it at a check that expects one ping a day, such as a
+healthchecks.io check, and a night without a backup raises an alert. A failed ping is logged as a
+warning and the backup still succeeds; a URL that is not https stops the script before it starts.
+
 **Where copies go.** Off the host, encrypted: **FILL** the destination (object storage, another
 machine) and how long copies are kept. The archive holds the server's private key and every
 user's data; treat it like the host itself.

@@ -5,7 +5,9 @@
 # RIM_BACKUP_AGE_RECIPIENT set the archive is encrypted with age and nothing unencrypted stays
 # on disk. The server recovery key file is never included. With RIM_BACKUP_KEEP_DAYS set, a
 # backup that succeeded then deletes this deployment's backups in RIM_BACKUP_DIR older than that
-# many days; unset, every backup is kept.
+# many days; unset, every backup is kept. With RIM_BACKUP_HEARTBEAT_URL set, a backup that
+# succeeded ends with a GET of that https URL, so a monitor that expects it each day alerts when
+# a night is missed; a failed ping is a warning, not a failed backup.
 #
 #   deploy/backup.sh
 #   COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh
@@ -19,9 +21,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/backup-lib.sh"
 backup_dir=$(setting RIM_BACKUP_DIR ./backups)
 recipient=$(setting RIM_BACKUP_AGE_RECIPIENT)
 keep_days=$(setting RIM_BACKUP_KEEP_DAYS)
+heartbeat=$(setting RIM_BACKUP_HEARTBEAT_URL)
 
 if [[ -n $keep_days && ! $keep_days =~ ^[1-9][0-9]*$ ]]; then
 	die "RIM_BACKUP_KEEP_DAYS=$keep_days is not a whole number of days, at least 1"
+fi
+if [[ -n $heartbeat && $heartbeat != https://* ]]; then
+	die "RIM_BACKUP_HEARTBEAT_URL is not an https URL"
 fi
 
 if [[ -n $recipient ]]; then
@@ -95,4 +101,8 @@ if [[ -n $keep_days ]]; then
 fi
 (cd "$set_dir" && du -h -- *)
 du -h "$out"
+if [[ -n $heartbeat ]]; then
+	say "pinging the backup heartbeat"
+	curl -fsS -m 10 --retry 3 -o /dev/null "$heartbeat" || say "warning: the backup heartbeat ping failed"
+fi
 printf '%s\n' "$out"

@@ -83,6 +83,7 @@ case $arg in
   ;;
 *.tar.gz) cp "$STUB_TARBALL" "$out" ;;
 */.well-known/rim-server) [[ ${STUB_PUBLIC_DOWN:-0} != 1 ]] ;;
+https://hc.example.org/*) [[ ${STUB_HEARTBEAT_DOWN:-0} != 1 ]] ;;
 *) exit 22 ;;
 esac
 STUB
@@ -343,6 +344,33 @@ if STUB_POSTGRES=1 STUB_VOLUME=rim_rim_data "$b/backup.sh" >"$work/stdout" 2>"$w
 fi
 expect_stderr "RIM_BACKUP_KEEP_DAYS=0 is not a whole number of days" "RIM_BACKUP_KEEP_DAYS=0"
 [[ ! -s $work/calls ]] || fail "RIM_BACKUP_KEEP_DAYS=0: commands ran: $(cat "$work/calls")"
+
+# Without RIM_BACKUP_HEARTBEAT_URL nothing is pinged; with it, a backup that succeeded pings it,
+# and a ping that fails leaves the backup a success.
+printf 'POSTGRES_PASSWORD=secret\nRIM_BACKUP_DIR=%s\n' "$b/backups" >"$b/.env"
+: >"$work/calls"
+STUB_POSTGRES=1 STUB_VOLUME=rim_rim_data "$b/backup.sh" >"$work/stdout" 2>"$work/stderr" ||
+  fail "backup without a heartbeat: $(cat "$work/stderr")"
+not_called "curl" || fail "backup without a heartbeat: curl ran"
+printf 'RIM_BACKUP_HEARTBEAT_URL=https://hc.example.org/ping/abc\n' >>"$b/.env"
+: >"$work/calls"
+STUB_POSTGRES=1 STUB_VOLUME=rim_rim_data "$b/backup.sh" >"$work/stdout" 2>"$work/stderr" ||
+  fail "backup with a heartbeat: $(cat "$work/stderr")"
+grep -q "^curl .* https://hc.example.org/ping/abc$" "$work/calls" || fail "backup with a heartbeat: no ping"
+[[ -f $(tail -n 1 "$work/stdout") ]] || fail "backup with a heartbeat: the last line is not the archive"
+: >"$work/calls"
+STUB_HEARTBEAT_DOWN=1 STUB_POSTGRES=1 STUB_VOLUME=rim_rim_data "$b/backup.sh" >"$work/stdout" 2>"$work/stderr" ||
+  fail "backup with a failing heartbeat failed: $(cat "$work/stderr")"
+expect_stderr "the backup heartbeat ping failed" "failing heartbeat"
+
+# A heartbeat that is not an https URL stops the script before it backs anything up.
+printf 'RIM_BACKUP_HEARTBEAT_URL=http://hc.example.org/ping/abc\n' >>"$b/.env"
+: >"$work/calls"
+if STUB_POSTGRES=1 STUB_VOLUME=rim_rim_data "$b/backup.sh" >"$work/stdout" 2>"$work/stderr"; then
+  fail "an http heartbeat was accepted"
+fi
+expect_stderr "RIM_BACKUP_HEARTBEAT_URL is not an https URL" "http heartbeat"
+[[ ! -s $work/calls ]] || fail "http heartbeat: commands ran: $(cat "$work/calls")"
 
 # --- rim-deploy.sh -------------------------------------------------------------------------
 
