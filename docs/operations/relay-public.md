@@ -26,6 +26,10 @@ operator's account is in no group that reaches Docker, so every command runs thr
 `-E` keeps `COMPOSE_FILE`. The backup and restore scripts call Docker too: run them as
 `sudo -E deploy/backup.sh` and so on.
 
+On `relay.rim-platform.org` the files of `deploy/` sit flat in `/srv/rim-server` ("Deploys"),
+and its `.env` sets `COMPOSE_FILE=compose.yml:compose.relay.yml`: there, `cd /srv/rim-server`
+and read `deploy/backup.sh` as `./backup.sh` and `deploy/.env` as `.env`.
+
 ## Run your own server first
 
 This relay is for people who cannot run a server yet. A server of your own, or one your team,
@@ -104,7 +108,7 @@ off the host: Alloy sends metrics only.
 | Rate limits and the known sign-in addresses | the addresses themselves, in memory | minutes for the rate windows; a known sign-in address counts for 30 days; none outlives a restart | the server; every restart clears them |
 | IP blocks, the `ip_block` table | the blocked ranges | until the block's expiry, or until `rim-relay ip unblock` for one without | the server, within 30 seconds of the expiry |
 | Caddy access log | every request's address | off; switched on only during an incident ("Monitoring"), and then part of Caddy's container log above | the operator, by removing `log` again |
-| Backups | those in the audit files of the backed-up `/data` | 30 days (`RIM_BACKUP_KEEP_DAYS=30` in `/srv/rim-server/.env`) | `deploy/backup.sh`, after each backup that succeeded; copies off the host: **FILL** |
+| Backups | those in the audit files of the backed-up `/data` | 30 days (`RIM_BACKUP_KEEP_DAYS=30` in `/srv/rim-server/.env`) | `deploy/backup.sh`, after each backup that succeeded; there is no other copy |
 | The host's own logs (journald: SSH, fail2ban, the firewall) | addresses that connect to the host itself | at most 500 MB and 30 days (`SystemMaxUse=500M`, `MaxRetentionSec=30day` in `/etc/systemd/journald.conf.d/rim.conf`) | journald |
 
 ## Keys
@@ -118,7 +122,7 @@ server's, so it never stays on the host: the first start writes it to
 
 | | |
 |---|---|
-| Holders | **FILL**: two named people, so one absence never blocks a recovery |
+| Holders | the maintainer (@dvorakj31) alone for now; a second holder, so one absence never blocks a recovery, is to be named |
 | Copy 1 | **FILL**: e.g. a password manager vault, its name and who can open it |
 | Copy 2 | **FILL**: e.g. a printed copy in a safe, its location |
 | Last checked that both copies read back | **FILL**: date; check every quarter with the restore drill |
@@ -128,7 +132,7 @@ public half it names is `recovery key` in `rim-relay server-key show`.
 
 ### Yearly rotation
 
-Rotate the server key once a year (**FILL**: the month) and when someone with host access leaves.
+Rotate the server key once a year, in October, and when someone with host access leaves.
 
 ```sh
 rim-relay server-key rotate
@@ -196,20 +200,24 @@ first and then in the file. Ownership moves in the app.
 `deploy/backup.sh` writes one archive of the database dump, the `/data` volume and `deploy/.env`;
 `docs/self-hosting.md`, "Backups", says what is in it. It never includes the recovery key file.
 
-Nightly (**FILL**: the time and the cron or timer that runs it), before every update and right
-after every key rotation; encrypted with `age` to **FILL**: the recipient, whose identity is held
-by **FILL**; copied off the host to **FILL**: the destination; kept for 30 days, with
-`RIM_BACKUP_KEEP_DAYS=30` in `/srv/rim-server/.env` so each backup deletes the older ones.
+Nightly at 03:15 host time from root's cron (`/etc/cron.d/rim-backup`, below), before every
+update and right after every key rotation; encrypted with `age` to the public key of the
+maintainer's backup identity (`RIM_BACKUP_AGE_RECIPIENT`), whose private half is held by the
+maintainer and never on the host; written off the VPS disk to the provider's NAS share mounted
+at `/mnt/backups` (`RIM_BACKUP_DIR=/mnt/backups/rim-backups`); kept for 30 days, with
+`RIM_BACKUP_KEEP_DAYS=30` in `/srv/rim-server/.env` so each backup deletes the older ones. The
+share is with the same provider as the VPS; a copy elsewhere is not set up yet.
 
 ```sh
 RIM_BACKUP_AGE_RECIPIENT=age1… deploy/backup.sh       # or set it in deploy/.env
-# copy the archive it names off the host (FILL: destination)
+# with RIM_BACKUP_DIR on the NAS share, the archive is already off the VPS disk
 ```
 
-Cron, with `RIM_BACKUP_AGE_RECIPIENT` in `deploy/.env`:
+Cron, `/etc/cron.d/rim-backup` on the host, with `COMPOSE_FILE`, `RIM_BACKUP_DIR`,
+`RIM_BACKUP_AGE_RECIPIENT` and `RIM_BACKUP_KEEP_DAYS` in `/srv/rim-server/.env`:
 
 ```cron
-15 3 * * * cd /srv/rim-server && COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/backup.sh >>/var/log/rim-backup.log 2>&1
+15 3 * * * root cd /srv/rim-server && ./backup.sh >>/var/log/rim-backup.log 2>&1
 ```
 
 The dump and the data archive are one set: the key file must match the head of the key log in
@@ -233,8 +241,8 @@ disagree: that is a mixed set, or a rotation after the backup. Use a matching se
 
 ### Restore drill
 
-Every quarter (**FILL**: the months; record each drill's date and result below), restore the
-latest set:
+Every quarter, in January, April, July and October (record each drill's date and result
+below), restore the latest set:
 
 ```sh
 RIM_BACKUP_AGE_IDENTITY=/path/to/identity deploy/restore-drill.sh rim-backup-rim-relay-<time>.tar.age
@@ -389,8 +397,9 @@ of the Caddyfile `RIM_CADDYFILE` names, `dc restart caddy`, and remove it afterw
 
 ## Incidents
 
-Record each incident: start, what was seen, what was done, end (**FILL**: where the record
-goes).
+Record each incident: start, what was seen, what was done, end, in an issue in
+`rim-platform/rim-server` labelled `incident`, with no personal data in it (principal and server
+ids are fine; names, addresses and message content are not).
 
 ### A spam wave
 
@@ -459,7 +468,8 @@ or a backup of `/data` was exposed.
 3. Find how it left: host logins, who had the backups. Rebuild the host if it was broken into.
 4. Tell users what the thief could do until the recovery (sign as this server towards peers and
    receive what peers delivered for its users; never sign as a user or read their DMs) and when
-   it stopped. **FILL**: the channel for such notices.
+   it stopped: in the instance notice (`RIM_INSTANCE_NOTICE`, shown on the sign-in page), in
+   `#announcements` in the RIM workspace and in the incident's issue.
 
 ### A database leak
 
@@ -472,34 +482,38 @@ files in `/data`.
 1. End every session: `rim-sql -c 'UPDATE session SET revoked_at = now() WHERE revoked_at IS NULL'`.
 2. Rotate `POSTGRES_PASSWORD` as above, and find and close the way out.
 3. If `/data` or a backup set went too: "A stolen server key".
-4. Notify users and, where the law asks for it, the authority (**FILL**: who decides, the
-   deadline that applies, e.g. 72 hours under the GDPR, and the contact).
+4. Notify users as in "A stolen server key", and the authority where the law asks for it: the
+   maintainer decides; under the GDPR a breach that risks people's rights goes to the Czech
+   Office for Personal Data Protection (ÚOOÚ, <https://uoou.gov.cz>) within 72 hours of
+   learning of it, and to the people affected without delay when the risk is high.
 
 ## Abuse policy
 
-The text to publish (**FILL**: where, e.g. `https://<domain>/abuse`), filled in:
+The text below is published with this page on the project site; the terms
+(`deploy/terms.md`) carry the rules and the contact. Filled in:
 
 > **Abuse on <relay name>**
 >
 > This relay carries messages for anyone who signs up. We block an account (its key identity)
 > on this relay when it sends spam or unsolicited bulk requests, harasses or threatens people,
 > impersonates someone, spreads malware or phishing, tries to break or overload the service, or
-> uses it for anything illegal where the relay operates (**FILL**: jurisdiction). We block
+> uses it for anything illegal under the law of the Czech Republic or of the European Union. We block
 > another server when it sends such traffic and its operator does not stop it, or when it
 > attacks this relay.
 >
-> To report: use "Report" on a message request in the app, or write to **FILL**: abuse address
-> with the principal id or server id, what happened and when. We cannot read encrypted
-> messages; a report from the app carries what the sender's own request showed.
+> To report: use "Report" in the app, or open an issue at
+> <https://github.com/rim-platform/rim-server/issues> with the principal id or server id, what
+> happened and when. Issues are public: put no personal details in one. We cannot read
+> encrypted messages; a report from the app carries what the sender's own request showed.
 >
 > The workspaces this relay hosts, the RIM community workspace among them, are moderated from
 > the app: by each workspace's owners and moderators, who get the reports of its messages, and by
 > the instance operators, who block accounts and servers on the whole relay.
 >
-> We answer reports within **FILL** (e.g. one working day) and act on clear spam or attacks
-> within **FILL** (e.g. four hours). We keep reports for **FILL** and the blocked identity until
-> it is unblocked. A blocked person may ask for a review at the same address; we answer within
-> **FILL**.
+> This relay is a first test run, looked after by one person. We read reports as time allows,
+> usually within a few days, and block clear spam or attacks as soon as we see them. We keep
+> reports for one year and the blocked identity until it is unblocked. A blocked person may
+> ask for a review the same way; we answer as time allows.
 
 Reports from the abuse address go into the same list as those from the app:
 
