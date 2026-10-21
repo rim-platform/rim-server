@@ -122,7 +122,7 @@ impl DefaultServerService {
         self
     }
 
-    /// `Validation` while the creator's account is in probation.
+    /// `Validation` while the creator's account is in probation; an instance operator never is.
     async fn ensure_out_of_probation(&self, user_id: UserId) -> ServiceResult<()> {
         if self.limits.probation_hours.is_none() {
             return Ok(());
@@ -133,8 +133,14 @@ impl DefaultServerService {
             .get_by_id(user_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
-        self.limits
-            .ensure_out_of_probation(user.created_at, self.clock.now(), "create a workspace")
+        crate::probation::ensure_out_of_probation(
+            &self.limits,
+            self.repos.user_repo.as_ref(),
+            &user,
+            self.clock.now(),
+            "create a workspace",
+        )
+        .await
     }
 
     fn to_dto(server: rim_core::server::model::Server) -> ServerDto {

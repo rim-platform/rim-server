@@ -179,8 +179,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - Probation for new accounts: `RIM_PROBATION_HOURS` (off unless set) keeps an account younger
   than that from creating a workspace or sending a DM request to a stranger, answered
   `VALIDATION` naming the minutes left, and `RIM_RATE_PROBATION_MESSAGES_PER_MIN` gives it a
-  lower message rate. GraphQL `ServerLimits.probationHours` reports the setting and
-  `User.probationEndsAt`, read on `me`, says when the caller's probation ends.
+  lower message rate. An instance operator is never on probation. GraphQL
+  `ServerLimits.probationHours` reports the setting and `User.probationEndsAt`, read on `me`,
+  says when the caller's probation ends.
 - GraphQL `transferWorkspaceOwnership(input: { serverId, userId })` hands a workspace to another
   member, who becomes its one owner while the caller becomes a moderator, and
   `deleteWorkspace(input: { serverId, confirmName })` (answers `DeleteWorkspacePayload {

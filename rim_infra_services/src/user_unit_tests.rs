@@ -280,6 +280,28 @@ mod tests {
             );
         }
     }
+
+    /// An instance operator is never on probation, however new the account.
+    #[tokio::test]
+    async fn an_instance_operator_has_no_probation_end() {
+        let id = UserId::new();
+        let created = chrono::Utc::now();
+        let service = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(crate::probation_fixtures::users_and_operators(
+                vec![crate::probation_fixtures::account(id, created, None)],
+                vec![id],
+            )),
+        })
+        .with_limits(rim_services::limits::InstanceLimits {
+            probation_hours: Some(24),
+            ..Default::default()
+        })
+        .with_clock(crate::clock::Clock::fixed(created));
+        let me = GetMeQuery {
+            actor: Actor::new(id),
+        };
+        assert_eq!(service.probation_ends_at(me).await.unwrap(), None);
+    }
     /// A user service reserving `rim` over one account named `username`.
     fn reserving_svc(id: UserId, username: &'static str) -> DefaultUserService {
         let mut user_repo = MockUserRepository::new();

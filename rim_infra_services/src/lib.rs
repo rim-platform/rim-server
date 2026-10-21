@@ -23,6 +23,7 @@ pub mod default_workspace;
 pub(crate) mod device_link;
 pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
+pub(crate) mod probation;
 #[cfg(test)]
 mod probation_fixtures;
 // Public: the composition root (rim_server/src/app.rs) constructs

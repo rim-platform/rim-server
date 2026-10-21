@@ -1275,20 +1275,22 @@ mod tests {
     }
 
     /// An account in probation draws on the probation rate instead of the normal one, and
-    /// moves to the normal one once probation ends; without probation the normal rate applies.
+    /// moves to the normal one once probation ends; without probation the normal rate applies,
+    /// and so it does to an instance operator, who is never on probation.
     #[tokio::test]
     async fn an_account_in_probation_sends_at_the_probation_rate() {
         use rim_core::server_member::model::ServerMemberRole;
         let created = chrono::Utc::now();
-        let budget = |probation_hours, now| {
+        let budget = |probation_hours, now, operator: bool| {
             let author = UserId::new();
             let (svc, server_id, conv_id) = slow_mode_service_with_users(
                 ServerMemberRole::Owner,
                 0,
                 chrono::Duration::seconds(1),
-                crate::probation_fixtures::users(vec![crate::probation_fixtures::account(
-                    author, created, None,
-                )]),
+                crate::probation_fixtures::users_and_operators(
+                    vec![crate::probation_fixtures::account(author, created, None)],
+                    if operator { vec![author] } else { Vec::new() },
+                ),
             );
             let cmd = SendMessageCmd {
                 actor: Actor::new(author),
@@ -1313,10 +1315,20 @@ mod tests {
             sent
         };
         let in_probation = created + chrono::Duration::minutes(10);
-        assert_eq!(sent_before_limited(budget(Some(1), in_probation)).await, 1);
+        assert_eq!(
+            sent_before_limited(budget(Some(1), in_probation, false)).await,
+            1
+        );
         let after = created + chrono::Duration::hours(1);
-        assert_eq!(sent_before_limited(budget(Some(1), after)).await, 3);
-        assert_eq!(sent_before_limited(budget(None, in_probation)).await, 3);
+        assert_eq!(sent_before_limited(budget(Some(1), after, false)).await, 3);
+        assert_eq!(
+            sent_before_limited(budget(None, in_probation, false)).await,
+            3
+        );
+        assert_eq!(
+            sent_before_limited(budget(Some(1), in_probation, true)).await,
+            3
+        );
     }
 
     #[tokio::test]

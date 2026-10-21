@@ -408,6 +408,26 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn an_instance_operator_creates_a_workspace_however_new_the_account() {
+        let created = chrono::Utc::now();
+        let actor_id = UserId::new();
+        let svc = limited_service_for(
+            creatable_server_repo(actor_id, None),
+            conversation_repo_creating(None),
+            crate::probation_fixtures::users_and_operators(
+                vec![crate::probation_fixtures::account(actor_id, created, None)],
+                vec![actor_id],
+            ),
+            rim_services::limits::InstanceLimits {
+                probation_hours: Some(24),
+                ..Default::default()
+            },
+        )
+        .with_clock(crate::clock::Clock::fixed(created));
+        create(&svc, actor_id).await.expect("created");
+    }
+
     /// Every event broadcast through it, in order.
     #[derive(Default)]
     struct Recorder(std::sync::Mutex<Vec<rim_services::events::WorkspaceEvent>>);

@@ -381,6 +381,9 @@ with and does not know (a contact who lists it too, or someone either of them ac
 request from; adding someone as a contact alone is not enough), and with
 `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
 are judged by their age, so turning it on does not hold back anyone older than the setting.
+The instance operator is never on probation: the account that claims the default workspace
+with the operator role, or one granted it with `rim_server operator grant`, can create
+workspaces and message anyone from the moment it holds the role.
 
 ## Optional features
 

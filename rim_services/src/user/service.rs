@@ -16,8 +16,8 @@ pub trait UserService: Send + Sync {
 
     async fn update_my_profile(&self, cmd: UpdateMyProfileCmd) -> ServiceResult<UserDto>;
 
-    /// When the caller's account leaves probation; `None` once it has, or when the instance
-    /// has no probation.
+    /// When the caller's account leaves probation; `None` once it has, when the instance has
+    /// no probation, or when the caller is an instance operator.
     async fn probation_ends_at(
         &self,
         query: GetMeQuery,
