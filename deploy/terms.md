@@ -26,11 +26,9 @@ there are public: do not post personal details.
 To report a message, content or a person, use the report function in the app. Reports reach
 the people who moderate and run this server, and nothing in them is made public.
 
-## Who may use it
+## Your account
 
-You must be at least 16 years old. You confirm this yourself when you sign up; nobody checks
-it, and RIM never asks anyone for an ID document. Nobody running this server will ever ask
-for your password or your keys.
+Nobody running this server will ever ask for your password or your keys.
 
 ## What you may not do
 
