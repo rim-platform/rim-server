@@ -57,9 +57,10 @@ use rim_services::e2ee::service::E2eeService;
 use rim_services::e2ee::wire::{MlsContentType, MlsWire, PrivateMessageInfo};
 use rim_services::e2ee::{
     ACCEPTED_CIPHER_SUITES, MAX_AVAILABLE_KEY_PACKAGES, MAX_COMMIT_BYTES, MAX_CONTENT_BYTES,
-    MAX_ENCRYPTED_MEMBERS, MAX_GROUP_DEVICES, MAX_KEY_PACKAGE_BYTES, MAX_KEY_PACKAGES_PER_UPLOAD,
-    MAX_PENDING_WELCOME_BYTES, MAX_PENDING_WELCOMES, MAX_WELCOME_BYTES, MLS_ACTIVE_DAYS,
-    PREFERRED_CIPHER_SUITE, mls_group_id, parse_mls_group_id,
+    MAX_DAILY_COMMIT_BYTES_PER_MEMBER, MAX_ENCRYPTED_MEMBERS, MAX_GROUP_DEVICES,
+    MAX_KEY_PACKAGE_BYTES, MAX_KEY_PACKAGES_PER_UPLOAD, MAX_PENDING_WELCOME_BYTES,
+    MAX_PENDING_WELCOMES, MAX_WELCOME_BYTES, MLS_ACTIVE_DAYS, PREFERRED_CIPHER_SUITE,
+    max_commit_bytes_without_adds, mls_group_id, parse_mls_group_id,
 };
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::host::dto::RemoteClaim;
@@ -72,6 +73,7 @@ use crate::franking_keys::SharedFrankingKeys;
 use crate::moderation::{ModerationAuditEntry, record_audit_action};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
+use crate::token_bucket::{BucketRate, TokenBucketLimiter};
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access,
     ensure_conversation_writable_with_standing,
@@ -108,6 +110,17 @@ const MAX_COMMIT_PAGE: i32 = 100;
 /// Largest page of pending Welcomes, and the size of a page that names none; one page fits one
 /// acknowledgement.
 const MAX_WELCOME_PAGE: i32 = 100;
+/// Commits each user may submit per minute, and the largest burst.
+const COMMIT_RATE: BucketRate = BucketRate {
+    per_minute: 30,
+    burst: 60,
+};
+/// KiB of Commits each user may submit per minute (about 90 MiB a day), and the largest burst:
+/// two of the largest Commits.
+const COMMIT_KIB_RATE: BucketRate = BucketRate {
+    per_minute: 64,
+    burst: 8 * 1024,
+};
 
 /// Audit command ids.
 const AUDIT_ENABLE: &str = "e2ee.enable";
@@ -120,6 +133,8 @@ pub(crate) const AUDIT_INITIATOR: &str = "e2ee";
 const CLAIM_KEY: &str = "mls_claim";
 const ONE_TIME_CLAIM_KEY: &str = "mls_one_time_claim";
 const READD_KEY: &str = "mls_readd";
+const COMMIT_KEY: &str = "mls_commit";
+const COMMIT_BYTES_KEY: &str = "mls_commit_bytes";
 
 pub(crate) fn not_bound() -> ServiceError {
     ServiceError::Forbidden("this session is not bound to a device".to_string())
@@ -423,6 +438,10 @@ pub struct DefaultE2eeService {
     one_time_claim_rate_limiter: RegistrationRateLimiter,
     /// Re-add requests per device and conversation.
     readd_rate_limiter: RegistrationRateLimiter,
+    /// Commits submitted per user.
+    commit_rate: TokenBucketLimiter<UserId>,
+    /// KiB of Commits submitted per user.
+    commit_kib_rate: TokenBucketLimiter<UserId>,
     /// Claims key packages of remote users' devices from their relays.
     remote_key_packages: Option<Arc<dyn RemoteKeyPackages>>,
     /// Verifies franking receipts. `None` in unit tests that are not about reports; the
@@ -480,6 +499,8 @@ impl DefaultE2eeService {
             claim_rate_limiter: RegistrationRateLimiter::new(3600, 600),
             one_time_claim_rate_limiter: RegistrationRateLimiter::new(86_400, 100),
             readd_rate_limiter: RegistrationRateLimiter::new(86_400, 3),
+            commit_rate: TokenBucketLimiter::new(COMMIT_RATE),
+            commit_kib_rate: TokenBucketLimiter::new(COMMIT_KIB_RATE),
             franking_keys: None,
             remote_key_packages: None,
             key_packages_per_device: MAX_AVAILABLE_KEY_PACKAGES,
@@ -520,6 +541,38 @@ impl DefaultE2eeService {
         self.one_time_claim_rate_limiter = one_time_claims;
         self.readd_rate_limiter = readds;
         self
+    }
+
+    /// Replace the Commit budgets per user: Commits, and KiB of Commits.
+    #[cfg(test)]
+    pub(crate) fn with_commit_budgets(mut self, commits: BucketRate, kib: BucketRate) -> Self {
+        self.commit_rate = TokenBucketLimiter::new(commits);
+        self.commit_kib_rate = TokenBucketLimiter::new(kib);
+        self
+    }
+
+    /// Take `cost` from `user`'s bucket of `budget`.
+    ///
+    /// # Errors
+    ///
+    /// `RateLimited` with the seconds until the bucket holds `cost` again.
+    fn spend(
+        budget: &TokenBucketLimiter<UserId>,
+        user: UserId,
+        cost: u32,
+        key: &'static str,
+    ) -> ServiceResult<()> {
+        match budget.take(&user, cost, std::time::Instant::now()) {
+            RateLimitDecision::Allowed => Ok(()),
+            RateLimitDecision::Limited {
+                retry_after_seconds,
+            } => {
+                crate::metrics::rate_limited(key);
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
+        }
     }
 
     fn access_repos(&self) -> ConversationAccessRepos<'_> {
@@ -1102,6 +1155,33 @@ impl DefaultE2eeService {
             }
         }
 
+        // Size: a Commit that adds nobody carries no key packages, and a member stores a
+        // bounded number of bytes of Commits in a conversation a day.
+        if added.is_empty() {
+            let devices = match &current {
+                Some(state) if !first => state.devices.len(),
+                _ => 1,
+            };
+            let cap = max_commit_bytes_without_adds(devices);
+            if commit_bytes.len() > cap {
+                return Err(ServiceError::Validation(format!(
+                    "a Commit that adds no device to a group of {devices} devices is at most \
+                     {cap} bytes"
+                )));
+            }
+        }
+        let stored_today = repos
+            .e2ee_repo
+            .commit_bytes_since(conversation_id, committer.user_id, now - Duration::days(1))
+            .await?;
+        let size = i64::try_from(commit_bytes.len()).unwrap_or(i64::MAX);
+        if stored_today.saturating_add(size) > MAX_DAILY_COMMIT_BYTES_PER_MEMBER {
+            return Err(ServiceError::Validation(format!(
+                "a member sends at most {} MiB of Commits to a conversation a day",
+                MAX_DAILY_COMMIT_BYTES_PER_MEMBER / (1024 * 1024)
+            )));
+        }
+
         // Key packages and the Welcome.
         let refs: Vec<Vec<u8>> = added.iter().map(|(_, r)| r.clone()).collect();
         let packages = repos.e2ee_repo.find_key_packages_by_refs(&refs).await?;
@@ -1633,7 +1713,11 @@ impl E2eeService for DefaultE2eeService {
                 "incarnation starts at 1 and epoch at 0".to_string(),
             ));
         }
+        let user_id = cmd.caller.actor.user_id;
+        Self::spend(&self.commit_rate, user_id, 1, COMMIT_KEY)?;
         let commit_bytes = decode_b64("commit", &cmd.commit, MAX_COMMIT_BYTES)?;
+        let kib = u32::try_from(commit_bytes.len().div_ceil(1024)).unwrap_or(u32::MAX);
+        Self::spend(&self.commit_kib_rate, user_id, kib, COMMIT_BYTES_KEY)?;
         let header =
             read_private_message(self.wire.as_ref(), &commit_bytes, MlsContentType::Commit)?;
         let summary = parse_commit(&header.authenticated_data)?;

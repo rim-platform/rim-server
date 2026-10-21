@@ -1224,6 +1224,27 @@ impl E2eeRepository for SeaOrmE2eeRepository {
         row.try_get::<bool>("", "found").map_err(map_db_err)
     }
 
+    async fn commit_bytes_since(
+        &self,
+        conversation_id: ConversationId,
+        sender_user_id: UserId,
+        since: DateTime<Utc>,
+    ) -> RepoResult<i64> {
+        let id: Uuid = conversation_id.into();
+        let sender: Uuid = sender_user_id.into();
+        let row = self
+            .db
+            .query_one_raw(Self::statement(
+                "SELECT COALESCE(sum(octet_length(message)), 0)::bigint AS n FROM mls_commit \
+                 WHERE conversation_id = $1 AND sender_user_id = $2 AND created_at > $3",
+                vec![id.into(), sender.into(), utc(since)],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| internal("sum returned no row"))?;
+        row.try_get::<i64>("", "n").map_err(map_db_err)
+    }
+
     async fn insert_welcome(&self, welcome: NewMlsWelcome) -> RepoResult<MlsWelcomeId> {
         let id = MlsWelcomeId::new();
         let row_id: Uuid = id.into();

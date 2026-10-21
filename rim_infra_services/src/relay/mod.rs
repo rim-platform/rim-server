@@ -330,13 +330,18 @@ impl DefaultRelayService {
         if self.dm_policy.admits_inbound(peer_server_id) {
             return Ok(true);
         }
+        self.subscribed_at(user_id, peer_server_id).await
+    }
+
+    /// Whether a local user holds an active subscription to a workspace `host_server_id` hosts.
+    async fn subscribed_at(&self, user_id: UserId, host_server_id: &str) -> ServiceResult<bool> {
         Ok(self
             .repos
             .subscription_repo
             .subscribed_hosts(user_id, Utc::now())
             .await?
             .iter()
-            .any(|host| host == peer_server_id))
+            .any(|host| host == host_server_id))
     }
 
     /// The server a DM invite's sender writes from: the host that delivered it, or for an own
@@ -767,7 +772,9 @@ impl DefaultRelayService {
                         policy => policy,
                     }
                 };
-                if facts.policy == DmPolicy::Deliver {
+                // The cap bounds what other hosts store here; this server's own conversations
+                // are bounded where they are created.
+                if facts.policy == DmPolicy::Deliver && !read.local {
                     facts.accepted_from_host = repos
                         .relay_repo
                         .count_accepted_requests(user_id, peer_server_id)
@@ -1794,17 +1801,15 @@ impl RelayService for DefaultRelayService {
                 "the claimer is blocked".to_string(),
             ));
         }
-        let stranger = !(self.repos.relay_repo.is_contact(user_id, claimer).await?
-            || self
-                .repos
-                .relay_repo
-                .accepted_from(user_id, claimer)
-                .await?
-            || self
-                .repos
-                .host_repo
-                .shares_workspace(user_id, claimer, None)
-                .await?);
+        // The claiming server names the claimer and may make them up, so only a tie between the
+        // user and that server counts: a conversation it homes they accepted, or a workspace it
+        // hosts they belong to.
+        let stranger = !(self
+            .repos
+            .relay_repo
+            .accepted_at_host(user_id, &peer_server_id)
+            .await?
+            || self.subscribed_at(user_id, &peer_server_id).await?);
         if stranger
             && let RateLimitDecision::Limited {
                 retry_after_seconds,

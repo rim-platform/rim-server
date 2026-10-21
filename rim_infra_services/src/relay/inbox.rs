@@ -19,10 +19,11 @@ pub(crate) const MAX_HELD_BYTES_PER_REQUEST: i64 = 1024 * 1024;
 /// it and never dropped to make room in it, so this cap does not follow the configured queue
 /// cap; it is a quarter of the public relay's (64 MiB).
 pub(crate) const MAX_HELD_BYTES_PER_USER: i64 = 16 * 1024 * 1024;
-/// Most accepted conversations a recipient holds from one host. Past it an invite the
+/// Most accepted conversations a recipient holds from one other host. Past it an invite the
 /// recipient's settings would deliver is refused (`limited`); accepting a request is not
 /// limited, and no row is evicted to make room. Far more conversations than a person keeps with
-/// the people of one server, while the rows stay a few MiB per recipient and host.
+/// the people of one server, while the rows stay a few MiB per recipient and host. This
+/// server's own invites are not counted.
 pub(crate) const MAX_ACCEPTED_PER_HOST: i64 = 5000;
 /// The window a sender's daily request limit counts over.
 pub(crate) const SENDER_WINDOW: Duration = Duration::days(1);
@@ -90,7 +91,7 @@ pub(crate) struct InboxFacts {
     /// own events.
     pub filed_by_host_today: i64,
     /// The recipient's accepted conversations from the item's host, counted for an invite the
-    /// policy delivers.
+    /// policy delivers; 0 for this server's own events.
     pub accepted_from_host: i64,
 }
 

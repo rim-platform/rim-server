@@ -264,6 +264,15 @@ pub trait E2eeRepository: Send + Sync {
         since: DateTime<Utc>,
     ) -> RepoResult<bool>;
 
+    /// The total size in bytes of the Commits a user sent in the conversation after `since`,
+    /// over every incarnation.
+    async fn commit_bytes_since(
+        &self,
+        conversation_id: ConversationId,
+        sender_user_id: UserId,
+        since: DateTime<Utc>,
+    ) -> RepoResult<i64>;
+
     // ── Welcomes ─────────────────────────────────────────────────────────
 
     async fn insert_welcome(&self, welcome: NewMlsWelcome) -> RepoResult<MlsWelcomeId>;

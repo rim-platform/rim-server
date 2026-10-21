@@ -1056,7 +1056,8 @@ removes devices. `MlsWelcomeAvailable` goes to
 |---|---|
 | Key package | 16 KiB each; 50 per upload; 100 unclaimed per device and suite |
 | Claims | 600 devices per user per hour; one-time packages of one device: 100 claims per day, then only its last-resort package |
-| Commit | 4 MiB; authenticated data 256 KiB |
+| Commit | 4 MiB; authenticated data 256 KiB; one that adds no device 16 KiB plus 2 KiB per device of the group (`VALIDATION`); 32 MiB per member and conversation in 24 hours (`VALIDATION`) |
+| Commits per user | 30 per minute with bursts of 60, and 64 KiB per minute with bursts of 8 MiB (`RATE_LIMITED`) |
 | Welcome | 4 MiB |
 | Pending Welcomes | 256 per device, 64 MiB per device |
 | Application envelope | 96 KiB; authenticated data 8 KiB; content 64 KiB |

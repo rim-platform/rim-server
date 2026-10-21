@@ -282,6 +282,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_user_starts_a_bounded_number_of_direct_space_conversations_a_day() {
+        use crate::conversation::MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY;
+
+        let actor_id = UserId::new();
+        let known = UserId::new();
+        let direct = ServerId::new();
+        let existing = conv(direct);
+        let existing_id = existing.id;
+
+        let (mut conversation_repo, mut conversation_member_repo, mut server_member_repo) =
+            base_repos();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_sid, _uid| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(Some(MemberStanding::new(ServerMemberRole::Guest))));
+        conversation_repo
+            .expect_find_direct_between_users()
+            .returning(move |_sid, _a, b| {
+                let found = (b == known).then(|| existing.clone());
+                Box::pin(async move { Ok(found) })
+            });
+        conversation_repo
+            .expect_create_conversation_with_members()
+            .returning(move |new, _members, _pending| {
+                let mut created = conv(direct);
+                created.conversation_type = new.conversation_type;
+                Box::pin(async move { Ok(created) })
+            });
+        conversation_member_repo
+            .expect_list_member_ids()
+            .returning(|_conversation_id| Box::pin(async { Ok(vec![]) }));
+
+        let svc = DefaultConversationService::new(
+            ConversationRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                server_member_repo: Arc::new(server_member_repo),
+                notification_repo: Arc::new(MockNotificationRepository::new()),
+            },
+            test_observers(),
+        )
+        .with_direct_space(Some(direct));
+        let create = |participants| CreateConversationCmd {
+            actor: Actor::new(actor_id),
+            server_id: direct,
+            participants,
+            title: None,
+            is_private: false,
+            encrypted: false,
+        };
+        let dm = |other_user_id| ConversationParticipants::DirectMessage { other_user_id };
+
+        for n in 0..MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY {
+            let participants = if n % 2 == 0 {
+                dm(UserId::new())
+            } else {
+                ConversationParticipants::Group {
+                    member_ids: vec![UserId::new(), UserId::new()],
+                }
+            };
+            svc.create_conversation(create(participants))
+                .await
+                .expect("within the day's conversations");
+        }
+        let err = svc
+            .create_conversation(create(dm(UserId::new())))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("at most 50 new conversations a day")),
+            "{err:?}"
+        );
+        let reopened = svc
+            .create_conversation(create(dm(known)))
+            .await
+            .expect("an existing DM opens past the limit");
+        assert_eq!(reopened.id, existing_id);
+    }
+
+    #[tokio::test]
     async fn get_conversation_denies_if_not_conversation_member() {
         let actor_id = UserId::new();
         let server_id = ServerId::new();

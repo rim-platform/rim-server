@@ -351,6 +351,46 @@ impl DefaultHostService {
         Ok(())
     }
 
+    /// Refuse a conversation by `actor` with a local user who has a principal id while `actor`
+    /// has a principal id but no profile card: without a card no DM invite is filed, so the
+    /// conversation would reach them past their DM settings, blocks and request limits.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` asking `actor` to publish a profile card first.
+    async fn refuse_invites_without_card(
+        &self,
+        actor: Actor,
+        user_ids: &[UserId],
+    ) -> ServiceResult<()> {
+        if self.principal_of(actor.user_id).await?.is_none() {
+            return Ok(());
+        }
+        let mut invites = false;
+        for other in user_ids {
+            if self.repos.host_repo.user_kind(*other).await? == Some(UserKind::Local)
+                && self.principal_of(*other).await?.is_some()
+            {
+                invites = true;
+                break;
+            }
+        }
+        if invites
+            && self
+                .repos
+                .key_identity_repo
+                .get_profile_card(actor.user_id)
+                .await?
+                .is_none()
+        {
+            return Err(ServiceError::Validation(
+                "publish a profile card before starting a conversation with someone here"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The local users among `user_ids`, but `actor`, whose DM settings take a DM from `actor`
     /// as a request.
     ///
@@ -1436,6 +1476,7 @@ impl HostService for DefaultHostService {
             _ => false,
         };
         if !reopened {
+            self.refuse_invites_without_card(actor, &others).await?;
             self.refuse_requests_over_limits(actor, &requested).await?;
         }
         // A DM in a workspace meets probation too: its members share that workspace, unless it

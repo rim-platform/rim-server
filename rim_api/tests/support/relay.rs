@@ -457,6 +457,22 @@ pub async fn key_signup(
 
 /// [`sign_up`] publishing card `card_version`. A seed is one person with one device everywhere.
 pub async fn sign_up_with_card(node: &Node, name: &str, seed: u8, card_version: u64) -> Person {
+    sign_up_publishing(node, name, seed, Some(card_version)).await
+}
+
+/// Sign up `name` on `node` with a key and upload key packages, publishing no profile card.
+pub async fn sign_up_without_card(node: &Node, name: &str, seed: u8) -> Person {
+    sign_up_publishing(node, name, seed, None).await
+}
+
+/// Sign up `name` on `node` with a key, publish a card of `card_version` naming the node when
+/// one is given, and upload key packages.
+async fn sign_up_publishing(
+    node: &Node,
+    name: &str,
+    seed: u8,
+    card_version: Option<u64>,
+) -> Person {
     let http = reqwest::Client::new();
     let Keys {
         identity,
@@ -482,9 +498,9 @@ pub async fn sign_up_with_card(node: &Node, name: &str, seed: u8, card_version: 
         state,
         seq: 1_791_504_000_000_000 + u64::from(seed) * 1_000_000_000,
     };
-    person
-        .publish_card(card_version, &[node.origin.as_str()])
-        .await;
+    if let Some(version) = card_version {
+        person.publish_card(version, &[node.origin.as_str()]).await;
+    }
     let packages = vec![
         person.mls.key_package(false),
         person.mls.key_package(false),
