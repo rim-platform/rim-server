@@ -210,6 +210,11 @@ pub struct RIMConfig {
     /// 3650, default 90. Controlled by `RIM_AUDIT_LOG_RETENTION_DAYS`.
     pub audit_log_retention_days: Option<u32>,
 
+    /// Days an audit export file in `<data dir>/audit-exports/` is kept after it was written; an
+    /// older one is deleted daily. Unset keeps every export. 1 to 3650. Controlled by
+    /// `RIM_AUDIT_EXPORT_RETENTION_DAYS`.
+    pub audit_export_retention_days: Option<u32>,
+
     /// Comma-separated optional features switched off on this instance, e.g.
     /// `attachments,custom_emoji`; unset or empty keeps every feature on. Controlled by
     /// `RIM_FEATURES_DISABLED`; see [`RIMConfig::features_disabled`].
@@ -460,6 +465,10 @@ impl fmt::Debug for RIMConfig {
             .field("metrics_addr", &self.metrics_addr)
             .field("audit_retention_days", &self.audit_retention_days)
             .field("audit_log_retention_days", &self.audit_log_retention_days)
+            .field(
+                "audit_export_retention_days",
+                &self.audit_export_retention_days,
+            )
             .field("features_disabled", &self.features_disabled)
             .field("link_preview_concurrency", &self.link_preview_concurrency)
             .field("api_limits", &self.api_limits())
@@ -533,6 +542,7 @@ impl Default for RIMConfig {
             metrics_addr: None,
             audit_retention_days: None,
             audit_log_retention_days: None,
+            audit_export_retention_days: None,
             features_disabled: None,
             link_preview_concurrency: None,
             rate_requests_per_min_per_ip: None,
@@ -978,6 +988,24 @@ impl RIMConfig {
             Some(days) => Err(format!(
                 "RIM_AUDIT_LOG_RETENTION_DAYS={days} is outside {MIN_RETENTION_DAYS} to \
                  {MAX_RETENTION_DAYS}"
+            )),
+        }
+    }
+
+    /// `RIM_AUDIT_EXPORT_RETENTION_DAYS`; `None` keeps every audit export.
+    ///
+    /// # Errors
+    /// A message naming the variable when the value is outside 1 to 3650.
+    pub fn audit_export_retention_days(&self) -> Result<Option<u32>, String> {
+        use rim_infra_services::audit_retention::{MAX_RETENTION_DAYS, MIN_RETENTION_DAYS};
+        match self.audit_export_retention_days {
+            None => Ok(None),
+            Some(days) if (MIN_RETENTION_DAYS..=MAX_RETENTION_DAYS).contains(&days) => {
+                Ok(Some(days))
+            }
+            Some(days) => Err(format!(
+                "RIM_AUDIT_EXPORT_RETENTION_DAYS={days} is outside {MIN_RETENTION_DAYS} to \
+                 {MAX_RETENTION_DAYS}; unset it to keep every audit export"
             )),
         }
     }
@@ -2098,6 +2126,26 @@ mod tests {
             };
             let err = config.audit_log_retention_days().unwrap_err();
             assert!(err.contains("RIM_AUDIT_LOG_RETENTION_DAYS"), "{err}");
+        }
+    }
+
+    #[test]
+    fn audit_export_retention_is_off_when_unset_and_refuses_values_outside_the_range() {
+        assert_eq!(RIMConfig::default().audit_export_retention_days(), Ok(None));
+        for days in [1, 90, 3650] {
+            let config = RIMConfig {
+                audit_export_retention_days: Some(days),
+                ..Default::default()
+            };
+            assert_eq!(config.audit_export_retention_days(), Ok(Some(days)));
+        }
+        for days in [0, 3651] {
+            let config = RIMConfig {
+                audit_export_retention_days: Some(days),
+                ..Default::default()
+            };
+            let err = config.audit_export_retention_days().unwrap_err();
+            assert!(err.contains("RIM_AUDIT_EXPORT_RETENTION_DAYS"), "{err}");
         }
     }
 

@@ -246,6 +246,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   guarantee against data loss, and what happens if it shuts down.
 - An hourly purge deletes the sessions that sign nobody in any more, revoked or past their
   expiry, and counts them in `rim_sessions_purged_total`; until now their rows stayed forever.
+- `RIM_AUDIT_EXPORT_RETENTION_DAYS` (1 to 3650): the server deletes the audit export files in
+  `<RIM_DATA_DIR>/audit-exports/` written more than that many days ago, a minute after boot and
+  daily, and counts them in `rim_audit_exports_deleted_total`. Unset keeps every export.
+  `deploy/compose.relay.yml` sets it to 90, so on a public relay a command audit row is gone
+  completely after about 180 days.
 - `RIM_BACKUP_KEEP_DAYS` for `deploy/backup.sh`: after a backup that succeeded, the deployment's
   archives in `RIM_BACKUP_DIR` older than that many days are deleted. Unset keeps every archive.
 

@@ -1,14 +1,17 @@
 # Audit retention
 
-rim-server keeps two audit records, and retention treats them differently:
+rim-server keeps its audit records in three places, and retention treats them differently:
 
 | Record | Where | Retention |
 |---|---|---|
 | Command audit log | the `command_audit_log` table, read by the admin audit view (`listAuditLog`) | `RIM_AUDIT_RETENTION_DAYS`, this page |
+| Audit exports | `audit-exports/` in `RIM_DATA_DIR`, the rows the purge took from the table | `RIM_AUDIT_EXPORT_RETENTION_DAYS`; "Deleting old exports", below |
 | Audit files | `audit.<YYYY-MM-DD>.log` in `RIM_AUDIT_LOG_PATH` (and every audit event on stdout) | `RIM_AUDIT_LOG_RETENTION_DAYS`, default 90; "The audit files", below |
 
-With `RIM_AUDIT_RETENTION_DAYS` unset the table keeps every row forever. The public relay's
-overlay, `deploy/compose.relay.yml`, sets it to 90.
+With `RIM_AUDIT_RETENTION_DAYS` unset the table keeps every row forever, and with
+`RIM_AUDIT_EXPORT_RETENTION_DAYS` unset every export is kept. The public relay's overlay,
+`deploy/compose.relay.yml`, sets both to 90, so a command audit row is gone completely about
+180 days after it was written.
 
 The admin audit view shows the retention in force. It reads `serverInfo.auditRetentionDays`,
 readable without a session: the configured days, or null when rows are kept forever.
@@ -52,9 +55,24 @@ Read one with:
 zcat audit-20260712T030000Z-20260713T025959Z.jsonl.gz | jq .
 ```
 
-The server never deletes an export. They hold user and workspace ids and the redacted command
-arguments: keep them where the backups go, encrypted, and delete them when your own retention
-for archived audit data runs out (**FILL**: how long, and where they are copied).
+Exports hold user and workspace ids and the redacted command arguments, and no IP addresses.
+They are in every backup of the data directory; keep copies made elsewhere encrypted.
+
+### Deleting old exports
+
+| Variable | Meaning |
+|---|---|
+| `RIM_AUDIT_EXPORT_RETENTION_DAYS` | Days an export file is kept after it was written, 1 to 3650. Unset (the default) keeps every export. A value outside the range, or one that is not a whole number, stops the server at boot. |
+
+With it set, the server deletes the export files written more than that many days ago, a minute
+after it starts and then every 24 hours. When a file was written is read from its modification
+time, not from the timestamps in its name: those are the `created_at` of the rows inside, which
+are already past `RIM_AUDIT_RETENTION_DAYS` when the file is written, so counting from them would
+take that many days off each export's time, and delete it at once when the two retentions are
+equal. The purge writes the file once and never touches it
+again, and the backup and restore scripts keep the time. Only names of the export form,
+`audit-<oldest>-<newest>.jsonl.gz` with or without a `-N` suffix, are deleted. Each run that
+deleted something logs the count, and `rim_audit_exports_deleted_total` adds it up.
 
 Each run is on record itself: an audit event `audit.retention.purged` (`target` `audit`) with
 `trigger` (`job` or `cli`), `cutoff`, `exported`, `deleted` and `export_path` (empty when nothing

@@ -84,7 +84,7 @@ relay still answers.
 | Workspace content: channels, their messages, members | the database | nightly backup, "Backups" |
 | Uploads (avatars, attachments in channels) | `/data/uploads` in volume `rim-relay_rim_data` | with every dump |
 | Audit files | `/data/audit.<YYYY-MM-DD>.log`, one per day, and every audit event on stdout too (`docs/operations/audit-retention.md`) | with every dump |
-| Audit exports | `/data/audit-exports/`, command audit rows past `RIM_AUDIT_RETENTION_DAYS` | with every dump |
+| Audit exports | `/data/audit-exports/`, command audit rows past `RIM_AUDIT_RETENTION_DAYS`, deleted after `RIM_AUDIT_EXPORT_RETENTION_DAYS` | with every dump |
 | TLS certificates | volume `rim-relay_caddy_data` | not needed: Caddy gets new ones |
 
 ### How long personal data and logs are kept
@@ -99,13 +99,13 @@ off the host: Alloy sends metrics only.
 | Container logs (`dc logs`) | the server's audit events for signups, logins and refusals carry `remote_ip`; the web client's nginx logs each request with the address Caddy forwards; Caddy logs the request, address included, of a request it could not serve | about 100 MB per service (five files of 20 MB), and never longer than the container | Docker, when the newest file fills (the `logging` options in the compose files); a deploy that replaces a container's image starts its log afresh |
 | Audit files, `/data/audit.<YYYY-MM-DD>.log` | the same audit events as on stdout | 90 days (`RIM_AUDIT_LOG_RETENTION_DAYS`, default 90) | the server, daily |
 | Command audit rows, the `command_audit_log` table | none | 90 days (`RIM_AUDIT_RETENTION_DAYS`, 90 in `deploy/compose.relay.yml`) | the server, daily, after it exported them to `/data/audit-exports/` |
-| Audit exports, `/data/audit-exports/` | none: user and workspace ids, redacted arguments | until the operator deletes them (**FILL**: how long) | the operator |
+| Audit exports, `/data/audit-exports/` | none: user and workspace ids, redacted arguments | 90 days after the export (`RIM_AUDIT_EXPORT_RETENTION_DAYS`, 90 in `deploy/compose.relay.yml`), so a command audit row is gone completely after about 180 days | the server, daily |
 | Sessions, the `session` table | none: its `ip` column is never filled | until revoked (sign-out, a revoked device, a block) or expired, 30 days after sign-in (`RIM_SESSION_TTL_DAYS`); use does not extend it | the server, within an hour |
 | Rate limits and the known sign-in addresses | the addresses themselves, in memory | minutes for the rate windows; a known sign-in address counts for 30 days; none outlives a restart | the server; every restart clears them |
 | IP blocks, the `ip_block` table | the blocked ranges | until the block's expiry, or until `rim-relay ip unblock` for one without | the server, within 30 seconds of the expiry |
 | Caddy access log | every request's address | off; switched on only during an incident ("Monitoring"), and then part of Caddy's container log above | the operator, by removing `log` again |
-| Backups | those in the audit files of the backed-up `/data` | `RIM_BACKUP_KEEP_DAYS` days in `deploy/.env` (**FILL**: the days) | `deploy/backup.sh`, after each backup that succeeded; copies off the host: **FILL** |
-| The host's own logs (journald: SSH, fail2ban, the firewall) | addresses that connect to the host itself | **FILL**: journald's retention on the host | journald |
+| Backups | those in the audit files of the backed-up `/data` | 30 days (`RIM_BACKUP_KEEP_DAYS=30` in `/srv/rim-server/.env`) | `deploy/backup.sh`, after each backup that succeeded; copies off the host: **FILL** |
+| The host's own logs (journald: SSH, fail2ban, the firewall) | addresses that connect to the host itself | at most 500 MB and 30 days (`SystemMaxUse=500M`, `MaxRetentionSec=30day` in `/etc/systemd/journald.conf.d/rim.conf`) | journald |
 
 ## Keys
 
@@ -198,8 +198,8 @@ first and then in the file. Ownership moves in the app.
 
 Nightly (**FILL**: the time and the cron or timer that runs it), before every update and right
 after every key rotation; encrypted with `age` to **FILL**: the recipient, whose identity is held
-by **FILL**; copied off the host to **FILL**: the destination; kept for **FILL** days, with
-`RIM_BACKUP_KEEP_DAYS` set to that number in `deploy/.env` so each backup deletes the older ones.
+by **FILL**; copied off the host to **FILL**: the destination; kept for 30 days, with
+`RIM_BACKUP_KEEP_DAYS=30` in `/srv/rim-server/.env` so each backup deletes the older ones.
 
 ```sh
 RIM_BACKUP_AGE_RECIPIENT=age1… deploy/backup.sh       # or set it in deploy/.env

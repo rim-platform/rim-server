@@ -346,6 +346,7 @@ users or queue items, so do not sum their identical gauges.
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `rim_audit_rows_purged_total` | counter | | Command audit rows the daily retention purge deleted (`docs/operations/audit-retention.md`). |
+| `rim_audit_exports_deleted_total` | counter | | Audit export files the daily export retention deleted (`RIM_AUDIT_EXPORT_RETENTION_DAYS`). |
 | `rim_audit_retention_days` | gauge | | `RIM_AUDIT_RETENTION_DAYS`, set at boot; `0` when rows are kept forever. |
 
 ### Scheduled purges

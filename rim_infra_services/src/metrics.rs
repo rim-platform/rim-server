@@ -36,6 +36,8 @@ pub const OUTBOX_DEAD_PEERS: &str = "rim_outbox_dead_peers";
 pub const OUTBOX_NOT_QUEUED: &str = "rim_outbox_not_queued_rows_total";
 /// Audit log rows deleted by the retention purge.
 pub const AUDIT_ROWS_PURGED: &str = "rim_audit_rows_purged_total";
+/// Audit export files the daily export retention deleted.
+pub const AUDIT_EXPORTS_DELETED: &str = "rim_audit_exports_deleted_total";
 /// The configured audit retention in days, 0 when rows are kept forever.
 pub const AUDIT_RETENTION_DAYS: &str = "rim_audit_retention_days";
 /// Stale attachment uploads the daily cleanup marked failed.
@@ -125,6 +127,11 @@ pub fn describe() {
         Unit::Count,
         "Audit log rows deleted by the retention purge."
     );
+    describe_counter!(
+        AUDIT_EXPORTS_DELETED,
+        Unit::Count,
+        "Audit export files the daily export retention deleted."
+    );
     describe_gauge!(
         AUDIT_RETENTION_DAYS,
         Unit::Count,
@@ -191,6 +198,11 @@ pub(crate) fn outbox_not_queued(reason: &'static str) {
 /// Count `n` audit log rows the retention purge deleted.
 pub fn audit_rows_purged(n: u64) {
     counter!(AUDIT_ROWS_PURGED).increment(n);
+}
+
+/// Count `n` audit export files the export retention deleted.
+pub fn audit_exports_deleted(n: u64) {
+    counter!(AUDIT_EXPORTS_DELETED).increment(n);
 }
 
 /// Count `n` stale attachment uploads the cleanup marked failed.

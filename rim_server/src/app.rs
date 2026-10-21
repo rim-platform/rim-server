@@ -432,6 +432,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let audit_log_retention_days = config
         .audit_log_retention_days()
         .map_err(std::io::Error::other)?;
+    let audit_export_retention_days = config
+        .audit_export_retention_days()
+        .map_err(std::io::Error::other)?;
     let terms_page = config.terms_page().map_err(std::io::Error::other)?;
     let instance_policy = config
         .instance_policy(terms_page.as_ref())
@@ -886,6 +889,15 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         ));
     }
 
+    // Background task: delete the audit exports written more than
+    // `RIM_AUDIT_EXPORT_RETENTION_DAYS` ago, a minute after boot and then daily.
+    if let Some(days) = audit_export_retention_days {
+        tokio::spawn(rim_infra_services::audit_retention::run_export_prune_daily(
+            rim_infra_services::audit_retention::export_dir(std::path::Path::new(&config.data_dir)),
+            days,
+            shutdown_tx.subscribe(),
+        ));
+    }
     // Background task: delete the daily audit files past `RIM_AUDIT_LOG_RETENTION_DAYS`, a
     // minute after boot and then daily.
     tokio::spawn(crate::audit_file::run_daily(
