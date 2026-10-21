@@ -19,6 +19,10 @@ use async_trait::async_trait;
 use rim_core::command::model::{NewUserCommand, UpdateUserCommand, UserCommand};
 use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::AuditLogService;
+use rim_services::command::bounds::{
+    MAX_DESCRIPTION_CHARS, MAX_EXECUTE_ARGS_BYTES, MAX_PIPE_EXPRESSION_BYTES, bound_audit_args,
+    ensure_args_size, ensure_chars, ensure_command_id_size,
+};
 use rim_services::command::confirmation::{
     ConfirmationProof, ConfirmationStore, shared_in_memory_store,
 };
@@ -110,6 +114,8 @@ impl DefaultCommandService {
     pub(super) const MAX_USER_COMMANDS_PER_USER: usize = 100;
     /// Builtin steps one run may perform, through every nested user command and pipe stage.
     pub(super) const MAX_EXPANDED_STEPS: usize = 100;
+    /// Characters of a user command's title.
+    pub(super) const MAX_USER_COMMAND_TITLE_CHARS: usize = 128;
 
     pub fn new(repos: CommandRepos, services: CommandServices) -> Self {
         Self::with_confirmation_store(repos, services, shared_in_memory_store())
@@ -162,6 +168,55 @@ impl DefaultCommandService {
 
     pub(super) fn builtin_commands() -> Vec<CommandDefinitionDto> {
         registry::builtin_commands()
+    }
+
+    /// Refuses an `execute_command` call whose command id is longer than 256 bytes, whose pipe
+    /// expression is longer than [`MAX_PIPE_EXPRESSION_BYTES`], or whose arguments serialize to
+    /// more than [`MAX_EXECUTE_ARGS_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the bound.
+    fn ensure_call_within_bounds(cmd: &ExecuteCommandCmd) -> ServiceResult<()> {
+        if cmd.is_pipe {
+            if cmd.command_id.len() > MAX_PIPE_EXPRESSION_BYTES {
+                return Err(ServiceError::Validation(format!(
+                    "a pipe expression may be at most {MAX_PIPE_EXPRESSION_BYTES} bytes"
+                )));
+            }
+        } else {
+            ensure_command_id_size(&cmd.command_id, "a command id")?;
+        }
+        ensure_args_size(
+            cmd.args.as_ref(),
+            MAX_EXECUTE_ARGS_BYTES,
+            "command arguments",
+        )
+    }
+
+    /// Refuses a user command title that is empty or longer than
+    /// [`Self::MAX_USER_COMMAND_TITLE_CHARS`], or a description longer than
+    /// [`MAX_DESCRIPTION_CHARS`].
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the field.
+    fn validate_user_command_text(title: &str, description: &str) -> ServiceResult<()> {
+        if title.trim().is_empty() {
+            return Err(ServiceError::Validation(
+                "user command title must be non-empty".to_string(),
+            ));
+        }
+        ensure_chars(
+            title.trim(),
+            Self::MAX_USER_COMMAND_TITLE_CHARS,
+            "a user command title",
+        )?;
+        ensure_chars(
+            description.trim(),
+            MAX_DESCRIPTION_CHARS,
+            "a user command description",
+        )
     }
 
     pub(super) fn validate_user_command_steps(
@@ -283,6 +338,8 @@ impl CommandService for DefaultCommandService {
     }
 
     async fn execute_command(&self, cmd: ExecuteCommandCmd) -> ServiceResult<CommandResultDto> {
+        Self::ensure_call_within_bounds(&cmd)?;
+
         // Snapshot the audit fields BEFORE moving `cmd` into
         // `execute_command_inner` (which consumes args/context).
         let actor_id = cmd.actor.user_id;
@@ -294,8 +351,9 @@ impl CommandService for DefaultCommandService {
             .and_then(|c| c.workspace_id)
             .map(|s| s.into())
             .unwrap_or_else(uuid::Uuid::nil);
-        let sanitized_args =
-            sanitize_args_for_audit(cmd.args.as_ref().unwrap_or(&serde_json::Value::Null));
+        let sanitized_args = bound_audit_args(sanitize_args_for_audit(
+            cmd.args.as_ref().unwrap_or(&serde_json::Value::Null),
+        ));
 
         let mut resolver = CommandResolver::new(self, cmd.actor);
         let top_level = if cmd.is_pipe {
@@ -413,11 +471,8 @@ impl CommandService for DefaultCommandService {
                 "user command ids must start with `user.`".to_string(),
             ));
         }
-        if cmd.title.trim().is_empty() {
-            return Err(ServiceError::Validation(
-                "user command title must be non-empty".to_string(),
-            ));
-        }
+        ensure_command_id_size(key, "a user command id")?;
+        Self::validate_user_command_text(&cmd.title, &cmd.description)?;
         Self::validate_user_command_steps(key, &cmd.steps)?;
         if self
             .repos
@@ -471,11 +526,7 @@ impl CommandService for DefaultCommandService {
             .await?
             .ok_or(ServiceError::NotFound)?;
 
-        if cmd.title.trim().is_empty() {
-            return Err(ServiceError::Validation(
-                "user command title must be non-empty".to_string(),
-            ));
-        }
+        Self::validate_user_command_text(&cmd.title, &cmd.description)?;
         self.validate_user_command_for_actor(cmd.actor, key, &cmd.steps, false)
             .await?;
 

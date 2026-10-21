@@ -16,6 +16,10 @@ use rim_core::pipeline::repository::PipelineRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
+use rim_services::command::bounds::{
+    MAX_DESCRIPTION_CHARS, MAX_STEP_ARGS_BYTES, ensure_args_size, ensure_chars,
+    ensure_command_id_size,
+};
 use rim_services::command::dto::CommandContextDto;
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::ExecuteCommandCmd;
@@ -23,7 +27,10 @@ use rim_services::command::service::CommandService;
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
 use rim_services::limits::{InstanceLimits, ensure_below};
-use rim_services::pipeline::dto::{PipelineDto, PipelineFiredResult, PipelineTriggerDto};
+use rim_services::pipeline::dto::{
+    FilterConditionDto, PipelineActionDto, PipelineDto, PipelineFilterDto, PipelineFiredResult,
+    PipelineTriggerDto,
+};
 use rim_services::pipeline::request::{
     CreatePipelineCmd, DeletePipelineCmd, ListPipelinesCmd, TogglePipelineCmd, UpdatePipelineCmd,
 };
@@ -33,6 +40,14 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 const MAX_PIPELINES_PER_USER_PER_SERVER: u64 = 50;
 const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const RATE_LIMIT_MAX_FIRINGS: u32 = 10;
+/// Actions one pipeline may list; a firing runs at most this many.
+const MAX_ACTIONS: usize = 10;
+/// Conditions one pipeline's filter may list.
+const MAX_FILTER_CONDITIONS: usize = 5;
+/// Characters of a `MessageContains` filter's pattern.
+const MAX_FILTER_PATTERN_CHARS: usize = 256;
+/// The refusal of a pipeline action naming a user command or a macro.
+const COMPOSED_ACTION: &str = "pipeline actions must not reference user commands or macros";
 
 #[derive(Clone)]
 pub struct PipelineRepos {
@@ -253,6 +268,98 @@ impl DefaultPipelineService {
         Ok(())
     }
 
+    /// Refuses a description longer than [`MAX_DESCRIPTION_CHARS`] characters.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` saying so.
+    fn validate_description(description: Option<&str>) -> ServiceResult<()> {
+        match description {
+            Some(description) => {
+                ensure_chars(description, MAX_DESCRIPTION_CHARS, "a pipeline description")
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// Refuses a filter with more than [`MAX_FILTER_CONDITIONS`] conditions or a pattern longer
+    /// than [`MAX_FILTER_PATTERN_CHARS`] characters.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the bound.
+    fn validate_filter(filter: Option<&PipelineFilterDto>) -> ServiceResult<()> {
+        let Some(filter) = filter else {
+            return Ok(());
+        };
+        if filter.conditions.len() > MAX_FILTER_CONDITIONS {
+            return Err(ServiceError::Validation(format!(
+                "a pipeline filter may have at most {MAX_FILTER_CONDITIONS} conditions"
+            )));
+        }
+        for condition in &filter.conditions {
+            if let FilterConditionDto::MessageContains { pattern } = condition {
+                ensure_chars(
+                    pattern,
+                    MAX_FILTER_PATTERN_CHARS,
+                    "a pipeline filter pattern",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses more than [`MAX_ACTIONS`] actions, or an action that names a user command or a
+    /// macro, has a command id longer than 256 bytes, or has arguments that serialize to more
+    /// than [`MAX_STEP_ARGS_BYTES`]. A user command is refused because each action runs with its
+    /// own budget of builtin steps, which a user command could fill on every firing.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the reason.
+    fn validate_actions(actions: &[PipelineActionDto]) -> ServiceResult<()> {
+        if actions.len() > MAX_ACTIONS {
+            return Err(ServiceError::Validation(format!(
+                "a pipeline may have at most {MAX_ACTIONS} actions"
+            )));
+        }
+        for action in actions {
+            let PipelineActionDto::ExecuteCommand { command_id, args } = action;
+            if is_composed_command(command_id) {
+                return Err(ServiceError::Validation(COMPOSED_ACTION.to_string()));
+            }
+            ensure_command_id_size(command_id, "a pipeline action's command id")?;
+            ensure_args_size(
+                args.as_ref(),
+                MAX_STEP_ARGS_BYTES,
+                "a pipeline action's args",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Refuses a create or update whose name, description, trigger, filter, actions or cooldown
+    /// is out of bounds.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the field.
+    fn validate_definition(
+        name: &str,
+        description: Option<&str>,
+        trigger: &PipelineTriggerDto,
+        filter: Option<&PipelineFilterDto>,
+        actions: &[PipelineActionDto],
+        cooldown_secs: Option<i32>,
+    ) -> ServiceResult<()> {
+        Self::validate_name(name)?;
+        Self::validate_description(description)?;
+        Self::validate_trigger(trigger)?;
+        Self::validate_filter(filter)?;
+        Self::validate_actions(actions)?;
+        Self::validate_cooldown(cooldown_secs)
+    }
+
     fn validate_cooldown(cooldown_secs: Option<i32>) -> ServiceResult<()> {
         if let Some(secs) = cooldown_secs
             && secs < 0
@@ -386,6 +493,11 @@ impl DefaultPipelineService {
     }
 }
 
+/// Whether `command_id` names a user command or a macro, which a pipeline action may not run.
+fn is_composed_command(command_id: &str) -> bool {
+    command_id.starts_with("user.") || command_id.starts_with("macro.")
+}
+
 fn event_conversation_id(event: &WorkspaceEvent) -> Option<ConversationId> {
     match event {
         WorkspaceEvent::NewMessage {
@@ -432,9 +544,14 @@ fn event_message_text(event: &WorkspaceEvent) -> Option<String> {
 impl PipelineService for DefaultPipelineService {
     async fn create(&self, cmd: CreatePipelineCmd) -> ServiceResult<PipelineDto> {
         self.ensure_member(cmd.server_id, cmd.actor.user_id).await?;
-        Self::validate_name(&cmd.name)?;
-        Self::validate_trigger(&cmd.trigger)?;
-        Self::validate_cooldown(cmd.cooldown_secs)?;
+        Self::validate_definition(
+            &cmd.name,
+            cmd.description.as_deref(),
+            &cmd.trigger,
+            cmd.filter.as_ref(),
+            &cmd.actions,
+            cmd.cooldown_secs,
+        )?;
 
         // Quota check
         let count = self
@@ -533,9 +650,14 @@ impl PipelineService for DefaultPipelineService {
             .ok_or(ServiceError::NotFound)?;
 
         self.ensure_can_manage(&existing, cmd.actor.user_id).await?;
-        Self::validate_name(&cmd.name)?;
-        Self::validate_trigger(&cmd.trigger)?;
-        Self::validate_cooldown(cmd.cooldown_secs)?;
+        Self::validate_definition(
+            &cmd.name,
+            cmd.description.as_deref(),
+            &cmd.trigger,
+            cmd.filter.as_ref(),
+            &cmd.actions,
+            cmd.cooldown_secs,
+        )?;
 
         let trigger: PipelineTrigger = cmd.trigger.into();
         let filter = cmd.filter.map(PipelineFilter::from);
@@ -720,8 +842,17 @@ impl PipelineService for DefaultPipelineService {
             });
 
             let mut actions_executed = 0;
-            for action in &pipeline.actions {
+            for action in pipeline.actions.iter().take(MAX_ACTIONS) {
                 match action {
+                    PipelineAction::ExecuteCommand { command_id, .. }
+                        if is_composed_command(command_id) =>
+                    {
+                        tracing::warn!(
+                            pipeline_id = %pipeline.id,
+                            command_id = %command_id,
+                            "pipeline action names a user command or a macro; action skipped",
+                        );
+                    }
                     PipelineAction::ExecuteCommand { command_id, args } => {
                         let result = self
                             .command_service
@@ -2109,5 +2240,151 @@ mod tests {
             .await
             .expect("toggle");
         assert_eq!(toggled.last_fired_at, None);
+    }
+
+    fn action(command_id: &str, args: Option<serde_json::Value>) -> PipelineActionDto {
+        PipelineActionDto::ExecuteCommand {
+            command_id: command_id.to_string(),
+            args,
+        }
+    }
+
+    fn create_cmd(actions: Vec<PipelineActionDto>) -> CreatePipelineCmd {
+        CreatePipelineCmd {
+            actor: Actor::new(UserId::new()),
+            server_id: ServerId::new(),
+            name: "Bounded".to_string(),
+            description: None,
+            trigger: PipelineTriggerDto {
+                kind: PipelineTriggerKindDto::NewMessage,
+                conversation_id: None,
+            },
+            filter: None,
+            actions,
+            cooldown_secs: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_and_update_refuse_definitions_out_of_bounds() {
+        let mut repo = MockPipelineRepository::new();
+        repo.expect_create().never();
+        repo.expect_update().never();
+        let creator = UserId::new();
+        let stored = make_pipeline(ServerId::new(), creator);
+        let stored_id = stored.id;
+        repo.expect_get_by_id()
+            .returning(move |_| Ok(Some(stored.clone())));
+        let mut members = make_member_repo();
+        members
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(Some(MemberStanding::new(ServerMemberRole::Member))));
+        let svc = make_service(repo, members);
+        let search = || action("chat.search_messages", None);
+        let contains = |pattern: String| PipelineFilterDto {
+            conditions: vec![FilterConditionDto::MessageContains { pattern }],
+        };
+        let cases = [
+            (
+                create_cmd(vec![search(); MAX_ACTIONS + 1]),
+                "a pipeline may have at most 10 actions",
+            ),
+            (
+                create_cmd(vec![action(
+                    "chat.search_messages",
+                    Some(serde_json::json!({ "query": "x".repeat(4096) })),
+                )]),
+                "a pipeline action's args may be at most 4096 bytes",
+            ),
+            (
+                create_cmd(vec![action(&format!("chat.{}", "x".repeat(300)), None)]),
+                "a pipeline action's command id may be at most 256 bytes",
+            ),
+            (
+                create_cmd(vec![action("user.many_steps", None)]),
+                COMPOSED_ACTION,
+            ),
+            (
+                create_cmd(vec![action("macro.other", None)]),
+                COMPOSED_ACTION,
+            ),
+            (
+                CreatePipelineCmd {
+                    description: Some("d".repeat(1001)),
+                    ..create_cmd(vec![search()])
+                },
+                "a pipeline description may be at most 1000 characters",
+            ),
+            (
+                CreatePipelineCmd {
+                    filter: Some(PipelineFilterDto {
+                        conditions: vec![
+                            FilterConditionDto::MessageContains {
+                                pattern: "bye".to_string()
+                            };
+                            MAX_FILTER_CONDITIONS + 1
+                        ],
+                    }),
+                    ..create_cmd(vec![search()])
+                },
+                "a pipeline filter may have at most 5 conditions",
+            ),
+            (
+                CreatePipelineCmd {
+                    filter: Some(contains("p".repeat(257))),
+                    ..create_cmd(vec![search()])
+                },
+                "a pipeline filter pattern may be at most 256 characters",
+            ),
+        ];
+        for (cmd, refusal) in cases {
+            let update = UpdatePipelineCmd {
+                actor: Actor::new(creator),
+                pipeline_id: stored_id,
+                name: cmd.name.clone(),
+                description: cmd.description.clone(),
+                trigger: cmd.trigger.clone(),
+                filter: cmd.filter.clone(),
+                actions: cmd.actions.clone(),
+                cooldown_secs: cmd.cooldown_secs,
+            };
+            for err in [
+                svc.create(cmd).await.unwrap_err(),
+                svc.update(update).await.unwrap_err(),
+            ] {
+                assert!(
+                    matches!(&err, ServiceError::Validation(m) if m == refusal),
+                    "{err:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_firing_runs_at_most_the_action_cap_and_skips_composed_commands() {
+        let mut world = World::new();
+        let creator = world.member(ServerMemberRole::Member);
+        let channel = world.conversation(ConversationType::Channel, false, &[]);
+        let mut pipeline = make_pipeline(world.server_id, creator);
+        pipeline.actions = (0..MAX_ACTIONS + 5)
+            .map(|i| PipelineAction::ExecuteCommand {
+                command_id: if i == 0 {
+                    "user.many_steps".to_string()
+                } else {
+                    "test.cmd".to_string()
+                },
+                args: None,
+            })
+            .collect();
+        let h = world.harness(vec![pipeline]);
+
+        let results = h
+            .svc
+            .evaluate_event(world.message(channel, "hello"))
+            .await
+            .expect("evaluate");
+
+        assert_eq!(h.commands(), MAX_ACTIONS - 1);
+        assert_eq!(results[0].actions_executed, MAX_ACTIONS - 1);
     }
 }

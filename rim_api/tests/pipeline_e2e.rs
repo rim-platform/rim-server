@@ -396,6 +396,57 @@ async fn create_pipeline_refuses_a_filter_condition_missing_its_operand() {
     assert!(f.list_names(&f.ws.alice, None).await.is_empty());
 }
 
+/// A pipeline holds at most ten actions of 4 KiB of arguments each, none naming a user command
+/// or a macro, five filter conditions with patterns of 256 characters, and a description of
+/// 1,000 characters; `createPipeline` and `updatePipeline` refuse more with `VALIDATION`.
+#[tokio::test]
+async fn create_and_update_pipeline_refuse_definitions_past_their_limits() {
+    let f = setup().await;
+    let search = json!({ "commandId": "chat.search_messages" });
+    let contains =
+        |pattern: String| json!({ "conditionType": "MessageContains", "pattern": pattern });
+    let too_big = [
+        with(
+            minimal_body("p"),
+            json!({ "actions": vec![search.clone(); 11] }),
+        ),
+        with(
+            minimal_body("p"),
+            json!({ "actions": [{ "commandId": "chat.search_messages",
+                                  "args": { "query": "x".repeat(4096) } }] }),
+        ),
+        with(
+            minimal_body("p"),
+            json!({ "actions": [{ "commandId": "user.many_steps" }] }),
+        ),
+        with(
+            minimal_body("p"),
+            json!({ "description": "d".repeat(1001) }),
+        ),
+        with(
+            minimal_body("p"),
+            json!({ "filter": { "conditions": vec![contains("bye".to_string()); 6] } }),
+        ),
+        with_condition(contains("p".repeat(257))),
+    ];
+    let stored = f.pipeline("stored").await;
+    for body in too_big {
+        for call in [f.create_call(body.clone()), f.update_call(&stored, body)] {
+            assert_eq!(f.code(&f.ws.alice, call).await, "VALIDATION");
+        }
+    }
+
+    let at_the_limits = with(
+        minimal_body("at the limits"),
+        json!({
+            "description": "d".repeat(1000),
+            "actions": vec![search; 10],
+            "filter": { "conditions": vec![contains("p".repeat(256)); 5] },
+        }),
+    );
+    f.create(&f.ws.alice, at_the_limits).await;
+}
+
 #[tokio::test]
 async fn a_member_creates_at_most_fifty_pipelines_per_workspace() {
     let f = setup().await;

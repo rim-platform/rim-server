@@ -430,6 +430,27 @@ tag `v<version>`, the version every crate in the workspace carries.
   of up to 50, and is closed with `1008` past that (`docs/api.md`, "Subscriptions"). Before,
   aliased root fields started a stream each under one slot of
   `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION`.
+- Commands, user commands, macros, pipelines and channel lenses have size limits
+  (`docs/command_model.md`, "Size Limits"), each refused with `VALIDATION` naming it:
+  `executeCommand` takes `args` of up to 64 KiB and a command id of 256 bytes (a pipe 4 KiB); a
+  stored step's or action's `args` up to 4 KiB; descriptions 1,000 characters; a user command's
+  title 128 characters; a macro's `nlDescription` 1,000 characters and up to 10 `intentSamples`
+  of 200; a pipeline up to 10 actions and 5 filter conditions with patterns of 256 characters; a
+  lens condition's strings 256 characters and lists 100 entries, never nested. The audit log
+  keeps a call's redacted `args` up to 4 KiB and a truncated prefix of larger ones.
+- A macro step or a pipeline action may not name a user command (nor a pipeline action a
+  macro): each step ran with its own 100-step budget, so one `executeMacro` could run 2,000
+  builtin steps. `createMacro`, `updateMacro`, `createPipeline` and `updatePipeline` refuse such a
+  step; `executeMacro` refuses a stored one before any step runs, and a stored pipeline skips the
+  action and runs at most its first 10.
+- `chat.create_group` and `chat.invite_to_conversation` need a member, not a guest, in the
+  direct space too, where they skipped the DM-request checks that `createConversation` and
+  `addConversationMembers` apply; `commands` no longer lists them to a guest there.
+- Workspace keybinds cannot bind a `Mutating` or `Restricted` command or preset a `server_id`
+  other than their own workspace: `createKeybind` and `updateKeybind` refuse one, and
+  `resolvedKeybinds` leaves out a stored one (`docs/keybind_model.md`, "Workspace Keybinds").
+- The server keeps at most 32 unanswered confirmation challenges per user, dropping the one
+  closest to expiry, so pipeline actions that need a confirmation no longer pile them up.
 
 ### Security
 

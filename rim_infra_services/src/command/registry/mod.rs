@@ -119,10 +119,10 @@ pub(crate) fn required_role(command_id: &str) -> RequiredRole {
         | "chat.set_slow_mode"
         | "chat.archive_channel"
         | "chat.unarchive_channel" => RequiredRole::Moderator,
-        "chat.create_channel" => RequiredRole::Member,
-        "chat.create_group" | "chat.join_channel" | "chat.invite_to_conversation" => {
-            RequiredRole::MemberOrDirectSpaceGuest
+        "chat.create_channel" | "chat.create_group" | "chat.invite_to_conversation" => {
+            RequiredRole::Member
         }
+        "chat.join_channel" => RequiredRole::MemberOrDirectSpaceGuest,
         _ => RequiredRole::Guest,
     }
 }

@@ -318,3 +318,31 @@ async fn delete_keybind_removes_the_owners_keybind() {
     assert_eq!(f.delete_code(&f.ws.bob, id(&keybind)).await, "NOT_FOUND");
     assert_eq!(f.delete_code(&f.ws.bob, "nope").await, "VALIDATION");
 }
+
+/// A workspace keybind runs as each member who presses it, so it may bind only a command that
+/// changes nothing and preset only its own workspace's `server_id`; a user keybind may do both.
+#[tokio::test]
+async fn workspace_keybinds_bind_only_commands_that_change_nothing() {
+    let f = setup().await;
+    let mutating = json!({ "commandId": "chat.leave_conversation" });
+    let foreign = json!({ "presetArgs": { "server_id": unknown_id() } });
+    for extra in [mutating.clone(), foreign.clone()] {
+        assert_eq!(
+            f.create_code(&f.ws.alice, merged(f.workspace(), extra))
+                .await,
+            "VALIDATION"
+        );
+    }
+
+    let own = json!({ "presetArgs": { "server_id": f.ws.server_id } });
+    let shared = f.create(&f.ws.alice, merged(f.workspace(), own)).await;
+    assert!(f.resolves(&f.ws.bob, id(&shared)).await);
+    assert_eq!(
+        f.update_code(&f.ws.alice, id(&shared), mutating.clone())
+            .await,
+        "VALIDATION"
+    );
+
+    let personal = f.create(&f.ws.bob, merged(mutating, foreign)).await;
+    assert_eq!(personal["commandId"], json!("chat.leave_conversation"));
+}

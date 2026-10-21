@@ -3,6 +3,9 @@ use std::collections::{HashMap, HashSet};
 use serde_json::Value;
 
 use rim_core::command::model::UserCommand;
+use rim_services::command::bounds::{
+    MAX_STEP_ARGS_BYTES, ensure_args_size, ensure_command_id_size,
+};
 use rim_services::command::dto::{CommandDefinitionDto, UserCommandDto, UserCommandStepDto};
 use rim_services::{ServiceError, ServiceResult};
 
@@ -19,8 +22,9 @@ pub(super) fn user_command_exists_locally(command_id: &str) -> bool {
 }
 
 /// Refuses `steps` for the user command `command_key` when there are none, more than
-/// [`DefaultCommandService::MAX_USER_COMMAND_STEPS`], one without a command id, or one naming
-/// `command_key` itself.
+/// [`DefaultCommandService::MAX_USER_COMMAND_STEPS`], one without a command id or with one
+/// longer than 256 bytes, one whose arguments serialize to more than [`MAX_STEP_ARGS_BYTES`],
+/// or one naming `command_key` itself.
 pub(super) fn validate_user_command_step_shape(
     command_key: &str,
     steps: &[UserCommandStepDto],
@@ -43,6 +47,12 @@ pub(super) fn validate_user_command_step_shape(
                 "user command steps must reference a command id".to_string(),
             ));
         }
+        ensure_command_id_size(&step.command_id, "a user command step's command id")?;
+        ensure_args_size(
+            step.args.as_ref(),
+            MAX_STEP_ARGS_BYTES,
+            "a user command step's args",
+        )?;
         if step.command_id == command_key {
             return Err(ServiceError::Validation(
                 "user command cannot reference itself".to_string(),

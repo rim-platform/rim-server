@@ -7,6 +7,10 @@ use rim_core::macro_def::repository::MacroRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::AuditLogService;
+use rim_services::command::bounds::{
+    MAX_DESCRIPTION_CHARS, MAX_STEP_ARGS_BYTES, ensure_args_size, ensure_chars,
+    ensure_command_id_size,
+};
 use rim_services::command::confirmation::{
     ConfirmationProof, ConfirmationStore, issue_in_band, verify_in_band,
 };
@@ -16,6 +20,7 @@ use rim_services::command::dto::{
 };
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{ExecuteCommandCmd, GetCommandQuery};
+use rim_services::command::sanitize::{MAX_INTENT_SAMPLE_LEN, MAX_NL_DESCRIPTION_LEN};
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::service::CommandService;
 use rim_services::command::verb::TypedVerb;
@@ -30,6 +35,10 @@ use rim_services::{ServiceError, ServiceResult};
 
 const MAX_STEPS: usize = 20;
 const MAX_MACROS_PER_USER: u64 = 50;
+/// Intent samples one macro may carry.
+const MAX_INTENT_SAMPLES: usize = 10;
+/// The refusal of a macro step naming a user command.
+const USER_COMMAND_STEP: &str = "macro steps must not reference user commands";
 
 #[derive(Clone)]
 pub struct MacroRepos {
@@ -171,6 +180,14 @@ impl DefaultMacroService {
         serde_json::to_value(persisted).map_err(ServiceError::internal)
     }
 
+    /// Refuses `steps` when there are none or more than [`MAX_STEPS`], or when a step names a
+    /// macro or a user command, has a command id longer than 256 bytes, or has arguments that
+    /// serialize to more than [`MAX_STEP_ARGS_BYTES`]. A user command step is refused because
+    /// each step runs with its own budget of builtin steps, which a user command could fill.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the reason.
     fn validate_steps(steps: &[MacroStepDto]) -> ServiceResult<()> {
         if steps.is_empty() {
             return Err(ServiceError::Validation(
@@ -188,6 +205,47 @@ impl DefaultMacroService {
                     "macro steps must not reference other macros".to_string(),
                 ));
             }
+            if step.command_id.starts_with("user.") {
+                return Err(ServiceError::Validation(USER_COMMAND_STEP.to_string()));
+            }
+            ensure_command_id_size(&step.command_id, "a macro step's command id")?;
+            ensure_args_size(
+                step.args.as_ref(),
+                MAX_STEP_ARGS_BYTES,
+                "a macro step's args",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Refuses a description or natural-language description longer than
+    /// [`MAX_DESCRIPTION_CHARS`] or [`MAX_NL_DESCRIPTION_LEN`] characters, or more than
+    /// [`MAX_INTENT_SAMPLES`] intent samples or one longer than [`MAX_INTENT_SAMPLE_LEN`]
+    /// characters.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the field.
+    fn validate_text(
+        description: Option<&str>,
+        nl_description: &str,
+        intent_samples: &[String],
+    ) -> ServiceResult<()> {
+        if let Some(description) = description {
+            ensure_chars(description, MAX_DESCRIPTION_CHARS, "a macro description")?;
+        }
+        ensure_chars(
+            nl_description,
+            MAX_NL_DESCRIPTION_LEN,
+            "a macro's natural-language description",
+        )?;
+        if intent_samples.len() > MAX_INTENT_SAMPLES {
+            return Err(ServiceError::Validation(format!(
+                "a macro may have at most {MAX_INTENT_SAMPLES} intent samples"
+            )));
+        }
+        for sample in intent_samples {
+            ensure_chars(sample, MAX_INTENT_SAMPLE_LEN, "a macro intent sample")?;
         }
         Ok(())
     }
@@ -209,6 +267,11 @@ impl MacroService for DefaultMacroService {
         }
 
         Self::validate_steps(&cmd.steps)?;
+        Self::validate_text(
+            cmd.description.as_deref(),
+            &cmd.nl_description,
+            &cmd.intent_samples,
+        )?;
 
         crate::util::ensure_server_member(
             self.repos.server_member_repo.as_ref(),
@@ -286,6 +349,11 @@ impl MacroService for DefaultMacroService {
         }
 
         Self::validate_steps(&cmd.steps)?;
+        Self::validate_text(
+            cmd.description.as_deref(),
+            &cmd.nl_description,
+            &cmd.intent_samples,
+        )?;
 
         let steps_json = Self::serialize_steps(&cmd.steps)?;
 
@@ -388,6 +456,12 @@ impl MacroService for DefaultMacroService {
         }
 
         let steps = Self::parse_steps(&macro_def.steps_json)?;
+        if steps
+            .iter()
+            .any(|step| step.command_id.starts_with("user."))
+        {
+            return Err(ServiceError::Validation(USER_COMMAND_STEP.to_string()));
+        }
 
         // ── Resolve each step's definition via the command service. The effective
         // sensitivity is max(macro_tier, step_tiers), so a Safe-declared macro never runs below
@@ -1899,6 +1973,183 @@ mod tests {
                 gate_stops,
                 "{id}"
             );
+        }
+    }
+
+    fn macro_cmd(steps: Vec<MacroStepDto>) -> CreateMacroCmd {
+        CreateMacroCmd {
+            actor: Actor::new(UserId::new()),
+            server_id: ServerId::new(),
+            name: "Bounded".to_string(),
+            description: None,
+            steps,
+            ai_callable: false,
+            nl_description: String::new(),
+            intent_samples: vec![],
+            sensitivity: CommandSensitivityDto::Safe,
+        }
+    }
+
+    fn post_step(args: Option<serde_json::Value>) -> MacroStepDto {
+        MacroStepDto {
+            command_id: "chat.post_message".to_string(),
+            args,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_macro_refuses_user_command_steps_and_oversized_fields() {
+        let svc = service(MockMacroRepository::new(), MockCommandService::new());
+        let user_step = MacroStepDto {
+            command_id: "user.many_steps".to_string(),
+            args: None,
+        };
+        let cases = [
+            (
+                macro_cmd(vec![post_step(None), user_step]),
+                USER_COMMAND_STEP,
+            ),
+            (
+                macro_cmd(vec![post_step(Some(
+                    serde_json::json!({ "text": "x".repeat(4096) }),
+                ))]),
+                "a macro step's args may be at most 4096 bytes",
+            ),
+            (
+                macro_cmd(vec![MacroStepDto {
+                    command_id: format!("chat.{}", "x".repeat(300)),
+                    args: None,
+                }]),
+                "a macro step's command id may be at most 256 bytes",
+            ),
+            (
+                CreateMacroCmd {
+                    description: Some("d".repeat(1001)),
+                    ..macro_cmd(vec![post_step(None)])
+                },
+                "a macro description may be at most 1000 characters",
+            ),
+            (
+                CreateMacroCmd {
+                    nl_description: "n".repeat(1001),
+                    ..macro_cmd(vec![post_step(None)])
+                },
+                "a macro's natural-language description may be at most 1000 characters",
+            ),
+            (
+                CreateMacroCmd {
+                    intent_samples: vec!["post it".to_string(); 11],
+                    ..macro_cmd(vec![post_step(None)])
+                },
+                "a macro may have at most 10 intent samples",
+            ),
+            (
+                CreateMacroCmd {
+                    intent_samples: vec!["s".repeat(201)],
+                    ..macro_cmd(vec![post_step(None)])
+                },
+                "a macro intent sample may be at most 200 characters",
+            ),
+        ];
+        for (cmd, refusal) in cases {
+            let err = svc.create_macro(cmd).await.unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == refusal),
+                "{err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn update_macro_refuses_user_command_steps() {
+        let actor = Actor::new(UserId::new());
+        let macro_id = MacroId::new();
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(stored_macro(
+                macro_id,
+                actor.user_id,
+                serde_json::json!([{ "commandId": "chat.post_message", "args": null }]),
+            )))
+        });
+        repo.expect_update().never();
+        let svc = service(repo, MockCommandService::new());
+
+        let err = svc
+            .update_macro(UpdateMacroCmd {
+                actor,
+                macro_id,
+                name: "Bounded".to_string(),
+                description: None,
+                steps: vec![MacroStepDto {
+                    command_id: "user.many_steps".to_string(),
+                    args: None,
+                }],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == USER_COMMAND_STEP),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_macro_refuses_a_stored_user_command_step_before_any_step_runs() {
+        let actor = Actor::new(UserId::new());
+        let macro_id = MacroId::new();
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(stored_macro(
+                macro_id,
+                actor.user_id,
+                serde_json::json!([
+                    { "commandId": "chat.post_message", "args": null },
+                    { "commandId": "user.many_steps", "args": null }
+                ]),
+            )))
+        });
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc.expect_get_command().never();
+        cmd_svc.expect_execute_command().never();
+        let svc = service(repo, cmd_svc);
+
+        let err = svc
+            .execute_macro(ExecuteMacroCmd {
+                actor,
+                macro_id,
+                command_context: None,
+                confirmation: None,
+                initiator: rim_services::command::initiator::CommandInitiator::Palette,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == USER_COMMAND_STEP),
+            "{err:?}"
+        );
+    }
+
+    fn stored_macro(id: MacroId, user_id: UserId, steps_json: serde_json::Value) -> MacroDef {
+        MacroDef {
+            id,
+            server_id: ServerId::new(),
+            user_id,
+            name: "Bounded".to_string(),
+            description: None,
+            steps_json,
+            ai_callable: false,
+            nl_description: String::new(),
+            intent_samples: vec![],
+            sensitivity: "safe".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         }
     }
 }
