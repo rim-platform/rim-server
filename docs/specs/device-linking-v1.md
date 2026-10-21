@@ -39,7 +39,7 @@ account started the link. It never sees the secret.
 
 The confirmation step on the old device is the defense against the second row. The channel is
 symmetric only (AES-256 under a 256-bit secret), so there is no key agreement to record now and
-break later; the hybrid post-quantum decision asks nothing of it.
+break later; the hybrid post-quantum rule asks nothing of it.
 
 ## Flow
 
@@ -435,7 +435,7 @@ desktop device, except:
 - **The archive key in the answer.** It would let the new device read the drive archive without
   the passphrase, but the answer key is known to anyone who saw the code, so a secret in the
   answer must be encrypted to a key only the new device holds: an ephemeral key-agreement key in
-  the offer, which the post-quantum decision makes hybrid (X25519 + ML-KEM-768). The archive
+  the offer, which the hybrid post-quantum rule makes X25519 + ML-KEM-768. The archive
   format already reserves the mechanism (a new `keyWraps` kind, `history-archive-v1.md`). A later
   code version adds both; until then the new device unlocks the archive with the passphrase, and
   it needs the folder or drive sign-in in any case.

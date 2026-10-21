@@ -1,11 +1,9 @@
 # Server-to-server v1
 
-_Status: implemented, normative. Follows `docs/decisions/decentralization-2026-10-08.md` and
-`docs/decisions/relay-proxied-workspaces-2026-10-09.md`. Read `key-identity-v1.md`,
-`device-linking-v1.md` and `e2ee-mls-v1.md` first. This document is the contract between servers
-and between a server and its clients: server identity, the signed HTTP API between servers,
-relays, hosts, and what the client verifies. Labels of the form S5-n below name the change that
-introduced an item._
+_Status: implemented, normative. Read `key-identity-v1.md`, `device-linking-v1.md` and
+`e2ee-mls-v1.md` first. This document is the contract between servers and between a server and
+its clients: server identity, the signed HTTP API between servers, relays, hosts, and what the
+client verifies. Labels of the form S5-n below name the change that introduced an item._
 
 ## Summary
 
@@ -136,8 +134,7 @@ The descriptor is signed by the head server key over `rim.server-descriptor.v1\0
 | `handleDomain` | The domain of the server's handles ("Handles"): a lowercase DNS name of at most 253 bytes, labels of 1 to 63 letters, digits and hyphens, no leading or trailing hyphen, no trailing dot. Optional: a descriptor without it declares no handles, and is still valid. Placed before `issuedAt` |
 | `abuseContact` | Optional, after `issuedAt`: where to report abuse on the server, an email address or an https URL (`RIM_ABUSE_CONTACT`), 1 to 512 bytes. Left out of the payload when the operator names none, so such a descriptor is byte for byte what it was before the field existed |
 
-The decision record wrote `/.well-known/rim/server` as an illustration; one well-known name is
-simpler. Rejected: an unsigned descriptor (anyone proxying the fetch, a relay included, could change
+One well-known name is enough. Rejected: an unsigned descriptor (anyone proxying the fetch, a relay included, could change
 endpoints), and signing the whole document (the log is self-certifying; one verifier per statement).
 
 ### Pinning a peer
@@ -737,8 +734,8 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    holds no conversation row. R_A keeps the conversation like any server today (Commits 90 days,
    Welcomes 30 days); R_B's items follow "Relay queues".
 
-Rejected: a sequencer that moves between relays or a vote between them (the state resolution the
-2026-10-08 decision rejected), and storing the conversation on both relays (two truths for epochs).
+Rejected: a sequencer that moves between relays or a vote between them (state resolution
+between servers, which RIM does not do), and storing the conversation on both relays (two truths for epochs).
 
 **When the home is gone**: unreachable directly and through the member's relay for 7 days, or
 absent from the creator's newest card and not answering. Any member's app may then create a

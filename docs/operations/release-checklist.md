@@ -42,9 +42,8 @@ release is announced (section 9). Later releases keep the order as written.
 - [ ] `RIM_SIGNUP_REQUIRE_KEYS` stays on (the default) in the deployment's `deploy/.env`, and the
       packaged desktop client and the web client both sign up with a key against it. A
       deployment that sets it to `false` says why here.
-- [ ] `docs/testing/manual-test-plan-2026-10-12.md` is run on the packaged client and the HTTPS
-      deployment being released, and the results are recorded: the "Steps passed" and "Not run"
-      sections of `docs/testing/manual-test-findings-2026-10-12.md` are filled.
+- [ ] The packaged desktop client and the web client are run by hand against the HTTPS
+      deployment being released, and every finding is fixed or filed as an issue.
 - [ ] The upgrade, rollback and restore drill of section 4 ran for this release, with its date
       recorded there.
 - [ ] Desktop distribution is in place as section 8 checks it. rim-ui's release workflow builds
@@ -69,8 +68,8 @@ release is announced (section 9). Later releases keep the order as written.
       descriptor. `https://chat.rim-platform.org/` opens the web client (`RIM_WEB_DOMAIN`), and
       `https://relay.rim-platform.org/` redirects there. The apex `rim-platform.org` is the
       website and does not serve the API.
-- [ ] The credentials the old `.env` exposed stay rotated: rewriting history does not revoke them
-      (`docs/security/env-history-purge-runbook.md`).
+- [ ] The credentials the old `.env` exposed stay rotated: the published history no longer holds
+      the file, but rewriting history did not revoke them.
 
 ## 1. Choose the version
 

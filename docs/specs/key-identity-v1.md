@@ -1,15 +1,13 @@
 # Key identity v1
 
-_Status: implemented, normative. Follows `docs/decisions/decentralization-2026-10-08.md`:
-a user is a key pair, the user id is stable with a signed key log, and servers are
-interchangeable relays. The web app may create and hold an identity, not only be a linked
-device (amended 2026-10-15, keys by default). This document is the contract between the
-server (`rim_identity`, `KeyAuthService`) and every client that signs statements._
+_Status: implemented, normative. A user is a key pair, the user id is stable with a signed key
+log, and servers are interchangeable relays. The web app may create and hold an identity, not
+only be a linked device (amended 2026-10-15, keys by default). This document is the contract
+between the server (`rim_identity`, `KeyAuthService`) and every client that signs statements._
 
-_Algorithm agility (`docs/decisions/post-quantum-hybrid-2026-10-09.md`): statement format
-version 2 tags every key and signature with its algorithm, payload caps fit
-hybrid post-quantum keys, and the server indexes device keys by a hash. Version 1 statements
-stay valid. See "Algorithms and statement versions"._
+_Algorithm agility: statement format version 2 tags every key and signature with its algorithm,
+payload caps fit hybrid post-quantum keys, and the server indexes device keys by a hash.
+Version 1 statements stay valid. See "Algorithms and statement versions"._
 
 _Key-only signup: `signupWithKey` creates an account from a key
 identity alone, with no password and no email unless an email-bound invite gives one, so
@@ -97,7 +95,7 @@ bytes, caps and every rule below are the same.
 - **Hashes stay SHA-256.** `principalId`, `prev` and the device key hash are SHA-256, which
   keeps 128-bit security against quantum search; they are not tagged.
 
-**Planned algorithm (not implemented).** Per the hybrid post-quantum decision, identity,
+**Planned algorithm (not implemented).** Under the hybrid post-quantum rule, identity,
 recovery and device keys later move to **Ed25519 + ML-DSA-44** (FIPS 204), expected under the
 name `ed25519-mldsa44`: the key and signature carry both parts (32 + 1,312 bytes of key,
 64 + 2,420 bytes of signature) and a signature is valid only when both parts verify. Until a

@@ -227,7 +227,7 @@ tag `v<version>`, the version every crate in the workspace carries.
   for both plugin kinds, with the panel bridge's `rim.settings.open`, which opens the plugin's
   settings form over the current view, leaving the panel in place. Values stay on the device
   and never reach the server, so the server does not change. Sections 15 to 20 of that spec are
-  now 16 to 21. `docs/decisions/plugin-settings-2026-10-18.md` records why.
+  now 16 to 21.
 - Workspace invites can be listed and revoked. The new `workspaceInvites(serverId, dir, cursor,
   limit)` gives a workspace's Owner its invites newest first as a `WorkspaceInvitePage` of
   `WorkspaceInvite` (role, uses, expiry, creator, revocation and a `WorkspaceInviteState` of
@@ -341,6 +341,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 - The dependency audit in CI and in the release gates is `cargo audit --deny unsound`: an
   unsoundness advisory fails it like a vulnerability. Each advisory it accepts is listed in
   `.cargo/audit.toml` with why it does not apply and when the entry comes out.
+
+### Removed
+
+- The dated records left `docs/`: the decision records, the manual test plans and their
+  findings, and the `.env` history purge runbook. Git history keeps them. The nested resolver
+  access reference moved to `docs/security/nested-resolver-access.md`.
 
 ### Fixed
 
