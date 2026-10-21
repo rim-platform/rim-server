@@ -1,10 +1,12 @@
 use async_graphql::*;
+use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 use rim_services::user::command::UpdateMyProfileCmd;
 use rim_services::user::service::UserService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
+use crate::features::require_feature;
 use crate::federation::ensure_may_set_display_name;
 use crate::types::User;
 
@@ -21,6 +23,8 @@ impl ProfileMutations {
     /// # Errors
     ///
     /// - `UNAUTHENTICATED` — no session.
+    /// - `FEATURE_DISABLED` — `avatarUrl` given while the instance has the `avatars` feature
+    ///   off.
     /// - `FORBIDDEN` — `displayName` from a member whose relay is another server; their
     ///   display name comes from their profile card.
     /// - `VALIDATION` — `displayName` > 64 chars, `statusText` > 256 chars,
@@ -43,6 +47,9 @@ impl ProfileMutations {
         input: UpdateMyProfileInput,
     ) -> Result<User> {
         let actor = require_actor(ctx)?;
+        if input.avatar_url.is_some() {
+            require_feature(ctx, ServerFeature::Avatars)?;
+        }
         if input.display_name.is_some() {
             ensure_may_set_display_name(ctx, actor).await?;
         }

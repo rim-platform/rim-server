@@ -14,6 +14,7 @@ SMTP is not configured, which is how it already behaved.
 | `custom_emoji` | The `customEmojis` query and the `createCustomEmoji` and `deleteCustomEmoji` mutations | Uploaded images are content the operator moderates and stores. |
 | `workspace_plugins` | The `workspacePlugins` query, the `addWorkspacePlugin`, `updateWorkspacePlugin` and `removeWorkspacePlugin` mutations, and `POST`/`GET /api/plugin-bundles/…` (and the forwarded download) | Hosting plugin bundles distributes code to members' clients. Plugins a user installs locally on their client are not affected. |
 | `ai_commands` | `commandDiscover`, `commands(surface: AI)`, `executeCommand` and `executeMacro` with the `AGENT` initiator, and the agent-facing fields of `Command` (`nlDescription` is null, `intentSamples` empty and `aiCallable` false while off) | An instance may not want an AI agent driving its workspaces. |
+| `avatars` | `POST /api/files/avatar`, `GET /api/files/{path}` (the stored avatars; both also when another relay forwards them), `updateMyProfile` with an `avatarUrl`, and `User.avatarUrl` and `ServerMember.avatarUrl` (null while off) | Uploaded profile pictures are content the operator moderates and stores. |
 
 These are platform core and have no switch: end-to-end encrypted conversations, key identity,
 the relay and host roles (`RIM_ROLE`), registration (its own modes: `RIM_OPEN_REGISTRATION`,
@@ -37,7 +38,8 @@ Unavailable today:
 | `email` | `RIM_SMTP_HOST` or `RIM_SMTP_FROM` is not set | Mail is logged (recipient and subject) instead of sent, as before. Password reset still answers, so the token can be read from a development log. |
 
 A feature both disabled and unavailable is reported as `disabled`. Storage is always the local
-data directory, so `attachments`, `custom_emoji` and `workspace_plugins` are never unavailable.
+data directory, so `attachments`, `custom_emoji`, `workspace_plugins` and `avatars` are never
+unavailable.
 
 ## Setting it
 
@@ -50,7 +52,7 @@ RIM_FEATURES_DISABLED=attachments,custom_emoji
 An unknown name stops the server at boot, naming it, so a typo never leaves a feature on:
 
 ```text
-RIM_FEATURES_DISABLED: unknown feature: atachments (known: attachments, link_previews, email, custom_emoji, workspace_plugins, ai_commands)
+RIM_FEATURES_DISABLED: unknown feature: atachments (known: attachments, link_previews, email, custom_emoji, workspace_plugins, ai_commands, avatars)
 ```
 
 The switches are read at boot; change the variable and restart. At boot the server logs the
@@ -60,10 +62,11 @@ disabled and unavailable features:
 {"level":"INFO","fields":{"message":"instance features (RIM_FEATURES_DISABLED)","disabled":"[\"attachments\", \"custom_emoji\"]","unavailable":"[\"email: SMTP is not configured: set RIM_SMTP_HOST and RIM_SMTP_FROM\"]"},"target":"rim_server::app"}
 ```
 
-Switching a feature off deletes nothing. Stored attachments, emoji, plugin entries, bundles and
-link previews stay in the database and on disk, and come back when the feature is enabled
-again. While `attachments` is off, messages still list their attachments, but downloads are
-refused.
+Switching a feature off deletes nothing. Stored attachments, emoji, plugin entries, bundles,
+link previews and avatars stay in the database and on disk, and come back when the feature is
+enabled again. While `attachments` is off, messages still list their attachments, but downloads
+are refused. While `avatars` is off, every avatar URL reads as null, so clients show their
+placeholder; `updateMyProfile` without an `avatarUrl` still works.
 
 With `email` disabled, `requestPasswordReset` answers `FEATURE_DISABLED`, invite mail is not
 sent (the invite link is still returned to whoever created it), and the notification digest job
@@ -101,7 +104,7 @@ requests ignore proxy environment variables.
 
 A client reads `serverInfo.features` after connecting and hides the surfaces of disabled and
 unavailable features: the attach button, emoji management, the workspace plugin settings, the
-AI agent, "forgot password". The server enforces the switches either way.
+AI agent, "forgot password", the profile picture upload. The server enforces the switches either way.
 
 `ai_commands` refuses agent runs by the initiator the client declares. It switches the
 AI surface off for well-behaved clients; the capability checks, confirmation and audit that

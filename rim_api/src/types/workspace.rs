@@ -1,7 +1,7 @@
 use async_graphql::{ComplexObject, Context, Enum, ID, InputObject, Result, SimpleObject};
 
 use crate::resolve::ResolveExt;
-use crate::types::User;
+use crate::types::{AvatarUrl, User};
 
 /// A member's role in a workspace, from most to least privileged. Used by `Server.viewerRole`,
 /// `ServerMember.memberRole`, `CreateInviteInput.role` and `setMemberRole`.
@@ -150,7 +150,8 @@ pub struct ServerMember {
     pub user_id: async_graphql::ID,
     pub username: String,
     pub display_name: Option<String>,
-    pub avatar_url: Option<String>,
+    /// The profile picture's URL; null while the instance has the `avatars` feature off.
+    pub avatar_url: AvatarUrl,
     pub status_text: Option<String>,
     pub bio: Option<String>,
     pub member_role: ServerMemberRoleGql,
@@ -168,7 +169,7 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
             user_id: async_graphql::ID(value.user_id.to_string()),
             username: value.username,
             display_name: value.display_name,
-            avatar_url: value.avatar_url,
+            avatar_url: AvatarUrl(value.avatar_url),
             status_text: value.status_text,
             bio: value.bio,
             member_role: value.member_role.into(),

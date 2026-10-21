@@ -155,9 +155,10 @@ The file routes are plain HTTP, not GraphQL. They answer JSON errors of the form
   `attachments` feature is not enabled.
 - **`POST /api/files/avatar`** stores the caller's avatar: a multipart body with one file of
   type `image/png`, `image/jpeg`, `image/gif` or `image/webp`, at most 2 MiB. The answer is
-  `{"path","size_bytes","url"}`, where `url` is the `/api/files/...` path to read it back.
+  `{"path","size_bytes","url"}`, where `url` is the `/api/files/...` path to read it back. Off
+  when the `avatars` feature is not enabled.
 - **`GET /api/files/{path}`** serves a stored avatar to any signed-in user. Any path outside
-  `avatars/` is refused with 403.
+  `avatars/` is refused with 403. Off when the `avatars` feature is not enabled.
 - **`GET /api/attachments/{id}/download`** serves an attachment to a member of its conversation.
   The blob of an encrypted conversation is served as `application/octet-stream` named
   `encrypted.bin`; the client checks its hash and decrypts it. Off when the `attachments` feature

@@ -184,6 +184,9 @@ fn route_feature(method: &str, segments: &[&str]) -> Option<ServerFeature> {
             Some(ServerFeature::Attachments)
         }
         ("GET", ["api", "plugin-bundles", _, _]) => Some(ServerFeature::WorkspacePlugins),
+        ("POST", ["api", "files", "avatar"]) | ("GET", ["api", "files", _, ..]) => {
+            Some(ServerFeature::Avatars)
+        }
         _ => None,
     }
 }
@@ -391,6 +394,34 @@ mod tests {
 
     fn body(reply: &Reply) -> Value {
         serde_json::from_slice(&reply.body).expect("json")
+    }
+
+    #[test]
+    fn forwarded_file_routes_belong_to_their_feature() {
+        let cases = [
+            ("POST", "api/files/upload", Some(ServerFeature::Attachments)),
+            (
+                "GET",
+                "api/attachments/a/download",
+                Some(ServerFeature::Attachments),
+            ),
+            ("POST", "api/files/avatar", Some(ServerFeature::Avatars)),
+            (
+                "GET",
+                "api/files/avatars/u/avatar.png",
+                Some(ServerFeature::Avatars),
+            ),
+            (
+                "GET",
+                "api/plugin-bundles/s/h",
+                Some(ServerFeature::WorkspacePlugins),
+            ),
+            ("POST", "api", None),
+        ];
+        for (method, path, feature) in cases {
+            let segments: Vec<&str> = path.split('/').collect();
+            assert_eq!(route_feature(method, &segments), feature, "{method} {path}");
+        }
     }
 
     #[test]
