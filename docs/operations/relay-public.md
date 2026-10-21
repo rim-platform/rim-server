@@ -96,7 +96,7 @@ off the host: Alloy sends metrics only.
 
 | What | IP addresses | Kept | Deleted by |
 |---|---|---|---|
-| Container logs (`dc logs`) | the server's audit events for signups, logins and refusals carry `remote_ip`; the web client's nginx logs each request with the address Caddy forwards; Caddy logs the request, address included, of a request it could not serve | at most three files of 10 MB per container, and never longer than the container | Docker, when the newest file fills (the `logging` options in the compose files); a deploy that replaces a container's image starts its log afresh |
+| Container logs (`dc logs`) | the server's audit events for signups, logins and refusals carry `remote_ip`; the web client's nginx logs each request with the address Caddy forwards; Caddy logs the request, address included, of a request it could not serve | about 100 MB per service (five files of 20 MB), and never longer than the container | Docker, when the newest file fills (the `logging` options in the compose files); a deploy that replaces a container's image starts its log afresh |
 | Audit files, `/data/audit.<YYYY-MM-DD>.log` | the same audit events as on stdout | 90 days (`RIM_AUDIT_LOG_RETENTION_DAYS`, default 90) | the server, daily |
 | Command audit rows, the `command_audit_log` table | none | 90 days (`RIM_AUDIT_RETENTION_DAYS`, 90 in `deploy/compose.relay.yml`) | the server, daily, after it exported them to `/data/audit-exports/` |
 | Audit exports, `/data/audit-exports/` | none: user and workspace ids, redacted arguments | until the operator deletes them (**FILL**: how long) | the operator |

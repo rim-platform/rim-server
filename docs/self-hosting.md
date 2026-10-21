@@ -322,9 +322,9 @@ production's. Record each drill: **FILL** where.
 - **Logs.** JSON on stdout: `dc logs --since 1h rim`. Audit events (`"target":"audit"`) also go
   to the daily files `/data/audit.<YYYY-MM-DD>.log`, deleted after `RIM_AUDIT_LOG_RETENTION_DAYS`
   (default 90); `docs/operations/audit-retention.md` covers them and `RIM_AUDIT_RETENTION_DAYS`
-  for the audit table. Docker keeps each container's output in at most three files of 10 MB
-  (the `logging` options in the compose files) and deletes it with the container; ship it to
-  your own log store to keep more.
+  for the audit table. Docker keeps about 100 MB of each service's output, in five files of
+  20 MB (the `logging` options in the compose files), and deletes it with the container; ship it
+  to your own log store to keep more.
 - **Background jobs.** `docs/operations/background-jobs.md` lists what the server runs on a
   timer, how often, and the setting that changes it.
 - **Disk.** The `postgres_data` and `rim_data` volumes, and `RIM_BACKUP_DIR`.

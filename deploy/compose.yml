@@ -26,14 +26,14 @@
 
 name: rim
 
-# Every container's output goes to Docker's json-file log, at most three files of 10 MB: the
-# oldest file is deleted when the newest fills, and the log goes with the container when it is
-# recreated.
+# Every container's output goes to Docker's json-file log, about 100 MB per service in five
+# files of 20 MB: the oldest file is deleted when the newest fills, and the log goes with the
+# container when it is recreated.
 x-logging: &logging
   driver: json-file
   options:
-    max-size: 10m
-    max-file: "3"
+    max-size: 20m
+    max-file: "5"
 
 x-database-url: &database-url "postgres://rim:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/rim"
 

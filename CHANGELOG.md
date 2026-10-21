@@ -256,8 +256,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   `RIM_AUDIT_LOG_RETENTION_DAYS` (1 to 3650, default 90) daily. A logrotate rule for
   `audit.log` is no longer needed; the old `audit.log` is left as it is, to be deleted by hand.
   Set `RIM_AUDIT_LOG_RETENTION_DAYS` in `deploy/.env` to keep the files longer.
-- Every container in the compose files keeps its log in at most three json-file files of 10 MB
-  instead of one file that grows without end.
+- Every container in the compose files keeps about 100 MB of log per service, in five
+  json-file files of 20 MB, instead of one file that grows without end.
 - `deploy/compose.relay.yml` sets `RIM_AUDIT_RETENTION_DAYS` to 90: a public relay exports and
   deletes command audit rows after 90 days unless `deploy/.env` sets another value.
 - **Upgrade:** `deploy/compose.relay.yml` no longer sets `RIM_ROLE=relay` and the Caddyfile
