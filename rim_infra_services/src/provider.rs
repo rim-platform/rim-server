@@ -79,6 +79,8 @@ pub struct FederationHooks {
     /// The workspace every new account joins as a Member, and the definition an owner claim
     /// creates it from.
     pub default_workspace: crate::default_workspace::DefaultWorkspace,
+    /// This server's handle domain (`RIM_HANDLE_DOMAIN`); `None` gives local accounts no handle.
+    pub handle_domain: Option<String>,
     /// The minimum age every signup must confirm; `None` when there is none.
     pub minimum_age: Option<u8>,
 }
@@ -259,7 +261,8 @@ impl DefaultAppServiceProvider {
             franking_keys.clone(),
         )
         .with_moderation_repo(Arc::clone(&repos.moderation_repo))
-        .with_limits(limits);
+        .with_limits(limits)
+        .with_handle_domain(federation.handle_domain.clone());
         if let Some(rate) = federation.quotas.messages {
             message_concrete = message_concrete.with_message_budget(rate);
         }
@@ -361,7 +364,8 @@ impl DefaultAppServiceProvider {
         let user_service: Arc<dyn UserService> = Arc::new(
             crate::user::DefaultUserService::new(repos.for_user())
                 .with_limits(limits)
-                .with_reserved_names(federation.reserved_names.clone()),
+                .with_reserved_names(federation.reserved_names.clone())
+                .with_handle_domain(federation.handle_domain.clone()),
         );
         let workspace_state_service: Arc<dyn WorkspaceStateService> = Arc::new(
             crate::workspace_state::DefaultWorkspaceStateService::new(

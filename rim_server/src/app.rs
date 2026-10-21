@@ -142,6 +142,7 @@ fn descriptor_settings(
     role: ServerRole,
     s2s_origin: Option<&str>,
     registration: &rim_services::auth::dto::RegistrationMode,
+    handle_domain: String,
     abuse_contact: Option<String>,
 ) -> DescriptorSettings {
     let origin = config.public_origin();
@@ -177,6 +178,7 @@ fn descriptor_settings(
             },
         },
         mls_cipher_suites: rim_services::e2ee::ACCEPTED_CIPHER_SUITES.to_vec(),
+        handle_domain: Some(handle_domain),
         abuse_contact,
     }
 }
@@ -196,6 +198,9 @@ pub(crate) async fn build_s2s(
         .host_allowed_relays()
         .map_err(io_error("RIM_HOST_ALLOWED_RELAYS"))?;
     let dm_policy = config.dm_policy().map_err(io_error("RIM_DM_*"))?;
+    let handle_domain = config
+        .handle_domain()
+        .map_err(io_error("RIM_HANDLE_DOMAIN"))?;
     let abuse_contact = config.abuse_contact().map_err(std::io::Error::other)?;
     let s2s_origin = config.s2s_origin();
     let key_files = config.key_files();
@@ -209,6 +214,7 @@ pub(crate) async fn build_s2s(
         role,
         s2s_origin.as_deref(),
         registration,
+        handle_domain,
         abuse_contact,
     );
     let identity = server_key::with_descriptor(identity_repo.as_ref(), loaded, &settings)
@@ -419,6 +425,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let mut key_login_audiences = config
         .key_login_audiences()
         .map_err(std::io::Error::other)?;
+    config.handle_domain().map_err(std::io::Error::other)?;
     let audit_retention_days = config
         .audit_retention_days()
         .map_err(std::io::Error::other)?;
@@ -584,6 +591,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             signup_requires_keys: instance_policy.signup_requires_keys,
             dm_policy: dm_policy.clone(),
             default_workspace,
+            handle_domain: s2s.descriptor_settings.handle_domain.clone(),
             minimum_age: instance_policy.minimum_age,
         },
         Arc::clone(&feature_gate),

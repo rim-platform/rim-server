@@ -12,7 +12,7 @@ use rim_core::conversation::repository::MockConversationRepository;
 use rim_core::conversation_member::repository::MockConversationMemberRepository;
 use rim_core::dm_policy::repository::MockDmPolicyRepository;
 use rim_core::e2ee::repository::MockE2eeRepository;
-use rim_core::host::model::UserKind;
+use rim_core::host::model::{HomeHandle, UserKind};
 use rim_core::host::repository::{MockDelegationRepository, MockHostRepository};
 use rim_core::key_identity::model::{
     DeviceKey, DeviceKeyId, KeyLogEntry, KeyLogEntryType, StoredProfileCard,
@@ -75,6 +75,7 @@ pub(crate) fn server_identity() -> SharedIdentity {
             mode: RegistrationMode::Invite,
             pow_bits: None,
         },
+        None,
         timestamp(Utc::now()),
     );
     let descriptor = sign_descriptor(&signer, &content).expect("descriptor");
@@ -135,6 +136,8 @@ struct Writes {
     home_relay: Mutex<Vec<Option<String>>>,
     /// The relays the host fetched the identity from.
     fetched_from: Mutex<Vec<String>>,
+    /// The handles passed to `set_home_handle`.
+    home_handle: Mutex<Vec<Option<HomeHandle>>>,
 }
 
 impl Writes {
@@ -152,6 +155,10 @@ impl Writes {
 
     fn fetched_from(&self) -> Vec<String> {
         self.fetched_from.lock().expect("lock").clone()
+    }
+
+    fn home_handle(&self) -> Vec<Option<HomeHandle>> {
+        self.home_handle.lock().expect("lock").clone()
     }
 }
 
@@ -237,6 +244,11 @@ fn host_with(
             w.home_relay.lock().expect("lock").push(home);
             Box::pin(async { Ok(()) })
         });
+    let w = Arc::clone(&writes);
+    host.expect_set_home_handle().returning(move |_, handle| {
+        w.home_handle.lock().expect("lock").push(handle);
+        Box::pin(async { Ok(()) })
+    });
     let w = Arc::clone(&writes);
     host.expect_set_device_mls_active()
         .returning(move |_, active| {
@@ -359,6 +371,10 @@ fn host_with(
             fetched_at: Utc::now(),
         });
         Box::pin(async move { pinned.ok_or(rim_services::ServiceError::Unavailable) })
+    });
+    peers.expect_handle_domain().returning(|server_id| {
+        let domain = (server_id == RELAY).then(|| "relay.example".to_string());
+        Box::pin(async move { Ok(domain) })
     });
     peers.expect_resolve().returning(|server_id, _, _| {
         let lookup = match origin_of_server(server_id) {
@@ -628,6 +644,7 @@ async fn a_pushed_recovery_closes_every_live_connection_of_the_user() {
             mls_active: true,
         }],
         card: None,
+        username: None,
     };
     let (svc, _, held) = host_with(FACTS, &doc, vec![signed(&inception)]);
     let revocations = Arc::new(InProcessSessionRevocations::default());
@@ -685,4 +702,62 @@ async fn a_relay_a_local_user_names_does_not_update_a_known_person_it_does_not_s
     assert_eq!(writes.fetched_from(), vec![STRANGER.to_string()]);
     assert!(writes.mls_active().is_empty());
     assert!(writes.cached_from().is_empty());
+}
+
+#[tokio::test]
+async fn the_home_relay_gives_the_user_a_handle_at_its_domain() {
+    let alice = Alice::new();
+    let mut doc = alice.document(false);
+    doc.username = Some("alice".to_string());
+    let (outcome, writes) = push(FACTS, RELAY, doc).await;
+    assert_eq!(outcome, IdentityPush::Applied(true));
+    assert_eq!(
+        writes.home_handle(),
+        vec![Some(HomeHandle {
+            username: "alice".to_string(),
+            domain: "relay.example".to_string(),
+        })]
+    );
+}
+
+#[tokio::test]
+async fn a_home_relay_without_a_valid_username_or_a_checked_domain_clears_the_handle() {
+    let alice = Alice::new();
+    for username in [
+        None,
+        Some("Alice"),
+        Some("r_alice"),
+        Some("a:b"),
+        Some("al"),
+    ] {
+        let mut doc = alice.document(false);
+        doc.username = username.map(str::to_string);
+        let (_, writes) = push(FACTS, RELAY, doc).await;
+        assert_eq!(writes.home_handle(), vec![None], "{username:?}");
+    }
+    // A home relay whose handle domain is not checked gives no handle either.
+    let delegated = Facts {
+        delegated_relay: Some(STRANGER),
+        home_relay: Some(STRANGER),
+        ..FACTS
+    };
+    let mut doc = alice.document(false);
+    doc.username = Some("alice".to_string());
+    let (_, writes) = push(delegated, STRANGER, doc).await;
+    assert_eq!(writes.home_handle(), vec![None]);
+}
+
+#[tokio::test]
+async fn a_relay_that_is_not_the_home_relay_leaves_the_handle_alone() {
+    let alice = Alice::new();
+    // The stranger holds a delegation, so it may push; the card's relay stays the home relay.
+    let delegated = Facts {
+        delegated_relay: Some(STRANGER),
+        ..FACTS
+    };
+    let mut doc = alice.document(false);
+    doc.username = Some("mallory".to_string());
+    let (outcome, writes) = push(delegated, STRANGER, doc).await;
+    assert_eq!(outcome, IdentityPush::Applied(true));
+    assert!(writes.home_handle().is_empty());
 }

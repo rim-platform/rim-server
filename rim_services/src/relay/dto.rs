@@ -31,7 +31,8 @@ pub struct IdentityDevice {
 }
 
 /// A person's identity as their relay serves it (`GET /s2s/v1/principals/<id>`, `POST
-/// /s2s/v1/identity`): key log, devices with certificates and revocations, newest card.
+/// /s2s/v1/identity`): key log, devices with certificates and revocations, newest card, and
+/// their username at that relay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityDocument {
@@ -39,6 +40,10 @@ pub struct IdentityDocument {
     pub key_log: Vec<SignedJson>,
     pub devices: Vec<IdentityDevice>,
     pub card: Option<SignedJson>,
+    /// The person's username at the relay serving the document, outside every signed
+    /// statement; absent from a relay that does not send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 /// An identity and the relay it came from.

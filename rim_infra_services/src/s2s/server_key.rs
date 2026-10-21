@@ -78,7 +78,7 @@ pub struct LoadedKey {
 }
 
 /// What the descriptor says besides the key: roles, endpoints, limits, registration and the
-/// abuse contact.
+/// handle domain and abuse contact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescriptorSettings {
     pub roles: Vec<Role>,
@@ -86,6 +86,7 @@ pub struct DescriptorSettings {
     pub limits: Limits,
     pub registration: Registration,
     pub mls_cipher_suites: Vec<i32>,
+    pub handle_domain: Option<String>,
     /// Where to report abuse on this server; `None` when the operator names none.
     pub abuse_contact: Option<String>,
 }
@@ -446,6 +447,7 @@ pub async fn with_descriptor(
             settings.mls_cipher_suites.clone(),
             settings.limits.clone(),
             settings.registration.clone(),
+            settings.handle_domain.clone(),
             timestamp(Utc::now()),
         )
         .with_abuse_contact(settings.abuse_contact.clone())
@@ -599,6 +601,7 @@ mod tests {
                 pow_bits: None,
             },
             mls_cipher_suites: vec![79],
+            handle_domain: Some("a.example".into()),
             abuse_contact: None,
         }
     }
@@ -806,6 +809,33 @@ mod tests {
         assert_eq!(current.descriptor_content.key_seq, 1);
         assert_eq!(current.descriptor_content.version, 3);
     }
+
+    #[tokio::test]
+    async fn a_new_handle_domain_signs_a_new_descriptor() {
+        let dir = tempfile::tempdir().expect("dir");
+        let files = files(dir.path());
+        let repo = MemoryRepo::default();
+        let loaded = load_or_create(&repo, &files).await.expect("create");
+        let without = DescriptorSettings {
+            handle_domain: None,
+            ..settings(None)
+        };
+        let first = with_descriptor(&repo, loaded, &without)
+            .await
+            .expect("descriptor");
+        assert!(!first.descriptor.payload.contains("handleDomain"));
+
+        let loaded = load(&repo, &files).await.expect("load");
+        let with = with_descriptor(&repo, loaded, &settings(None))
+            .await
+            .expect("descriptor");
+        assert_eq!(with.descriptor_content.version, 2);
+        assert_eq!(
+            with.descriptor_content.handle_domain.as_deref(),
+            Some("a.example")
+        );
+    }
+
     #[tokio::test]
     async fn a_new_abuse_contact_re_signs_the_descriptor() {
         let dir = tempfile::tempdir().expect("dir");
@@ -834,7 +864,13 @@ mod tests {
             changed
                 .descriptor
                 .payload
-                .contains(r#""abuseContact":"abuse@a.example""#)
+                .contains(r#""handleDomain":"a.example","issuedAt":"#)
+        );
+        assert!(
+            changed
+                .descriptor
+                .payload
+                .ends_with(r#","abuseContact":"abuse@a.example"}"#)
         );
     }
 }

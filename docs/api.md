@@ -120,7 +120,10 @@ five minutes:
 unsigned and advisory. `registration.full` is true while the server holds as many accounts as
 `RIM_LIMIT_ACCOUNTS` allows ("Limits"), so a client can say so before anyone tries to sign up.
 `specs/server-to-server-v1.md` ("Discovery document", "Pinning a peer") says how to verify and
-pin them.
+pin them. The descriptor's `handleDomain` is the domain of the server's handles ("Handles"); it
+is optional, so a client accepts a descriptor with or without it. At a handle domain that is not
+a server's own host the document is instead `{"delegate": "<origin>"}`, the origin of the
+server holding that domain's handles (`specs/server-to-server-v1.md`, "Handles").
 
 ### Probes: `/healthz` and `/readyz`
 
@@ -554,6 +557,20 @@ each list.
 
 The discovery document carries the same `features`, and `registrationFull` as
 `registration.full`, for a client that has not connected yet.
+
+## Handles
+
+`User.handle` is a person's handle, `@<username>:<domain>`: for an account on this server its
+username at this server's handle domain (`RIM_HANDLE_DOMAIN`), for a person from another server
+their username at their home server and that server's handle domain, such as
+`@kuba:rim-platform.org`. It is null for a person from another server whose handle is not known
+(their server did not say, or its domain does not point back at it) and for a deleted account;
+a client then shows the display name and never the internal `r_…` username of a remote person.
+The domain of `me.handle` is the viewer's own server's, so a client can show `@username` for
+people whose handle has that domain and the full handle for everyone else. A handle is a name
+for the person's key (`principalId`), which stays the identity: a username change changes the
+handle only. `searchMessages` takes either form after `from:`: `from:@kuba` names an account on
+this server, `from:@kuba:rim-platform.org` names whoever has that handle, here or elsewhere.
 
 ## The full GraphQL reference
 

@@ -88,6 +88,14 @@ pub struct RIMConfig {
     /// [`RIMConfig::key_login_audiences`] for the defaults.
     pub key_login_audiences: Option<String>,
 
+    /// The domain of this server's handles: people here are `@<username>:<domain>`, and the
+    /// signed descriptor declares it as `handleDomain`. A lowercase DNS name; default the host
+    /// of `RIM_PUBLIC_BASE_URL`, else `localhost`. A domain other than that host must serve
+    /// `{"delegate": "<this server's origin>"}` at `/.well-known/rim-server`, or other servers
+    /// show no handles for people here. Controlled by `RIM_HANDLE_DOMAIN`; see
+    /// [`RIMConfig::handle_domain`].
+    pub handle_domain: Option<String>,
+
     /// `relay`, `host` or `both` (default). Controlled by `RIM_ROLE`.
     pub role: Option<String>,
 
@@ -423,6 +431,7 @@ impl fmt::Debug for RIMConfig {
                 &self.notification_digest_interval_secs(),
             )
             .field("key_login_audiences", &self.key_login_audiences())
+            .field("handle_domain", &self.handle_domain())
             .field("role", &self.role)
             .field("server_key_file", &self.server_key_file)
             .field("franking_key_file", &self.franking_key_file)
@@ -491,6 +500,7 @@ impl Default for RIMConfig {
             public_base_url: None,
             notification_digest_interval_secs: None,
             key_login_audiences: None,
+            handle_domain: None,
             role: None,
             server_key_file: None,
             franking_key_file: None,
@@ -756,6 +766,38 @@ impl RIMConfig {
             format!("localhost:{}", self.server_port),
             format!("127.0.0.1:{}", self.server_port),
         ])
+    }
+}
+
+impl RIMConfig {
+    /// The domain of this server's handles: `RIM_HANDLE_DOMAIN`, trimmed and lowercased; when
+    /// unset or empty, the host of `RIM_PUBLIC_BASE_URL`, else `localhost`.
+    ///
+    /// # Errors
+    /// A message naming `RIM_HANDLE_DOMAIN` when the domain is not a DNS name (an IPv6 host
+    /// of `RIM_PUBLIC_BASE_URL` is not one, and needs the variable set).
+    pub fn handle_domain(&self) -> Result<String, String> {
+        let configured = self
+            .handle_domain
+            .as_deref()
+            .map(|d| d.trim().to_ascii_lowercase())
+            .filter(|d| !d.is_empty());
+        let domain = match configured {
+            Some(domain) => domain,
+            None => url::Url::parse(&self.public_origin())
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+                .unwrap_or_else(|| "localhost".to_string()),
+        };
+        if rim_s2s::is_handle_domain(&domain) {
+            Ok(domain)
+        } else {
+            Err(format!(
+                "RIM_HANDLE_DOMAIN={domain} is not a DNS name (letters, digits and hyphens in \
+                 dot-separated labels); set RIM_HANDLE_DOMAIN to the domain of this server's \
+                 handles"
+            ))
+        }
     }
 }
 
@@ -1607,6 +1649,48 @@ mod tests {
                 "relay.example.org:8443".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn handle_domain_is_configured_or_the_public_host() {
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_HANDLE_DOMAIN", " Rim-Platform.org "),
+            ("RIM_PUBLIC_BASE_URL", "https://relay.rim-platform.org"),
+        ]))
+        .expect("loads");
+        assert_eq!(config.handle_domain(), Ok("rim-platform.org".to_string()));
+
+        let config = RIMConfig {
+            public_base_url: Some("https://user@Relay.Example.com:8443/app".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.handle_domain(), Ok("relay.example.com".to_string()));
+        assert_eq!(
+            RIMConfig::default().handle_domain(),
+            Ok("localhost".to_string())
+        );
+    }
+
+    #[test]
+    fn handle_domain_refuses_what_is_not_a_dns_name() {
+        for domain in [
+            "rim_platform.org",
+            "rim-platform.org.",
+            "https://rim.example",
+        ] {
+            let config = RIMConfig {
+                handle_domain: Some(domain.to_string()),
+                ..Default::default()
+            };
+            let err = config.handle_domain().expect_err(domain);
+            assert!(err.contains("RIM_HANDLE_DOMAIN"), "{err}");
+        }
+        let config = RIMConfig {
+            public_base_url: Some("https://[2001:db8::1]".to_string()),
+            ..Default::default()
+        };
+        assert!(config.handle_domain().is_err());
     }
 
     #[test]

@@ -528,6 +528,7 @@ mod tests {
                 timezone: None,
                 principal_id,
                 deletion_scheduled_for: None,
+                handle: rim_core::user::model::UserHandle::Local,
             };
         }
         User {
@@ -545,6 +546,7 @@ mod tests {
             timezone: None,
             principal_id,
             deletion_scheduled_for: None,
+            handle: rim_core::user::model::UserHandle::Local,
         }
     }
 

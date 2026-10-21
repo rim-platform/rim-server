@@ -225,7 +225,8 @@ fn listed_devices(signers: &[Option<RotationSigner>], devices: Vec<DeviceKey>) -
     devices
 }
 
-/// A local user's document, or `None` when the user has no key identity.
+/// A local user's document, carrying their `username` here, or `None` when the user has no key
+/// identity.
 ///
 /// # Errors
 /// What the repositories return, and `Internal` when a stored key log entry cannot be read.
@@ -234,6 +235,7 @@ pub(crate) async fn local_document(
     e2ee_repo: &dyn E2eeRepository,
     user_id: UserId,
     principal_id: &str,
+    username: Option<String>,
 ) -> ServiceResult<Option<IdentityDocument>> {
     let log = key_identity_repo.list_key_log(user_id).await?;
     if log.is_empty() {
@@ -278,6 +280,7 @@ pub(crate) async fn local_document(
             .collect(),
         devices,
         card,
+        username,
     }))
 }
 
@@ -524,6 +527,7 @@ pub(crate) mod testing {
                 mls_active: true,
             }],
             card: Some(signed(&card)),
+            username: None,
         }
     }
 }
@@ -612,7 +616,7 @@ mod tests {
             let active = active.clone();
             Box::pin(async move { Ok(active) })
         });
-        local_document(&keys, &e2ee, UserId::new(), principal_id)
+        local_document(&keys, &e2ee, UserId::new(), principal_id, None)
             .await
             .expect("document")
             .expect("a key identity")
@@ -721,6 +725,7 @@ mod tests {
             key_log: vec![signed(&inception), signed(&recovery)],
             devices: vec![device(1, &old), device(2, &new)],
             card: None,
+            username: None,
         };
         let verified = verify_identity(&doc).expect("verify");
         let ids: Vec<Uuid> = verified.devices.iter().map(|d| d.cert.device_id).collect();
@@ -931,6 +936,7 @@ mod tests {
                 mls_active: true,
             }],
             card: None,
+            username: None,
         };
 
         let (stored, ended) = store_held(user_id, &[inception], rows, &doc).await;

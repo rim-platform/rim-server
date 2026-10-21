@@ -490,6 +490,7 @@ fn card_of(principal_id: &str, key_log: Vec<SignedJson>, card: &SignedJson) -> O
         key_log,
         devices: Vec::new(),
         card: Some(card.clone()),
+        username: None,
     })
 }
 
@@ -1523,11 +1524,18 @@ impl RelayService for DefaultRelayService {
         }
         match self.repos.host_repo.find_user(&principal_id).await? {
             Some((user_id, UserKind::Local)) => {
+                let username = self
+                    .repos
+                    .user_repo
+                    .get_by_id(user_id)
+                    .await?
+                    .map(|u| u.username);
                 local_document(
                     self.repos.key_identity_repo.as_ref(),
                     self.repos.e2ee_repo.as_ref(),
                     user_id,
                     &principal_id,
+                    username,
                 )
                 .await
             }

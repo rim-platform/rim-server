@@ -539,7 +539,20 @@ An account already in the workspace, or banned from it, is left as it is.
 an invite to it still follows the cap. The workspace's channels are ordinary plaintext channels;
 DMs and encrypted groups are untouched, and other servers see an ordinary membership.
 
-## Who may start a DM
+## Handles
+
+Everyone here has a handle, `@<username>:<domain>`, which other servers and their apps show
+for them and which people type to mention or search for them. Usernames are 3 to 32 letters,
+digits, `_` and `-`, stored in lowercase: `Kuba` signs up as `kuba`, and sign-in and search
+accept any case. The domain is `RIM_HANDLE_DOMAIN`, commented out in `deploy/.env.example`: by
+default the host of `RIM_PUBLIC_BASE_URL` (`rim.example.org` gives `@kuba:rim.example.org`),
+and the server refuses to start when it is not a DNS name. Handles may use a shorter domain
+than the server's, say `example.org` for a server at `rim.example.org`, when
+`https://example.org/.well-known/rim-server` serves `{"delegate": "https://rim.example.org"}`;
+`docs/server-identity.md`, "Handles and delegation", has the details. Choose the domain before
+people join: changing it later changes every handle here (keys, contacts and memberships stay).
+
+
 
 `RIM_DM_INBOUND`, `RIM_DM_OUTBOUND` and `RIM_DM_PARTNERS` (commented out in
 `deploy/.env.example`) set floors for every account: by default a stranger's first message is a

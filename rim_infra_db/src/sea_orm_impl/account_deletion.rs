@@ -642,7 +642,8 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                        status_text = NULL, bio = NULL, timezone = NULL, last_login_at = NULL,
                        terms_accepted_at = NULL, terms_accepted_url = NULL,
                        minimum_age_confirmed = NULL,
-                       identity_key = NULL, home_relay = NULL
+                       identity_key = NULL, home_relay = NULL, home_username = NULL,
+                       home_handle_domain = NULL
                    WHERE id = $1"#,
                 vec![
                     uuid(user_id),

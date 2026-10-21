@@ -658,6 +658,7 @@ mod tests {
             timezone: None,
             principal_id: principal.map(str::to_string),
             deletion_scheduled_for: None,
+            handle: rim_core::user::model::UserHandle::Local,
         }
     }
 

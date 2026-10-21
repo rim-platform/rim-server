@@ -75,6 +75,8 @@ USER rim
 #                           RIM_KEY_LOGIN_AUDIENCES is required: the server binds 0.0.0.0 and
 #                           refuses to start without an audience for key logins
 #   RIM_KEY_LOGIN_AUDIENCES — comma-separated host[:port] clients reach this server at
+#   RIM_HANDLE_DOMAIN     — domain of handles, @<username>:<domain> (default: the host of
+#                           RIM_PUBLIC_BASE_URL); another domain delegates to this server
 #   RIM_ROLE              — relay, host or both (default: both)
 #   RIM_REGISTRATION_POW_BITS — turns on proof-of-work signups with that many leading zero bits
 #   Per-user quotas of a relay:

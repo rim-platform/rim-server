@@ -27,6 +27,8 @@ pub struct Model {
     pub first_seen_at: DateTimeWithTimeZone,
     pub fetched_at: DateTimeWithTimeZone,
     pub last_request_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub handle_domain: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

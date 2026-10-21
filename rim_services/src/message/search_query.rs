@@ -35,10 +35,15 @@ pub struct ParsedSearchQuery {
     pub before: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// The `from:` operator, either an unresolved username or an already-known user id.
+/// The `from:` operator: an unresolved username or handle, or an already-known user id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FromToken {
     Username(String),
+    /// `from:@<username>:<domain>`, a handle.
+    Handle {
+        username: String,
+        domain: String,
+    },
     UserId(uuid::Uuid),
 }
 
@@ -109,13 +114,20 @@ fn split_operator(token: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// `from:@x` and `from:x` both parse as `Username("x")`; a value that parses as a UUID (with or
-/// without a leading `@`, though `@<uuid>` is not an expected real-world input) becomes `UserId`.
+/// `from:@x` and `from:x` both parse as `Username("x")`, and `from:@x:d` as a `Handle`; a value
+/// that parses as a UUID (with or without a leading `@`, though `@<uuid>` is not an expected
+/// real-world input) becomes `UserId`.
 fn parse_from_token(value: &str) -> FromToken {
     let stripped = value.strip_prefix('@').unwrap_or(value);
     match uuid::Uuid::parse_str(stripped) {
         Ok(uuid) => FromToken::UserId(uuid),
-        Err(_) => FromToken::Username(stripped.to_string()),
+        Err(_) => match stripped.split_once(':') {
+            Some((username, domain)) => FromToken::Handle {
+                username: username.to_string(),
+                domain: domain.to_string(),
+            },
+            None => FromToken::Username(stripped.to_string()),
+        },
     }
 }
 
@@ -152,6 +164,19 @@ fn parse_date_boundary(value: &str) -> ServiceResult<chrono::DateTime<chrono::Ut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_a_handle_parses_its_username_and_domain() {
+        let parsed = parse_search_query("deploy from:@kuba:rim-platform.org").unwrap();
+        assert_eq!(parsed.text, "deploy");
+        assert_eq!(
+            parsed.from,
+            Some(FromToken::Handle {
+                username: "kuba".into(),
+                domain: "rim-platform.org".into(),
+            })
+        );
+    }
 
     #[test]
     fn plain_free_text_has_no_operators() {

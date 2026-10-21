@@ -13,10 +13,12 @@
 //! - [`http_sig`]: signature bases, signing and verifying requests and responses.
 //! - [`SharedIdentity`]: this server's key, log and descriptor, shared by everything that
 //!   signs.
+//! - [`handle`]: handle domains and the `@<username>:<domain>` form.
 //! - [`pow`]: the proof-of-work a relay in `pow` registration mode asks of key-only signups.
 
 pub mod descriptor;
 mod error;
+pub mod handle;
 pub mod host;
 pub mod http_sig;
 mod identity;
@@ -33,6 +35,7 @@ pub use descriptor::{
     verify_descriptor,
 };
 pub use error::{SignatureRefusal, StatementError, StatementResult};
+pub use handle::{format_handle, is_handle_domain};
 pub use http_sig::KeyId;
 pub use identity::{ServerIdentity, SharedIdentity};
 pub use key_log::{

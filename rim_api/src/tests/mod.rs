@@ -318,6 +318,7 @@ fn test_user_dto() -> rim_services::user::dto::UserDto {
         bio: None,
         principal_id: None,
         deletion_scheduled_for: None,
+        handle: None,
     }
 }
 

@@ -51,6 +51,9 @@ pub struct JoinRequest {
     /// A `login` statement over a challenge from the host, naming the host's server id.
     pub proof: SignedJson,
     pub delegation: SignedJson,
+    /// The person's username at the relay presenting them, outside every signed statement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 /// The host's answer to a join.

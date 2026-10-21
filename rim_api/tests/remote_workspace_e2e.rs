@@ -726,6 +726,17 @@ async fn a_remote_member_joins_through_the_relay_and_channel_traffic_flows_both_
         1,
         "the host holds Rita as a remote user whose relay presented her delegation"
     );
+    assert_eq!(
+        scalar(
+            &h,
+            r#"SELECT count(*) AS n FROM "user" WHERE id = $1 AND home_username = 'rita'
+                 AND home_handle_domain = '127.0.0.1'"#,
+            vec![Uuid::from(rita_on_h).into()],
+        )
+        .await,
+        1,
+        "the join carries Rita's username at her relay, whose handle domain is checked"
+    );
     assert_eq!(active_delegations(&h, &rita.principal()).await, 1);
     let subscriptions = rita.ok(SUBSCRIPTIONS, json!({})).await["remoteSubscriptions"].clone();
     assert_eq!(subscriptions[0]["status"], "active");

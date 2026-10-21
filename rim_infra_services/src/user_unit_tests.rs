@@ -28,6 +28,7 @@ mod tests {
             timezone: None,
             principal_id: None,
             deletion_scheduled_for: None,
+            handle: rim_core::user::model::UserHandle::Local,
         }
     }
 
@@ -83,6 +84,55 @@ mod tests {
         assert_eq!(me.deletion_scheduled_for, Some(at));
         let others = svc.get_users_by_ids(&[id]).await.unwrap();
         assert_eq!(others[0].deletion_scheduled_for, None);
+    }
+
+    #[tokio::test]
+    async fn handles_are_built_for_local_and_remote_users() {
+        use rim_core::user::model::UserHandle;
+
+        let local = UserId::new();
+        let remote = UserId::new();
+        let unknown = UserId::new();
+        let mut user_repo = MockUserRepository::new();
+        user_repo.expect_get_by_ids().returning(move |_| {
+            Ok(vec![
+                User {
+                    username: "Kuba".to_string(),
+                    ..user(local)
+                },
+                User {
+                    username: "r_txDLbnipi5i3kCJtJwBOUixzv_MY8O".to_string(),
+                    handle: UserHandle::Home {
+                        username: "kuba".to_string(),
+                        domain: "rim-platform.org".to_string(),
+                    },
+                    ..user(remote)
+                },
+                User {
+                    handle: UserHandle::Unknown,
+                    ..user(unknown)
+                },
+            ])
+        });
+        let svc = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(user_repo),
+        })
+        .with_handle_domain(Some("chat.example".to_string()));
+        let handles: Vec<Option<String>> = svc
+            .get_users_by_ids(&[local, remote, unknown])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|u| u.handle)
+            .collect();
+        assert_eq!(
+            handles,
+            vec![
+                Some("@kuba:chat.example".to_string()),
+                Some("@kuba:rim-platform.org".to_string()),
+                None,
+            ]
+        );
     }
 
     #[tokio::test]

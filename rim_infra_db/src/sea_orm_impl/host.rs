@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rim_core::conversation::model::ConversationId;
 use rim_core::host::model::{
-    NewRemoteUser, OutboxBacklog, OutboxRow, OutboxStats, PeerDelivery, RemoteMember, SeqDecision,
-    UserKind,
+    HomeHandle, NewRemoteUser, OutboxBacklog, OutboxRow, OutboxStats, PeerDelivery, RemoteMember,
+    SeqDecision, UserKind,
 };
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::DeviceKeyId;
@@ -274,7 +274,8 @@ impl HostRepository for SeaOrmHostRepository {
         let changed = self
             .execute(
                 r#"UPDATE "user" SET kind = 'local', username = $2, display_name = $3,
-                       email = COALESCE($4, email), home_relay = NULL, updated_at = now()
+                       email = COALESCE($4, email), home_relay = NULL, home_username = NULL,
+                       home_handle_domain = NULL, updated_at = now()
                    WHERE id = $1 AND kind = 'remote'"#,
                 vec![
                     uuid(user_id),
@@ -299,6 +300,21 @@ impl HostRepository for SeaOrmHostRepository {
             )
             .await?
             .and_then(|r| r.value))
+    }
+
+    async fn set_home_handle(&self, user_id: UserId, handle: Option<HomeHandle>) -> RepoResult<()> {
+        let (username, domain) = match handle {
+            Some(h) => (Some(h.username), Some(h.domain)),
+            None => (None, None),
+        };
+        self.execute(
+            r#"UPDATE "user" SET home_username = $2, home_handle_domain = $3, updated_at = now()
+               WHERE id = $1 AND kind = 'remote'
+                 AND (home_username, home_handle_domain) IS DISTINCT FROM ($2, $3)"#,
+            vec![uuid(user_id), username.into(), domain.into()],
+        )
+        .await?;
+        Ok(())
     }
 
     async fn peer_at_origin(&self, origin: &str) -> RepoResult<Option<String>> {

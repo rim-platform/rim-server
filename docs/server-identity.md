@@ -129,12 +129,41 @@ For local development bind `RIM_SERVER_HOST=127.0.0.1`, or set
 `GET /.well-known/rim-server` answers, to anyone and cacheable for five minutes, the key log and
 the **descriptor**: a statement signed by the current key with the server's roles, its endpoints
 (`/api`, `/api/ws`, and `/s2s/v1` when server-to-server traffic is on), the protocol versions,
-MLS cipher suites, limits and registration mode, and the abuse contact when `RIM_ABUSE_CONTACT`
-names one. Registration is invite-only (`invite`) unless `RIM_OPEN_REGISTRATION` or
-`RIM_REGISTRATION_POW_BITS` is set. The server signs a new descriptor with a higher `version`
-whenever its configuration changes it and after every rotation. Beside the descriptor,
-unsigned, the document lists the optional features and says whether registration is full
-(`RIM_LIMIT_ACCOUNTS`, `docs/api.md`).
+MLS cipher suites, limits, registration mode and **handle domain**, and the abuse contact when
+`RIM_ABUSE_CONTACT` names one. Registration is invite-only (`invite`) unless
+`RIM_OPEN_REGISTRATION` or `RIM_REGISTRATION_POW_BITS` is set. The server signs a new descriptor
+with a higher `version` whenever its configuration changes it and after every rotation. Beside
+the descriptor, unsigned, the document lists the optional features and says whether
+registration is full (`RIM_LIMIT_ACCOUNTS`, `docs/api.md`).
+
+### Handles and delegation
+
+People are shown to other servers by their **handle**, `@<username>:<domain>`, such as
+`@kuba:rim-platform.org`. The domain is `RIM_HANDLE_DOMAIN`, by default the host of
+`RIM_PUBLIC_BASE_URL`; the descriptor declares it as `handleDomain`. A handle is a readable name
+for a person's key, never the key itself: a username change changes the handle and nothing else.
+
+With the default nothing more is needed. To give handles a domain other than the server's own
+host, so that they survive moving the server to another machine or subdomain (the server at
+`https://relay.rim-platform.org` with handles at `rim-platform.org`), set
+`RIM_HANDLE_DOMAIN=rim-platform.org` and serve this file at
+`https://rim-platform.org/.well-known/rim-server`, from whatever answers there (a static site
+will do):
+
+```json
+{"delegate": "https://relay.rim-platform.org"}
+```
+
+The value is the origin of `RIM_PUBLIC_BASE_URL`: `https`, no path, no trailing slash. Other
+servers check the claim both ways before they show a handle: the domain must hand them to this
+server, and this server's descriptor must name the domain. They fetch the file with the same rules
+as a discovery document (5 seconds, 64 KiB, no redirects, public addresses only) and follow a
+delegation once; the file at the delegate origin must be this server's own discovery document. A
+server whose domain does not answer, or answers with anything else, keeps its people without
+handles on other servers (they log "a peer's handle domain does not point back at it"), and its
+own users still see their own handles. Changing `RIM_HANDLE_DOMAIN` later changes everyone's
+handle; people's keys, contacts and memberships stay as they are. The protocol is in
+`docs/specs/server-to-server-v1.md`, "Handles".
 
 ## Roles and server-to-server configuration
 
@@ -144,6 +173,7 @@ workspaces (`RIM_ROLE=both`), with server-to-server traffic off.
 | Variable | Default | Meaning |
 |---|---|---|
 | `RIM_PUBLIC_BASE_URL` | unset | The URL clients and peers reach this server at. Server-to-server traffic is on only when it is `https`. Its origin is sent as `Rim-Origin` and is the base every signed request is checked against, so it must be the URL peers actually use, also behind a TLS-terminating proxy |
+| `RIM_HANDLE_DOMAIN` | the host of `RIM_PUBLIC_BASE_URL` | The domain of people's handles (`@<username>:<domain>`), a lowercase DNS name; the server refuses to start on anything else. Another domain delegates to this server ("Handles and delegation") |
 | `RIM_ROLE` | `both` | `relay` (its users' server and their direct messages), `host` (workspaces only) or `both` |
 | `RIM_SERVER_KEY_FILE` | `<RIM_DATA_DIR>/server-key.json` | The server key seed |
 | `RIM_HOST_ALLOWED_RELAYS` | empty, any | Comma-separated server ids allowed to use this server's workspaces as a host |
@@ -169,6 +199,8 @@ A peer learns this server's id from a request, an invite or a profile card, fetc
 document from the origin, checks that the log hashes to the id, and pins the log. From then on it
 accepts only requests and answers signed by the pinned key (or the previous key for 24 hours after
 a routine rotation). If the log it fetches later does not extend the pin, it refuses this server
-until its operator resets the pin. Each peer appears in the log as `s2s.peer_pinned`,
-`s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked` and `s2s.peer_unblocked` events (target
-`audit`), with server ids only.
+until its operator resets the pin. It also checks this server's handle domain, as "Handles and
+delegation" says, at the pin and at every refetch. Each peer appears in the log as
+`s2s.peer_pinned`, `s2s.peer_rotated`, `s2s.peer_forked`, `s2s.peer_blocked`,
+`s2s.peer_unblocked` and `s2s.peer_handle_domain` events (target `audit`), with server ids and
+the checked domain only.

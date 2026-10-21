@@ -48,6 +48,12 @@ pub struct Model {
     pub instance_operator: bool,
     /// The minimum age the account confirmed having reached at signup.
     pub minimum_age_confirmed: Option<i16>,
+    /// A remote user's username at their home relay; set together with `home_handle_domain`.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub home_username: Option<String>,
+    /// The checked handle domain of a remote user's home relay.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub home_handle_domain: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

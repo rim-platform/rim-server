@@ -39,6 +39,11 @@ pub trait PeerService: Send + Sync {
     /// descriptor.
     async fn discovery_document(&self, server_id: &str) -> ServiceResult<Option<String>>;
 
+    /// The handle domain of an active pinned peer: the one its descriptor declares, once it was
+    /// checked to point back at the peer. `None` for a peer that is not pinned or active, whose
+    /// descriptor declares none, or whose domain points elsewhere or was not checked yet.
+    async fn handle_domain(&self, server_id: &str) -> ServiceResult<Option<String>>;
+
     /// A pinned peer's key log, inception first; empty when it is not pinned.
     async fn pinned_key_log(
         &self,

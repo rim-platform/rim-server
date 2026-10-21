@@ -85,6 +85,7 @@ fn identity(seed: u8) -> SharedIdentity {
             mode: RegistrationMode::Invite,
             pow_bits: None,
         },
+        None,
         timestamp(Utc::now()),
     );
     let descriptor = sign_descriptor(&signer, &content).expect("descriptor");
@@ -474,6 +475,7 @@ fn sender_document(card: Option<SignedJson>) -> IdentityDocument {
         key_log: vec![signed(&id.inception())],
         devices: Vec::new(),
         card,
+        username: None,
     }
 }
 
@@ -1137,6 +1139,7 @@ fn alice_document_of(id: &TestIdentity) -> IdentityDocument {
         key_log: vec![signed(&id.inception())],
         devices: Vec::new(),
         card: None,
+        username: None,
     }
 }
 
@@ -3517,6 +3520,7 @@ fn reinvite_writer(
         timezone: None,
         principal_id: Some(principal.to_string()),
         deletion_scheduled_for: None,
+        handle: rim_core::user::model::UserHandle::Local,
     };
     let mut users = MockUserRepository::new();
     let creator = user(ada, ALICE);

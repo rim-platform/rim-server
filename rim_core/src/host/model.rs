@@ -43,6 +43,14 @@ pub struct NewRemoteUser {
     pub home_relay: Option<String>,
 }
 
+/// A remote user's handle at their home relay: their username there and the relay's checked
+/// handle domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeHandle {
+    pub username: String,
+    pub domain: String,
+}
+
 /// A remote member of a space and what the outbox writer needs to address them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteMember {

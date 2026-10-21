@@ -23,6 +23,7 @@ use rim_services::{ServiceError, ServiceResult};
 use serde::Deserialize;
 
 use crate::keyed_rate_limiter::KeyedRateLimiter;
+use crate::s2s::handle_domain::{DomainCheck, check_handle_domain};
 use crate::s2s::net::{NetError, check_url_host, http_client, normalize_origin, read_limited};
 
 /// Path of the discovery document below an origin.
@@ -208,6 +209,13 @@ pub fn peer_keys(peer: &PeerServer, now: DateTime<Utc>) -> PeerKeysDto {
     }
 }
 
+/// The handle domain a pinned peer's descriptor declares.
+fn declared_handle_domain(peer: &PeerServer) -> Option<String> {
+    serde_json::from_str::<ServerDescriptor>(&peer.descriptor.payload)
+        .ok()
+        .and_then(|d| d.handle_domain)
+}
+
 fn to_dto(peer: &PeerServer) -> PeerDto {
     PeerDto {
         server_id: peer.server_id.clone(),
@@ -341,7 +349,7 @@ impl DefaultPeerService {
                     head_seq = peer.head_seq,
                     "pinned a peer server"
                 );
-                Ok(peer)
+                Ok(self.record_handle_domain(peer).await?)
             }
             Err(e) if e.kind() == RepoErrorKind::Conflict => self
                 .repo
@@ -423,11 +431,78 @@ impl DefaultPeerService {
                 return Err(RefreshError::Forked);
             }
         }
-        self.repo
+        let fresh = self
+            .repo
             .find(&peer.server_id)
             .await
             .map_err(failed)?
-            .ok_or_else(|| RefreshError::Failed("peer was reset".to_string()))
+            .ok_or_else(|| RefreshError::Failed("peer was reset".to_string()))?;
+        self.record_handle_domain(fresh).await.map_err(failed)
+    }
+
+    /// Check the handle domain the peer's descriptor declares and record the outcome: the
+    /// domain when it points back at the peer, `None` when the descriptor declares none or the
+    /// domain points elsewhere. A check that cannot run now (the domain does not answer, or the
+    /// fetch limits are reached) keeps what was recorded. Returns the peer as recorded.
+    ///
+    /// # Errors
+    /// What the repository returns.
+    async fn record_handle_domain(
+        &self,
+        mut peer: PeerServer,
+    ) -> Result<PeerServer, rim_core::repository::error::RepoError> {
+        let checked = match declared_handle_domain(&peer) {
+            None => None,
+            Some(domain) => {
+                let check = if self.may_fetch(&format!("handle-domain:{domain}")) {
+                    check_handle_domain(
+                        self.fetcher.as_ref(),
+                        &peer.origin,
+                        &peer.server_id,
+                        &domain,
+                        self.allow_http,
+                    )
+                    .await
+                } else {
+                    DomainCheck::Unavailable("over the fetch limits".to_string())
+                };
+                match check {
+                    DomainCheck::Verified => Some(domain),
+                    DomainCheck::Refused(reason) => {
+                        tracing::warn!(
+                            peer_server_id = %peer.server_id,
+                            handle_domain = %domain,
+                            reason = %reason,
+                            "a peer's handle domain does not point back at it; its people get no handles"
+                        );
+                        None
+                    }
+                    DomainCheck::Unavailable(reason) => {
+                        tracing::warn!(
+                            peer_server_id = %peer.server_id,
+                            handle_domain = %domain,
+                            reason = %reason,
+                            "could not check a peer's handle domain; keeping what was recorded"
+                        );
+                        return Ok(peer);
+                    }
+                }
+            }
+        };
+        if checked != peer.handle_domain {
+            self.repo
+                .set_handle_domain(&peer.server_id, checked.clone())
+                .await?;
+            tracing::info!(
+                target: "audit",
+                event = "s2s.peer_handle_domain",
+                peer_server_id = %peer.server_id,
+                handle_domain = checked.as_deref().unwrap_or(""),
+                "recorded a peer server's handle domain"
+            );
+            peer.handle_domain = checked;
+        }
+        Ok(peer)
     }
 
     /// Refresh within the limits; a failure keeps the pin as it was.
@@ -559,6 +634,19 @@ impl PeerService for DefaultPeerService {
             })
             .to_string(),
         ))
+    }
+
+    async fn handle_domain(&self, server_id: &str) -> ServiceResult<Option<String>> {
+        Ok(self
+            .repo
+            .find(server_id)
+            .await?
+            .filter(|peer| peer.status == PeerStatus::Active)
+            .and_then(|peer| {
+                peer.handle_domain
+                    .clone()
+                    .filter(|checked| declared_handle_domain(&peer).as_ref() == Some(checked))
+            }))
     }
 
     async fn pinned_key_log(&self, server_id: &str) -> ServiceResult<Vec<SignedJson>> {
