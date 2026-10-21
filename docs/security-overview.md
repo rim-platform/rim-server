@@ -144,9 +144,9 @@ whose log forks is refused until an operator checks it out of band.
 - **Sandboxed plugins** run in an iframe with `allow-scripts` only and an opaque origin. They
   cannot reach the RIM session, the CSRF token, device keys, files or other plugins, and a
   per-plugin policy lets them fetch only from the sites their manifest lists and the user allowed
-  ([web plugins](../../rim-ui/docs/web-plugins.md), [spec](specs/web-plugins-v1.md)). Other
-  channels remain, such as navigation, DNS prefetch and WebRTC, so whatever a plugin is shown is
-  available to its author.
+  ([web plugins](../../rim-ui/docs/web-plugins.md), [spec](specs/web-plugins-v1.md)). The shell
+  removes WebRTC before any plugin code runs. Small one-way channels remain, such as navigation
+  and DNS prefetch, so whatever a plugin is shown could still reach its author.
 - **Plugins that run on the computer** run as the user, with the user's access to files, the
   network and local credentials. Their permissions govern what the app does for them, not what
   the program can do. Install steps such as `npm install` run only after a dialog lists each

@@ -556,7 +556,7 @@ the module loaded is not lost.
 | Drawing over the host, clickjacking host controls | Yes | The iframe's box. Host dialogs render above frames, and frames are `inert` while one is open. |
 | Faking host UI inside its own box | No | A plugin can draw a fake RIM dialog or password form in its box. Rules: RIM never asks for a password, recovery phrase or confirmation inside a plugin's area; host chrome around each panel shows the plugin's name and trust badge; dangerous confirmations are host dialogs naming the plugin. |
 | Sending data to unlisted origins with `fetch`, XHR, WebSocket, images, fonts | Yes | The policy |
-| Leaking data by other channels | No | A frame can navigate itself to any URL (the load rule removes it after the request left); DNS prefetch, WebRTC ICE and timing are outside CSP. Anything shown to a web plugin should be treated as available to its author, which the `network.fetch` description says. |
+| Leaking data by other channels | No | A frame can navigate itself to any URL (the load rule removes it after the request left); DNS prefetch and timing are outside CSP; the shell removes WebRTC (rule 2). Anything shown to a web plugin should be treated as available to its author, which the `network.fetch` description says. |
 | Passing on its own secret settings | No | The plugin that declares a secret setting receives it in plain form (on the desktop; the web app keeps none) and can send it to its listed origins and by the channels above. A secret setting is kept from other plugins and web pages, not from the plugin that owns it. Host-attached secrets are deferred. |
 | Using the user's cookies on a listed site | Partly | `credentialless` where supported, otherwise the browser's third-party cookie rules |
 | CPU and memory exhaustion | Partly | Where the browser gives the frame its own process, missed heartbeats remove it. Where the frame shares the host's thread (WebKit-based webviews), a busy loop freezes the app until reload, and safe start keeps it from starting again. |
@@ -565,7 +565,10 @@ the module loaded is not lost.
 Rules:
 
 1. `sandbox` is exactly `allow-scripts`.
-2. The shell appends the per-plugin policy before any plugin byte runs.
+2. The shell appends the per-plugin policy before any plugin byte runs, and sets
+   `RTCPeerConnection`, `webkitRTCPeerConnection`, `RTCSessionDescription`, `RTCIceCandidate`
+   and `RTCDataChannel` to `undefined`, non-writable and non-configurable: ICE gathering reaches
+   any STUN or TURN server, past `connect-src`.
 3. The host never puts the RIM API origin, the web app's origin, `http:` or a wildcard into a
    frame's policy. A manifest whose `network_origins` names the app's or the API's origin is
    refused at install.
