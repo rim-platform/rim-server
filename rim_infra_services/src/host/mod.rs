@@ -37,6 +37,7 @@ use rim_identity::{SignedStatement, UnverifiedDeviceRequest};
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_s2s::SharedIdentity;
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::default_workspace::DefaultWorkspaceService;
 use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::dto::{
@@ -126,6 +127,9 @@ pub struct DefaultHostService {
     clock: Clock,
     /// The operator's DM settings.
     dm_policy: DmOperatorPolicy,
+    /// The server's default workspace, which every new account joins and so makes nobody
+    /// known to a new account in probation; without one every shared workspace counts.
+    default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
 }
 
 fn upstream(server_id: &str) -> ServiceError {
@@ -183,7 +187,18 @@ impl DefaultHostService {
             limits: InstanceLimits::default(),
             clock: Clock::default(),
             dm_policy: DmOperatorPolicy::default(),
+            default_workspace: None,
         }
+    }
+
+    /// Leave the server's default workspace out of the workspaces that make someone known to a
+    /// new account in probation.
+    pub fn with_default_workspace(
+        mut self,
+        default_workspace: Arc<dyn DefaultWorkspaceService>,
+    ) -> Self {
+        self.default_workspace = Some(default_workspace);
+        self
     }
 
     /// Apply the operator's DM settings.
@@ -367,7 +382,8 @@ impl DefaultHostService {
 
     /// `Validation` while `actor`'s account is in probation (an instance operator never is) and
     /// the holder of one of `principal_ids` is a stranger to them: someone they do not know
-    /// (see [`RelayRepository::knows`]) who is not in a workspace with them.
+    /// (see [`RelayRepository::knows`]) who is in no workspace with them but the server's
+    /// default workspace, which every new account joins.
     async fn refuse_strangers_in_probation(
         &self,
         actor: Actor,
@@ -394,6 +410,10 @@ impl DefaultHostService {
         {
             return Ok(());
         }
+        let default_workspace = match &self.default_workspace {
+            Some(default_workspace) => default_workspace.current().await?,
+            None => None,
+        };
         for principal_id in principal_ids {
             let known = user.principal_id.as_ref() == Some(principal_id)
                 || self
@@ -404,7 +424,7 @@ impl DefaultHostService {
                 || self
                     .repos
                     .host_repo
-                    .shares_workspace(actor.user_id, principal_id)
+                    .shares_workspace(actor.user_id, principal_id, default_workspace)
                     .await?;
             if !known {
                 return self.limits.ensure_out_of_probation(

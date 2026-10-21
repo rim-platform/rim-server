@@ -381,7 +381,8 @@ with and does not know (a contact who lists it too, or someone either of them ac
 request from; adding someone as a contact alone is not enough), and with
 `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
 are judged by their age, so turning it on does not hold back anyone older than the setting.
-The instance operator is never on probation: the account that claims the default workspace
+The default workspace ("A default workspace" below) is left out of the workspaces it shares,
+since every new account joins it. The instance operator is never on probation: the account that claims the default workspace
 with the operator role, or one granted it with `rim_server operator grant`, can create
 workspaces and message anyone from the moment it holds the role.
 
@@ -466,7 +467,9 @@ signs up: open, proof-of-work, with an instance invite or a workspace invite, wi
 password. The account joins as soon as it exists and gets the workspace's public channels like
 any new member, so people land where others already are instead of in an empty direct space.
 `serverInfo.defaultWorkspace` names the workspace, so a client can open it after a signup.
-Without one, nothing changes: a new account joins only the workspace its invite names.
+Without one, nothing changes: a new account joins only the workspace its invite names. Sharing
+the default workspace makes nobody known to a new account in probation (`RIM_PROBATION_HOURS`):
+it still sends no DM request to someone it shares no other workspace with.
 
 There are two ways to name it: describe it in a file, or point at a workspace made in the app.
 Setting both stops the server at boot.

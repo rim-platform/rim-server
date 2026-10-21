@@ -75,9 +75,14 @@ pub trait HostRepository: Send + Sync {
         active: bool,
     ) -> RepoResult<()>;
 
-    /// Whether a user shares a workspace (not the direct space) with the user holding a
-    /// principal.
-    async fn shares_workspace(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
+    /// Whether a user shares a workspace (not the direct space, nor `except` when given) with
+    /// the user holding a principal.
+    async fn shares_workspace(
+        &self,
+        user_id: UserId,
+        principal_id: &str,
+        except: Option<ServerId>,
+    ) -> RepoResult<bool>;
 
     async fn set_conversation_predecessor(
         &self,

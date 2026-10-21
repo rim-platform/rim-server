@@ -368,7 +368,12 @@ impl HostRepository for SeaOrmHostRepository {
         Ok(())
     }
 
-    async fn shares_workspace(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool> {
+    async fn shares_workspace(
+        &self,
+        user_id: UserId,
+        principal_id: &str,
+        except: Option<ServerId>,
+    ) -> RepoResult<bool> {
         Ok(self
             .one::<FlagRow>(
                 r#"SELECT EXISTS (
@@ -376,8 +381,13 @@ impl HostRepository for SeaOrmHostRepository {
                        JOIN server s ON s.id = a.server_id AND s.kind = 'workspace'
                        JOIN server_member b ON b.server_id = a.server_id
                        JOIN "user" u ON u.id = b.user_id
-                       WHERE a.user_id = $1 AND u.principal_id = $2) AS flag"#,
-                vec![uuid(user_id), principal_id.into()],
+                       WHERE a.user_id = $1 AND u.principal_id = $2
+                         AND a.server_id IS DISTINCT FROM $3::uuid) AS flag"#,
+                vec![
+                    uuid(user_id),
+                    principal_id.into(),
+                    except.map(Uuid::from).into(),
+                ],
             )
             .await?
             .is_some_and(|r| r.flag))

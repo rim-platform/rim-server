@@ -3,7 +3,7 @@
 //! `VALIDATION` naming it, and allows the writes within it. With a one-hour probation, a new
 //! account creates no workspace and sends no DM request to a stranger, a contact it added on
 //! its own included, and `me` says when its probation ends; an instance operator is never on
-//! probation.
+//! probation, and the server's default workspace makes nobody known to a new account.
 //!
 //! Run with:
 //! ```sh
@@ -234,6 +234,54 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
         ),
     )
     .await;
+
+    node.stop().await;
+}
+
+/// With a default workspace every new account joins, two new accounts that share only it are
+/// strangers to each other during probation; once they share another workspace they are not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_default_workspace_makes_nobody_known_during_probation() {
+    let ctx = TestCtx::new().await;
+    ctx.conn
+        .execute_unprepared(S2S_TABLES)
+        .await
+        .expect("truncate");
+    let everyone = ctx.create_server("everyone").await;
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let node = start(&url, |config| {
+        config.key_login_audiences = Some(KEY_LOGIN_AUDIENCE.to_string());
+        config.probation_hours = Some(1);
+        config.default_workspace = Some(everyone.id.to_string());
+    })
+    .await;
+    let schema = &node.schema;
+
+    let amy = ctx.create_user("amy").await;
+    let fresh = ctx.caller(&amy).await;
+    let ben = ctx.enrolled(schema, "ben", 2).await;
+    ctx.add_member(&everyone, &amy, ServerMemberRole::Member)
+        .await;
+    ctx.add_member(&everyone, &ben.user, ServerMemberRole::Member)
+        .await;
+    let dm = || {
+        fresh.request(
+            CREATE_DM,
+            json!({ "s": node.s2s.direct_space_id.to_string(), "u": ben.user.id.to_string() }),
+        )
+    };
+    let (code, message) = exec_err(schema, dm()).await;
+    assert_eq!(code, "VALIDATION", "{message}");
+    assert!(
+        message.starts_with("a new account can send a DM request to a stranger in "),
+        "{message}"
+    );
+
+    let team = ctx.create_server("team").await;
+    ctx.add_member(&team, &amy, ServerMemberRole::Member).await;
+    ctx.add_member(&team, &ben.user, ServerMemberRole::Member)
+        .await;
+    exec_ok(schema, dm()).await;
 
     node.stop().await;
 }

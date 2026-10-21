@@ -99,7 +99,8 @@ decide, and each may only tighten the one above it:
   `retryAfterSeconds`.
 - **Probation.** During `RIM_PROBATION_HOURS` a new account sends no DM request to a stranger,
   someone it does not know (above) who is in none of its workspaces here: `VALIDATION` saying when
-  it can (`docs/api.md`). The instance operator is never on probation.
+  it can (`docs/api.md`). The server's default workspace does not count, since every new account
+  joins it; any other workspace does. The instance operator is never on probation.
 - **Refused here.** A DM in the direct space that a recipient here refuses answers `FORBIDDEN`
   when it is started (`createConversation`, `addConversationMembers`). A refused DM from another
   server is answered as for a block, so its server stops addressing the recipient.
