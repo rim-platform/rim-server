@@ -1684,7 +1684,7 @@ async fn a_stored_reaction_that_is_not_an_emoji_can_be_removed() {
     let f = setup().await;
     let msg = f.send(&f.alice, &f.channel_id, "react to me").await;
     let repo = rim_infra_db::sea_orm_impl::message_reaction::SeaOrmMessageReactionRepository::new(
-        f.ctx.db.clone().into(),
+        f.ctx.db.clone(),
     );
     for who in [&f.alice, &f.bob] {
         repo.add_reaction(NewMessageReaction {
