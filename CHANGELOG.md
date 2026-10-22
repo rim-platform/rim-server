@@ -348,6 +348,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 - The dependency audit in CI and in the release gates is `cargo audit --deny unsound`: an
   unsoundness advisory fails it like a vulnerability. Each advisory it accepts is listed in
   `.cargo/audit.toml` with why it does not apply and when the entry comes out.
+- GraphQL `updateMyProfile` takes as `avatarUrl` only an empty value or the caller's own avatar,
+  the `url` that `POST /api/files/avatar` answered them
+  (`/api/files/avatars/<their id>/avatar.<png|jpeg|gif|webp>`); any other path, another user's
+  avatar included, answers `VALIDATION`. `POST /api/files/avatar` answers 415 when the file's
+  bytes do not start with the signature of its declared type.
 
 ### Removed
 
@@ -380,6 +385,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `MlsPendingDevice.hasKeyPackage` is false for a device whose pending MLS Welcomes leave no
   room for one more, the devices `claimMlsKeyPackages` leaves out, so a client no longer waits
   to add a device that no claim serves (`docs/specs/e2ee-mls-v1.md`, "Key packages").
+- A user's earlier avatar files no longer stay on disk: uploading an avatar deletes the user's
+  avatar files in the other formats, setting `avatarUrl` deletes all but the one it names,
+  clearing it deletes them all, and the account purge deletes every file in the account's avatar
+  directory, whatever its `avatarUrl` named. The purge no longer deletes the file of another
+  user that an account's `avatarUrl` pointed at.
+- `GET /api/files/{path}` sends `X-Content-Type-Options: nosniff` with a stored avatar.
 
 ### Security
 

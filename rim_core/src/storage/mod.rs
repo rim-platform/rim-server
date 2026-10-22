@@ -22,6 +22,10 @@ pub trait StorageBackend: Send + Sync {
 
     /// Delete a file by key.
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
+
+    /// The keys of the files stored directly in the directory `dir` (a key prefix without a
+    /// trailing slash), sorted; empty when the directory holds none or does not exist.
+    async fn list(&self, dir: &str) -> Result<Vec<String>, StorageError>;
 }
 
 #[derive(Debug, thiserror::Error)]

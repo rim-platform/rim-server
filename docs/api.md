@@ -154,10 +154,15 @@ The file routes are plain HTTP, not GraphQL. They answer JSON errors of the form
   the blob of an encrypted conversation. The answer is `{"size_bytes":<n>}`. Off when the
   `attachments` feature is not enabled.
 - **`POST /api/files/avatar`** stores the caller's avatar: a multipart body with one file of
-  type `image/png`, `image/jpeg`, `image/gif` or `image/webp`, at most 2 MiB. The answer is
-  `{"path","size_bytes","url"}`, where `url` is the `/api/files/...` path to read it back. Off
-  when the `avatars` feature is not enabled.
-- **`GET /api/files/{path}`** serves a stored avatar to any signed-in user. Any path outside
+  type `image/png`, `image/jpeg`, `image/gif` or `image/webp`, at most 2 MiB, whose bytes start
+  with that format's signature (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`, GIF `GIF87a` or
+  `GIF89a`, WebP `RIFF` with `WEBP` at byte 8); another type, or bytes that do not match the
+  declared one, is 415. It is stored as `avatars/<user id>/avatar.<png|jpeg|gif|webp>`, and the
+  caller's other avatar files are deleted. The answer is `{"path","size_bytes","url"}`, where
+  `url` is the `/api/files/...` path to read it back and the only value `updateMyProfile` takes
+  as `avatarUrl` besides an empty one. Off when the `avatars` feature is not enabled.
+- **`GET /api/files/{path}`** serves a stored avatar to any signed-in user, as an attachment
+  with the type its extension implies and `X-Content-Type-Options: nosniff`. Any path outside
   `avatars/` is refused with 403. Off when the `avatars` feature is not enabled.
 - **`GET /api/attachments/{id}/download`** serves an attachment to a member of its conversation.
   The blob of an encrypted conversation is served as `application/octet-stream` named
@@ -289,8 +294,8 @@ pending, and on every other user), and `cancelAccountDeletion` keeps the account
 whether a deletion was pending. Both mutations need a session and the CSRF header.
 
 When the grace period ends, the hourly purge removes the account's sessions, devices, keys,
-memberships, plaintext messages and files, settings and personal automations, and frees its
-username. The user row stays as a tombstone: `deleted-` and the start of its id as the username,
+memberships, plaintext messages and files, every avatar file it stored, settings and personal
+automations, and frees its username. The user row stays as a tombstone: `deleted-` and the start of its id as the username,
 "Deleted account" as the display name, no email, password or key. It cannot sign in and is in no
 member list or search result. It stays the author of the account's encrypted messages, which are
 kept so a conversation's history does not shift, and of a message others replied to, which shows
@@ -504,7 +509,7 @@ The file and plugin bundle routes answer `{"error":"<message>"}` with:
 | 404 | Not found. |
 | 409 | A conflict, or an archived conversation. |
 | 413 | The body is over the route's limit. |
-| 415 | A file type the route does not take. |
+| 415 | A file type the route does not take, or an avatar whose bytes are not the declared type. |
 | 422 | A plugin bundle the service refused. |
 | 429 | Rate limited, with a `Retry-After` header and `retryAfterSeconds`. |
 | 500 | A server fault. |

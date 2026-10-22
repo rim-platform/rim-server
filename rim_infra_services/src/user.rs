@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
+use rim_core::user::avatar::own_avatar_key;
 use rim_core::user::model::{UpdateProfilePatch, UserHandle, UserId};
 use rim_services::limits::InstanceLimits;
+use rim_services::storage::service::StorageService;
 use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
 use rim_services::user::dto::UserDto;
 use rim_services::user::service::UserService;
@@ -33,6 +37,8 @@ pub struct DefaultUserService {
     reserved_names: ReservedNames,
     /// This server's handle domain; local accounts have no handle without one.
     handle_domain: Option<String>,
+    /// Where avatar files are stored; without it a profile change deletes no file.
+    storage: Option<Arc<dyn StorageService>>,
 }
 
 impl DefaultUserService {
@@ -43,7 +49,15 @@ impl DefaultUserService {
             clock: Clock::default(),
             reserved_names: ReservedNames::default(),
             handle_domain: None,
+            storage: None,
         }
+    }
+
+    /// Delete the user's unused avatar files from `storage` when a profile change clears or
+    /// replaces the avatar.
+    pub fn with_storage(mut self, storage: Arc<dyn StorageService>) -> Self {
+        self.storage = Some(storage);
+        self
     }
 
     /// Give local accounts handles at `handle_domain`.
@@ -205,24 +219,27 @@ impl UserService for DefaultUserService {
             ));
         }
 
-        // Validate avatar_url: must be internal path.
+        // An avatar URL is empty or names one of the caller's own uploaded avatar files.
+        let user_id = cmd.actor.user_id;
         let avatar_url = cmd.avatar_url.map(|v| {
             let v = v.trim().to_string();
             if v.is_empty() { None } else { Some(v) }
         });
-        if let Some(Some(ref url)) = avatar_url
-            && !url.starts_with("/api/files/")
-        {
-            return Err(ServiceError::Validation(
-                "avatar_url must start with /api/files/".to_string(),
-            ));
-        }
+        let avatar_key = match &avatar_url {
+            Some(Some(url)) => Some(Some(own_avatar_key(user_id, url).ok_or_else(|| {
+                ServiceError::Validation(
+                    "avatar_url must be the URL of your own uploaded avatar".to_string(),
+                )
+            })?)),
+            Some(None) => Some(None),
+            None => None,
+        };
 
         let user = self
             .repos
             .user_repo
             .update_profile(
-                cmd.actor.user_id,
+                user_id,
                 UpdateProfilePatch {
                     display_name,
                     avatar_url,
@@ -231,6 +248,14 @@ impl UserService for DefaultUserService {
                 },
             )
             .await?;
+
+        // The profile is saved; a file that cannot be deleted now goes with the next upload,
+        // the next profile change or the account.
+        if let (Some(keep), Some(storage)) = (avatar_key, &self.storage)
+            && let Err(e) = storage.delete_avatar_files(user_id, keep).await
+        {
+            tracing::warn!(user_id = %user_id, error = %e, "could not delete unused avatar files");
+        }
 
         Ok(self.convert_to_dto(user))
     }

@@ -439,11 +439,9 @@ async fn a_tombstone_frees_the_username_and_is_found_by_id_only() {
     .await;
     let twin = create_user_sharing_the_id_prefix(&ctx, &alice, "twin").await;
 
+    // The avatar files are found in the account's avatar directory, not through its URL.
     let step = repo.tombstone(alice.id, Utc::now()).await.unwrap();
-    assert_eq!(
-        step.storage_keys,
-        vec![format!("avatars/{}/avatar.png", alice.id)]
-    );
+    assert!(step.storage_keys.is_empty());
     repo.tombstone(twin, Utc::now()).await.unwrap();
 
     let tombstone = users.get_by_id(alice.id).await.unwrap().unwrap();

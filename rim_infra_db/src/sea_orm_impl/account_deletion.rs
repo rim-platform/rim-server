@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rim_core::account_deletion::model::{
     AccountStanding, LeftConversation, OwnedSharedWorkspace, PurgeStep, TOMBSTONE_DISPLAY_NAME,
-    avatar_storage_key, tombstone_username_candidates,
+    tombstone_username_candidates,
 };
 use rim_core::account_deletion::repository::AccountDeletionRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
@@ -137,11 +137,6 @@ struct LeftConversationRow {
     server_id: Uuid,
     conversation_id: Uuid,
     members: Vec<Uuid>,
-}
-
-#[derive(FromQueryResult)]
-struct AvatarRow {
-    avatar_url: Option<String>,
 }
 
 /// The workspaces (not the direct space) where the account is the only member.
@@ -611,14 +606,6 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
     }
 
     async fn tombstone(&self, user_id: UserId, now: DateTime<Utc>) -> RepoResult<PurgeStep> {
-        let avatar = self
-            .one::<AvatarRow>(
-                r#"SELECT avatar_url FROM "user" WHERE id = $1"#,
-                vec![uuid(user_id)],
-            )
-            .await?
-            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?
-            .avatar_url;
         let username = self
             .texts(
                 r#"SELECT t.c AS value FROM unnest($2::text[]) WITH ORDINALITY AS t(c, n)
@@ -656,15 +643,6 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
         if updated != 1 {
             return Err(RepoError::new(RepoErrorKind::NotFound));
         }
-        Ok(PurgeStep {
-            counts: vec![("tombstone", 1)],
-            storage_keys: avatar
-                .as_deref()
-                .and_then(avatar_storage_key)
-                .map(str::to_string)
-                .into_iter()
-                .collect(),
-            ..PurgeStep::default()
-        })
+        Ok(PurgeStep::counted(vec![("tombstone", 1)]))
     }
 }

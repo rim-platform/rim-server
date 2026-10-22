@@ -365,7 +365,8 @@ impl DefaultAppServiceProvider {
             crate::user::DefaultUserService::new(repos.for_user())
                 .with_limits(limits)
                 .with_reserved_names(federation.reserved_names.clone())
-                .with_handle_domain(federation.handle_domain.clone()),
+                .with_handle_domain(federation.handle_domain.clone())
+                .with_storage(Arc::clone(&storage_service)),
         );
         let workspace_state_service: Arc<dyn WorkspaceStateService> = Arc::new(
             crate::workspace_state::DefaultWorkspaceStateService::new(

@@ -67,6 +67,7 @@ pub trait AccountDeletionRepository: Send + Sync {
 
     /// Turn the user row into a tombstone at `now`: the first free tombstone username, the
     /// tombstone display name, no email, password, avatar, terms acceptance, profile fields or
-    /// identity key. Returns the avatar's storage key among the step's files.
+    /// identity key. The avatar files are not among the step's files: they are found in the
+    /// account's avatar directory.
     async fn tombstone(&self, user_id: UserId, now: DateTime<Utc>) -> RepoResult<PurgeStep>;
 }

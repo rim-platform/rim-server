@@ -113,6 +113,28 @@ impl StorageBackend for LocalFileStorage {
         tokio::fs::remove_file(&full_path).await?;
         Ok(())
     }
+
+    async fn list(&self, dir: &str) -> Result<Vec<String>, StorageError> {
+        let full_path = self.validate_path(dir)?;
+
+        if !full_path.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut keys = Vec::new();
+        let mut entries = tokio::fs::read_dir(&full_path).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if !entry.file_type().await?.is_file() {
+                continue;
+            }
+            // A name that is not UTF-8 cannot have been stored under a key.
+            if let Some(name) = entry.file_name().to_str() {
+                keys.push(format!("{dir}/{name}"));
+            }
+        }
+        keys.sort();
+        Ok(keys)
+    }
 }
 
 #[cfg(test)]
@@ -161,6 +183,21 @@ mod tests {
 
         let err = storage.get("../../etc/passwd").await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_names_the_files_directly_in_a_directory() {
+        let tmp = TempDir::new().unwrap();
+        let storage = LocalFileStorage::new(tmp.path().to_path_buf());
+        for key in ["a/x.png", "a/b.gif", "a/sub/c.txt", "ab/d.txt"] {
+            storage.put(key, b"x", "text/plain").await.unwrap();
+        }
+
+        assert_eq!(storage.list("a").await.unwrap(), vec!["a/b.gif", "a/x.png"]);
+        assert_eq!(storage.list("a/sub").await.unwrap(), vec!["a/sub/c.txt"]);
+        assert!(storage.list("missing").await.unwrap().is_empty());
+        assert!(storage.list("a/x.png").await.unwrap().is_empty());
+        assert!(storage.list("../escape").await.is_err());
     }
 
     #[tokio::test]
