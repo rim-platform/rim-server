@@ -655,7 +655,13 @@ pub(crate) mod tests {
     #[test]
     fn normalize_display_name_falls_back_cleans_and_caps() {
         assert_eq!(normalize_display_name(None, "alice").unwrap(), "alice");
-        for blank in ["  ", "\u{200B}\u{FEFF}", "\n\t"] {
+        for blank in [
+            "  ",
+            "\u{200B}\u{FEFF}",
+            "\n\t",
+            "\u{3164}",
+            "\u{FE0F}\u{3164}",
+        ] {
             assert_eq!(
                 normalize_display_name(Some(blank), "alice").unwrap(),
                 "alice",

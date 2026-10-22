@@ -12,8 +12,9 @@ use crate::display_name::is_invisible;
 /// The refusal of a reserved username or display name.
 pub const RESERVED_NAME_REFUSAL: &str = "this name is reserved";
 
-/// `name` without control and format characters (whitespace among them becomes a space),
-/// NFKC-normalised, lowercased and trimmed: the form names are compared in.
+/// `name` without invisible characters, the joiners, variation selectors and tag characters a
+/// stored name keeps among them (whitespace becomes a space), NFKC-normalised, lowercased and
+/// trimmed: the form names are compared in.
 fn fold(name: &str) -> String {
     name.chars()
         .filter_map(|c| match c {
@@ -22,6 +23,7 @@ fn fold(name: &str) -> String {
             c => Some(c),
         })
         .nfkc()
+        .filter(|&c| !is_invisible(c))
         .collect::<String>()
         .to_lowercase()
         .trim()
@@ -204,6 +206,18 @@ mod tests {
             "rim\u{200B}",
             "rim\u{200B} team",
             "rim\tteam",
+            "Ad\u{FE00}min",
+            "Admin\u{FE0F}",
+            "A\u{034F}dmin",
+            "Ad\u{3164}min",
+            "Ad\u{115F}min",
+            "Ad\u{FFA0}min",
+            "Ad\u{180E}min",
+            "Ad\u{E0100}min",
+            "Ad\u{E0020}min\u{E007F}",
+            "Supp\u{FE00}ort",
+            "RIM Supp\u{FE00}ort",
+            "\u{3164}rim\u{3164}",
         ] {
             assert!(names.is_reserved(name), "{name:?}");
         }
