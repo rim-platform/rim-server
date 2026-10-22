@@ -12,7 +12,8 @@ pub struct InstanceLimits {
     pub workspaces_per_user: Option<u32>,
     /// Members of one workspace; the direct space has no cap.
     pub members_per_workspace: Option<u32>,
-    /// Unarchived channels of one workspace, public and private.
+    /// Unarchived channels of one workspace, public and private; see
+    /// [`InstanceLimits::all_channels_per_workspace`] for all of them.
     pub channels_per_workspace: Option<u32>,
     /// Devices on one account: the stricter of `RIM_LIMIT_DEVICES_PER_USER` and the relay
     /// quota.
@@ -42,7 +43,18 @@ pub struct InstanceLimits {
     pub accounts: Option<u32>,
 }
 
+/// How many times `channels_per_workspace` a workspace may hold in channels, archived ones
+/// included.
+pub const ALL_CHANNELS_FACTOR: u32 = 5;
+
 impl InstanceLimits {
+    /// Channels of one workspace, archived ones included: [`ALL_CHANNELS_FACTOR`] times
+    /// `channels_per_workspace`, and off when that cap is off.
+    pub fn all_channels_per_workspace(&self) -> Option<u32> {
+        self.channels_per_workspace
+            .map(|cap| cap.saturating_mul(ALL_CHANNELS_FACTOR))
+    }
+
     /// When an account created at `created_at` leaves probation, while `now` is before then;
     /// `None` once it has or when there is no probation.
     pub fn probation_ends_at(
@@ -107,6 +119,20 @@ pub fn ensure_below(cap: Option<u32>, count: u64, what: &str) -> Result<(), Serv
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_channels_are_five_times_the_unarchived_cap_and_off_with_it() {
+        let limits = |cap| InstanceLimits {
+            channels_per_workspace: cap,
+            ..Default::default()
+        };
+        assert_eq!(limits(Some(30)).all_channels_per_workspace(), Some(150));
+        assert_eq!(
+            limits(Some(u32::MAX)).all_channels_per_workspace(),
+            Some(u32::MAX)
+        );
+        assert_eq!(limits(None).all_channels_per_workspace(), None);
+    }
 
     #[test]
     fn below_the_cap_passes_at_it_refuses_naming_it_and_no_cap_never_refuses() {

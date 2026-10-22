@@ -165,7 +165,8 @@ workspace scope (`scope: server`) and reads and writes their own user scope. Wri
 workspace scope takes a Member, Moderator or Owner who is not timed out and whose account is out
 of probation; a guest gets `FORBIDDEN`. A Member overwrites and deletes only the keys they
 created and increments any numeric key, so a shared counter takes everyone's count; Owners and
-Moderators change every key. A Member creates at most 100 workspace-scoped entries per
+Moderators change every key. A key whose entry expired is written as a new entry of its writer,
+even before the expired row is purged. A Member creates at most 100 workspace-scoped entries per
 workspace, holding at most 1 MiB of values; a workspace holds at most 10,000, a user scope
 1,000, and a value at most 64 KiB. Each user makes at most 60 writes (sets, increments and
 deletes, either scope) a minute in bursts of up to 30, however they reach the service (GraphQL,

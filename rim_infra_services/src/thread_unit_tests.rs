@@ -36,6 +36,7 @@ mod tests {
         #[async_trait]
         impl rim_core::conversation::repository::ConversationRepository for ConversationRepository {
             async fn count_channels(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
+            async fn count_all_channels(&self, server_id: rim_core::server::model::ServerId) -> RepoResult<u64>;
             async fn get_by_id(&self, id: ConversationId) -> RepoResult<Option<Conversation>>;
             async fn get_by_ids(&self, ids: &[ConversationId]) -> RepoResult<Vec<Conversation>>;
             async fn create_conversation(&self, conv: NewConversation) -> RepoResult<Conversation>;

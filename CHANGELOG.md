@@ -547,6 +547,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A signup display name of 65 to 80 characters, and a remote profile card's of 65 to 80, no
   longer fail in the database, whose column holds 64: a signup answers `VALIDATION` and a
   card's name is cut to 64 characters.
+- Writing a workspace state key whose entry expired but was not purged yet (`setWorkspaceState`,
+  `state.set`, `state.incr`) creates the entry anew: it belongs to its new writer, counts
+  against their per-member quota, starts at version 1, and an increment starts from the delta
+  without the old expiry. Before, the entry kept its first creator, so the new writer's bytes
+  counted against someone else and the writer, a Member, was refused (`FORBIDDEN`) changing
+  their own value.
 
 ### Security
 
@@ -554,6 +560,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   reading it, and reads every other body as JSON. Before, it parsed the GraphQL multipart upload
   format, which the schema has no use for, and one body of many empty file parts opened a
   temporary file for each, enough to run the server out of file descriptors (`docs/api.md`).
+- A workspace holds at most five times `RIM_LIMIT_CHANNELS_PER_WORKSPACE` channels, archived
+  ones included; creating one past that answers `VALIDATION` saying archived channels still
+  count. Before, creating and archiving channels in turn added channels without end. The
+  ceiling is off when the cap is.
 - Adding someone as a contact no longer lets a user skip their own limits on DMs to strangers.
   The daily invites to people on other servers (`RIM_RELAY_DM_REQUESTS_PER_DAY`) and a new
   account's probation (`RIM_PROBATION_HOURS`) now pass only for people the user knows: a contact

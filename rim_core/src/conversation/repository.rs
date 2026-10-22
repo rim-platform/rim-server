@@ -153,4 +153,7 @@ pub trait ConversationRepository: Send + Sync {
 
     /// How many unarchived channels `server_id` has, public and private.
     async fn count_channels(&self, server_id: ServerId) -> RepoResult<u64>;
+
+    /// How many channels `server_id` has, archived ones included.
+    async fn count_all_channels(&self, server_id: ServerId) -> RepoResult<u64>;
 }

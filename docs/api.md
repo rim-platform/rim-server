@@ -422,7 +422,7 @@ naming the cap, such as "this instance allows 5 workspaces per user".
 |---|---|---|
 | `RIM_LIMIT_WORKSPACES_PER_USER` | `workspacesPerUser` | Workspaces one user owns, created or handed over to them: `transferWorkspaceOwnership` to someone at the cap answers `VALIDATION`. |
 | `RIM_LIMIT_MEMBERS_PER_WORKSPACE` | `membersPerWorkspace` | Members of a workspace, by invite or signup; the direct space has none. |
-| `RIM_LIMIT_CHANNELS_PER_WORKSPACE` | `channelsPerWorkspace` | Unarchived channels of a workspace, public and private; a new workspace gets only the default channels the cap allows. Archiving a channel frees its place, and unarchiving one needs room. |
+| `RIM_LIMIT_CHANNELS_PER_WORKSPACE` | `channelsPerWorkspace` | Unarchived channels of a workspace, public and private; a new workspace gets only the default channels the cap allows. Archiving a channel frees its place, and unarchiving one needs room. All channels, archived ones included, are capped at five times this. |
 | `RIM_LIMIT_DEVICES_PER_USER` | `devicesPerUser` | Devices on one account. |
 | `RIM_LIMIT_DM_REQUESTS_PER_DAY` | `dmRequestsPerDay` | DM requests one user sends to strangers per day. |
 | `RIM_LIMIT_MACROS_PER_WORKSPACE` | `macrosPerWorkspace` | Macros of a workspace. A member who is neither Owner nor Moderator holds at most a fifth of them (at least one, and never more than the 50 everyone may hold). The default workspace has no per-workspace cap, only that share. |

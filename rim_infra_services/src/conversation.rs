@@ -199,6 +199,29 @@ impl DefaultConversationService {
         )
     }
 
+    /// `Validation` when `server_id` already holds as many channels, archived ones included, as
+    /// the instance allows; archiving does not free room toward this ceiling.
+    async fn ensure_channels_below_ceiling(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+    ) -> ServiceResult<()> {
+        let Some(ceiling) = self.limits.all_channels_per_workspace() else {
+            return Ok(());
+        };
+        let channels = self
+            .repos
+            .conversation_repo
+            .count_all_channels(server_id)
+            .await?;
+        if channels >= u64::from(ceiling) {
+            return Err(ServiceError::Validation(format!(
+                "this instance allows {ceiling} channels per workspace counting archived ones; \
+                 archived channels cannot be deleted and still count toward it"
+            )));
+        }
+        Ok(())
+    }
+
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
         self
@@ -829,6 +852,7 @@ impl ConversationService for DefaultConversationService {
                     }
                 }
                 self.ensure_channel_below_cap(cmd.server_id).await?;
+                self.ensure_channels_below_ceiling(cmd.server_id).await?;
 
                 // The creator is always a member of the channel, public or private.
                 (CoreConversationType::Channel, vec![cmd.actor.user_id])

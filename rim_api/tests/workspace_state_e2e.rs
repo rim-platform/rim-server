@@ -576,6 +576,61 @@ async fn an_expired_entry_is_neither_read_nor_listed() {
     assert_eq!(keys, [json!("board.keep")]);
 }
 
+/// A key whose entry expired but is not purged yet is written as a new entry: it belongs to its
+/// new writer, counts against their quota, and its first creator no longer changes it.
+#[tokio::test]
+async fn writing_over_an_expired_entry_makes_it_the_writers() {
+    let f = setup().await;
+    f.seed_by(99, None, &f.ws.bob, "seed").await;
+    exec_ok(
+        &f.schema,
+        f.ws.carol
+            .call(f.set_call("board.temp", json!("carol"), "SERVER", Some(60))),
+    )
+    .await;
+    f.set(&f.ws.carol, "board.temp", json!("carol again"), "SERVER")
+        .await;
+    f.expire("board.temp").await;
+
+    let taken = f.set(&f.ws.bob, "board.temp", json!("bob"), "SERVER").await;
+    assert_eq!(taken["version"], 1);
+    let row = f
+        .ctx
+        .conn
+        .query_one_raw(sea_orm::Statement::from_string(
+            sea_orm::DbBackend::Postgres,
+            format!(
+                "SELECT created_by::text AS created_by FROM workspace_state \
+                 WHERE server_id = '{}'::uuid AND key = 'board.temp'",
+                f.ws.server_id
+            ),
+        ))
+        .await
+        .expect("query")
+        .expect("row");
+    assert_eq!(
+        row.try_get::<String>("", "created_by").expect("created_by"),
+        f.ws.bob.user_id.to_string()
+    );
+    assert_eq!(
+        f.set_code(&f.ws.bob, "board.extra", json!(1), None).await,
+        "VALIDATION",
+        "the entry counts toward bob's hundred"
+    );
+
+    assert_eq!(
+        f.set(&f.ws.bob, "board.temp", json!("bob again"), "SERVER")
+            .await["version"],
+        2
+    );
+    let writes = [
+        f.set_call("board.temp", json!("carol"), "SERVER", None),
+        f.delete_call("board.temp", "SERVER"),
+    ];
+    assert_each_refused_as(&f.schema, &f.ws.carol, &writes, "FORBIDDEN").await;
+    assert!(f.delete(&f.ws.bob, "board.temp", "SERVER").await);
+}
+
 // ── Quotas ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
