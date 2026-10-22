@@ -239,7 +239,9 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
 }
 
 /// With a default workspace every new account joins, two new accounts that share only it are
-/// strangers to each other during probation; once they share another workspace they are not.
+/// strangers to each other during probation, for a DM in the direct space and for one in the
+/// default workspace, with a key or without one; once they share another workspace they are
+/// not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_default_workspace_makes_nobody_known_during_probation() {
     let ctx = TestCtx::new().await;
@@ -260,28 +262,35 @@ async fn the_default_workspace_makes_nobody_known_during_probation() {
     let amy = ctx.create_user("amy").await;
     let fresh = ctx.caller(&amy).await;
     let ben = ctx.enrolled(schema, "ben", 2).await;
-    ctx.add_member(&everyone, &amy, ServerMemberRole::Member)
-        .await;
-    ctx.add_member(&everyone, &ben.user, ServerMemberRole::Member)
-        .await;
-    let dm = || {
-        fresh.request(
-            CREATE_DM,
-            json!({ "s": node.s2s.direct_space_id.to_string(), "u": ben.user.id.to_string() }),
-        )
+    let cal = ctx.create_user("cal").await;
+    for user in [&amy, &ben.user, &cal] {
+        ctx.add_member(&everyone, user, ServerMemberRole::Member)
+            .await;
+    }
+    let direct = node.s2s.direct_space_id.to_string();
+    let in_everyone = everyone.id.to_string();
+    let dm = |space: &str, other: &rim_core::user::model::User| {
+        fresh.request(CREATE_DM, json!({ "s": space, "u": other.id.to_string() }))
     };
-    let (code, message) = exec_err(schema, dm()).await;
-    assert_eq!(code, "VALIDATION", "{message}");
-    assert!(
-        message.starts_with("a new account can send a DM request to a stranger in "),
-        "{message}"
-    );
+    for (space, other) in [
+        (&direct, &ben.user),
+        (&in_everyone, &ben.user),
+        (&in_everyone, &cal),
+    ] {
+        let (code, message) = exec_err(schema, dm(space, other)).await;
+        assert_eq!(code, "VALIDATION", "{message}");
+        assert!(
+            message.starts_with("a new account can send a DM request to a stranger in "),
+            "{space} {message}"
+        );
+    }
 
     let team = ctx.create_server("team").await;
-    ctx.add_member(&team, &amy, ServerMemberRole::Member).await;
-    ctx.add_member(&team, &ben.user, ServerMemberRole::Member)
-        .await;
-    exec_ok(schema, dm()).await;
+    for user in [&amy, &ben.user, &cal] {
+        ctx.add_member(&team, user, ServerMemberRole::Member).await;
+    }
+    exec_ok(schema, dm(&direct, &ben.user)).await;
+    exec_ok(schema, dm(&in_everyone, &cal)).await;
 
     node.stop().await;
 }

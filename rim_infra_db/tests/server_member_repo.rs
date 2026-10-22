@@ -136,8 +136,8 @@ async fn join_direct_space_admits_local_users_of_the_direct_space_only() {
     );
 }
 
-/// A user shares a workspace with the holder of a principal when both are members of one,
-/// unless that one is the workspace left out; the direct space never counts.
+/// A user shares a workspace with the holder of a principal, or with an account, when both are
+/// members of one, unless that one is the workspace left out; the direct space never counts.
 #[tokio::test]
 async fn shares_workspace_counts_workspaces_but_the_one_left_out() {
     let ctx = support::TestCtx::new().await;
@@ -157,7 +157,8 @@ async fn shares_workspace_counts_workspaces_but_the_one_left_out() {
         })
         .await
         .unwrap();
-    for user in [ada, bob] {
+    let cal = ctx.create_user("cal").await.id;
+    for user in [ada, bob, cal] {
         repo.add_member(direct, user, ServerMemberRole::Member)
             .await
             .unwrap();
@@ -166,9 +167,18 @@ async fn shares_workspace_counts_workspaces_but_the_one_left_out() {
             .unwrap();
     }
     let shares = |except| host.shares_workspace(ada, "rimp1_bob", except);
+    let shares_with_cal = |except| host.shares_workspace_with_account(ada, cal, except);
 
     assert!(shares(None).await.unwrap());
     assert!(!shares(Some(everyone)).await.unwrap());
+    assert!(shares_with_cal(None).await.unwrap());
+    assert!(!shares_with_cal(Some(everyone)).await.unwrap());
+    assert!(
+        !host
+            .shares_workspace_with_account(ada, ctx.create_user("dan").await.id, None)
+            .await
+            .unwrap()
+    );
     assert!(
         !host
             .shares_workspace(ada, "rimp1_carol", None)
@@ -184,4 +194,9 @@ async fn shares_workspace_counts_workspaces_but_the_one_left_out() {
         .unwrap();
     assert!(shares(Some(everyone)).await.unwrap());
     assert!(shares(Some(team)).await.unwrap());
+    assert!(!shares_with_cal(Some(everyone)).await.unwrap());
+    repo.add_member(team, cal, ServerMemberRole::Member)
+        .await
+        .unwrap();
+    assert!(shares_with_cal(Some(everyone)).await.unwrap());
 }

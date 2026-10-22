@@ -2578,8 +2578,10 @@ async fn forwarded_requests_are_limited_per_device() {
 
 /// A host with a one-hour probation, read at `now`, where `ada` knows the holder of
 /// identity 61 (a mutual contact or an accepted request), holds the holder of identity 65 as a
-/// contact on her own, shares a workspace with the holder of identity 62, and shares only
-/// [`default_workspace`] with the holder of identity 66; `accounts` are the users it knows.
+/// contact on her own, shares a workspace with the holder of identity 62 and with the account
+/// `unkeyed(62)`, and shares only [`default_workspace`] with the holder of identity 66 and with
+/// the account `unkeyed(66)`; `accounts` are the users it knows, and no DM between two of them
+/// exists yet.
 fn probation_host(
     ada: UserId,
     accounts: Vec<rim_core::user::model::User>,
@@ -2626,6 +2628,17 @@ fn knowing_host(
                     || (principal == fellow_newcomer && except != Some(default_workspace())));
             Box::pin(async move { Ok(shared) })
         });
+    host.expect_shares_workspace_with_account()
+        .returning(move |user, other, except| {
+            let shared = user == ada
+                && (other == unkeyed(62)
+                    || (other == unkeyed(66) && except != Some(default_workspace())));
+            Box::pin(async move { Ok(shared) })
+        });
+    let mut conversations = MockConversationRepository::new();
+    conversations
+        .expect_find_direct_between_users()
+        .returning(|_, _, _| Box::pin(async { Ok(None) }));
     DefaultHostService::new(
         HostRepos {
             host_repo: Arc::new(host),
@@ -2633,7 +2646,7 @@ fn knowing_host(
             key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
             e2ee_repo: Arc::new(MockE2eeRepository::new()),
             user_repo: Arc::new(users),
-            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_repo: Arc::new(conversations),
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
@@ -2743,9 +2756,15 @@ fn default_workspace() -> ServerId {
     ServerId::from(Uuid::from_u128(66))
 }
 
+/// The account `n` of [`probation_host`] that holds no principal.
+fn unkeyed(n: u128) -> UserId {
+    UserId::from(Uuid::from_u128(n))
+}
+
 /// Someone an account in probation shares only the server's default workspace with is a
-/// stranger to it, while a fellow member of another workspace is not; without a default
-/// workspace every shared workspace counts.
+/// stranger to it, in the direct space and in a DM in the default workspace alike, with a
+/// principal or without one, while a fellow member of another workspace is not; without a
+/// default workspace every shared workspace counts.
 #[tokio::test]
 async fn the_default_workspace_makes_nobody_known_to_an_account_in_probation() {
     use crate::probation_fixtures::account;
@@ -2765,6 +2784,8 @@ async fn the_default_workspace_makes_nobody_known_to_an_account_in_probation() {
             created,
             Some(&TestIdentity::new(66).principal_id()),
         ),
+        account(unkeyed(62), created, None),
+        account(unkeyed(66), created, None),
     ];
     let mut defaults = MockDefaultWorkspaceService::new();
     defaults
@@ -2772,29 +2793,46 @@ async fn the_default_workspace_makes_nobody_known_to_an_account_in_probation() {
         .returning(|| Box::pin(async { Ok(Some(default_workspace())) }));
     let host = probation_host(ada, accounts.clone(), in_probation)
         .with_default_workspace(Arc::new(defaults));
+    // A DM in the direct space, or a DM in the default workspace.
     async fn request(
         host: &DefaultHostService,
         ada: UserId,
         other: UserId,
+        in_default_workspace: bool,
     ) -> Result<(), ServiceError> {
-        host.ensure_may_request(Actor::new(ada), host.direct_space_id(), vec![other], false)
+        let (space, direct_message) = if in_default_workspace {
+            (default_workspace(), true)
+        } else {
+            (host.direct_space_id(), false)
+        };
+        host.ensure_may_request(Actor::new(ada), space, vec![other], direct_message)
             .await
     }
-    match request(&host, ada, fellow_newcomer).await {
-        Err(ServiceError::Validation(message)) => assert_eq!(
-            message,
-            "a new account can send a DM request to a stranger in 40 minutes"
-        ),
-        other => panic!("expected the probation refusal, got {other:?}"),
+    for in_default_workspace in [false, true] {
+        for stranger in [fellow_newcomer, unkeyed(66)] {
+            match request(&host, ada, stranger, in_default_workspace).await {
+                Err(ServiceError::Validation(message)) => assert_eq!(
+                    message,
+                    "a new account can send a DM request to a stranger in 40 minutes"
+                ),
+                other => panic!("expected the probation refusal, got {other:?}"),
+            }
+        }
+        for fellow in [coworker, unkeyed(62)] {
+            request(&host, ada, fellow, in_default_workspace)
+                .await
+                .expect("a fellow member of another workspace is no stranger");
+        }
     }
-    request(&host, ada, coworker)
-        .await
-        .expect("a fellow member of another workspace is no stranger");
 
     let without = probation_host(ada, accounts, in_probation);
-    request(&without, ada, fellow_newcomer)
-        .await
-        .expect("without a default workspace every shared workspace counts");
+    for in_default_workspace in [false, true] {
+        for fellow in [fellow_newcomer, unkeyed(66)] {
+            request(&without, ada, fellow, in_default_workspace)
+                .await
+                .expect("without a default workspace every shared workspace counts");
+        }
+    }
 }
 
 #[tokio::test]

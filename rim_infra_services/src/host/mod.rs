@@ -31,7 +31,7 @@ use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository};
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_core::user::model::UserId;
+use rim_core::user::model::{User, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_identity::{SignedStatement, UnverifiedDeviceRequest};
 use rim_infra_db::{TransactionScope, begin_transaction};
@@ -130,6 +130,14 @@ pub struct DefaultHostService {
     /// The server's default workspace, which every new account joins and so makes nobody
     /// known to a new account in probation; without one every shared workspace counts.
     default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
+}
+
+/// Someone a DM request from a new account would reach, as its probation judges them.
+enum Addressee<'a> {
+    /// The holder of a principal, whose account may not be held here yet.
+    Principal(&'a str),
+    /// An account held here, with a principal or without one.
+    Account(&'a User),
 }
 
 fn upstream(server_id: &str) -> ServiceError {
@@ -381,15 +389,16 @@ impl DefaultHostService {
     }
 
     /// `Validation` while `actor`'s account is in probation (an instance operator never is) and
-    /// the holder of one of `principal_ids` is a stranger to them: someone they do not know
-    /// (see [`RelayRepository::knows`]) who is in no workspace with them but the server's
-    /// default workspace, which every new account joins.
+    /// one of `addressees` is a stranger to them: someone they do not know (see
+    /// [`RelayRepository::knows`]; an account without a principal is known only through a
+    /// workspace) who is in no workspace with them but the server's default workspace, which
+    /// every new account joins.
     async fn refuse_strangers_in_probation(
         &self,
         actor: Actor,
-        principal_ids: &[String],
+        addressees: &[Addressee<'_>],
     ) -> ServiceResult<()> {
-        if self.limits.probation_hours.is_none() || principal_ids.is_empty() {
+        if self.limits.probation_hours.is_none() || addressees.is_empty() {
             return Ok(());
         }
         let user = self
@@ -414,18 +423,33 @@ impl DefaultHostService {
             Some(default_workspace) => default_workspace.current().await?,
             None => None,
         };
-        for principal_id in principal_ids {
-            let known = user.principal_id.as_ref() == Some(principal_id)
-                || self
-                    .repos
-                    .relay_repo
-                    .knows(actor.user_id, principal_id)
-                    .await?
-                || self
-                    .repos
-                    .host_repo
-                    .shares_workspace(actor.user_id, principal_id, default_workspace)
-                    .await?;
+        for addressee in addressees {
+            let principal_id = match addressee {
+                Addressee::Principal(principal_id) => Some(*principal_id),
+                Addressee::Account(account) => account.principal_id.as_deref(),
+            };
+            let known = match (principal_id, addressee) {
+                (Some(principal_id), _) => {
+                    user.principal_id.as_deref() == Some(principal_id)
+                        || self
+                            .repos
+                            .relay_repo
+                            .knows(actor.user_id, principal_id)
+                            .await?
+                        || self
+                            .repos
+                            .host_repo
+                            .shares_workspace(actor.user_id, principal_id, default_workspace)
+                            .await?
+                }
+                (None, Addressee::Account(account)) => {
+                    self.repos
+                        .host_repo
+                        .shares_workspace_with_account(actor.user_id, account.id, default_workspace)
+                        .await?
+                }
+                (None, Addressee::Principal(_)) => false,
+            };
             if !known {
                 return self.limits.ensure_out_of_probation(
                     user.created_at,
@@ -1038,7 +1062,7 @@ impl HostService for DefaultHostService {
                 }
                 self.refuse_strangers_in_probation(
                     actor,
-                    std::slice::from_ref(&member.principal_id),
+                    &[Addressee::Principal(&member.principal_id)],
                 )
                 .await?;
                 self.count_dm_invite(actor, &member.principal_id).await?;
@@ -1414,19 +1438,14 @@ impl HostService for DefaultHostService {
         if !reopened {
             self.refuse_requests_over_limits(actor, &requested).await?;
         }
-        if !in_direct_space || self.limits.probation_hours.is_none() {
+        // A DM in a workspace meets probation too: its members share that workspace, unless it
+        // is the default workspace, which makes nobody known.
+        if self.limits.probation_hours.is_none() {
             return Ok(());
         }
-        let principal_ids: Vec<String> = self
-            .repos
-            .user_repo
-            .get_by_ids(&others)
-            .await?
-            .into_iter()
-            .filter_map(|user| user.principal_id)
-            .collect();
-        self.refuse_strangers_in_probation(actor, &principal_ids)
-            .await
+        let accounts = self.repos.user_repo.get_by_ids(&others).await?;
+        let addressees: Vec<Addressee<'_>> = accounts.iter().map(Addressee::Account).collect();
+        self.refuse_strangers_in_probation(actor, &addressees).await
     }
 }
 

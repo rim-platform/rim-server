@@ -97,10 +97,12 @@ decide, and each may only tighten the one above it:
   on another server the sender does not know counts against the sender's daily invites
   (`RIM_RELAY_DM_REQUESTS_PER_DAY`, 20): past them it answers `RATE_LIMITED` with
   `retryAfterSeconds`.
-- **Probation.** During `RIM_PROBATION_HOURS` a new account sends no DM request to a stranger,
-  someone it does not know (above) who is in none of its workspaces here: `VALIDATION` saying when
-  it can (`docs/api.md`). The server's default workspace does not count, since every new account
-  joins it; any other workspace does. The instance operator is never on probation.
+- **Probation.** During `RIM_PROBATION_HOURS` a new account starts no DM with a stranger, in the
+  direct space or in a workspace: someone it does not know (above) who is in none of its
+  workspaces here, the account without a key included: `VALIDATION` saying when it can
+  (`docs/api.md`). The server's default workspace does not count, since every new account joins
+  it, so a DM in it meets probation like one in the direct space; any other workspace does. The
+  instance operator is never on probation.
 - **Refused here.** A DM in the direct space that a recipient here refuses answers `FORBIDDEN`
   when it is started (`createConversation`, `addConversationMembers`). A refused DM from another
   server is answered as for a block, so its server stops addressing the recipient.

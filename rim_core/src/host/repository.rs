@@ -84,6 +84,15 @@ pub trait HostRepository: Send + Sync {
         except: Option<ServerId>,
     ) -> RepoResult<bool>;
 
+    /// Whether a user shares a workspace (not the direct space, nor `except` when given) with
+    /// the account `other`.
+    async fn shares_workspace_with_account(
+        &self,
+        user_id: UserId,
+        other: UserId,
+        except: Option<ServerId>,
+    ) -> RepoResult<bool>;
+
     async fn set_conversation_predecessor(
         &self,
         conversation_id: ConversationId,

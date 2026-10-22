@@ -376,15 +376,16 @@ at a time, so two at once never pass it. Lowering it below the accounts there ar
 signups only; nobody loses an account.
 
 `RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
-an account cannot create a workspace or send a DM request to someone it shares no workspace
-with and does not know (a contact who lists it too, or someone either of them accepted a DM
-request from; adding someone as a contact alone is not enough), and with
+an account cannot create a workspace or send a DM request to someone it shares no workspace with
+and does not know (a contact who lists it too, or someone either of them accepted a DM request
+from; adding someone as a contact alone is not enough), and with
 `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
-are judged by their age, so turning it on does not hold back anyone older than the setting.
-The default workspace ("A default workspace" below) is left out of the workspaces it shares,
-since every new account joins it. The instance operator is never on probation: the account that claims the default workspace
-with the operator role, or one granted it with `rim_server operator grant`, can create
-workspaces and message anyone from the moment it holds the role.
+are judged by their age, so turning it on does not hold back anyone older than the setting. The
+default workspace ("A default workspace" below) is left out of the workspaces it shares, since
+every new account joins it, and a DM in it meets probation like one in the direct space. The
+instance operator is never on probation: the account that claims the default workspace with the
+operator role, or one granted it with `rim_server operator grant`, can create workspaces and
+message anyone from the moment it holds the role.
 
 ## Optional features
 
