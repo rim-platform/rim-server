@@ -359,7 +359,8 @@ pipelines and plugins per workspace, invites per user per day, uses per invite a
 of a message. Each is a `RIM_LIMIT_*` variable, off until set (the "Instance limits" block of
 `deploy/.env.example` has values for a small test instance); past one a write is refused with
 a message naming the cap, and clients read every cap from `serverInfo.limits`. Channels count
-while unarchived. A member who is neither Owner nor Moderator holds at most a fifth of a
+while unarchived, and a workspace holds at most five times the channel cap counting archived
+ones. A member who is neither Owner nor Moderator holds at most a fifth of a
 workspace's macro and pipeline caps, so no one member fills them, and loses theirs when kicked
 or banned. A workspace handed over counts against its new owner's cap. Devices and DM
 requests also follow the relay quotas `RIM_RELAY_DEVICES_PER_USER` and

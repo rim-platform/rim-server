@@ -44,6 +44,9 @@ pub trait WorkspaceStateRepository: Send + Sync {
         creator: UserId,
     ) -> RepoResult<WorkspaceStateUsage>;
 
+    /// Insert `new`, or overwrite the value and expiry of the entry stored under its key. An
+    /// expired entry not yet purged is replaced as a new one: its creator becomes `created_by`,
+    /// its version 1 and its creation time now.
     async fn upsert(&self, new: NewWorkspaceState) -> RepoResult<WorkspaceState>;
 
     async fn delete_by_key(
@@ -57,7 +60,8 @@ pub trait WorkspaceStateRepository: Send + Sync {
     async fn delete_expired(&self) -> RepoResult<u64>;
 
     /// Atomically increment a numeric value by `delta`, inserting with `delta` if the key does not
-    /// exist. Uses a single SQL statement to avoid TOCTOU race conditions.
+    /// exist or its entry expired (then created by `actor_id`, version 1, without expiry). Uses a
+    /// single SQL statement to avoid TOCTOU race conditions.
     async fn increment_by_key(
         &self,
         server_id: ServerId,

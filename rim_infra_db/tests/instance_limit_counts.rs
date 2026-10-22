@@ -1,6 +1,6 @@
-//! The counts the instance limits read: workspaces a user owns, members and channels of a
-//! workspace, its macros and pipelines, the invites a user created since a time, and the local
-//! accounts with the lock signups count them under.
+//! The counts the instance limits read: workspaces a user owns, members and channels (unarchived
+//! and all) of a workspace, its macros and pipelines, the invites a user created since a time,
+//! and the local accounts with the lock signups count them under.
 #![cfg(feature = "db-tests")]
 
 mod support;
@@ -100,9 +100,17 @@ async fn each_count_covers_its_workspace_or_user_alone() {
     ] {
         ctx.create_conversation(owned.id, kind).await;
     }
+    let archived = ctx
+        .create_conversation(owned.id, ConversationType::Channel)
+        .await;
+    conversations
+        .set_archived(archived.id, Some(Utc::now()))
+        .await
+        .unwrap();
     ctx.create_conversation(other.id, ConversationType::Channel)
         .await;
     assert_eq!(conversations.count_channels(owned.id).await.unwrap(), 2);
+    assert_eq!(conversations.count_all_channels(owned.id).await.unwrap(), 3);
 
     for (user, name) in [(ada.id, "a"), (bob.id, "b")] {
         macros

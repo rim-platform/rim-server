@@ -168,7 +168,9 @@ decide, and each may only tighten the one above it:
 - Owner/Moderator archive and unarchive channels (`setConversationArchived`); other roles get
   `FORBIDDEN`. Only channels can be archived (`VALIDATION` otherwise). An archived channel does
   not count against `RIM_LIMIT_CHANNELS_PER_WORKSPACE`; unarchiving one past the cap is
-  `VALIDATION`.
+  `VALIDATION`. A workspace holds at most five times that cap in channels, archived ones
+  included, and creating one past it is `VALIDATION`; channels cannot be deleted, so archiving
+  frees no room toward it.
 - An archived conversation is read-only: sending, replying, editing, deleting and forwarding into
   it, reactions, pins, topic edits, threads, attachments, typing, joining and inviting fail with
   `CONVERSATION_ARCHIVED`. Leaving and removing members still work.

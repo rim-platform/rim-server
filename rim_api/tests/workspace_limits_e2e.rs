@@ -1,6 +1,6 @@
 //! The caps that keep one account from filling a workspace or the instance, over a real
 //! database: workspaces per user under concurrent creation and on a hand-over, channels per
-//! workspace with archived channels, channel creation in the default workspace, and the
+//! workspace with archived channels and the ceiling on all of them, channel creation in the default workspace, and the
 //! macros and pipelines of one member.
 //!
 //! Run with:
@@ -143,6 +143,57 @@ async fn archived_channels_leave_room_under_the_channels_per_workspace_cap() {
     let (code, message) = exec_err(&schema, archive(&first, false)).await;
     assert_eq!(code, "VALIDATION");
     assert_eq!(message, "this instance allows 1 channels per workspace");
+}
+
+/// Creating and archiving channels stops at five times the channel cap, archived channels
+/// included; the refusal says archived channels still count.
+#[tokio::test]
+async fn archiving_does_not_free_room_under_the_ceiling_on_all_channels() {
+    let ctx = TestCtx::new().await;
+    let ws = ctx.roles("cap-all-channels").await;
+    let (schema, _) = ctx.build_with_limits(limits(|l| l.channels_per_workspace = Some(1)));
+    let create = |title: String| {
+        ws.alice.request(
+            CREATE_CHANNEL,
+            json!({ "s": ws.server_id, "title": title, "private": false }),
+        )
+    };
+
+    for n in 0..5 {
+        let id = exec_ok(&schema, create(format!("round-{n}"))).await["createConversation"]["id"]
+            .clone();
+        exec_ok(
+            &schema,
+            ws.alice.request(
+                SET_ARCHIVED,
+                json!({ "s": ws.server_id, "c": id, "archived": true }),
+            ),
+        )
+        .await;
+    }
+    let (code, message) = exec_err(&schema, create("round-5".to_string())).await;
+    assert_eq!(code, "VALIDATION");
+    assert_eq!(
+        message,
+        "this instance allows 5 channels per workspace counting archived ones; archived \
+         channels cannot be deleted and still count toward it"
+    );
+
+    // Another workspace has its own room.
+    ctx.join(
+        &ws.other_server_id,
+        &ws.alice,
+        rim_core::server_member::model::ServerMemberRole::Owner,
+    )
+    .await;
+    exec_ok(
+        &schema,
+        ws.alice.request(
+            CREATE_CHANNEL,
+            json!({ "s": ws.other_server_id, "title": "round-5", "private": false }),
+        ),
+    )
+    .await;
 }
 
 /// In the default workspace only the Owner and Moderators create channels, public or private;

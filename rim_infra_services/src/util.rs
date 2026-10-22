@@ -453,6 +453,7 @@ mod tests {
         assert!(member_repo.count_members(server_id).await.is_err());
         assert!(server_repo.count_owned(user_id).await.is_err());
         assert!(conv_repo.count_channels(server_id).await.is_err());
+        assert!(conv_repo.count_all_channels(server_id).await.is_err());
     }
 
     struct FakeServerMemberRepo {
@@ -591,6 +592,10 @@ mod tests {
     #[async_trait]
     impl ConversationRepository for FakeConversationRepo {
         async fn count_channels(&self, _server_id: ServerId) -> RepoResult<u64> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
+
+        async fn count_all_channels(&self, _server_id: ServerId) -> RepoResult<u64> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
 

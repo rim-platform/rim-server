@@ -153,7 +153,10 @@ impl WorkspaceStateRepository for SeaOrmWorkspaceStateRepository {
             INSERT INTO workspace_state (id, server_id, key, value, scope, user_id, created_by, updated_by, version, expires_at, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $7, 1, $8, $9, $9)
             ON CONFLICT (server_id, scope, user_id, key)
-            DO UPDATE SET value = $4, updated_by = $7, version = workspace_state.version + 1, expires_at = $8, updated_at = $9
+            DO UPDATE SET value = $4, updated_by = $7, expires_at = $8, updated_at = $9,
+                created_by = CASE WHEN workspace_state.expires_at <= $9 THEN $7 ELSE workspace_state.created_by END,
+                version = CASE WHEN workspace_state.expires_at <= $9 THEN 1 ELSE workspace_state.version + 1 END,
+                created_at = CASE WHEN workspace_state.expires_at <= $9 THEN $9 ELSE workspace_state.created_at END
             RETURNING *
             "#,
             vec![
@@ -232,7 +235,12 @@ impl WorkspaceStateRepository for SeaOrmWorkspaceStateRepository {
             INSERT INTO workspace_state (id, server_id, key, value, scope, user_id, created_by, updated_by, version, expires_at, created_at, updated_at)
             VALUES ($1, $2, $3, to_jsonb($4::bigint), $5, $6, $7, $7, 1, NULL, $8, $8)
             ON CONFLICT (server_id, scope, user_id, key)
-            DO UPDATE SET value = to_jsonb((workspace_state.value::text::bigint + $4::bigint)), updated_by = $7, version = workspace_state.version + 1, updated_at = $8
+            DO UPDATE SET updated_by = $7, updated_at = $8,
+                value = CASE WHEN workspace_state.expires_at <= $8 THEN to_jsonb($4::bigint) ELSE to_jsonb((workspace_state.value::text::bigint + $4::bigint)) END,
+                created_by = CASE WHEN workspace_state.expires_at <= $8 THEN $7 ELSE workspace_state.created_by END,
+                version = CASE WHEN workspace_state.expires_at <= $8 THEN 1 ELSE workspace_state.version + 1 END,
+                expires_at = CASE WHEN workspace_state.expires_at <= $8 THEN NULL ELSE workspace_state.expires_at END,
+                created_at = CASE WHEN workspace_state.expires_at <= $8 THEN $8 ELSE workspace_state.created_at END
             RETURNING *
             "#,
             vec![

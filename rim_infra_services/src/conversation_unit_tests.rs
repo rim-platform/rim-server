@@ -934,6 +934,8 @@ mod tests {
             conversation_repo
                 .expect_count_channels()
                 .returning(move |_| Box::pin(async move { Ok(channels) }));
+            // Unarchiving leaves the count of all channels unchanged, so it never checks it.
+            conversation_repo.expect_count_all_channels().never();
             conversation_repo
                 .expect_exists_channel_by_title()
                 .returning(|_, _| Box::pin(async { Ok(false) }));
@@ -2058,9 +2060,14 @@ mod tests {
 
     // ── Instance limits ──
 
-    /// A service where a member creates a channel in a workspace holding `channels` channels
-    /// under `cap`; `None` channels expects them never to be counted.
-    fn channel_service(channels: Option<u64>, cap: Option<u32>) -> DefaultConversationService {
+    /// A service where a member creates a channel in a workspace holding `channels` unarchived
+    /// channels and `all_channels` channels in all under `cap`; `None` expects that count never
+    /// to be taken.
+    fn channel_service(
+        channels: Option<u64>,
+        all_channels: Option<u64>,
+        cap: Option<u32>,
+    ) -> DefaultConversationService {
         let (mut conversation_repo, mut conversation_member_repo, mut server_member_repo) =
             base_repos();
         server_member_repo
@@ -2077,6 +2084,16 @@ mod tests {
             }
             None => {
                 conversation_repo.expect_count_channels().never();
+            }
+        }
+        match all_channels {
+            Some(all_channels) => {
+                conversation_repo
+                    .expect_count_all_channels()
+                    .returning(move |_| Box::pin(async move { Ok(all_channels) }));
+            }
+            None => {
+                conversation_repo.expect_count_all_channels().never();
             }
         }
         conversation_repo
@@ -2107,13 +2124,13 @@ mod tests {
 
     #[tokio::test]
     async fn creating_a_channel_follows_the_channels_per_workspace_cap() {
-        for (cap, channels, is_private, allowed) in [
-            (Some(30), Some(29), false, true),
-            (Some(30), Some(30), true, false),
-            (Some(30), Some(30), false, false),
-            (None, None, false, true),
+        for (cap, channels, all_channels, is_private, allowed) in [
+            (Some(30), Some(29), Some(29), false, true),
+            (Some(30), Some(30), None, true, false),
+            (Some(30), Some(30), None, false, false),
+            (None, None, None, false, true),
         ] {
-            let result = channel_service(channels, cap)
+            let result = channel_service(channels, all_channels, cap)
                 .create_conversation(CreateConversationCmd {
                     actor: Actor::new(UserId::new()),
                     server_id: ServerId::new(),
@@ -2128,6 +2145,34 @@ mod tests {
                 Err(ServiceError::Validation(message)) => {
                     assert!(!allowed, "{cap:?} {channels:?}");
                     assert_eq!(message, "this instance allows 30 channels per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn creating_a_channel_follows_the_ceiling_on_all_channels_archived_included() {
+        for (all_channels, allowed) in [(149, true), (150, false), (151, false)] {
+            let result = channel_service(Some(1), Some(all_channels), Some(30))
+                .create_conversation(CreateConversationCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    participants: ConversationParticipants::Channel,
+                    title: Some("news".to_string()),
+                    is_private: false,
+                    encrypted: false,
+                })
+                .await;
+            match result {
+                Ok(_) => assert!(allowed, "{all_channels}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{all_channels}");
+                    assert_eq!(
+                        message,
+                        "this instance allows 150 channels per workspace counting archived \
+                         ones; archived channels cannot be deleted and still count toward it"
+                    );
                 }
                 Err(other) => panic!("unexpected {other:?}"),
             }

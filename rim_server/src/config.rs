@@ -306,8 +306,8 @@ pub struct RIMConfig {
     /// Members of one workspace; the direct space has no cap. Controlled by
     /// `RIM_LIMIT_MEMBERS_PER_WORKSPACE`.
     pub limit_members_per_workspace: Option<u32>,
-    /// Unarchived channels of one workspace, public and private. Controlled by
-    /// `RIM_LIMIT_CHANNELS_PER_WORKSPACE`.
+    /// Unarchived channels of one workspace, public and private; all its channels, archived ones
+    /// included, are capped at five times this. Controlled by `RIM_LIMIT_CHANNELS_PER_WORKSPACE`.
     pub limit_channels_per_workspace: Option<u32>,
     /// Devices on one account; the stricter of this and `RIM_RELAY_DEVICES_PER_USER` applies.
     /// Controlled by `RIM_LIMIT_DEVICES_PER_USER`.
