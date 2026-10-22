@@ -35,7 +35,10 @@ the route needs the session cookie; "CSRF" means it also needs the `X-CSRF-Token
 ### GraphQL: `POST /api`
 
 The request body is the usual GraphQL JSON (`query`, `variables`, `operationName`), or an array
-of such objects, which the server runs as one batch and answers with an array. A batch holds
+of such objects, which the server runs as one batch and answers with an array. The body is read
+as JSON whatever its `Content-Type`; a `multipart/*` body (the GraphQL multipart upload format)
+is answered 415 with `{"error":"unsupported_media_type","message":"..."}` before it is read, as
+the schema takes no file uploads (files go through the routes under `/api/files`). A batch holds
 at most `RIM_API_MAX_BATCH` requests (default 20); a larger one is answered 400 with
 `{"error":"batch_too_large"}` and none of it runs. The body is at most 12 MiB, enough for
 `submitMlsCommit` with a Commit and a Welcome at their 4 MiB caps in base64; it holds at most
@@ -546,6 +549,7 @@ JSON body naming the refusal:
 |---|---|---|
 | 400 | `{"error":"batch_too_large"}` | A GraphQL batch over `RIM_API_MAX_BATCH`. |
 | 413 | `{"error":"too_large","message":"..."}` | A GraphQL body past its caps (see "GraphQL: `POST /api`"). |
+| 415 | `{"error":"unsupported_media_type","message":"..."}` | A `multipart/*` body sent to `POST /api`. |
 | 429 | `{"error":"rate_limited","retryAfterSeconds":n}`, with `Retry-After: n` | The client address is over `RIM_RATE_REQUESTS_PER_MIN_PER_IP`. |
 | 429 | `{"error":"too_many_connections"}` | A WebSocket upgrade over `RIM_RATE_WS_CONNECTIONS_PER_USER`. |
 | 403 | `{"error":"blocked"}` | The client address is on the operator's IP deny list. |

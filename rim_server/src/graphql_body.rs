@@ -1,9 +1,9 @@
-//! The body of a GraphQL request: read up to a size cap and refused, before it is parsed, when
-//! it could expand into more parsed values or document nodes than any request the API takes.
+//! The body of a GraphQL request: JSON only, read up to a size cap and refused, before it is
+//! parsed, when it could expand into more parsed values or document nodes than any request the
+//! API takes.
 
 use actix_web::{HttpRequest, HttpResponse, web};
-use async_graphql::http::MultipartOptions;
-use async_graphql::{BatchRequest, ParseRequestError};
+use async_graphql::BatchRequest;
 
 use crate::body::{BodyError, read_bounded};
 
@@ -85,16 +85,40 @@ pub(crate) fn check_documents(batch: &BatchRequest) -> Result<(), Oversize> {
     Ok(())
 }
 
-/// The GraphQL batch a `POST /api` body holds, read and parsed as async-graphql's extractor
-/// does (JSON by default, multipart by its `Content-Type`), under the caps of this module.
+/// Whether `content_type` is a `multipart/*` media type, which the GraphQL endpoint does not
+/// take: the schema has no file uploads, and parsing one would open a file per file part.
+fn is_multipart(content_type: &str) -> bool {
+    let media_type = content_type.split(';').next().unwrap_or_default().trim();
+    media_type
+        .get(.."multipart/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("multipart/"))
+}
+
+/// `415` with `{"error":"unsupported_media_type","message":...}`.
+fn unsupported_media_type() -> HttpResponse {
+    HttpResponse::UnsupportedMediaType().json(serde_json::json!({
+        "error": "unsupported_media_type",
+        "message": "the GraphQL endpoint takes JSON, not multipart",
+    }))
+}
+
+/// The GraphQL batch a `POST /api` body holds, parsed as JSON whatever its `Content-Type`, under
+/// the caps of this module. A `multipart/*` body is refused before it is read.
 ///
 /// # Errors
-/// The response to send instead: `413` past a cap, `400` for a body that could not be read or
-/// does not parse.
+/// The response to send instead: `415` for a multipart body, `413` past a cap, `400` for a body
+/// that could not be read or does not parse.
 pub(crate) async fn read_batch(
     req: &HttpRequest,
     payload: web::Payload,
 ) -> Result<BatchRequest, HttpResponse> {
+    let content_type = req
+        .headers()
+        .get(actix_web::http::header::CONTENT_TYPE)
+        .map(|value| String::from_utf8_lossy(value.as_bytes()));
+    if content_type.is_some_and(|content_type| is_multipart(&content_type)) {
+        return Err(unsupported_media_type());
+    }
     let body = read_bounded(req, payload, MAX_GRAPHQL_BODY_BYTES)
         .await
         .map_err(|e| match e {
@@ -105,20 +129,9 @@ pub(crate) async fn read_batch(
             })),
         })?;
     check_body(&body).map_err(Oversize::response)?;
-    let content_type = req
-        .headers()
-        .get(actix_web::http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok());
-    let batch = async_graphql::http::receive_batch_body(
-        content_type,
-        body.as_slice(),
-        MultipartOptions::default(),
-    )
-    .await
-    .map_err(|err| match err {
-        ParseRequestError::PayloadTooLarge => Oversize::Body.response(),
-        _ => actix_web::error::ErrorBadRequest(err).error_response(),
-    })?;
+    let batch = async_graphql::http::receive_batch_json(body.as_slice())
+        .await
+        .map_err(|err| actix_web::error::ErrorBadRequest(err).error_response())?;
     check_documents(&batch).map_err(Oversize::response)?;
     Ok(batch)
 }
@@ -262,6 +275,59 @@ mod tests {
         let (status, body) = post(body, Some("application/json")).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(body, Oversize::Documents.body());
+    }
+
+    #[actix_web::test]
+    async fn a_multipart_body_gets_415_unparsed() {
+        let boundary = "rim";
+        let body = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"operations\"\r\n\r\n\
+             {{\"query\":\"{{ ok }}\"}}\r\n\
+             --{boundary}\r\n\
+             Content-Disposition: form-data; name=\"map\"\r\n\r\n\
+             {{}}\r\n\
+             --{boundary}\r\n\
+             Content-Disposition: form-data; name=\"0\"; filename=\"a\"\r\n\r\n\
+             \r\n\
+             --{boundary}--\r\n"
+        );
+        for content_type in [
+            "multipart/form-data; boundary=rim",
+            "Multipart/Form-Data; boundary=rim",
+            " multipart/mixed;boundary=rim",
+        ] {
+            let (status, response) = post(body.clone().into_bytes(), Some(content_type)).await;
+            assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{content_type}");
+            assert_eq!(
+                response["error"], "unsupported_media_type",
+                "{content_type}"
+            );
+        }
+    }
+
+    #[actix_web::test]
+    async fn a_multipart_body_is_refused_before_it_is_read() {
+        let app = app!();
+        let req = TestRequest::post()
+            .uri("/api")
+            .insert_header(("content-type", "multipart/form-data; boundary=rim"))
+            .insert_header(("content-length", (MAX_GRAPHQL_BODY_BYTES + 1).to_string()))
+            .to_request();
+        let res = test::call_service(&app, req).await;
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[test]
+    fn only_multipart_media_types_are_multipart() {
+        assert!(is_multipart("multipart/form-data"));
+        assert!(is_multipart("MULTIPART/related; type=application/json"));
+        assert!(!is_multipart("application/json"));
+        assert!(!is_multipart(
+            "application/json; profile=multipart/form-data"
+        ));
+        assert!(!is_multipart("multipart"));
+        assert!(!is_multipart(""));
     }
 
     #[test]

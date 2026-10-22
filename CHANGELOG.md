@@ -550,6 +550,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- `POST /api` answers a `multipart/*` body 415 with `{"error":"unsupported_media_type"}` before
+  reading it, and reads every other body as JSON. Before, it parsed the GraphQL multipart upload
+  format, which the schema has no use for, and one body of many empty file parts opened a
+  temporary file for each, enough to run the server out of file descriptors (`docs/api.md`).
 - Adding someone as a contact no longer lets a user skip their own limits on DMs to strangers.
   The daily invites to people on other servers (`RIM_RELAY_DM_REQUESTS_PER_DAY`) and a new
   account's probation (`RIM_PROBATION_HOURS`) now pass only for people the user knows: a contact
