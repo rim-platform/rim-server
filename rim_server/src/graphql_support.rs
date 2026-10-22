@@ -4,20 +4,45 @@ use rim_auth::csrf::verify_csrf_token;
 use rim_services::auth::service::RequestAuthenticator;
 
 use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
-use rim_api::operation::parse_root_fields;
+use rim_api::operation::{OperationFields, root_fields};
 
 pub const COOKIE_SESSION: &str = "rim_session";
 pub const COOKIE_CSRF: &str = "rim_csrf";
 
+/// The root fields of one request of a batch, or the message its document fails to parse with.
+pub type RootFields = Result<OperationFields, String>;
+
+/// The root fields of every request of `batch`, in order. Each document is parsed once and kept
+/// in its request, so running the batch does not parse it again.
+pub fn batch_root_fields(batch: &mut async_graphql::BatchRequest) -> Vec<RootFields> {
+    batch
+        .iter_mut()
+        .map(|request| {
+            let operation_name = request.operation_name.clone();
+            request
+                .parsed_query()
+                .map(|document| root_fields(document, operation_name.as_deref()))
+                .map_err(|e| e.message)
+        })
+        .collect()
+}
+
+/// Whether a request of the batch defines a mutation operation, selected or not.
+pub fn batch_has_mutation(fields: &[RootFields]) -> bool {
+    fields
+        .iter()
+        .any(|f| f.as_ref().is_ok_and(|f| f.mutation_in_document))
+}
+
 /// Mutation fields across a batch, aliases, repeats and each fragment expansion counted; a
 /// request that does not parse counts none, since it runs nothing.
-pub fn count_mutation_fields(batch: &async_graphql::BatchRequest) -> u32 {
-    let fields: usize = batch
+pub fn count_mutation_fields(fields: &[RootFields]) -> u32 {
+    let count: usize = fields
         .iter()
-        .filter_map(|gql| parse_root_fields(&gql.query, gql.operation_name.as_deref()).ok())
-        .map(|fields| fields.mutation_count())
+        .filter_map(|f| f.as_ref().ok())
+        .map(OperationFields::mutation_count)
         .sum();
-    u32::try_from(fields).unwrap_or(u32::MAX)
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// Mutation field names (camelCase, matching the GraphQL schema) that are
@@ -59,10 +84,10 @@ const CSRF_EXEMPT_WITHOUT_SESSION: &[&str] = &["rotateIdentityKey", "cancelDevic
 #[allow(clippy::result_large_err)]
 pub fn enforce_csrf_for_batch(
     req: &HttpRequest,
-    batch: &async_graphql::BatchRequest,
+    fields: &[RootFields],
 ) -> Result<(), GraphQLResponse> {
     let has_session = req.cookie(COOKIE_SESSION).is_some();
-    let needs_csrf = batch.iter().any(|gql| request_needs_csrf(gql, has_session));
+    let needs_csrf = fields.iter().any(|f| request_needs_csrf(f, has_session));
     if needs_csrf {
         validate_csrf_tokens(req)
     } else {
@@ -74,8 +99,8 @@ pub fn enforce_csrf_for_batch(
 /// root fields cannot all be found, through fragments at any depth, or one is not exempt. A
 /// request that does not parse needs it. `has_session` says whether the request carries a
 /// session cookie.
-fn request_needs_csrf(gql: &async_graphql::Request, has_session: bool) -> bool {
-    let Ok(fields) = parse_root_fields(&gql.query, gql.operation_name.as_deref()) else {
+fn request_needs_csrf(fields: &RootFields, has_session: bool) -> bool {
+    let Ok(fields) = fields else {
         return true;
     };
     if !fields.may_mutate() {
@@ -302,6 +327,20 @@ mod tests {
     use rim_services::auth::dto::RequestAuthResultDto;
     use rim_services::auth::service::MockRequestAuthenticator;
 
+    /// The root fields of `request`, as [`batch_root_fields`] finds them.
+    fn fields_of(request: &async_graphql::Request) -> RootFields {
+        let mut copy = async_graphql::Request::new(request.query.clone());
+        if let Some(name) = &request.operation_name {
+            copy = copy.operation_name(name.clone());
+        }
+        batch_root_fields(&mut async_graphql::BatchRequest::Single(copy)).remove(0)
+    }
+
+    /// The root fields of every request of `batch`.
+    fn batch_fields(batch: &async_graphql::BatchRequest) -> Vec<RootFields> {
+        batch.iter().map(fields_of).collect()
+    }
+
     fn session_cookie_request(token: &str) -> HttpRequest {
         TestRequest::default()
             .cookie(actix_web::cookie::Cookie::new(
@@ -312,6 +351,31 @@ mod tests {
     }
 
     #[test]
+    fn each_document_is_parsed_once_and_kept_for_execution() {
+        let mut batch = async_graphql::BatchRequest::Batch(vec![
+            async_graphql::Request::new("query Q { me { id } } mutation M { logout }")
+                .operation_name("Q"),
+            async_graphql::Request::new("mutation {"),
+        ]);
+        let fields = batch_root_fields(&mut batch);
+        let first = fields[0].as_ref().expect("parses");
+        assert_eq!(first.fields, vec!["me".to_string()]);
+        assert!(first.mutation_in_document);
+        assert!(fields[1].is_err());
+        assert!(batch_has_mutation(&fields));
+        assert!(!batch_has_mutation(&fields[1..]));
+        let async_graphql::BatchRequest::Batch(mut requests) = batch else {
+            panic!("a batch");
+        };
+        let mut kept = requests.remove(0);
+        kept.query = "not a document".to_string();
+        assert!(
+            kept.parsed_query().is_ok(),
+            "the parsed document is kept in the request"
+        );
+    }
+
+    #[test]
     fn count_mutation_fields_counts_every_field_across_the_batch() {
         let batch = async_graphql::BatchRequest::Batch(vec![
             async_graphql::Request::new("mutation { a: logout b: logout }"),
@@ -319,7 +383,7 @@ mod tests {
             async_graphql::Request::new("mutation M { ...F } fragment F on Mutation { logout }"),
             async_graphql::Request::new("mutation {"),
         ]);
-        assert_eq!(count_mutation_fields(&batch), 3);
+        assert_eq!(count_mutation_fields(&batch_fields(&batch)), 3);
     }
 
     /// `depth` inline fragments around `field`.
@@ -424,14 +488,22 @@ fragment Inner on Mutation {
             if let Some(name) = operation_name {
                 request = request.operation_name(name);
             }
-            assert_eq!(request_needs_csrf(&request, true), needs_csrf, "{case}");
+            assert_eq!(
+                request_needs_csrf(&fields_of(&request), true),
+                needs_csrf,
+                "{case}"
+            );
             let batch = async_graphql::BatchRequest::Single(request);
-            assert_eq!(count_mutation_fields(&batch), charged, "{case}");
+            assert_eq!(
+                count_mutation_fields(&batch_fields(&batch)),
+                charged,
+                "{case}"
+            );
             let signed_in = TestRequest::default()
                 .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
                 .to_http_request();
             assert_eq!(
-                enforce_csrf_for_batch(&signed_in, &batch).is_err(),
+                enforce_csrf_for_batch(&signed_in, &batch_fields(&batch)).is_err(),
                 needs_csrf,
                 "{case}"
             );
@@ -522,7 +594,7 @@ fragment Inner on Mutation {
             r#"mutation { resetPassword(token: "t", newPassword: "p") }"#,
         ] {
             assert!(
-                !request_needs_csrf(&async_graphql::Request::new(query), false),
+                !request_needs_csrf(&fields_of(&async_graphql::Request::new(query)), false),
                 "{query}"
             );
         }
@@ -533,12 +605,12 @@ fragment Inner on Mutation {
         let rotate = async_graphql::Request::new(
             r#"mutation { rotateIdentityKey(input: { entry: { payload: "p", signature: "s" } }) { keySeq } }"#,
         );
-        assert!(request_needs_csrf(&rotate, true));
+        assert!(request_needs_csrf(&fields_of(&rotate), true));
         // Login stays exempt with a stale session cookie, so signing in again always works.
         let login = async_graphql::Request::new(
             r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } }"#,
         );
-        assert!(!request_needs_csrf(&login, true));
+        assert!(!request_needs_csrf(&fields_of(&login), true));
     }
 
     #[test]
@@ -549,9 +621,9 @@ fragment Inner on Mutation {
         let signed_in = TestRequest::default()
             .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
             .to_http_request();
-        assert!(enforce_csrf_for_batch(&signed_in, &batch).is_err());
+        assert!(enforce_csrf_for_batch(&signed_in, &batch_fields(&batch)).is_err());
         let signed_out = TestRequest::default().to_http_request();
-        assert!(enforce_csrf_for_batch(&signed_out, &batch).is_ok());
+        assert!(enforce_csrf_for_batch(&signed_out, &batch_fields(&batch)).is_ok());
     }
 
     #[test]
@@ -561,7 +633,7 @@ fragment Inner on Mutation {
             r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } addDeviceKey(certificate: { payload: "p", signature: "s" }) { name } }"#,
         ] {
             assert!(
-                request_needs_csrf(&async_graphql::Request::new(query), false),
+                request_needs_csrf(&fields_of(&async_graphql::Request::new(query)), false),
                 "{query}"
             );
         }
@@ -572,23 +644,23 @@ fragment Inner on Mutation {
         let offer = async_graphql::Request::new(
             r#"mutation { sendDeviceLinkOffer(linkId: "l", offer: { nonce: "n", ciphertext: "c" }) }"#,
         );
-        assert!(!request_needs_csrf(&offer, false));
-        assert!(!request_needs_csrf(&offer, true));
+        assert!(!request_needs_csrf(&fields_of(&offer), false));
+        assert!(!request_needs_csrf(&fields_of(&offer), true));
     }
 
     #[test]
     fn device_link_cancel_skips_csrf_only_without_a_session() {
         let cancel = async_graphql::Request::new(r#"mutation { cancelDeviceLink(linkId: "l") }"#);
-        assert!(!request_needs_csrf(&cancel, false));
-        assert!(request_needs_csrf(&cancel, true));
+        assert!(!request_needs_csrf(&fields_of(&cancel), false));
+        assert!(request_needs_csrf(&fields_of(&cancel), true));
 
         let batch = async_graphql::BatchRequest::Single(cancel);
         let signed_in = TestRequest::default()
             .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
             .to_http_request();
-        assert!(enforce_csrf_for_batch(&signed_in, &batch).is_err());
+        assert!(enforce_csrf_for_batch(&signed_in, &batch_fields(&batch)).is_err());
         let signed_out = TestRequest::default().to_http_request();
-        assert!(enforce_csrf_for_batch(&signed_out, &batch).is_ok());
+        assert!(enforce_csrf_for_batch(&signed_out, &batch_fields(&batch)).is_ok());
     }
 
     #[test]
@@ -601,8 +673,8 @@ fragment Inner on Mutation {
             r#"mutation { sendDeviceLinkOffer(linkId: "l", offer: { nonce: "n", ciphertext: "c" }) completeDeviceLink(linkId: "l") }"#,
         ] {
             let request = async_graphql::Request::new(query);
-            assert!(request_needs_csrf(&request, false), "{query}");
-            assert!(request_needs_csrf(&request, true), "{query}");
+            assert!(request_needs_csrf(&fields_of(&request), false), "{query}");
+            assert!(request_needs_csrf(&fields_of(&request), true), "{query}");
         }
     }
 
@@ -614,14 +686,14 @@ fragment Inner on Mutation {
             r#"mutation { removeWorkspacePlugin(serverId: "s", pluginId: "p") }"#,
         ] {
             let request = async_graphql::Request::new(query);
-            assert!(request_needs_csrf(&request, false), "{query}");
-            assert!(request_needs_csrf(&request, true), "{query}");
+            assert!(request_needs_csrf(&fields_of(&request), false), "{query}");
+            assert!(request_needs_csrf(&fields_of(&request), true), "{query}");
             let batch = async_graphql::BatchRequest::Single(request);
             let signed_in = TestRequest::default()
                 .cookie(actix_web::cookie::Cookie::new(COOKIE_SESSION, "rim_sess_x"))
                 .to_http_request();
             assert!(
-                enforce_csrf_for_batch(&signed_in, &batch).is_err(),
+                enforce_csrf_for_batch(&signed_in, &batch_fields(&batch)).is_err(),
                 "{query}"
             );
         }

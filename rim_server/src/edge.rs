@@ -230,14 +230,17 @@ impl EdgeLimits {
         matches!(batch, async_graphql::BatchRequest::Batch(requests) if self.batch_too_large(requests.len()))
     }
 
-    /// Spend the mutation fields of `batch` from `caller`'s budget, or the seconds until they
-    /// are back.
+    /// Spend the mutation fields of a batch, given as the root `fields` of its requests, from
+    /// `caller`'s budget, or the seconds until they are back.
     pub(crate) fn charge_batch(
         &self,
         caller: &MutationCaller,
-        batch: &async_graphql::BatchRequest,
+        fields: &[crate::graphql_support::RootFields],
     ) -> Result<(), u64> {
-        self.spend_mutations(caller, crate::graphql_support::count_mutation_fields(batch))
+        self.spend_mutations(
+            caller,
+            crate::graphql_support::count_mutation_fields(fields),
+        )
     }
 
     /// Spend `fields` mutation fields from `caller`'s budget, or the seconds until they are
