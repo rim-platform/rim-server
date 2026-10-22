@@ -23,6 +23,7 @@ use rim_services::workspace_plugin::service::PluginBundleService;
 use serde_json::json;
 
 use crate::edge::{EdgeLimits, MutationCaller};
+use crate::graphql_body::{Oversize, check_body, check_documents};
 use crate::s2s::S2sState;
 use crate::s2s::guard::{Reply, Verified, internal};
 
@@ -117,25 +118,33 @@ fn over_limits(
     )
 }
 
-/// Run GraphQL as the forwarded user and device, under this server's batch cap and with its
-/// mutation fields charged to the device's budget.
+/// Run GraphQL as the forwarded user and device, under the body caps and the batch cap of
+/// `/api` and with its mutation fields charged to the device's budget.
 async fn graphql(
     req: &HttpRequest,
     auth: &ForwardAuth,
     peer_server_id: &str,
     body: &[u8],
 ) -> Reply {
-    let (Some(schema), Some(edge_limits)) = (
-        req.app_data::<web::Data<AppSchema>>(),
-        req.app_data::<web::Data<EdgeLimits>>(),
-    ) else {
-        return internal("the schema or the API limits are not configured");
-    };
+    let too_large =
+        |oversize: Oversize| Reply::json(StatusCode::PAYLOAD_TOO_LARGE, &oversize.body());
+    if let Err(oversize) = check_body(body) {
+        return too_large(oversize);
+    }
     let batch: async_graphql::BatchRequest = match serde_json::from_slice(body) {
         Ok(batch) => batch,
         Err(_) => {
             return Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed GraphQL");
         }
+    };
+    if let Err(oversize) = check_documents(&batch) {
+        return too_large(oversize);
+    }
+    let (Some(schema), Some(edge_limits)) = (
+        req.app_data::<web::Data<AppSchema>>(),
+        req.app_data::<web::Data<EdgeLimits>>(),
+    ) else {
+        return internal("the schema or the API limits are not configured");
     };
     if let Some(refused) = over_limits(edge_limits, auth, &batch) {
         return refused;
@@ -435,6 +444,31 @@ mod tests {
         let single: async_graphql::BatchRequest =
             serde_json::from_value(json!({ "query": "{ a }" })).expect("a request");
         assert!(over_limits(&limits, &auth, &single).is_none());
+    }
+
+    #[actix_web::test]
+    async fn a_forwarded_body_past_the_api_caps_is_refused_before_it_is_parsed() {
+        let req = actix_web::test::TestRequest::default().to_http_request();
+        let values = format!(
+            r#"{{"query":"{{ a }}","variables":{{"x":[{}0]}}}}"#,
+            "0,".repeat(crate::graphql_body::MAX_GRAPHQL_STRUCTURAL_BYTES)
+        );
+        let long = serde_json::to_vec(&json!({
+            "query": format!("{{ {} }}", "a ".repeat(crate::graphql_body::MAX_GRAPHQL_DOCUMENT_BYTES)),
+        }))
+        .expect("json");
+        for (payload, oversize) in [
+            (values.into_bytes(), Oversize::Values),
+            (long, Oversize::Documents),
+            (
+                vec![b' '; crate::graphql_body::MAX_GRAPHQL_BODY_BYTES + 1],
+                Oversize::Body,
+            ),
+        ] {
+            let reply = graphql(&req, &device(), "rims1_peer", &payload).await;
+            assert_eq!(reply.status, StatusCode::PAYLOAD_TOO_LARGE, "{oversize:?}");
+            assert_eq!(body(&reply), oversize.body());
+        }
     }
 
     #[test]

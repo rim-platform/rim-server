@@ -9,6 +9,10 @@
 //! A client message longer than [`MAX_MESSAGE_BYTES`], whole or reassembled from fragments,
 //! closes the connection the same way with code `1009`. A frame announcing a longer payload is
 //! refused at its header, before its payload is read.
+//!
+//! A client that starts subscriptions faster than [`SUBSCRIBE_RATE`] allows is disconnected
+//! with code `1008`, so subscribing and completing in a loop cannot churn streams faster than
+//! the rate.
 
 use std::cell::Cell;
 use std::pin::Pin;
@@ -35,6 +39,8 @@ use futures_util::Stream;
 use metrics::{Unit, describe_gauge, gauge};
 
 use rim_api::AppSchema;
+use rim_infra_services::token_bucket::{BucketRate, TokenBucketLimiter};
+use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::session_revocation::SessionWatch;
 
 const CONNECTIONS: &str = "rim_websocket_connections";
@@ -80,6 +86,28 @@ const TOO_LARGE_REASON: &str = "message too large";
 const MESSAGE_QUEUE: usize = 32;
 /// The close reason of a connection whose client filled [`MESSAGE_QUEUE`].
 const QUEUE_FULL_REASON: &str = "too many messages";
+/// Subscriptions a connection may start: 10 a second, in bursts of up to 50, so a client
+/// resubscribing everything it holds after a reconnect is not refused.
+const SUBSCRIBE_RATE: BucketRate = BucketRate {
+    per_minute: 600,
+    burst: 50,
+};
+/// The close reason of a connection whose client started subscriptions faster than
+/// [`SUBSCRIBE_RATE`].
+const SUBSCRIBE_RATE_REASON: &str = "too many subscriptions started";
+
+/// Whether a client message may start a subscription: a `subscribe` (graphql-transport-ws) or
+/// `start` (graphql-ws) message, or one whose type does not read, which the engine refuses
+/// anyway.
+fn starts_subscription(message: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Kind {
+        #[serde(rename = "type")]
+        kind: String,
+    }
+    serde_json::from_slice::<Kind>(message)
+        .map_or(true, |m| matches!(m.kind.as_str(), "subscribe" | "start"))
+}
 
 /// What ends a connection besides the client: its session's revocation and expiry.
 pub(crate) struct SessionBound {
@@ -123,6 +151,7 @@ where
         frame_too_large: Rc::clone(&payload.too_large),
         ended: false,
         metric_guard: None,
+        subscribes: subscribe_limiter(),
     };
     WsResponseBuilder::new(connection, request, payload)
         .protocols(&ALL_WEBSOCKET_PROTOCOLS)
@@ -149,6 +178,13 @@ struct Connection {
     /// Set once the server ended the connection: it sends nothing more and reads nothing more.
     ended: bool,
     metric_guard: Option<ConnectionGuard>,
+    /// The subscriptions the client may start now, under [`SUBSCRIBE_RATE`].
+    subscribes: TokenBucketLimiter<()>,
+}
+
+/// The one bucket of a connection's [`SUBSCRIBE_RATE`].
+fn subscribe_limiter() -> TokenBucketLimiter<()> {
+    TokenBucketLimiter::with_max_keys(SUBSCRIBE_RATE, 1)
 }
 
 impl Connection {
@@ -302,6 +338,12 @@ impl StreamHandler<Result<Message, ProtocolError>> for Connection {
         };
         if text.len() > MAX_MESSAGE_BYTES {
             return self.refuse_too_large(ctx);
+        }
+        if starts_subscription(&text)
+            && let RateLimitDecision::Limited { .. } = self.subscribes.check(&(), Instant::now())
+        {
+            rim_infra_services::metrics::rate_limited("ws_subscribe_rate");
+            return self.end(CloseCode::Policy, SUBSCRIBE_RATE_REASON, ctx);
         }
         match sender.try_send(text) {
             Ok(()) => {}
@@ -472,6 +514,7 @@ mod tests {
             frame_too_large: Rc::new(Cell::new(false)),
             ended: false,
             metric_guard: None,
+            subscribes: subscribe_limiter(),
         }
     }
 
@@ -503,6 +546,94 @@ mod tests {
             drop(stream);
             assert!(handle.render().contains("rim_websocket_connections 0"));
         }
+    }
+
+    #[test]
+    fn subscribe_and_start_messages_and_unreadable_ones_count_as_starting_subscriptions() {
+        for message in [
+            r#"{"id":"1","type":"subscribe","payload":{"query":"subscription { a }"}}"#,
+            r#"{"id":"1","type":"start","payload":{"query":"subscription { a }"}}"#,
+            r#"{"type":"subscr\u0069be","id":"1"}"#,
+            r#"{"type":"complete","type":"subscribe"}"#,
+            "not json",
+        ] {
+            assert!(starts_subscription(message.as_bytes()), "{message}");
+        }
+        for message in [
+            r#"{"type":"connection_init"}"#,
+            r#"{"type":"ping"}"#,
+            r#"{"type":"pong"}"#,
+            r#"{"id":"1","type":"complete"}"#,
+            r#"{"id":"1","type":"stop"}"#,
+        ] {
+            assert!(!starts_subscription(message.as_bytes()), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_connection_starts_a_burst_of_subscriptions_then_waits_for_the_rate() {
+        let limiter = subscribe_limiter();
+        let now = Instant::now();
+        for _ in 0..SUBSCRIBE_RATE.burst {
+            assert_eq!(limiter.check(&(), now), RateLimitDecision::Allowed);
+        }
+        assert!(matches!(
+            limiter.check(&(), now),
+            RateLimitDecision::Limited { .. }
+        ));
+        let later = now + Duration::from_millis(100);
+        assert_eq!(limiter.check(&(), later), RateLimitDecision::Allowed);
+    }
+
+    /// A client text frame holding `text`, masked as a client sends it.
+    fn text_frame(text: &str) -> Bytes {
+        let mut bytes = BytesMut::new();
+        Parser::write_message(&mut bytes, text.as_bytes(), OpCode::Text, true, true);
+        bytes.freeze()
+    }
+
+    #[actix_web::test]
+    async fn starting_subscriptions_past_the_rate_closes_the_connection_with_1008() {
+        let subscribes = SUBSCRIBE_RATE.burst as usize + 10;
+        let mut frames = vec![text_frame(r#"{"type":"connection_init"}"#)];
+        frames.extend((0..subscribes).map(|id| {
+            text_frame(&format!(
+                r#"{{"id":"{id}","type":"subscribe","payload":{{"query":"subscription {{ nothing }}"}}}}"#
+            ))
+        }));
+        let client = futures_util::stream::iter(frames).then(|frame| async move {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            Ok::<_, PayloadError>(frame)
+        });
+        let mut server = Box::pin(WebsocketContext::create(
+            connection_for_test(SessionBound {
+                watch: None,
+                expires_at: None,
+            }),
+            client,
+        ));
+        let mut received = BytesMut::new();
+        let close = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                while let Some((_, opcode, payload)) =
+                    Parser::parse(&mut received, false, usize::MAX).expect("a server frame")
+                {
+                    if opcode == OpCode::Close {
+                        return payload.unwrap_or_default();
+                    }
+                }
+                let chunk = server
+                    .next()
+                    .await
+                    .expect("the connection closes before it ends")
+                    .expect("bytes");
+                received.extend_from_slice(&chunk);
+            }
+        })
+        .await
+        .expect("closed in time");
+        assert_eq!(u16::from_be_bytes([close[0], close[1]]), 1008);
+        assert_eq!(&close[2..], SUBSCRIBE_RATE_REASON.as_bytes());
     }
 
     /// A client frame of `len` payload bytes, masked as a client sends it.

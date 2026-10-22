@@ -24,13 +24,16 @@ use rim_services::ip_block::service::IpBlockService;
 
 use crate::config::ApiLimits;
 
-/// The address a request comes from: with `trust_forwarded_headers`, the client named by
-/// `Forwarded` or `X-Forwarded-For` when it parses as an address, else the TCP peer. An
+/// The address a request comes from: with `trust_forwarded_headers`, the first entry of
+/// `X-Forwarded-For` when it parses as an address, else the TCP peer. `Forwarded` is never
+/// read: a proxy that sets `X-Forwarded-For` may pass it through from the client untouched. An
 /// IPv4-mapped IPv6 address is its IPv4 address.
 pub(crate) fn client_ip(req: &HttpRequest, trust_forwarded_headers: bool) -> Option<IpAddr> {
     let forwarded = if trust_forwarded_headers {
-        req.connection_info()
-            .realip_remote_addr()
+        req.headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
             .and_then(parse_address)
     } else {
         None
@@ -494,6 +497,62 @@ mod tests {
             "garbage falls back to the peer"
         );
         assert_eq!(parse_address("[2001:db8::2]"), ip("2001:db8::2"));
+    }
+
+    #[test]
+    fn the_forwarded_header_never_names_the_client() {
+        let req = |trust: bool, headers: &[(&str, &str)]| {
+            let mut req = from("10.0.0.1");
+            for (name, value) in headers {
+                req = req.insert_header((*name, *value));
+            }
+            client_ip(&req.to_http_request(), trust)
+        };
+        let ip = |s: &str| Some(s.parse::<IpAddr>().expect("ip"));
+        let spoofed = ("forwarded", "for=198.51.100.66;proto=https");
+        assert_eq!(
+            req(true, &[spoofed]),
+            ip("10.0.0.1"),
+            "the peer, not Forwarded"
+        );
+        assert_eq!(req(false, &[spoofed]), ip("10.0.0.1"));
+        assert_eq!(
+            req(true, &[spoofed, ("x-forwarded-for", "203.0.113.7")]),
+            ip("203.0.113.7"),
+            "X-Forwarded-For wins over Forwarded"
+        );
+        assert_eq!(
+            req(false, &[spoofed, ("x-forwarded-for", "203.0.113.7")]),
+            ip("10.0.0.1"),
+            "untrusted, neither header counts"
+        );
+        assert_eq!(
+            req(true, &[("x-forwarded-for", "")]),
+            ip("10.0.0.1"),
+            "an empty header falls back to the peer"
+        );
+    }
+
+    #[actix_web::test]
+    async fn a_forged_forwarded_header_neither_escapes_the_limit_nor_a_block() {
+        let spoofed = |client: &str| {
+            from("203.0.113.5")
+                .insert_header(("forwarded", format!("for={client}")))
+                .insert_header(("x-forwarded-for", "203.0.113.5"))
+                .to_request()
+        };
+        let app = app!(EdgeLimits::new(limits(1), true));
+        let res = test::call_service(&app, spoofed("198.51.100.1")).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = test::call_service(&app, spoofed("198.51.100.2")).await;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let app = app!(
+            EdgeLimits::new(limits_off(), true)
+                .with_deny_list(deny_list(&[("203.0.113.0/24", None)]))
+        );
+        let res = test::call_service(&app, spoofed("198.51.100.1")).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]

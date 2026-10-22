@@ -346,8 +346,10 @@ it gets 403 `{"error":"blocked"}` on every route but `/healthz`, server-to-serve
 included. Leave out `--expires-in-days` to block until `ip unblock`; `ip list` shows every block
 with its expiry. A running server reads the list every 30 seconds, so a change applies within
 that; each block and unblock is written to the audit log as `ip.block` or `ip.unblock`. Behind
-Caddy the address is the client's, since `RIM_TRUST_FORWARDED_HEADERS` is on; behind another
-proxy it must replace `X-Forwarded-For` (next sections), or one forged header unblocks a client.
+Caddy the address is the client's, since `RIM_TRUST_FORWARDED_HEADERS` is on: the server reads
+the first address in `X-Forwarded-For`, which Caddy replaces with the client's, and never
+`Forwarded`, which the Caddyfiles drop. Behind another proxy it must replace `X-Forwarded-For`
+(next sections), or one forged header unblocks a client.
 
 ### Instance limits
 
@@ -609,7 +611,9 @@ Caddy is an example. Any TLS proxy works if it:
   server domain's other paths there;
 - keeps `/healthz` and `/readyz` off the public side;
 - accepts bodies up to 32 MiB;
-- sets `X-Forwarded-For` itself, replacing what the client sent;
+- sets `X-Forwarded-For` itself, replacing what the client sent: the server takes the client's
+  address from its first entry and never reads `Forwarded`;
+- drops `Forwarded`, as the Caddyfiles do with `header_up -Forwarded`;
 - is the only way in.
 
 `deploy/README.md` has an nginx example for the relay's paths.

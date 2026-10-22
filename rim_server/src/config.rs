@@ -42,11 +42,12 @@ pub struct RIMConfig {
     /// Set `RIM_OPEN_REGISTRATION=true` to enable open signup.
     pub open_registration: Option<bool>,
 
-    /// When `true`, the server reads `X-Forwarded-For` / `Forwarded` headers
-    /// to determine the real client IP for rate-limiting. Only enable this
-    /// when a trusted reverse proxy (Nginx, Caddy, Traefik, …) is the sole
-    /// entry point; enabling it without a proxy lets attackers spoof their IP
-    /// and defeat the rate limiters.
+    /// When `true`, the server takes the real client IP for rate-limiting and
+    /// IP blocks from the first entry of `X-Forwarded-For`; `Forwarded` is
+    /// never read. Only enable this when a trusted reverse proxy (Nginx,
+    /// Caddy, Traefik, …) is the sole entry point and replaces any
+    /// `X-Forwarded-For` the client sent; enabling it without such a proxy
+    /// lets attackers spoof their IP and defeat the rate limiters.
     ///
     /// Controlled by `RIM_TRUST_FORWARDED_HEADERS=true`.
     pub trust_forwarded_headers: Option<bool>,
@@ -662,8 +663,8 @@ impl RIMConfig {
         }
     }
 
-    /// Whether the server should trust `X-Forwarded-For` / `Forwarded` headers
-    /// for real-IP resolution.
+    /// Whether the server should trust `X-Forwarded-For` for real-IP
+    /// resolution.
     ///
     /// Returns `true` only when `RIM_TRUST_FORWARDED_HEADERS=true` is set.
     /// **Operator requirement:** only enable when a trusted reverse proxy is

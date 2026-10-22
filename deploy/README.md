@@ -263,8 +263,9 @@ Caddy is an example. Any TLS proxy works if it:
   changes, since server-to-server requests and answers are signed over method, URL and body;
 - accepts request bodies up to 32 MiB;
 - sets `X-Forwarded-For` to the client's address itself, replacing what the client sent, because
-  the server trusts it (`RIM_TRUST_FORWARDED_HEADERS=true`) for its per-IP limits, signups
-  included; and sets `X-Forwarded-Proto`;
+  the server trusts its first entry (`RIM_TRUST_FORWARDED_HEADERS=true`) for its per-IP limits
+  and IP blocks, signups included; sets `X-Forwarded-Proto`; and drops `Forwarded`, which the
+  server never reads for the address (the Caddyfiles use `header_up -Forwarded`);
 - is the only way in: port 8080 is never published.
 
 With nginx:
@@ -285,6 +286,7 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Forwarded "";
         proxy_read_timeout 1h;
     }
 }

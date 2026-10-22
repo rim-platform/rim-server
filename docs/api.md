@@ -37,8 +37,12 @@ the route needs the session cookie; "CSRF" means it also needs the `X-CSRF-Token
 The request body is the usual GraphQL JSON (`query`, `variables`, `operationName`), or an array
 of such objects, which the server runs as one batch and answers with an array. A batch holds
 at most `RIM_API_MAX_BATCH` requests (default 20); a larger one is answered 400 with
-`{"error":"batch_too_large"}` and none of it runs. Apart from that and the refusals under
-"Limits", the answer is HTTP 200; errors are in the `errors` array of each response (see
+`{"error":"batch_too_large"}` and none of it runs. The body is at most 12 MiB, enough for
+`submitMlsCommit` with a Commit and a Welcome at their 4 MiB caps in base64; it holds at most
+262,144 of the bytes `,`, `[` and `{`, counted anywhere in it, strings included, and its GraphQL
+documents (every `query` of a batch together) are at most 128 KiB. A body past any of these is
+answered 413 with `{"error":"too_large","message":"..."}` before it is parsed, and none of it
+runs. Apart from these and the refusals under "Limits", the answer is HTTP 200; errors are in the `errors` array of each response (see
 "Errors"). The server
 reads an `X-Request-Id` header, or makes one, and adds it to every error as
 `extensions.request_id`, so a report can be matched to the server log.
@@ -68,10 +72,16 @@ is refused with 400, and an upgrade without a valid session with 401: there are 
 subscriptions. A user holding as many connections as `RIM_RATE_WS_CONNECTIONS_PER_USER` allows
 is refused with 429 and `{"error":"too_many_connections"}`. A subscription started past
 `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` on one connection answers one error with the code
-`TOO_MANY_SUBSCRIPTIONS` and ends; ending another subscription frees its place. A client
+`TOO_MANY_SUBSCRIPTIONS` and ends; ending another subscription frees its place. A subscription
+operation selects exactly one root field: one with more, aliases, repeated fields and fragment
+expansions each counted, answers one error with the code `VALIDATION` and the message "a
+subscription selects exactly one root field", over the WebSocket or anywhere else, and starts
+nothing. A client
 message over 256 KiB, whole or in fragments, closes the connection with code `1009` ("message
 too large"), and more than 32 messages waiting for the server close it with `1008` ("too many
-messages"). The socket runs subscriptions only: a query or a mutation sent on it answers one
+messages"). A connection starts at most 10 subscriptions a second, in bursts of up to 50: a
+`subscribe` (or `start`) message past that closes it with `1008` ("too many subscriptions
+started"). The socket runs subscriptions only: a query or a mutation sent on it answers one
 error with the code `VALIDATION` and the message "only subscriptions over the WebSocket", runs
 nothing, and completes; send those to `POST /api`. The subscription roots are `workspaceEvents` and
 `relayStream`; the schema describes both. A `TypingStarted` event, sent for direct conversations
@@ -372,8 +382,10 @@ a number above 0, so a private server limits nothing but the batch size.
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
 | `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
 
-The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the client a
-`Forwarded` or `X-Forwarded-For` header names. The limits are kept in memory by each server
+The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the first
+address in `X-Forwarded-For` (the peer when that header is missing or does not parse).
+`Forwarded` is never read, so a proxy that replaces `X-Forwarded-For` but passes `Forwarded`
+through cannot be used to choose an address. The limits are kept in memory by each server
 process, so a restart forgets them and two processes behind one proxy each allow the full
 amount. `/healthz`, `/readyz`, discovery and `/s2s/v1/...` are outside the per-address limit;
 server-to-server traffic has its own, `RIM_S2S_PEER_RATE_PER_MIN`.
@@ -495,6 +507,7 @@ JSON body naming the refusal:
 | Status | Body | When |
 |---|---|---|
 | 400 | `{"error":"batch_too_large"}` | A GraphQL batch over `RIM_API_MAX_BATCH`. |
+| 413 | `{"error":"too_large","message":"..."}` | A GraphQL body past its caps (see "GraphQL: `POST /api`"). |
 | 429 | `{"error":"rate_limited","retryAfterSeconds":n}`, with `Retry-After: n` | The client address is over `RIM_RATE_REQUESTS_PER_MIN_PER_IP`. |
 | 429 | `{"error":"too_many_connections"}` | A WebSocket upgrade over `RIM_RATE_WS_CONNECTIONS_PER_USER`. |
 | 403 | `{"error":"blocked"}` | The client address is on the operator's IP deny list. |

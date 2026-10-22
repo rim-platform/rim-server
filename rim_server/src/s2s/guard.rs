@@ -1,7 +1,9 @@
-//! Every request under `/s2s/v1/` passes the same checks, in order: body size, the signature
-//! profile and clock window, the peer (denied, allow-list, pinned or pinnable, forked), the key
-//! for `keyid`, the body digest and the signature, the nonce, the per-peer rate limit, and the
-//! role. Every answer, refusals included, is signed and bound to the request's nonce.
+//! Every request under `/s2s/v1/` passes the same checks, in order: the declared body size, the
+//! signature profile and clock window, the peer (denied, allow-list, pinned or pinnable,
+//! forked), the key for `keyid` and the signature, then the body, read only now and up to its
+//! size cap, and its digest, the nonce, the per-peer rate limit, and the role. A request without
+//! a valid signature is refused before any of its body is read. Every answer, refusals
+//! included, is signed and bound to the request's nonce.
 
 use actix_web::http::StatusCode;
 use actix_web::http::header::{HeaderName, HeaderValue};
@@ -24,7 +26,7 @@ use rim_services::s2s::dto::{PeerKeysDto, PeerLookup};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::body::{BodyError, read_bounded};
+use crate::body::{BodyError, declared_length, read_bounded};
 use crate::metrics;
 use crate::s2s::S2sState;
 
@@ -226,20 +228,16 @@ async fn verify(
     } else {
         state.settings.max_body_bytes
     };
-    let body = read_bounded(req, payload, limit)
-        .await
-        .map_err(|e| match e {
-            BodyError::TooLarge => Reply::error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "too_large",
-                "the request body is too large",
-            ),
-            BodyError::Read => Reply::error(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "the request body could not be read",
-            ),
-        })?;
+    let too_large = || {
+        Reply::error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "too_large",
+            "the request body is too large",
+        )
+    };
+    if declared_length(req).is_some_and(|len| len > limit) {
+        return Err(too_large());
+    }
 
     let content_digest = joined_header(req, "content-digest");
     let content_type = joined_header(req, "content-type");
@@ -311,10 +309,21 @@ async fn verify(
         .ok_or_else(|| refuse_signature(Some(&peer_id), "key_not_accepted"))?;
     let key = PublicKey::parse(key_text, "peer key").map_err(internal)?;
     pending
-        .check_digest(&body)
-        .map_err(|r| refuse_signature(Some(&peer_id), r.as_str()))?;
-    pending
         .verify(&key)
+        .map_err(|r| refuse_signature(Some(&peer_id), r.as_str()))?;
+
+    let body = read_bounded(req, payload, limit)
+        .await
+        .map_err(|e| match e {
+            BodyError::TooLarge => too_large(),
+            BodyError::Read => Reply::error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "the request body could not be read",
+            ),
+        })?;
+    pending
+        .check_digest(&body)
         .map_err(|r| refuse_signature(Some(&peer_id), r.as_str()))?;
 
     let expires_at = chrono::DateTime::from_timestamp(pending.created + NONCE_RETENTION_SECS, 0)

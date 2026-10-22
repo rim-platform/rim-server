@@ -393,6 +393,22 @@ tag `v<version>`, the version every crate in the workspace carries.
   directory, whatever its `avatarUrl` named. The purge no longer deletes the file of another
   user that an account's `avatarUrl` pointed at.
 - `GET /api/files/{path}` sends `X-Content-Type-Options: nosniff` with a stored avatar.
+- With `RIM_TRUST_FORWARDED_HEADERS=true` the client address is the first entry of
+  `X-Forwarded-For` only. Before, a `Forwarded: for=` header, which Caddy passes through
+  untouched, named it, so any client could choose its address and escape the per-address
+  limits, IP blocks and the signup, login and invite limits keyed on it. The Caddyfiles also drop
+  `Forwarded` (`header_up -Forwarded`); an operator behind another proxy has it replace
+  `X-Forwarded-For` as before and drop `Forwarded` too (`docs/self-hosting.md`).
+- `POST /api` reads at most 12 MiB of body, holding at most 262,144 of the bytes `,`, `[` and `{`
+  and 128 KiB of GraphQL documents, and answers 413 `{"error":"too_large"}` past any of them
+  before parsing it; requests another server forwards here get the same caps. Before, the whole
+  body, up to the proxy's 32 MiB, was parsed before any check, so a few anonymous requests could
+  take gigabytes of memory. `/s2s/v1/…` checks a request's signature before it reads the body.
+- A subscription operation selects exactly one root field; one with more answers `VALIDATION`
+  and starts nothing. A WebSocket connection starts at most 10 subscriptions a second, in bursts
+  of up to 50, and is closed with `1008` past that (`docs/api.md`, "Subscriptions"). Before,
+  aliased root fields started a stream each under one slot of
+  `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION`.
 
 ### Security
 

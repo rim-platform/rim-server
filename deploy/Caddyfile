@@ -21,18 +21,24 @@
 	handle @web_domain {
 		@client path /api /api/* /.well-known/rim-server
 		handle @client {
-			reverse_proxy rim:8080
+			reverse_proxy rim:8080 {
+				header_up -Forwarded
+			}
 		}
 
 		handle {
-			reverse_proxy web:80
+			reverse_proxy web:80 {
+				header_up -Forwarded
+			}
 		}
 	}
 
 	# Signed server-to-server bodies pass unchanged: no compression, no rewriting.
 	@rim path /api /api/* /s2s/* /.well-known/*
 	handle @rim {
-		reverse_proxy rim:8080
+		reverse_proxy rim:8080 {
+			header_up -Forwarded
+		}
 	}
 
 	# With a web domain, a browser that opens RIM_DOMAIN, such as an invite link built on
@@ -41,6 +47,8 @@
 		@web_elsewhere expression `"{$RIM_WEB_DOMAIN}" != ""`
 		redir @web_elsewhere https://{$RIM_WEB_DOMAIN}{uri}
 
-		reverse_proxy web:80
+		reverse_proxy web:80 {
+			header_up -Forwarded
+		}
 	}
 }
