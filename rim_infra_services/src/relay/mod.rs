@@ -1793,7 +1793,7 @@ impl RelayService for DefaultRelayService {
             || self
                 .repos
                 .host_repo
-                .shares_workspace(user_id, claimer)
+                .shares_workspace(user_id, claimer, None)
                 .await?);
         if stranger
             && let RateLimitDecision::Limited {

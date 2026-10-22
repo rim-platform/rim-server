@@ -135,3 +135,68 @@ async fn join_direct_space_admits_local_users_of_the_direct_space_only() {
             .unwrap()
     );
 }
+
+/// A user shares a workspace with the holder of a principal, or with an account, when both are
+/// members of one, unless that one is the workspace left out; the direct space never counts.
+#[tokio::test]
+async fn shares_workspace_counts_workspaces_but_the_one_left_out() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmServerMemberRepository::new(ctx.db.clone());
+    let host = SeaOrmHostRepository::new(ctx.db.clone());
+    let direct = host.ensure_direct_space("Direct messages").await.unwrap();
+    let everyone = ctx.create_server("everyone").await.id;
+    let team = ctx.create_server("team").await.id;
+    let ada = ctx.create_user("ada").await.id;
+    let bob = host
+        .create_remote_user(NewRemoteUser {
+            principal_id: "rimp1_bob".to_string(),
+            identity_key: "ed25519:bob".to_string(),
+            username: "r_bob".to_string(),
+            display_name: "Bob".to_string(),
+            home_relay: Some("rims1_relay".to_string()),
+        })
+        .await
+        .unwrap();
+    let cal = ctx.create_user("cal").await.id;
+    for user in [ada, bob, cal] {
+        repo.add_member(direct, user, ServerMemberRole::Member)
+            .await
+            .unwrap();
+        repo.add_member(everyone, user, ServerMemberRole::Member)
+            .await
+            .unwrap();
+    }
+    let shares = |except| host.shares_workspace(ada, "rimp1_bob", except);
+    let shares_with_cal = |except| host.shares_workspace_with_account(ada, cal, except);
+
+    assert!(shares(None).await.unwrap());
+    assert!(!shares(Some(everyone)).await.unwrap());
+    assert!(shares_with_cal(None).await.unwrap());
+    assert!(!shares_with_cal(Some(everyone)).await.unwrap());
+    assert!(
+        !host
+            .shares_workspace_with_account(ada, ctx.create_user("dan").await.id, None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !host
+            .shares_workspace(ada, "rimp1_carol", None)
+            .await
+            .unwrap()
+    );
+
+    repo.add_member(team, ada, ServerMemberRole::Member)
+        .await
+        .unwrap();
+    repo.add_member(team, bob, ServerMemberRole::Member)
+        .await
+        .unwrap();
+    assert!(shares(Some(everyone)).await.unwrap());
+    assert!(shares(Some(team)).await.unwrap());
+    assert!(!shares_with_cal(Some(everyone)).await.unwrap());
+    repo.add_member(team, cal, ServerMemberRole::Member)
+        .await
+        .unwrap();
+    assert!(shares_with_cal(Some(everyone)).await.unwrap());
+}

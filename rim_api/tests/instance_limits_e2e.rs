@@ -3,7 +3,7 @@
 //! `VALIDATION` naming it, and allows the writes within it. With a one-hour probation, a new
 //! account creates no workspace and sends no DM request to a stranger, a contact it added on
 //! its own included, and `me` says when its probation ends; an instance operator is never on
-//! probation.
+//! probation, and the server's default workspace makes nobody known to a new account.
 //!
 //! Run with:
 //! ```sh
@@ -234,6 +234,63 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
         ),
     )
     .await;
+
+    node.stop().await;
+}
+
+/// With a default workspace every new account joins, two new accounts that share only it are
+/// strangers to each other during probation, for a DM in the direct space and for one in the
+/// default workspace, with a key or without one; once they share another workspace they are
+/// not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_default_workspace_makes_nobody_known_during_probation() {
+    let ctx = TestCtx::new().await;
+    ctx.conn
+        .execute_unprepared(S2S_TABLES)
+        .await
+        .expect("truncate");
+    let everyone = ctx.create_server("everyone").await;
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+    let node = start(&url, |config| {
+        config.key_login_audiences = Some(KEY_LOGIN_AUDIENCE.to_string());
+        config.probation_hours = Some(1);
+        config.default_workspace = Some(everyone.id.to_string());
+    })
+    .await;
+    let schema = &node.schema;
+
+    let amy = ctx.create_user("amy").await;
+    let fresh = ctx.caller(&amy).await;
+    let ben = ctx.enrolled(schema, "ben", 2).await;
+    let cal = ctx.create_user("cal").await;
+    for user in [&amy, &ben.user, &cal] {
+        ctx.add_member(&everyone, user, ServerMemberRole::Member)
+            .await;
+    }
+    let direct = node.s2s.direct_space_id.to_string();
+    let in_everyone = everyone.id.to_string();
+    let dm = |space: &str, other: &rim_core::user::model::User| {
+        fresh.request(CREATE_DM, json!({ "s": space, "u": other.id.to_string() }))
+    };
+    for (space, other) in [
+        (&direct, &ben.user),
+        (&in_everyone, &ben.user),
+        (&in_everyone, &cal),
+    ] {
+        let (code, message) = exec_err(schema, dm(space, other)).await;
+        assert_eq!(code, "VALIDATION", "{message}");
+        assert!(
+            message.starts_with("a new account can send a DM request to a stranger in "),
+            "{space} {message}"
+        );
+    }
+
+    let team = ctx.create_server("team").await;
+    for user in [&amy, &ben.user, &cal] {
+        ctx.add_member(&team, user, ServerMemberRole::Member).await;
+    }
+    exec_ok(schema, dm(&direct, &ben.user)).await;
+    exec_ok(schema, dm(&in_everyone, &cal)).await;
 
     node.stop().await;
 }

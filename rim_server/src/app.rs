@@ -300,7 +300,15 @@ pub(crate) async fn build_s2s(
         .with_dm_policy(dm_policy.clone())
         .with_delegations(Arc::new(RepoDelegationCheck::new(Arc::clone(
             &repos.delegation_repo,
-        )))),
+        ))))
+        .with_default_workspace(Arc::new(
+            rim_infra_services::default_workspace::DefaultDefaultWorkspaceService::new(
+                config
+                    .default_workspace_setting()
+                    .map_err(std::io::Error::other)?,
+                Arc::clone(&repos.default_workspace_repo),
+            ),
+        )),
     );
     let workspace_host = Arc::new(DefaultWorkspaceHost::new(
         repos.for_workspace_host(),
