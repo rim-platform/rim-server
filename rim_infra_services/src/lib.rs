@@ -21,6 +21,7 @@ pub(crate) mod custom_emoji;
 /// start.
 pub mod default_workspace;
 pub(crate) mod device_link;
+pub(crate) mod display_name;
 pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
 pub(crate) mod probation;

@@ -942,6 +942,84 @@ async fn a_reserved_name_is_refused_at_signup_and_on_profile_edit() {
     assert_eq!(exec_err(&schema, edit).await, refused);
 }
 
+/// Display names lose their invisible characters: a reserved name hidden by them or written
+/// with a lookalike letter is refused at signup and on profile edit, a name over 64 characters
+/// answers `VALIDATION`, and an accepted one is stored cleaned.
+#[tokio::test]
+async fn display_names_lose_invisible_characters_and_hide_no_reserved_name() {
+    use rim_core::user::repository::UserRepository;
+    use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
+    use serde_json::json;
+    use support::graphql::{anonymous_request, exec_err, exec_ok};
+
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema_reserving("rim,admin");
+    for token in ["rim_iinv_dn_refused", "rim_iinv_dn_ok"] {
+        seed_operator_invite(&ctx.db, token, Utc::now() + chrono::Duration::minutes(15)).await;
+    }
+    let signup = |username: &str, display_name: &str, token: &str| {
+        anonymous_request(
+            SIGNUP_WITH_INVITE,
+            json!({ "input": {
+                "username": username,
+                "email": format!("{username}@test.example.com"),
+                "password": PASSWORD,
+                "displayName": display_name,
+                "instanceInviteToken": token,
+            } }),
+        )
+    };
+    let reserved = (
+        "VALIDATION".to_string(),
+        "this name is reserved".to_string(),
+    );
+    for name in [
+        "Ad\u{200B}min",
+        "Ad\u{200D}min",
+        "\u{2066}RIM\u{2069} Support",
+        "\u{410}dmin",
+        "R\u{456}m Team",
+    ] {
+        let refused = signup("dana", name, "rim_iinv_dn_refused");
+        assert_eq!(exec_err(&schema, refused).await, reserved, "{name:?}");
+    }
+    let too_long = signup("dana", &"x".repeat(70), "rim_iinv_dn_refused");
+    assert_eq!(
+        exec_err(&schema, too_long).await,
+        (
+            "VALIDATION".to_string(),
+            "display_name must be at most 64 characters".to_string()
+        )
+    );
+
+    let accepted = signup(
+        "dana",
+        "\u{202E}Dana \u{200B}\n Scully\u{FEFF}",
+        "rim_iinv_dn_ok",
+    );
+    exec_ok(&schema, accepted).await;
+    let dana = SeaOrmUserRepository::new(ctx.db.clone())
+        .find_by_username("dana")
+        .await
+        .expect("query")
+        .expect("dana");
+    assert_eq!(dana.display_name.as_deref(), Some("Dana Scully"));
+
+    let caller = ctx.caller(&dana).await;
+    let edit = |name: &str| {
+        caller.request(
+            "mutation($input: UpdateMyProfileInput!) { updateMyProfile(input: $input) { displayName } }",
+            json!({ "input": { "displayName": name } }),
+        )
+    };
+    assert_eq!(exec_err(&schema, edit("\u{430}dmin")).await, reserved);
+    let data = exec_ok(&schema, edit("Dana\u{AD} \u{2067}K.\u{2069}")).await;
+    assert_eq!(data["updateMyProfile"]["displayName"], json!("Dana K."));
+    let family = "Dana \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    let data = exec_ok(&schema, edit(family)).await;
+    assert_eq!(data["updateMyProfile"]["displayName"], json!(family));
+}
+
 /// On a server whose signups need a key, `serverInfo.signupRequiresKeys` is true and every
 /// password signup is `FORBIDDEN` and spends nothing: open, with an instance invite and with a
 /// workspace invite. An existing password account still signs in, and the instance invite

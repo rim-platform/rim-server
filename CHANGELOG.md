@@ -380,6 +380,16 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `editMessage` draws on the message budget (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`, and the
   probation rate for an account in probation) like a sent message, and answers `RATE_LIMITED`
   past it.
+- Display names from `signupWithInvite`, `signupWithKey` and `updateMyProfile` are stored
+  without control and invisible format characters (zero-width spaces, word joiners, soft
+  hyphens, byte order marks, bidirectional overrides and isolates; the zero-width joiner and
+  non-joiner stay for emoji sequences and scripts that need them), with whitespace runs made
+  one space, and are at most 64 characters after that for every path; the signups took up to
+  80 before (`SignupWithKeyInput.displayName`, `signupWithInvite`'s `displayName`).
+  `RIM_RESERVED_NAMES` also refuses a reserved name hidden behind invisible characters or
+  written with lookalike letters from another script (`Аdmin` with a Cyrillic `А`), and a
+  remote person whose profile card names one is shown by their username here instead
+  (`docs/specs/server-to-server-v1.md`, `docs/specs/key-identity-v1.md`).
 
 ### Removed
 
@@ -507,6 +517,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   name someone the user knows, or a member of the default workspace everyone shares, and drain
   their one-time key packages past the 20-a-day stranger limit
   (`docs/specs/server-to-server-v1.md`).
+- A signup display name of 65 to 80 characters, and a remote profile card's of 65 to 80, no
+  longer fail in the database, whose column holds 64: a signup answers `VALIDATION` and a
+  card's name is cut to 64 characters.
 
 ### Security
 

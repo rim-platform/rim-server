@@ -26,6 +26,8 @@ sea-orm = "2.0.0-rc.20"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 url = "2.5"
 unicode-normalization = "0.1"
+unicode-properties = "0.1.4"
+unicode-security = "0.1.2"
 futures-util = "0.3"
 thiserror = "2.0.17"
 rim_s2s = { path = "../rim_s2s" }

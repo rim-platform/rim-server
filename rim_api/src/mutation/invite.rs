@@ -281,8 +281,9 @@ pub struct SignupWithInviteInput {
     /// Required. The user's email address. Trimmed and lowercased before storage.
     /// Must look like `local@domain.tld` and be at most 254 characters.
     pub email: String,
-    /// Optional display name (1–80 chars when present). Falls back to `username`
-    /// when absent or blank after trim.
+    /// Optional display name, stored without control and invisible format characters and with
+    /// whitespace collapsed; at most 64 characters after that. Falls back to `username` when
+    /// absent or when nothing visible is left.
     pub display_name: Option<String>,
     pub password: String,
     pub instance_invite_token: Option<String>,

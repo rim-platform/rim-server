@@ -239,6 +239,19 @@ reports `https`. These mutations set it, and need no session or CSRF header:
 Both signups store the username trimmed and in lowercase, so `Alice` signs up as `alice`, and a
 username that differs from an existing account's only in case answers `CONFLICT`.
 
+A display name, from a signup or `updateMyProfile`, is stored without control and invisible
+format characters (zero-width spaces, word joiners, soft hyphens, byte order marks,
+bidirectional overrides and isolates), with each run of whitespace made one space and no space
+at either end. The zero-width joiner and non-joiner stay, except at either end, since emoji
+sequences and scripts such as Persian and Arabic need them.
+What is left is at most 64 characters, or the request answers `VALIDATION`; a signup with
+nothing visible left takes the username, and `updateMyProfile` clears the name. A name the
+server reserves (`RIM_RESERVED_NAMES`), followed by a separator or not, answers `VALIDATION`
+`this name is reserved`, also when it is written with lookalike letters from another script
+(the Unicode confusable skeleton) or hidden behind invisible characters. A person from another
+server keeps the display name of their profile card, cleaned the same way and cut to 64
+characters; a reserved one is replaced by their username here.
+
 When the server has terms of service (`serverInfo.termsUrl` is set), both signups must accept
 them: `acceptedTermsUrl` in the input carries that URL unchanged. A signup without it, or with
 another URL, answers `VALIDATION`. The server records the acceptance and its time on the
