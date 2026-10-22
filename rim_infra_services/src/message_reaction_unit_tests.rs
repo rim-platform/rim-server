@@ -1015,6 +1015,49 @@ mod tests {
             .expect("a Unicode emoji");
     }
 
+    /// A held reaction that is not an emoji comes off its author's message, at any caps and
+    /// without the custom emoji check; adding it is refused.
+    #[tokio::test]
+    async fn a_held_reaction_that_is_not_an_emoji_is_removed_and_not_added() {
+        use crate::message_reaction::MAX_REACTIONS_PER_USER;
+
+        let actor_id = UserId::new();
+        let message_id = MessageId::new();
+        for text in [":flag-cz:", "ok", " ok "] {
+            let mut own: Vec<MessageReaction> =
+                distinct_groups(message_id, MAX_REACTIONS_PER_USER - 1)
+                    .into_iter()
+                    .map(|r| MessageReaction {
+                        user_id: actor_id,
+                        ..r
+                    })
+                    .collect();
+            own.push(reaction(message_id, actor_id, text.trim()));
+            let mut never = MockCustomEmojiRepository::new();
+            never.expect_list_by_server().never();
+            let groups = toggle_with_custom_emoji(actor_id, own, text, never, None)
+                .await
+                .unwrap_or_else(|e| panic!("{text:?} removes: {e:?}"));
+            assert_eq!(groups.len(), MAX_REACTIONS_PER_USER - 1);
+            assert!(groups.iter().all(|g| g.emoji != text.trim()));
+
+            let others = vec![reaction(message_id, UserId::new(), text.trim())];
+            let err = toggle_with_existing(actor_id, others, text)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ServiceError::Validation(_)),
+                "{text:?}: {err:?}"
+            );
+        }
+        let too_long = "x".repeat(33);
+        let own = vec![reaction(message_id, actor_id, &too_long)];
+        let err = toggle_with_existing(actor_id, own, &too_long)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+    }
+
     /// The toggle locks the message first; a message gone by then is `NOT_FOUND`.
     #[tokio::test]
     async fn the_toggle_locks_the_message_before_reading_its_reactions() {

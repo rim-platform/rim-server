@@ -51,12 +51,11 @@ static UNICODE_EMOJI: LazyLock<Regex> = LazyLock::new(|| {
 static EMOJI_SHORTCODE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^:[\p{Alphabetic}\p{N}_]+:$").expect("valid regex"));
 
-/// The trimmed reaction when it is a Unicode emoji or a `:name:` shortcode of at most 32
-/// characters.
+/// The trimmed reaction when it is 1 to 32 characters long, whatever its content.
 ///
 /// # Errors
-/// `Validation` for anything else.
-pub(crate) fn validate_reaction_emoji(emoji: &str) -> ServiceResult<String> {
+/// `Validation` when it is empty or longer.
+fn trim_reaction(emoji: &str) -> ServiceResult<&str> {
     let emoji = emoji.trim();
     if emoji.is_empty() {
         return Err(ServiceError::Validation(
@@ -66,6 +65,16 @@ pub(crate) fn validate_reaction_emoji(emoji: &str) -> ServiceResult<String> {
     if emoji.chars().count() > MAX_EMOJI_CHARS {
         return Err(ServiceError::Validation("emoji too long".to_string()));
     }
+    Ok(emoji)
+}
+
+/// The trimmed reaction when it is a Unicode emoji or a `:name:` shortcode of at most 32
+/// characters.
+///
+/// # Errors
+/// `Validation` for anything else.
+pub(crate) fn validate_reaction_emoji(emoji: &str) -> ServiceResult<String> {
+    let emoji = trim_reaction(emoji)?;
     if !UNICODE_EMOJI.is_match(emoji) && !EMOJI_SHORTCODE.is_match(emoji) {
         return Err(ServiceError::Validation(
             "a reaction must be an emoji or a :name: shortcode".to_string(),
@@ -286,7 +295,9 @@ impl MessageReactionService for DefaultMessageReactionService {
         &self,
         cmd: ToggleReactionCmd,
     ) -> ServiceResult<Vec<ReactionGroupDto>> {
-        let emoji = validate_reaction_emoji(&cmd.emoji)?;
+        // Only an added reaction must be an emoji; the caller removes any reaction they hold,
+        // whatever its text.
+        let emoji = trim_reaction(&cmd.emoji)?.to_string();
 
         let message = self
             .ensure_actor_can_react(
@@ -319,6 +330,7 @@ impl MessageReactionService for DefaultMessageReactionService {
         let added = existing.is_none();
         match existing {
             None => {
+                validate_reaction_emoji(&emoji)?;
                 ensure_room_for_reaction(&all, cmd.actor.user_id, &emoji)?;
                 if !all.iter().any(|r| r.emoji == emoji) {
                     self.ensure_shortcode_exists(&repos, cmd.server_id, &emoji)

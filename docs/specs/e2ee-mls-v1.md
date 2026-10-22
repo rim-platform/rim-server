@@ -506,7 +506,9 @@ key inside the encryption, is UTF-8 JSON with the same strict rules:
   `mls_epoch`, `sender_device_key_id`, the franking columns and the mention rows, and records the
   edit as the next franking revision ("Franking"); the change-feed trigger bumps `version` and
   sets `edited_at`. Only the author (any of their devices) may edit; the receiver checks that the
-  sender's principal is the row author's.
+  sender's principal is the row author's. An edit counts against the author's message budget
+  (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`) as a plaintext edit does; resending the envelope that is
+  already stored answers the message without counting.
 - **Delete**: `deleteMessage` as today. The server sets `is_deleted`, nulls `mls_ciphertext`, and
   keeps the franking columns. No application message is sent: the server is the authority on
   deletion (it can drop a row anyway), and a moderator outside a group must be able to delete.

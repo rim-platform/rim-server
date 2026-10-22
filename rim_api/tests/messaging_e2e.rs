@@ -1674,6 +1674,53 @@ async fn reactions_on_one_message_are_capped() {
     assert_eq!(count(&emoji[20]), Some(json!(1)));
 }
 
+/// A stored reaction that is not an emoji comes off when its author toggles it; adding it
+/// answers `VALIDATION`.
+#[tokio::test]
+async fn a_stored_reaction_that_is_not_an_emoji_can_be_removed() {
+    use rim_core::message_reaction::model::NewMessageReaction;
+    use rim_core::message_reaction::repository::MessageReactionRepository;
+
+    let f = setup().await;
+    let msg = f.send(&f.alice, &f.channel_id, "react to me").await;
+    let repo = rim_infra_db::sea_orm_impl::message_reaction::SeaOrmMessageReactionRepository::new(
+        f.ctx.db.clone(),
+    );
+    for who in [&f.alice, &f.bob] {
+        repo.add_reaction(NewMessageReaction {
+            message_id: parse_uuid(&msg.id).into(),
+            user_id: who.user_id,
+            emoji: ":flag-cz:".to_string(),
+        })
+        .await
+        .expect("seed reaction");
+    }
+    let react = |who: &Caller| {
+        who.request(
+            TOGGLE_REACTION,
+            json!({ "input": {
+                "serverId": f.server_id, "conversationId": f.channel_id, "messageId": msg.id,
+                "emoji": ":flag-cz:",
+            } }),
+        )
+    };
+
+    f.react(&f.bob, &msg, ":flag-cz:").await;
+    let groups = &f.nested(&f.alice).await[&msg.id]["reactions"];
+    assert_eq!(
+        groups,
+        &json!([{ "emoji": ":flag-cz:", "count": 1, "reactedByMe": true,
+                  "userIds": [f.alice.user_id.to_string()] }])
+    );
+    assert_eq!(
+        exec_err_code(&f.schema, react(&f.bob)).await,
+        "VALIDATION",
+        "adding it back"
+    );
+    f.react(&f.alice, &msg, " :flag-cz: ").await;
+    assert_eq!(f.nested(&f.alice).await[&msg.id]["reactions"], json!([]));
+}
+
 /// A page size of zero or less reads one item on every message list instead of failing.
 #[tokio::test]
 async fn message_lists_read_one_item_for_a_page_size_below_one() {

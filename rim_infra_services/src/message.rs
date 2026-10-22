@@ -2237,6 +2237,7 @@ impl MessageService for DefaultMessageService {
         if current.ciphertext.as_deref() == Some(envelope.bytes.as_slice()) {
             return self.to_dto(msg, cmd.server_id).await;
         }
+        self.ensure_message_budget(author).await?;
         let device = session_device(e2ee.e2ee_repo.as_ref(), &cmd.caller).await?;
 
         let now = Utc::now();
