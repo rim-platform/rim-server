@@ -657,7 +657,8 @@ A report proves one message's content to the moderators without the server havin
    - In the direct space, where everyone is a guest, the instance operators take the
      moderators' place for reports: they list, open and resolve them, download their
      attachments and delete a message with a verified report, and nobody else in the direct
-     space can (`docs/messaging.md`, "Reports").
+     space can (`docs/messaging.md`, "Reports"). A report there that shows the author also
+     carries their principal id, `messageAuthorPrincipalId`.
 
 **Franking keys.** `K` lives in the franking key file, `RIM_FRANKING_KEY_FILE` (default
 `<RIM_DATA_DIR>/franking-key.json`, mode `0600`; the server refuses a file the group or others

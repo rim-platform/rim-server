@@ -426,6 +426,20 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- An instance operator handling a report of an unencrypted message in the direct space now sees
+  that one message's text, author and send time, and may delete it with `deleteMessage`, without
+  a verified report and without seeing the rest of the conversation. Before, only franked
+  reports of encrypted messages showed their author or could be deleted, so a reported plaintext
+  DM showed the operator nothing. GraphQL `MessageReport.messageAuthorPrincipalId` gives the
+  author's principal id on the direct space's reports whose author is shown, for
+  `instanceBlockPrincipal`.
+- A conversation's `DmInvite` sent again to a member whose relay let the conversation go comes
+  from the member who added them, as the first invite did, while that member is still in the
+  conversation; before, it always came from the conversation's creator, so the member's relay
+  judged an invite from someone else. The adder is recorded on the membership (migration
+  `m20261022_062917_add_conversation_member_invited_by` adds the nullable
+  `conversation_member.invited_by`); members added before it are invited again from the
+  creator.
 - `toggleReaction` accepts only a Unicode emoji or a custom emoji's `:name:` (a new `:name:`
   must name one of the workspace's custom emoji, and is refused while `custom_emoji` is
   disabled), and a message carries at most 20 different emoji and 10 reactions per user; adding past either answers

@@ -112,6 +112,11 @@ impl From<ReportOutcome> for rim_services::moderation::command::ReportOutcome {
 /// the viewing moderator can read the conversation (`messageReadable`); otherwise only the ids
 /// and the reporter's reason are shown. `messageText` is also null for a deleted message.
 ///
+/// A report of the direct space (DMs and groups) goes to the instance operators, who are not
+/// members of its conversations: they see the author, send time and text of the one reported
+/// message when it is not encrypted, and the author's principal id (`messageAuthorPrincipalId`)
+/// whenever the author is shown.
+///
 /// A report of an encrypted message is franked: the server verified that its content is what
 /// the sender's device sent (`frankingVerifiedAt`). Its author, send time and sender device are
 /// shown to every moderator; its content (`frankedContent`) only by `messageReport`.
@@ -130,6 +135,10 @@ pub struct MessageReport {
     pub message_readable: bool,
     pub message_text: Option<String>,
     pub message_author_id: Option<async_graphql::ID>,
+    /// The author's principal id, for `instanceBlockPrincipal`: filled for a report of the
+    /// direct space whenever `messageAuthorId` is, null elsewhere and for an author without
+    /// one.
+    pub message_author_principal_id: Option<String>,
     /// When the reported message was sent; null when its details are not shown.
     pub message_sent_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Set when the server verified a franked report of an encrypted message.
@@ -164,6 +173,7 @@ impl From<rim_services::moderation::dto::MessageReportDto> for MessageReport {
             message_author_id: value
                 .message_author_id
                 .map(|id| async_graphql::ID(id.to_string())),
+            message_author_principal_id: value.message_author_principal_id,
             message_sent_at: value.message_sent_at,
             franking_verified_at: value.franking_verified_at,
             franked_sender_device_id: value

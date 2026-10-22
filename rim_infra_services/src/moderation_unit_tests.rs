@@ -134,6 +134,11 @@ mod tests {
         }
     }
 
+    /// The principal id the fixture's users hold when listed by id.
+    fn principal_of(id: UserId) -> String {
+        format!("rimp1_{id}")
+    }
+
     fn channel(server_id: ServerId) -> Conversation {
         Conversation {
             id: ConversationId::new(),
@@ -246,6 +251,15 @@ mod tests {
             user_repo
                 .expect_get_by_id()
                 .returning(|id| Ok(Some(user(id))));
+            user_repo.expect_get_by_ids().returning(|ids| {
+                Ok(ids
+                    .iter()
+                    .map(|id| User {
+                        principal_id: Some(principal_of(*id)),
+                        ..user(*id)
+                    })
+                    .collect())
+            });
             let operators = self.operators.clone();
             user_repo
                 .expect_is_instance_operator()
@@ -1302,6 +1316,7 @@ mod tests {
             Some(FRANKED_CONTENT.as_bytes())
         );
         assert_eq!(dto.message_author_id, Some(author));
+        assert_eq!(dto.message_author_principal_id, Some(principal_of(author)));
         let served = svc
             .authorize_report_attachment(AuthorizeReportAttachmentQuery {
                 actor_user_id: operator,
@@ -1329,6 +1344,135 @@ mod tests {
             svc.kick(kick(&fx, operator, author)).await,
             Err(ServiceError::PermissionDenied)
         ));
+    }
+
+    /// The report of `message`, without franking, as `operator` sees it in a list and opened,
+    /// in a DM of the direct space (or of a workspace, when not `direct_space`) they are not in.
+    async fn unfranked_report_seen_by_operator(
+        message_encrypted: bool,
+        direct_space: bool,
+    ) -> (
+        rim_services::moderation::dto::MessageReportDto,
+        rim_services::moderation::dto::MessageReportDto,
+        UserId,
+    ) {
+        let [operator, member, author] = users();
+        let mut fx = Fx::new(&[(member, Guest), (author, Guest)]);
+        fx.direct_space = direct_space;
+        fx.operators = vec![operator];
+        let conversation = Conversation {
+            conversation_type: ConversationType::Direct,
+            title: None,
+            is_private: true,
+            ..channel(fx.server_id)
+        };
+        let mut message = message_in(conversation.id, author);
+        if message_encrypted {
+            message.text = None;
+            message.encryption = Some(rim_core::message::model::MessageEncryption {
+                incarnation: 1,
+                epoch: 1,
+                sender_device_key_id: None,
+                ciphertext: Some(vec![1]),
+                franking_commitment: vec![2],
+                franking_receipt: vec![3],
+                franking_key_id: 1,
+            });
+        }
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        fx.conversation_member = false;
+        let report = report_of(&fx, &message, member);
+        let mut repo = holding(&report);
+        let listed = report.clone();
+        repo.expect_list_reports().returning(move |_, _, _, _, _| {
+            let items = vec![listed.clone()];
+            Box::pin(async move {
+                Ok(rim_core::repository::pagination::Page::new(
+                    items, None, None,
+                ))
+            })
+        });
+        let svc = fx.service(repo);
+        let mut page = svc
+            .list_reports(rim_services::moderation::command::ListReportsQuery {
+                actor: Actor::new(operator),
+                server_id: fx.server_id,
+                status: None,
+                limit: 20,
+                dir: rim_core::repository::pagination::PageDir::After,
+                cursor: None,
+            })
+            .await
+            .expect("list");
+        let opened = svc
+            .get_report(GetReportQuery {
+                actor: Actor::new(operator),
+                server_id: fx.server_id,
+                report_id: report.id,
+            })
+            .await
+            .expect("report");
+        (page.items.pop().expect("one report"), opened, author)
+    }
+
+    #[tokio::test]
+    async fn an_operator_reads_the_reported_unencrypted_message_of_the_direct_space() {
+        let (listed, opened, author) = unfranked_report_seen_by_operator(false, true).await;
+        for dto in [listed, opened] {
+            assert!(!dto.message_readable, "the conversation stays unreadable");
+            assert_eq!(dto.message_text.as_deref(), Some("bad words"));
+            assert_eq!(dto.message_author_id, Some(author));
+            assert_eq!(dto.message_author_principal_id, Some(principal_of(author)));
+            assert!(dto.message_sent_at.is_some());
+            assert!(dto.franking_verified_at.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_operator_sees_nothing_of_an_unfranked_encrypted_message() {
+        let (listed, opened, _) = unfranked_report_seen_by_operator(true, true).await;
+        for dto in [listed, opened] {
+            assert_eq!(dto.message_text, None);
+            assert_eq!(dto.message_author_id, None);
+            assert_eq!(dto.message_author_principal_id, None);
+            assert_eq!(dto.message_sent_at, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_workspace_moderator_outside_a_dm_sees_no_unfranked_message() {
+        let [moderator, member, author] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member), (author, Member)]);
+        let conversation = Conversation {
+            conversation_type: ConversationType::Direct,
+            title: None,
+            is_private: true,
+            ..channel(fx.server_id)
+        };
+        let message = message_in(conversation.id, author);
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        fx.conversation_member = false;
+        let report = report_of(&fx, &message, member);
+        let svc = fx.service(holding(&report));
+        let get = || GetReportQuery {
+            actor: Actor::new(moderator),
+            server_id: fx.server_id,
+            report_id: report.id,
+        };
+        let dto = svc.get_report(get()).await.expect("report");
+        assert_eq!(dto.message_text, None);
+        assert_eq!(dto.message_author_id, None);
+        assert_eq!(dto.message_author_principal_id, None);
+
+        // A moderator who reads the conversation sees the author, but no principal id.
+        fx.conversation_member = true;
+        let svc = fx.service(holding(&report));
+        let dto = svc.get_report(get()).await.expect("report");
+        assert_eq!(dto.message_text.as_deref(), Some("bad words"));
+        assert_eq!(dto.message_author_id, Some(author));
+        assert_eq!(dto.message_author_principal_id, None);
     }
 
     #[tokio::test]

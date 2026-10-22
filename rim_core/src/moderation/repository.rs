@@ -80,6 +80,9 @@ pub trait ModerationRepository: Send + Sync {
         message_id: MessageId,
     ) -> RepoResult<bool>;
 
+    /// Whether `message_id` has a report in `server_id`, verified or not, open or not.
+    async fn has_report(&self, server_id: ServerId, message_id: MessageId) -> RepoResult<bool>;
+
     /// Reports of a workspace, optionally filtered by status, ordered `created_at ASC, id ASC`
     /// with the standard cursor semantics.
     async fn list_reports(

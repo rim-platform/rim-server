@@ -502,8 +502,11 @@ instance operators, not a workspace's moderators. An operator handles them with 
 moderation roots and the direct space's id (`relayInfo.directSpaceId`): `messageReports`,
 `messageReport` (with `frankedContent`, audited as `e2ee.report_viewed` with ids only),
 `resolveReport`, the report's attachment route and `deleteMessage` of a message with a verified
-report (`docs/messaging.md`, "Reports"). Resolving a report starts the 90 days after which its
-verified content is deleted.
+report, or of a reported unencrypted message (`docs/messaging.md`, "Reports"). A report of an
+unencrypted message shows the operator that message's text, author and send time, and a report
+whose author is shown carries the author's principal id (`messageAuthorPrincipalId`), which
+`instanceBlockPrincipal` takes. Resolving a report starts the 90 days after which its verified
+content is deleted.
 
 ## Errors
 

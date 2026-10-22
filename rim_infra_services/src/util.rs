@@ -1033,6 +1033,23 @@ mod tests {
         ) -> RepoResult<bool> {
             Ok(false)
         }
+
+        async fn set_invited_by(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+            _invited_by: UserId,
+        ) -> RepoResult<bool> {
+            Ok(false)
+        }
+
+        async fn invited_by(
+            &self,
+            _conversation_id: ConversationId,
+            _user_id: UserId,
+        ) -> RepoResult<Option<UserId>> {
+            Ok(None)
+        }
     }
 
     /// Non-server-member gets `PermissionDenied` BEFORE the conversation is

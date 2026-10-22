@@ -768,6 +768,14 @@ impl HostEventWriter {
         // An invite comes from whoever brought the member in, so their blocks and DM settings
         // judge that person: the adder, else the creator.
         let inviter = added_by.unwrap_or(creator);
+        if added_by.is_some() {
+            for user_id in added.iter().filter(|id| **id != inviter) {
+                self.repos
+                    .conversation_member_repo
+                    .set_invited_by(conversation_id, *user_id, inviter)
+                    .await?;
+            }
+        }
         let inviter_user = self.repos.user_repo.get_by_id(inviter).await?;
         let Some(from_principal_id) = inviter_user.and_then(|u| u.principal_id) else {
             return Ok(Vec::new());
@@ -842,8 +850,10 @@ impl HostEventWriter {
 
     /// Send the `DmInvite` of a conversation of the direct space again to a remote member whose
     /// relay refused an item of it (`not_subscribed`), so their relay judges it afresh like any
-    /// invite. Nothing is sent for a conversation elsewhere or gone, or for a principal who is
-    /// not a remote member of it. Returns how many outbox rows were added.
+    /// invite. It comes from whoever the first invite came from: the member who added them
+    /// while still a member, else the creator. Nothing is sent for a conversation elsewhere or
+    /// gone, or for a principal who is not a remote member of it. Returns how many outbox rows
+    /// were added.
     pub async fn reinvite(
         &self,
         conversation_id: Uuid,
@@ -882,15 +892,7 @@ impl HostEventWriter {
         let Some(member) = members.into_iter().find(|m| m.user_id == user_id) else {
             return Ok(0);
         };
-        let Some(creator) = conversation.created_by else {
-            return Ok(0);
-        };
-        let Some(from_principal_id) = self
-            .repos
-            .user_repo
-            .get_by_id(creator)
-            .await?
-            .and_then(|u| u.principal_id)
+        let Some((inviter, from_principal_id)) = self.reinviter(&conversation, user_id).await?
         else {
             return Ok(0);
         };
@@ -901,7 +903,7 @@ impl HostEventWriter {
             .await?;
         let users = self.repos.user_repo.get_by_ids(&member_ids).await?;
         let Some(invite) = self
-            .invite_event(&conversation, creator, &from_principal_id, &users)
+            .invite_event(&conversation, inviter, &from_principal_id, &users)
             .await?
         else {
             return Ok(0);
@@ -920,6 +922,35 @@ impl HostEventWriter {
             self.wake.notify_one();
         }
         Ok(rows)
+    }
+
+    /// Who a conversation's invite to `user_id` is sent again from, with their principal id:
+    /// the member recorded as having added them while still a member with a principal id, else
+    /// the conversation's creator. `None` when neither has a principal id.
+    async fn reinviter(
+        &self,
+        conversation: &Conversation,
+        user_id: UserId,
+    ) -> ServiceResult<Option<(UserId, String)>> {
+        let members = &self.repos.conversation_member_repo;
+        let adder = match members.invited_by(conversation.id, user_id).await? {
+            Some(adder) if members.membership(conversation.id, adder).await?.is_some() => {
+                Some(adder)
+            }
+            _ => None,
+        };
+        for inviter in adder.into_iter().chain(conversation.created_by) {
+            if let Some(principal_id) = self
+                .repos
+                .user_repo
+                .get_by_id(inviter)
+                .await?
+                .and_then(|u| u.principal_id)
+            {
+                return Ok(Some((inviter, principal_id)));
+            }
+        }
+        Ok(None)
     }
 
     /// Delete the accepted row of a local member removed from a conversation of this server, so

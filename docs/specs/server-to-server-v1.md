@@ -572,7 +572,8 @@ POST /s2s/v1/deliver
   principal) for 24 hours after `unknown_principal` only; the other refusals are about one
   conversation or item. After `not_subscribed` for an item of a conversation of its direct space
   that the principal is still a member of, the host sends that member the conversation's
-  `DmInvite` again, as when they were added, at most once a day per conversation and principal,
+  `DmInvite` again, as when they were added (from the member who added them while still a
+  member, else from the creator), at most once a day per conversation and principal,
   whatever the relay lost it to: a row that expired after a long silence, or an invite written
   while the relay was dead and never delivered. The refused item itself is not sent again.
 - Failures back off from 1 s doubling to 5 minutes. Outbox rows live 7 days, delivered or not; a

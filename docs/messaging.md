@@ -301,8 +301,15 @@ text). `MessageDeleted` is unchanged.
   groups) go to the instance operators instead (`docs/api.md`, "Instance moderation"):
   `messageReports`, `messageReport` and `resolveReport` with the direct space's id
   (`relayInfo.directSpaceId`) answer an instance operator and refuse everyone else with
-  `FORBIDDEN`, an app or bot acting for an operator too. An operator gets nothing else there: no
-  kick, ban, timeout, role change or slow mode.
+  `FORBIDDEN`, an app or bot acting for an operator too. An operator is no member of the
+  conversations there, yet for a report of an unencrypted message sees that one message's
+  `messageText`, `messageAuthorId` and `messageSentAt` (never the rest of the conversation;
+  `messageReadable` stays false), and for any report whose author is shown the author's
+  principal id (`messageAuthorPrincipalId`, for `instanceBlockPrincipal`). An encrypted message
+  shows its author only through a verified report, as in a workspace. `deleteMessage` lets the
+  operator delete a reported unencrypted message, or an encrypted one with a verified report,
+  and no other message there. An operator gets nothing else there: no kick, ban, timeout, role
+  change or slow mode.
 
 ### Audit
 

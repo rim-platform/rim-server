@@ -1550,8 +1550,8 @@ async fn encrypted_attachments_are_checked_by_hash() {
 const REPORTS: &str = r#"
 query Reports($serverId: ID!) {
   messageReports(serverId: $serverId, dir: AFTER, limit: 20) {
-    items { id messageId status resolvedAt messageReadable messageText messageAuthorId messageSentAt
-            frankingVerifiedAt frankedSenderDeviceId frankedContent frankedContentExpiresAt }
+    items { id messageId status resolvedAt messageReadable messageText messageAuthorId
+            messageAuthorPrincipalId messageSentAt frankingVerifiedAt frankedSenderDeviceId frankedContent frankedContentExpiresAt }
   }
 }"#;
 const REPORT_ONE: &str = r#"
@@ -1863,6 +1863,11 @@ async fn an_operator_handles_a_report_of_a_dm_in_the_direct_space() {
         items[0]["messageAuthorId"],
         json!(f.alice.user.id.to_string())
     );
+    assert_eq!(
+        items[0]["messageAuthorPrincipalId"],
+        json!(f.alice.principal_id)
+    );
+    assert_eq!(items[0]["messageText"], Value::Null);
     assert_eq!(items[0]["frankedContent"], Value::Null);
     let report_id = items[0]["id"].as_str().expect("id").to_string();
     let one = json!({ "serverId": server_id, "reportId": report_id });
@@ -1936,6 +1941,96 @@ async fn an_operator_handles_a_report_of_a_dm_in_the_direct_space() {
     assert_eq!(
         exec_err_code(&f.schema, f.alice.request(RESOLVE, one)).await,
         "FORBIDDEN"
+    );
+}
+
+const REPORT_PLAIN: &str = r#"
+mutation Report($serverId: ID!, $conversationId: ID!, $messageId: ID!) {
+  reportMessage(serverId: $serverId, conversationId: $conversationId, messageId: $messageId,
+                reason: "abuse") { id }
+}"#;
+
+/// A report of an unencrypted DM in the direct space shows the instance operator the one
+/// reported message, its author and their principal, and lets them delete it, without the
+/// rest of the DM.
+#[tokio::test]
+async fn an_operator_reads_and_deletes_a_reported_unencrypted_dm_message() {
+    let f = direct_space_fixture().await;
+    let conv = f.create_dm(false).await;
+    let server_id = f.server_id();
+    let opal = f.ctx.create_user("opal").await;
+    let opal = f.ctx.caller(&opal).await;
+    f.provider
+        .instance_operator_service()
+        .grant("opal".to_string())
+        .await
+        .expect("grant");
+    let send = |text: &str| {
+        f.alice.request(
+            SEND_PLAIN,
+            json!({ "input": { "serverId": server_id, "conversationId": conv, "text": text } }),
+        )
+    };
+    let reported = exec_ok(&f.schema, send("abuse")).await["sendMessage"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let other = exec_ok(&f.schema, send("unreported")).await["sendMessage"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    exec_ok(
+        &f.schema,
+        f.bob.request(
+            REPORT_PLAIN,
+            json!({ "serverId": server_id, "conversationId": conv, "messageId": reported }),
+        ),
+    )
+    .await;
+
+    let list = json!({ "serverId": server_id });
+    let items =
+        exec_ok(&f.schema, opal.request(REPORTS, list.clone())).await["messageReports"]["items"]
+            .clone();
+    assert_eq!(items.as_array().map(Vec::len), Some(1));
+    let item = &items[0];
+    assert_eq!(item["messageId"], json!(reported));
+    assert_eq!(item["messageReadable"], json!(false));
+    assert_eq!(item["messageText"], json!("abuse"));
+    assert_eq!(item["messageAuthorId"], json!(f.alice.user.id.to_string()));
+    assert_eq!(
+        item["messageAuthorPrincipalId"],
+        json!(f.alice.principal_id)
+    );
+    assert!(item["messageSentAt"].is_string(), "{item}");
+    assert_eq!(item["frankingVerifiedAt"], Value::Null);
+
+    // The rest of the DM stays closed to the operator.
+    let read = opal.request(
+        "query($s: ID!, $c: ID!, $m: ID!) { message(serverId: $s, conversationId: $c, \
+         messageId: $m) { id } }",
+        json!({ "s": server_id, "c": conv, "m": other }),
+    );
+    assert_eq!(exec_err_code(&f.schema, read).await, "FORBIDDEN");
+
+    let delete = |message_id: &str| {
+        opal.request(
+            DELETE,
+            json!({ "input": { "serverId": server_id, "conversationId": conv, "messageId": message_id } }),
+        )
+    };
+    assert_eq!(
+        exec_err_code(&f.schema, delete(&other)).await,
+        "FORBIDDEN",
+        "only the reported message"
+    );
+    exec_ok(&f.schema, delete(&reported)).await;
+    let items =
+        exec_ok(&f.schema, opal.request(REPORTS, list)).await["messageReports"]["items"].clone();
+    assert_eq!(items[0]["messageText"], Value::Null, "deleted");
+    assert_eq!(
+        items[0]["messageAuthorId"],
+        json!(f.alice.user.id.to_string())
     );
 }
 

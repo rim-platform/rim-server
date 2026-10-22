@@ -3766,13 +3766,24 @@ async fn a_local_member_removed_from_a_conversation_here_loses_its_accepted_row(
     );
 }
 
+/// Carol, a local member who may have added Bob to a conversation.
+const CAROL: &str = "rimp1_carol";
+
+/// Carol's user id.
+fn carol_id() -> UserId {
+    UserId::from(Uuid::from_u128(77))
+}
+
 /// A writer for a server whose direct space is `direct` and holds `conversation`, created by
 /// Ada with a card; Bob, from the relay `PEER`, is a remote member of the direct space and, when
-/// `member`, of the conversation. `outbox` records the relay and item of each row added.
+/// `member`, of the conversation. `adder` is who is recorded as having added Bob and whether
+/// they are still a member; only Ada, Bob and Carol have accounts. `outbox` records the relay
+/// and item of each row added.
 fn reinvite_writer(
     direct: ServerId,
     conversation: rim_core::conversation::model::Conversation,
     member: bool,
+    adder: Option<(UserId, bool)>,
     outbox: Arc<Mutex<Vec<(String, String)>>>,
 ) -> crate::host::outbox::HostEventWriter {
     use rim_core::conversation_member::model::Membership;
@@ -3825,7 +3836,12 @@ fn reinvite_writer(
     });
     let mut members = MockConversationMemberRepository::new();
     members.expect_membership().returning(move |_, user_id| {
-        let found = (member && user_id == bob).then_some(Membership::Active);
+        let still_adder = adder.is_some_and(|(id, still)| still && id == user_id);
+        let found = ((member && user_id == bob) || still_adder).then_some(Membership::Active);
+        Box::pin(async move { Ok(found) })
+    });
+    members.expect_invited_by().returning(move |_, user_id| {
+        let found = adder.filter(|_| user_id == bob).map(|(id, _)| id);
         Box::pin(async move { Ok(found) })
     });
     members
@@ -3849,10 +3865,10 @@ fn reinvite_writer(
         handle: rim_core::user::model::UserHandle::Local,
     };
     let mut users = MockUserRepository::new();
-    let creator = user(ada, ALICE);
+    let known = [user(ada, ALICE), user(bob, BOB), user(carol_id(), CAROL)];
     users
         .expect_get_by_id()
-        .returning(move |_| Ok(Some(creator.clone())));
+        .returning(move |id| Ok(known.iter().find(|u| u.id == id).cloned()));
     let all = vec![user(ada, ALICE), user(bob, BOB)];
     users
         .expect_get_by_ids()
@@ -3916,7 +3932,7 @@ fn group_in(server_id: ServerId) -> rim_core::conversation::model::Conversation 
 async fn a_member_whose_relay_refused_a_conversation_gets_its_invite_again() {
     let direct = ServerId::from(Uuid::from_u128(5));
     let outbox = Arc::default();
-    let writer = reinvite_writer(direct, group_in(direct), true, Arc::clone(&outbox));
+    let writer = reinvite_writer(direct, group_in(direct), true, None, Arc::clone(&outbox));
     assert_eq!(
         writer
             .reinvite(Uuid::from_u128(9), BOB)
@@ -3955,16 +3971,73 @@ async fn a_member_whose_relay_refused_a_conversation_gets_its_invite_again() {
     );
 }
 
+/// The `from_principal_id` of the one invite `writer` sends Bob again.
+async fn reinvited_from(
+    writer: &crate::host::outbox::HostEventWriter,
+    outbox: &Mutex<Vec<(String, String)>>,
+) -> String {
+    assert_eq!(
+        writer
+            .reinvite(Uuid::from_u128(9), BOB)
+            .await
+            .expect("sent"),
+        1
+    );
+    let rows = outbox.lock().expect("lock").clone();
+    let [(_, item)] = rows.as_slice() else {
+        panic!("one row: {rows:?}");
+    };
+    let item: serde_json::Value = serde_json::from_str(item).expect("json");
+    let envelope = rim_identity::SignedStatement {
+        payload: item["envelope"]["payload"]
+            .as_str()
+            .expect("payload")
+            .to_string(),
+        signature: item["envelope"]["signature"]
+            .as_str()
+            .expect("signature")
+            .to_string(),
+    };
+    let event = rim_s2s::host::read_host_event(&envelope).expect("host event");
+    event.event["from_principal_id"]
+        .as_str()
+        .expect("from")
+        .to_string()
+}
+
+#[tokio::test]
+async fn an_invite_sent_again_comes_from_whoever_added_the_member() {
+    let direct = ServerId::from(Uuid::from_u128(5));
+    for (adder, from, why) in [
+        (Some((carol_id(), true)), CAROL, "the adder, still a member"),
+        (
+            Some((carol_id(), false)),
+            ALICE,
+            "the creator, once the adder left",
+        ),
+        (
+            Some((UserId::from(Uuid::from_u128(78)), true)),
+            ALICE,
+            "the creator, when the adder's account is gone",
+        ),
+        (None, ALICE, "the creator, when nobody is recorded"),
+    ] {
+        let outbox = Arc::default();
+        let writer = reinvite_writer(direct, group_in(direct), true, adder, Arc::clone(&outbox));
+        assert_eq!(reinvited_from(&writer, &outbox).await, from, "{why}");
+    }
+}
+
 #[tokio::test]
 async fn no_invite_is_sent_again_to_a_non_member_or_for_a_conversation_elsewhere() {
     let direct = ServerId::from(Uuid::from_u128(5));
     for (conversation, member, principal) in [
         (group_in(direct), false, BOB),
-        (group_in(direct), true, "rimp1_carol"),
+        (group_in(direct), true, CAROL),
         (group_in(ServerId::from(Uuid::from_u128(6))), true, BOB),
     ] {
         let outbox = Arc::default();
-        let writer = reinvite_writer(direct, conversation, member, Arc::clone(&outbox));
+        let writer = reinvite_writer(direct, conversation, member, None, Arc::clone(&outbox));
         assert_eq!(
             writer
                 .reinvite(Uuid::from_u128(9), principal)
@@ -3975,7 +4048,7 @@ async fn no_invite_is_sent_again_to_a_non_member_or_for_a_conversation_elsewhere
         assert!(outbox.lock().expect("lock").is_empty());
     }
     let outbox = Arc::default();
-    let writer = reinvite_writer(direct, group_in(direct), true, Arc::clone(&outbox));
+    let writer = reinvite_writer(direct, group_in(direct), true, None, Arc::clone(&outbox));
     assert_eq!(
         writer
             .reinvite(Uuid::from_u128(10), BOB)
@@ -3993,13 +4066,14 @@ type FiledLocally = Arc<Mutex<Vec<(Vec<String>, String, String)>>>;
 /// A writer whose default workspace is `lobby` and that hands what its local members receive to
 /// a relay recording each `(recipients, event type, inviter)`. `group` was created by Ada with
 /// `bob`, both local, and `carol`, local too, may join; nobody has a delegation in its
-/// workspace.
+/// workspace. `adders` records each `(member, adder)` the writer stores.
 fn default_workspace_writer(
     lobby: ServerId,
     group: rim_core::conversation::model::Conversation,
     bob: UserId,
     carol: UserId,
     filed: FiledLocally,
+    adders: Arc<Mutex<Vec<(UserId, UserId)>>>,
 ) -> crate::host::outbox::HostEventWriter {
     use rim_core::user::model::User;
 
@@ -4026,6 +4100,12 @@ fn default_workspace_writer(
     members
         .expect_list_member_ids()
         .returning(move |_| Box::pin(async move { Ok(vec![ada, bob, carol]) }));
+    members
+        .expect_set_invited_by()
+        .returning(move |_, user_id, invited_by| {
+            adders.lock().expect("lock").push((user_id, invited_by));
+            Box::pin(async { Ok(true) })
+        });
     let user = |id: UserId, principal: &str| User {
         id,
         username: principal.to_string(),
@@ -4132,8 +4212,15 @@ async fn a_group_of_the_default_workspace_reaches_its_local_members_as_an_invite
             UserId::new(),
             UserId::new(),
         );
-        let filed = Arc::default();
-        let writer = default_workspace_writer(lobby, group.clone(), bob, carol, Arc::clone(&filed));
+        let (filed, adders) = (Arc::default(), Arc::default());
+        let writer = default_workspace_writer(
+            lobby,
+            group.clone(),
+            bob,
+            carol,
+            Arc::clone(&filed),
+            Arc::clone(&adders),
+        );
         writer
             .write(&WorkspaceEvent::ConversationCreated {
                 workspace_id: workspace,
@@ -4170,6 +4257,11 @@ async fn a_group_of_the_default_workspace_reaches_its_local_members_as_an_invite
                 filed,
                 vec![invite(BOB, ALICE), invite("rimp1_carol", BOB)],
                 "an added member's invite comes from whoever added them"
+            );
+            assert_eq!(
+                adders.lock().expect("lock").as_slice(),
+                &[(carol, bob)],
+                "the adder is recorded for the invite sent again"
             );
         } else {
             assert!(filed.is_empty(), "{filed:?}");

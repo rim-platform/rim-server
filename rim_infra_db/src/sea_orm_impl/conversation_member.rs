@@ -236,4 +236,40 @@ impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
             .map_err(map_db_err)?;
         Ok(res.rows_affected > 0)
     }
+
+    async fn set_invited_by(
+        &self,
+        conversation_id: ConversationId,
+        user_id: UserId,
+        invited_by: UserId,
+    ) -> RepoResult<bool> {
+        let res = conversation_member::Entity::update_many()
+            .col_expr(
+                conversation_member::Column::InvitedBy,
+                Expr::value(Some(Uuid::from(invited_by))),
+            )
+            .filter(conversation_member::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
+            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected > 0)
+    }
+
+    async fn invited_by(
+        &self,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> RepoResult<Option<UserId>> {
+        let invited_by: Option<Option<Uuid>> = conversation_member::Entity::find()
+            .select_only()
+            .column(conversation_member::Column::InvitedBy)
+            .filter(conversation_member::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
+            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_id.into()))
+            .into_tuple()
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(invited_by.flatten().map(Into::into))
+    }
 }

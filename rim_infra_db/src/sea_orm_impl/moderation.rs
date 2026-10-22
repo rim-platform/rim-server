@@ -226,6 +226,16 @@ impl ModerationRepository for SeaOrmModerationRepository {
         Ok(count > 0)
     }
 
+    async fn has_report(&self, server_id: ServerId, message_id: MessageId) -> RepoResult<bool> {
+        let count = message_report::Entity::find()
+            .filter(message_report::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(message_report::Column::MessageId.eq::<Uuid>(message_id.into()))
+            .count(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(count > 0)
+    }
+
     async fn list_reports(
         &self,
         server_id: ServerId,
