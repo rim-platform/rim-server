@@ -209,7 +209,7 @@ mod tests {
             definition.dm,
             Some(DmDefinition {
                 outside_floor: OutsideFloor::Requests,
-                member_default: MemberDm::Direct,
+                member_default: MemberDm::Requests,
             })
         );
         let titles: Vec<&str> = definition

@@ -238,16 +238,23 @@ impl DefaultAppServiceProvider {
                 Arc::clone(&repos.default_workspace_repo),
             ),
         );
-        let conversation_service: Arc<dyn ConversationService> = Arc::new(
-            crate::conversation::DefaultConversationService::new(
-                repos.for_conversation(),
-                observers.clone(),
-            )
-            .with_e2ee_repo(Arc::clone(&repos.e2ee_repo))
-            .with_direct_space(federation.direct_space_id)
-            .with_limits(limits)
-            .with_default_workspace(Arc::clone(&default_workspace_service)),
+        let default_workspace_rules = crate::default_workspace_rules::DefaultWorkspaceRules::new(
+            Arc::clone(&default_workspace_service),
+            Arc::clone(&repos.user_repo),
+            limits,
         );
+        let mut conversation_concrete = crate::conversation::DefaultConversationService::new(
+            repos.for_conversation(),
+            observers.clone(),
+        )
+        .with_e2ee_repo(Arc::clone(&repos.e2ee_repo))
+        .with_direct_space(federation.direct_space_id)
+        .with_limits(limits)
+        .with_default_workspace(Arc::clone(&default_workspace_service));
+        if let Some(host) = &federation.host_service {
+            conversation_concrete = conversation_concrete.with_request_gate(Arc::clone(host));
+        }
+        let conversation_service: Arc<dyn ConversationService> = Arc::new(conversation_concrete);
         let notification_service: Arc<dyn NotificationService> = Arc::new(
             crate::notification::DefaultNotificationService::new(
                 repos.for_notification(),
@@ -453,7 +460,8 @@ impl DefaultAppServiceProvider {
                     confirmation_store: Some(Arc::clone(&confirmation_store)),
                 },
             )
-            .with_limits(limits),
+            .with_limits(limits)
+            .with_default_workspace(default_workspace_rules.clone()),
         );
 
         // Break the command↔macro init cycle: the command service is constructed
@@ -474,7 +482,8 @@ impl DefaultAppServiceProvider {
                 pipeline_broadcaster_clone,
             )
             .with_direct_space(federation.direct_space_id)
-            .with_limits(limits),
+            .with_limits(limits)
+            .with_default_workspace(default_workspace_rules),
         );
 
         let device_link_service: Arc<dyn DeviceLinkService> =

@@ -416,14 +416,19 @@ naming the cap, such as "this instance allows 5 workspaces per user".
 | `RIM_LIMIT_CHANNELS_PER_WORKSPACE` | `channelsPerWorkspace` | Unarchived channels of a workspace, public and private; a new workspace gets only the default channels the cap allows. Archiving a channel frees its place, and unarchiving one needs room. |
 | `RIM_LIMIT_DEVICES_PER_USER` | `devicesPerUser` | Devices on one account. |
 | `RIM_LIMIT_DM_REQUESTS_PER_DAY` | `dmRequestsPerDay` | DM requests one user sends to strangers per day. |
-| `RIM_LIMIT_MACROS_PER_WORKSPACE` | `macrosPerWorkspace` | Macros of a workspace. A member who is neither Owner nor Moderator holds at most a fifth of them (at least one, and never more than the 50 everyone may hold). |
-| `RIM_LIMIT_PIPELINES_PER_WORKSPACE` | `pipelinesPerWorkspace` | Pipelines of a workspace, with the same fifth for a member who is neither Owner nor Moderator. |
+| `RIM_LIMIT_MACROS_PER_WORKSPACE` | `macrosPerWorkspace` | Macros of a workspace. A member who is neither Owner nor Moderator holds at most a fifth of them (at least one, and never more than the 50 everyone may hold). The default workspace has no per-workspace cap, only that share. |
+| `RIM_LIMIT_PIPELINES_PER_WORKSPACE` | `pipelinesPerWorkspace` | Pipelines of a workspace, with the same fifth for a member who is neither Owner nor Moderator, and the same exception for the default workspace. |
 | `RIM_LIMIT_PLUGINS_PER_WORKSPACE` | `pluginsPerWorkspace` | Plugins of a workspace's registry, at most the built-in 100. |
 | `RIM_LIMIT_INVITES_PER_USER_PER_DAY` | `invitesPerUserPerDay` | Workspace invites one user creates in the last 24 hours, and invite emails (`recipientEmail`) one user sends in the last 24 hours. Unlike most caps it defaults to 50; 0 turns it off. |
 | `RIM_LIMIT_INVITE_MAX_USES` | `inviteMaxUses` | The uses one invite may have. |
 | `RIM_LIMIT_MESSAGE_BYTES` | `messageBytes` | A message's text in UTF-8 bytes, at most 65536. An encrypted message's ciphertext may exceed it by 4096 bytes of framing. |
 | `RIM_LIMIT_PENDING_INVITES_PER_USER` | `pendingInvitesPerUser` | Pending invitations to encrypted conversations one user holds. Unlike the others it defaults to 50; 0 turns it off. Inviting someone who holds that many refuses the whole create or add. |
 | `RIM_LIMIT_ACCOUNTS` | `accounts` | Local accounts the instance holds, those waiting out their deletion grace period included; people from other servers held here and purged accounts do not count. At the cap every signup, `signupWithInvite` and `signupWithKey` alike and whatever token or proof-of-work it carries, answers `REGISTRATION_FULL` instead of `VALIDATION`, and `serverInfo.registrationFull` is true. |
+
+The server's default workspace, which every account joins, has caps of its own that no
+setting changes: a group there is started with at most 50 people per call and a plaintext one
+holds at most 50 members, and `addConversationMembers` names at most 50 people per call; past
+either the call answers `VALIDATION`.
 
 Devices and DM requests also have a relay quota, `RIM_RELAY_DEVICES_PER_USER` (default 32) and
 `RIM_RELAY_DM_REQUESTS_PER_DAY` (default 20). The stricter of the cap and the quota applies,

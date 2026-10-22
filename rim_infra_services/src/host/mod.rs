@@ -260,7 +260,8 @@ impl DefaultHostService {
     ///
     /// # Errors
     ///
-    /// `Forbidden` when the settings refuse it.
+    /// `Forbidden` when the settings refuse it, or the recipient or the operator blocked the
+    /// sender.
     async fn ensure_recipient_takes(
         &self,
         sender: UserId,
@@ -287,7 +288,17 @@ impl DefaultHostService {
         }
         .inbound(recipient, &principal_id, &sender_server)
         .await?;
-        if policy == DmPolicy::Refuse {
+        let blocked = self
+            .repos
+            .relay_repo
+            .is_blocked(recipient, &principal_id)
+            .await?
+            || self
+                .repos
+                .relay_abuse_repo
+                .is_principal_blocked(&principal_id)
+                .await?;
+        if blocked || policy == DmPolicy::Refuse {
             return Err(ServiceError::Forbidden(
                 "they do not take direct messages from you".to_string(),
             ));
@@ -407,7 +418,7 @@ impl DefaultHostService {
     ///
     /// # Errors
     ///
-    /// `Forbidden` when one's settings refuse it.
+    /// `Forbidden` when one's settings refuse it or they blocked `actor`.
     async fn requested_of(&self, actor: Actor, user_ids: &[UserId]) -> ServiceResult<Vec<UserId>> {
         let mut requested = Vec::new();
         for other in user_ids.iter().filter(|id| **id != actor.user_id) {
@@ -437,6 +448,53 @@ impl DefaultHostService {
     pub(crate) fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// The checks of starting a conversation with `user_ids` in `server_id`, a DM when
+    /// `direct_message`: in the direct space the operator's outbound setting for remote
+    /// members, everywhere the refusals and request limits of the request inbox and the
+    /// probation of a new account.
+    async fn check_request(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        user_ids: Vec<UserId>,
+        direct_message: bool,
+    ) -> ServiceResult<()> {
+        let in_direct_space = server_id == self.direct_space_id;
+        let others: Vec<UserId> = user_ids
+            .into_iter()
+            .filter(|id| *id != actor.user_id)
+            .collect();
+        if in_direct_space {
+            for other in &others {
+                if self.repos.host_repo.user_kind(*other).await? == Some(UserKind::Remote) {
+                    self.ensure_outbound_to(*other).await?;
+                }
+            }
+        }
+        let requested = self.requested_of(actor, &others).await?;
+        let reopened = match others.as_slice() {
+            [other] if direct_message => self
+                .repos
+                .conversation_repo
+                .find_direct_between_users(server_id, actor.user_id, *other)
+                .await?
+                .is_some(),
+            _ => false,
+        };
+        if !reopened {
+            self.refuse_invites_without_card(actor, &others).await?;
+            self.refuse_requests_over_limits(actor, &requested).await?;
+        }
+        // A conversation in a workspace meets probation too: its members share that workspace,
+        // unless it is the default workspace, which makes nobody known.
+        if self.limits.probation_hours.is_none() {
+            return Ok(());
+        }
+        let accounts = self.repos.user_repo.get_by_ids(&others).await?;
+        let addressees: Vec<Addressee<'_>> = accounts.iter().map(Addressee::Account).collect();
+        self.refuse_strangers_in_probation(actor, &addressees).await
     }
 
     /// `Validation` while `actor`'s account is in probation (an instance operator never is) and
@@ -1466,39 +1524,17 @@ impl HostService for DefaultHostService {
         if !in_direct_space && !direct_message {
             return Ok(());
         }
-        let others: Vec<UserId> = user_ids
-            .into_iter()
-            .filter(|id| *id != actor.user_id)
-            .collect();
-        if in_direct_space {
-            for other in &others {
-                if self.repos.host_repo.user_kind(*other).await? == Some(UserKind::Remote) {
-                    self.ensure_outbound_to(*other).await?;
-                }
-            }
-        }
-        let requested = self.requested_of(actor, &others).await?;
-        let reopened = match others.as_slice() {
-            [other] if direct_message => self
-                .repos
-                .conversation_repo
-                .find_direct_between_users(server_id, actor.user_id, *other)
-                .await?
-                .is_some(),
-            _ => false,
-        };
-        if !reopened {
-            self.refuse_invites_without_card(actor, &others).await?;
-            self.refuse_requests_over_limits(actor, &requested).await?;
-        }
-        // A DM in a workspace meets probation too: its members share that workspace, unless it
-        // is the default workspace, which makes nobody known.
-        if self.limits.probation_hours.is_none() {
-            return Ok(());
-        }
-        let accounts = self.repos.user_repo.get_by_ids(&others).await?;
-        let addressees: Vec<Addressee<'_>> = accounts.iter().map(Addressee::Account).collect();
-        self.refuse_strangers_in_probation(actor, &addressees).await
+        self.check_request(actor, server_id, user_ids, direct_message)
+            .await
+    }
+
+    async fn ensure_may_request_group(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        user_ids: Vec<UserId>,
+    ) -> ServiceResult<()> {
+        self.check_request(actor, server_id, user_ids, false).await
     }
 }
 

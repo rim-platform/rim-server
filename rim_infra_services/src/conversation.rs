@@ -23,6 +23,7 @@ use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::ConversationService;
 use rim_services::conversation::types::ConversationParticipants;
 use rim_services::default_workspace::DefaultWorkspaceService;
+use rim_services::host::service::HostService;
 use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::{ServiceError, ServiceResult};
 
@@ -42,6 +43,26 @@ use crate::util::{
 
 /// Most conversations one user starts in the direct space per day.
 pub(crate) const MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY: u64 = 50;
+
+/// Users one call may name to start a group of the default workspace or to add to one of its
+/// conversations.
+pub(crate) const MAX_DEFAULT_WORKSPACE_IDS_PER_CALL: usize = 50;
+/// Members a plaintext group of the default workspace holds; any other group holds
+/// [`rim_services::e2ee::MAX_ENCRYPTED_MEMBERS`].
+pub(crate) const MAX_DEFAULT_WORKSPACE_GROUP_MEMBERS: usize = 50;
+
+/// Whether a member of `role` may manage `conversation`'s shared surfaces (its topic, others'
+/// pins): anyone in a DM or group; in a channel an Owner or Moderator, or the creator of a
+/// private channel.
+pub(crate) fn manages_channel(
+    conversation: &Conversation,
+    role: ServerMemberRole,
+    user_id: UserId,
+) -> bool {
+    conversation.conversation_type != CoreConversationType::Channel
+        || role.is_moderator()
+        || (conversation.is_private && conversation.created_by == Some(user_id))
+}
 
 /// The refusal of a member who cannot read an encrypted conversation.
 fn not_ready() -> ServiceError {
@@ -68,6 +89,9 @@ pub struct DefaultConversationService {
     /// Which workspace every new account joins, where only its Owner and Moderators create
     /// channels; `None` where none is wired.
     default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
+    /// Checks starting a group of the default workspace, or adding people to one, like a DM
+    /// with each of them; `None` where the server runs no request inbox.
+    request_gate: Option<Arc<dyn HostService>>,
 }
 
 impl DefaultConversationService {
@@ -82,6 +106,7 @@ impl DefaultConversationService {
                 MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY,
             )),
             default_workspace: None,
+            request_gate: None,
         }
     }
 
@@ -107,6 +132,31 @@ impl DefaultConversationService {
                 )))
             }
         }
+    }
+
+    pub fn with_request_gate(mut self, request_gate: Arc<dyn HostService>) -> Self {
+        self.request_gate = Some(request_gate);
+        self
+    }
+
+    /// `Ok` when `actor` may bring `user_ids` into a group of the default workspace `server_id`
+    /// as the request inbox would let them start a DM with each: refused by a recipient's DM
+    /// settings, past the request limits or in probation, it answers as that DM would.
+    async fn ensure_may_request_group(
+        &self,
+        actor: UserId,
+        server_id: rim_core::server::model::ServerId,
+        user_ids: &[UserId],
+    ) -> ServiceResult<()> {
+        let Some(gate) = &self.request_gate else {
+            return Ok(());
+        };
+        let others: Vec<UserId> = user_ids.iter().copied().filter(|id| *id != actor).collect();
+        if others.is_empty() {
+            return Ok(());
+        }
+        gate.ensure_may_request_group(rim_services::Actor::new(actor), server_id, others)
+            .await
     }
 
     pub fn with_default_workspace(
@@ -378,7 +428,7 @@ impl DefaultConversationService {
         actor: UserId,
         server_id: rim_core::server::model::ServerId,
         conversation_id: rim_core::conversation::model::ConversationId,
-    ) -> ServiceResult<Conversation> {
+    ) -> ServiceResult<(Conversation, ServerMemberRole)> {
         let standing =
             member_standing(self.repos.server_member_repo.as_ref(), server_id, actor).await?;
         if standing.role.is_guest() && !self.is_direct_space(server_id) {
@@ -398,7 +448,87 @@ impl DefaultConversationService {
             standing.role,
         )
         .await?;
-        Ok(conversation)
+        Ok((conversation, standing.role))
+    }
+
+    /// The rules of adding `targets` to `conversation` of the default workspace, which every
+    /// account joins: at most [`MAX_DEFAULT_WORKSPACE_IDS_PER_CALL`] at once; to a channel only
+    /// as an Owner or Moderator, or as the creator of a private channel; to a group within
+    /// [`MAX_DEFAULT_WORKSPACE_GROUP_MEMBERS`] when it is plaintext, and as a DM with each newcomer
+    /// would be started.
+    ///
+    /// # Errors
+    /// `Validation` past a cap, `Forbidden` for a channel the actor does not manage, and what
+    /// starting the DMs would answer.
+    async fn ensure_may_add_in_default_workspace(
+        &self,
+        conversation: &Conversation,
+        role: ServerMemberRole,
+        actor: UserId,
+        targets: &[UserId],
+    ) -> ServiceResult<()> {
+        if targets.len() > MAX_DEFAULT_WORKSPACE_IDS_PER_CALL {
+            return Err(ServiceError::Validation(format!(
+                "at most {MAX_DEFAULT_WORKSPACE_IDS_PER_CALL} people are added at once in this \
+                 workspace"
+            )));
+        }
+        match conversation.conversation_type {
+            CoreConversationType::Channel => {
+                if role.is_moderator()
+                    || (conversation.is_private && conversation.created_by == Some(actor))
+                {
+                    Ok(())
+                } else {
+                    Err(ServiceError::Forbidden(
+                        "in this workspace only the owner, moderators and the creator of a \
+                         private channel add people to it"
+                            .to_string(),
+                    ))
+                }
+            }
+            CoreConversationType::Group => {
+                let members = &self.repos.conversation_member_repo;
+                let mut current = members.list_member_ids(conversation.id).await?;
+                current.extend(members.list_pending_member_ids(conversation.id).await?);
+                let joining: Vec<UserId> = targets
+                    .iter()
+                    .copied()
+                    .filter(|id| !current.contains(id))
+                    .collect();
+                if !conversation.is_encrypted()
+                    && current.len() + joining.len() > MAX_DEFAULT_WORKSPACE_GROUP_MEMBERS
+                {
+                    return Err(ServiceError::Validation(format!(
+                        "a group of this workspace has at most \
+                         {MAX_DEFAULT_WORKSPACE_GROUP_MEMBERS} members"
+                    )));
+                }
+                self.ensure_may_request_group(actor, conversation.server_id, &joining)
+                    .await
+            }
+            CoreConversationType::Direct => Ok(()),
+        }
+    }
+
+    /// `Validation` when adding `targets` would take the plaintext group `conversation` past
+    /// [`rim_services::e2ee::MAX_ENCRYPTED_MEMBERS`] members, pending ones included.
+    async fn ensure_group_has_room(
+        &self,
+        conversation: &Conversation,
+        targets: &[UserId],
+    ) -> ServiceResult<()> {
+        let members = &self.repos.conversation_member_repo;
+        let mut current = members.list_member_ids(conversation.id).await?;
+        current.extend(members.list_pending_member_ids(conversation.id).await?);
+        let joining = targets.iter().filter(|id| !current.contains(id)).count();
+        if current.len() + joining > rim_services::e2ee::MAX_ENCRYPTED_MEMBERS {
+            return Err(ServiceError::Validation(format!(
+                "a group has at most {} members",
+                rim_services::e2ee::MAX_ENCRYPTED_MEMBERS
+            )));
+        }
+        Ok(())
     }
 
     fn access_repos(&self) -> ConversationAccessRepos<'_> {
@@ -483,7 +613,9 @@ impl DefaultConversationService {
     }
 
     /// Tells the members and `user_id`, active or pending, that `user_id` joined.
-    fn emit_member_added(&self, dto: &ConversationDto, user_id: UserId) {
+    /// Announce that `user_id` joined `dto`, added by `added_by` (`None` for an accepted
+    /// invitation).
+    fn emit_member_added(&self, dto: &ConversationDto, user_id: UserId, added_by: Option<UserId>) {
         let mut member_user_ids = dto.member_ids.clone();
         if !member_user_ids.contains(&user_id) {
             member_user_ids.push(user_id);
@@ -494,6 +626,7 @@ impl DefaultConversationService {
                 conversation_id: dto.id,
                 user_id,
                 member_user_ids,
+                added_by,
             });
     }
 
@@ -624,6 +757,13 @@ impl ConversationService for DefaultConversationService {
                 )
             }
             ConversationParticipants::Group { mut member_ids } => {
+                let in_default_workspace = self.is_default_workspace(cmd.server_id).await?;
+                if in_default_workspace && member_ids.len() > MAX_DEFAULT_WORKSPACE_IDS_PER_CALL {
+                    return Err(ServiceError::Validation(format!(
+                        "a group of this workspace is started with at most \
+                         {MAX_DEFAULT_WORKSPACE_IDS_PER_CALL} people at once"
+                    )));
+                }
                 if !member_ids.contains(&cmd.actor.user_id) {
                     member_ids.push(cmd.actor.user_id);
                 }
@@ -647,6 +787,22 @@ impl ConversationService for DefaultConversationService {
                     return Err(ServiceError::Validation(
                         "group conversations require at least 2 members".to_string(),
                     ));
+                }
+                if !cmd.encrypted && unique.len() > rim_services::e2ee::MAX_ENCRYPTED_MEMBERS {
+                    return Err(ServiceError::Validation(format!(
+                        "a group has at most {} members",
+                        rim_services::e2ee::MAX_ENCRYPTED_MEMBERS
+                    )));
+                }
+                if in_default_workspace {
+                    if !cmd.encrypted && unique.len() > MAX_DEFAULT_WORKSPACE_GROUP_MEMBERS {
+                        return Err(ServiceError::Validation(format!(
+                            "a group of this workspace has at most \
+                             {MAX_DEFAULT_WORKSPACE_GROUP_MEMBERS} members"
+                        )));
+                    }
+                    self.ensure_may_request_group(cmd.actor.user_id, cmd.server_id, &unique)
+                        .await?;
                 }
 
                 (CoreConversationType::Group, unique)
@@ -742,7 +898,7 @@ impl ConversationService for DefaultConversationService {
             is_private: dto.is_private,
         });
         for &user_id in &pending_ids {
-            self.emit_member_added(&dto, user_id);
+            self.emit_member_added(&dto, user_id, Some(cmd.actor.user_id));
         }
 
         Ok(dto)
@@ -875,7 +1031,7 @@ impl ConversationService for DefaultConversationService {
         // Guests cannot invite and timed-out members cannot write. Private
         // channels and groups: the gate already requires membership (NotFound /
         // PermissionDenied otherwise).
-        let conversation = self
+        let (conversation, role) = self
             .ensure_may_add_members(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)
             .await?;
 
@@ -902,6 +1058,20 @@ impl ConversationService for DefaultConversationService {
             .into_iter()
             .filter(|id| seen.insert(*id))
             .collect();
+        if conversation.conversation_type == CoreConversationType::Group
+            && !conversation.is_encrypted()
+        {
+            self.ensure_group_has_room(&conversation, &targets).await?;
+        }
+        if self.is_default_workspace(cmd.server_id).await? {
+            self.ensure_may_add_in_default_workspace(
+                &conversation,
+                role,
+                cmd.actor.user_id,
+                &targets,
+            )
+            .await?;
+        }
         if self.is_direct_space(cmd.server_id) {
             self.join_direct_space(cmd.server_id, &targets).await?;
         }
@@ -967,7 +1137,7 @@ impl ConversationService for DefaultConversationService {
             self.emit_mls_membership_changed(&encrypted, dto.member_ids.clone());
         }
         for user_id in added {
-            self.emit_member_added(&dto, user_id);
+            self.emit_member_added(&dto, user_id, Some(cmd.actor.user_id));
         }
 
         Ok(dto)
@@ -1041,7 +1211,7 @@ impl ConversationService for DefaultConversationService {
         ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
         // Guests cannot join; a timed-out member cannot either. A private channel
         // the actor is not in is NotFound here, so it cannot be joined.
-        let conversation = self
+        let (conversation, _) = self
             .ensure_may_add_members(cmd.actor.user_id, cmd.server_id, cmd.conversation_id)
             .await?;
 
@@ -1059,7 +1229,7 @@ impl ConversationService for DefaultConversationService {
         let dto = self.to_dto(conversation).await?;
         if joined {
             info!("joined channel");
-            self.emit_member_added(&dto, cmd.actor.user_id);
+            self.emit_member_added(&dto, cmd.actor.user_id, Some(cmd.actor.user_id));
         }
 
         Ok(dto)
@@ -1166,13 +1336,18 @@ impl ConversationService for DefaultConversationService {
         &self,
         cmd: UpdateConversationTopicCmd,
     ) -> ServiceResult<ConversationDto> {
-        ensure_conversation_writable(
+        let (conversation, standing) = crate::util::ensure_conversation_writable_with_standing(
             self.access_repos(),
             cmd.actor.user_id,
             cmd.server_id,
             cmd.conversation_id,
         )
         .await?;
+        if !manages_channel(&conversation, standing.role, cmd.actor.user_id) {
+            return Err(ServiceError::Forbidden(
+                "only the owner and moderators change a channel's topic".to_string(),
+            ));
+        }
 
         // Validate topic
         let topic = match cmd.topic {
@@ -1252,7 +1427,7 @@ impl ConversationService for DefaultConversationService {
         let encrypted = conversation.clone();
         let dto = self.to_dto(conversation).await?;
         self.emit_mls_membership_changed(&encrypted, dto.member_ids.clone());
-        self.emit_member_added(&dto, user_id);
+        self.emit_member_added(&dto, user_id, None);
         Ok(dto)
     }
 

@@ -117,6 +117,10 @@ pub enum WorkspaceEvent {
         user_id: UserId,
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
+        /// Server-side only: who added them, the user themself for a join; `None` when they
+        /// accepted an invitation.
+        #[serde(skip_serializing, default)]
+        added_by: Option<UserId>,
     },
     MemberRemovedFromConversation {
         workspace_id: ServerId,

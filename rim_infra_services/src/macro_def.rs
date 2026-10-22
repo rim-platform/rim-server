@@ -4,7 +4,9 @@ use async_trait::async_trait;
 
 use rim_core::macro_def::model::{NewMacroDef, UpdateMacroDef};
 use rim_core::macro_def::repository::MacroRepository;
+use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
+use rim_core::user::model::UserId;
 use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::AuditLogService;
 use rim_services::command::bounds::{
@@ -62,6 +64,9 @@ pub struct DefaultMacroService {
     services: MacroServices,
     /// The cap on macros per workspace.
     limits: InstanceLimits,
+    /// The server's default workspace, where no per-workspace cap applies and accounts in
+    /// probation create none; `None` where none is wired.
+    default_workspace: Option<crate::default_workspace_rules::DefaultWorkspaceRules>,
 }
 
 impl DefaultMacroService {
@@ -70,7 +75,34 @@ impl DefaultMacroService {
             repos,
             services,
             limits: InstanceLimits::default(),
+            default_workspace: None,
         }
+    }
+
+    pub fn with_default_workspace(
+        mut self,
+        rules: crate::default_workspace_rules::DefaultWorkspaceRules,
+    ) -> Self {
+        self.default_workspace = Some(rules);
+        self
+    }
+
+    /// Whether `server_id` is the default workspace, after refusing `user_id` there while in
+    /// probation (`Validation` saying they can `action` once it ends).
+    async fn in_default_workspace(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+        action: &str,
+    ) -> ServiceResult<bool> {
+        let Some(rules) = &self.default_workspace else {
+            return Ok(false);
+        };
+        if !rules.is_default(server_id).await? {
+            return Ok(false);
+        }
+        rules.ensure_out_of_probation(user_id, action).await?;
+        Ok(true)
     }
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
@@ -280,6 +312,9 @@ impl MacroService for DefaultMacroService {
         )
         .await?;
 
+        let in_default_workspace = self
+            .in_default_workspace(cmd.server_id, cmd.actor.user_id, "create a macro")
+            .await?;
         let is_moderator = self
             .repos
             .server_member_repo
@@ -301,7 +336,9 @@ impl MacroService for DefaultMacroService {
                 "user may have at most {per_user} macros per server"
             )));
         }
-        if self.limits.macros_per_workspace.is_some() {
+        // Macros belong to their author: in the default workspace the member share bounds
+        // them and no account can fill a workspace cap for everyone.
+        if !in_default_workspace && self.limits.macros_per_workspace.is_some() {
             let in_workspace = self
                 .repos
                 .macro_repo
@@ -1152,6 +1189,84 @@ mod tests {
                     assert_eq!(message, "this instance allows 50 macros per workspace");
                 }
                 Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_workspace_takes_a_members_share_but_no_workspace_cap_or_probation() {
+        let lobby = ServerId::new();
+        let now = chrono::Utc::now();
+        let (old, new) = (UserId::new(), UserId::new());
+        let accounts = vec![
+            crate::probation_fixtures::account(old, now - chrono::Duration::days(3), None),
+            crate::probation_fixtures::account(new, now - chrono::Duration::hours(1), None),
+        ];
+        let limits = rim_services::limits::InstanceLimits {
+            macros_per_workspace: Some(50),
+            probation_hours: Some(24),
+            ..Default::default()
+        };
+        for (actor, held, outcome) in [
+            (old, 9, Ok(())),
+            (old, 10, Err("user may have at most 10 macros per server")),
+            (
+                new,
+                0,
+                Err("a new account can create a macro in 1380 minutes"),
+            ),
+        ] {
+            let mut repo = MockMacroRepository::new();
+            repo.expect_count_for_user().returning(move |_, _| Ok(held));
+            repo.expect_count_for_server().never();
+            repo.expect_create().returning(|new_macro| {
+                Ok(MacroDef {
+                    id: MacroId::new(),
+                    server_id: new_macro.server_id,
+                    user_id: new_macro.user_id,
+                    name: new_macro.name,
+                    description: new_macro.description,
+                    steps_json: new_macro.steps_json,
+                    ai_callable: new_macro.ai_callable,
+                    nl_description: new_macro.nl_description,
+                    intent_samples: new_macro.intent_samples,
+                    sensitivity: new_macro.sensitivity,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                })
+            });
+            let svc = service(repo, MockCommandService::new())
+                .with_limits(limits)
+                .with_default_workspace(
+                    crate::default_workspace_rules::DefaultWorkspaceRules::testing(
+                        lobby,
+                        accounts.clone(),
+                        limits,
+                        now,
+                    ),
+                );
+            let result = svc
+                .create_macro(CreateMacroCmd {
+                    actor: Actor::new(actor),
+                    server_id: lobby,
+                    name: "Mine".to_string(),
+                    description: None,
+                    steps: vec![MacroStepDto {
+                        command_id: "chat.post_message".to_string(),
+                        args: None,
+                    }],
+                    ai_callable: false,
+                    nl_description: String::new(),
+                    intent_samples: vec![],
+                    sensitivity: CommandSensitivityDto::Safe,
+                })
+                .await;
+            match (result, outcome) {
+                (Ok(_), Ok(())) => {}
+                (Err(ServiceError::Validation(message)), Err(expected)) => {
+                    assert_eq!(message, expected)
+                }
+                (other, expected) => panic!("expected {expected:?}, got {other:?}"),
             }
         }
     }

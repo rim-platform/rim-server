@@ -494,7 +494,7 @@ it for yours:
 {
   "name": "RIM",
   "claimGrantsOperator": true,
-  "dm": { "outsideFloor": "REQUESTS", "memberDefault": "DIRECT" },
+  "dm": { "outsideFloor": "REQUESTS", "memberDefault": "REQUESTS" },
   "channels": [
     { "name": "general", "topic": "Anything about RIM" },
     { "name": "announcements", "topic": "Releases and news from the project" }
@@ -507,6 +507,10 @@ it for yours:
   instance operator, as `rim-server operator grant` would make it.
 - `dm` (optional): the workspace's DM policy, as `setWorkspaceDmPolicy` takes it:
   `outsideFloor` is `NONE`, `REQUESTS` or `CLOSED`, `memberDefault` is `DIRECT` or `REQUESTS`.
+  Everyone on the server shares the default workspace, so with `DIRECT` every account's first
+  DM or group to anyone else here arrives at once and meets no request limit; `REQUESTS`, as
+  in the committed file, holds it in the recipient's request inbox until they accept it, and
+  each member can still choose `DIRECT` for themselves (`setMyWorkspaceDmSetting`).
 - `channels` (optional): each with a `name` (at most 100 characters, unique in the file), an
   optional `topic` (at most 512 characters) and `private` (default `false`).
 
@@ -564,8 +568,12 @@ the next start refuses its id.
 ### Either way
 
 An account already in the workspace, or banned from it, is left as it is. In the default
-workspace only the Owner and Moderators create channels; members start DMs and groups as
-anywhere else.
+workspace only the Owner and Moderators create channels, add people to channels and change
+their topics, and only their `@channel` and `@here` notify everyone. A group there is started
+like a DM with each of its members, following their DM settings and the request inbox, with at
+most 50 members. Macros and pipelines there follow each member's share of
+`RIM_LIMIT_MACROS_PER_WORKSPACE` and `RIM_LIMIT_PIPELINES_PER_WORKSPACE` but no per-workspace
+cap, so a few accounts cannot fill it for everyone, and an account in probation creates none.
 `RIM_LIMIT_MEMBERS_PER_WORKSPACE` does not keep a new account out of the default workspace, but
 an invite to it still follows the cap. The workspace's channels are ordinary plaintext channels;
 DMs and encrypted groups are untouched, and other servers see an ordinary membership.

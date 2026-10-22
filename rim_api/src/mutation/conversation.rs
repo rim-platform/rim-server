@@ -171,7 +171,10 @@ impl ConversationMutations {
         Ok(true)
     }
 
-    /// Add (invite) workspace members to a channel or group the caller belongs to.
+    /// Add (invite) workspace members to a channel or group the caller belongs to. In the
+    /// server's default workspace a channel takes them from an Owner, a Moderator or a private
+    /// channel's creator, a group as a DM with each would be started, and one call names at
+    /// most 50.
     async fn add_conversation_members(
         &self,
         ctx: &Context<'_>,

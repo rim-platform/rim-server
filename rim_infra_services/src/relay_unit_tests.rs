@@ -2992,6 +2992,8 @@ struct Inbox {
     existing_dm: bool,
     principals: Vec<UserId>,
     cardless: bool,
+    /// Users who blocked Ada.
+    blocked_by: Vec<UserId>,
 }
 
 /// A host at `now` with a daily limit of `DAILY` requests per sender, where Ada's oldest
@@ -3036,6 +3038,11 @@ fn limits_host(ada: UserId, inbox: Inbox, now: chrono::DateTime<Utc>) -> Default
     relay
         .expect_accepted_from()
         .returning(|_, _| Box::pin(async { Ok(false) }));
+    let blocked_by = inbox.blocked_by.clone();
+    relay.expect_is_blocked().returning(move |user, _| {
+        let blocked = blocked_by.contains(&user);
+        Box::pin(async move { Ok(blocked) })
+    });
     let pending = inbox.pending.clone();
     relay
         .expect_count_pending_requests()
@@ -3111,7 +3118,7 @@ fn limits_host(ada: UserId, inbox: Inbox, now: chrono::DateTime<Utc>) -> Default
             conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
             server_member_repo: Arc::new(MockServerMemberRepository::new()),
             delegation_repo: Arc::new(MockDelegationRepository::new()),
-            relay_abuse_repo: Arc::new(MockRelayAbuseRepository::new()),
+            relay_abuse_repo: Arc::new(blocks(&[])),
             dm_policy_repo: Arc::new(dm),
             session_repo: Arc::new(rim_core::auth::repository::MockSessionRepository::new()),
         },
@@ -3302,6 +3309,50 @@ async fn a_creator_without_a_profile_card_starts_no_conversation_with_a_local_us
     )
     .await
     .expect("with a card");
+}
+
+#[tokio::test]
+async fn a_group_started_like_dms_meets_the_request_limits_of_each_member() {
+    use rim_core::dm_policy::model::MemberDm;
+    let (ada, direct, requests) = (UserId::new(), UserId::new(), UserId::new());
+    let inbox = Inbox {
+        filed_today: i64::from(DAILY),
+        coworkers: vec![(direct, MemberDm::Direct), (requests, MemberDm::Requests)],
+        ..Inbox::default()
+    };
+    let host = limits_host(ada, inbox, Utc::now());
+    let lobby = ServerId::from(Uuid::from_u128(7));
+    host.ensure_may_request_group(Actor::new(ada), lobby, vec![ada, direct])
+        .await
+        .expect("a group whose members take DMs directly");
+    let blocker = UserId::new();
+    let blocked = limits_host(
+        ada,
+        Inbox {
+            coworkers: vec![(blocker, MemberDm::Direct)],
+            blocked_by: vec![blocker],
+            ..Inbox::default()
+        },
+        Utc::now(),
+    );
+    for result in [
+        blocked
+            .ensure_may_request_group(Actor::new(ada), lobby, vec![blocker])
+            .await,
+        blocked
+            .ensure_may_request(Actor::new(ada), lobby, vec![blocker], true)
+            .await,
+    ] {
+        assert!(
+            matches!(&result, Err(ServiceError::Forbidden(m)) if m == "they do not take direct messages from you"),
+            "{result:?}"
+        );
+    }
+    assert!(matches!(
+        host.ensure_may_request_group(Actor::new(ada), lobby, vec![requests, direct])
+            .await,
+        Err(ServiceError::RateLimited { .. })
+    ));
 }
 
 // ── Accepted conversations ───────────────────────────────────────────────────────────────
@@ -3933,4 +3984,195 @@ async fn no_invite_is_sent_again_to_a_non_member_or_for_a_conversation_elsewhere
         0,
         "a conversation gone"
     );
+}
+
+/// What the request inbox was handed for local members: the recipients, the event type and the
+/// principal an invite comes from.
+type FiledLocally = Arc<Mutex<Vec<(Vec<String>, String, String)>>>;
+
+/// A writer whose default workspace is `lobby` and that hands what its local members receive to
+/// a relay recording each `(recipients, event type, inviter)`. `group` was created by Ada with
+/// `bob`, both local, and `carol`, local too, may join; nobody has a delegation in its
+/// workspace.
+fn default_workspace_writer(
+    lobby: ServerId,
+    group: rim_core::conversation::model::Conversation,
+    bob: UserId,
+    carol: UserId,
+    filed: FiledLocally,
+) -> crate::host::outbox::HostEventWriter {
+    use rim_core::user::model::User;
+
+    use crate::host::outbox::{HostEventWriter, PeerBacklogs, RefusalCache};
+
+    let ada = group.created_by.expect("creator");
+    let mut host = MockHostRepository::new();
+    host.expect_next_stream_seq()
+        .returning(|_, _| Box::pin(async { Ok(1) }));
+    let mut delegations = MockDelegationRepository::new();
+    delegations
+        .expect_delegated_members()
+        .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+    delegations
+        .expect_delegated_relays()
+        .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+    let stored = group.clone();
+    let mut conversations = MockConversationRepository::new();
+    conversations.expect_get_by_id().returning(move |id| {
+        let found = (id == stored.id).then(|| stored.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    let mut members = MockConversationMemberRepository::new();
+    members
+        .expect_list_member_ids()
+        .returning(move |_| Box::pin(async move { Ok(vec![ada, bob, carol]) }));
+    let user = |id: UserId, principal: &str| User {
+        id,
+        username: principal.to_string(),
+        password_hash: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        last_login_at: None,
+        display_name: None,
+        avatar_url: None,
+        status_text: None,
+        bio: None,
+        email: None,
+        timezone: None,
+        principal_id: Some(principal.to_string()),
+        deletion_scheduled_for: None,
+        handle: rim_core::user::model::UserHandle::Local,
+    };
+    let mut users = MockUserRepository::new();
+    let all = vec![user(ada, ALICE), user(bob, BOB), user(carol, "rimp1_carol")];
+    let by_id = all.clone();
+    users
+        .expect_get_by_id()
+        .returning(move |id| Ok(by_id.iter().find(|u| u.id == id).cloned()));
+    users.expect_get_by_ids().returning(move |ids| {
+        Ok(all
+            .iter()
+            .filter(|u| ids.contains(&u.id))
+            .cloned()
+            .collect())
+    });
+    let mut keys = MockKeyIdentityRepository::new();
+    keys.expect_get_profile_card().returning(move |user_id| {
+        Box::pin(async move {
+            Ok(Some(StoredProfileCard {
+                user_id,
+                version: 1,
+                payload: "{}".to_string(),
+                signature: "ed25519:c".to_string(),
+                updated_at: Utc::now(),
+            }))
+        })
+    });
+    let mut relay = rim_services::relay::service::MockRelayService::new();
+    relay
+        .expect_file_local()
+        .returning(move |envelope, recipients| {
+            let event = rim_s2s::host::read_host_event(&rim_identity::SignedStatement {
+                payload: envelope.payload,
+                signature: envelope.signature,
+            })
+            .expect("host event");
+            let kind = event.event["type"].as_str().unwrap_or_default().to_string();
+            let from = event.event["from_principal_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            filed.lock().expect("lock").push((recipients, kind, from));
+            Box::pin(async { Ok(()) })
+        });
+    relay
+        .expect_pending_holders()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    let mut default_workspace = rim_services::default_workspace::MockDefaultWorkspaceService::new();
+    default_workspace
+        .expect_current()
+        .returning(move || Box::pin(async move { Ok(Some(lobby)) }));
+    HostEventWriter::new(
+        HostRepos {
+            host_repo: Arc::new(host),
+            relay_repo: Arc::new(MockRelayRepository::new()),
+            key_identity_repo: Arc::new(keys),
+            e2ee_repo: Arc::new(MockE2eeRepository::new()),
+            user_repo: Arc::new(users),
+            conversation_repo: Arc::new(conversations),
+            conversation_member_repo: Arc::new(members),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            delegation_repo: Arc::new(delegations),
+            session_repo: Arc::new(rim_core::auth::repository::MockSessionRepository::new()),
+            relay_abuse_repo: Arc::new(blocks(&[])),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
+        },
+        None,
+        identity(30),
+        ServerId::from(Uuid::from_u128(5)),
+        Arc::new(RefusalCache::default()),
+        Arc::new(PeerBacklogs::new(Duration::hours(24))),
+        Arc::new(tokio::sync::Notify::new()),
+    )
+    .with_relay(Arc::new(relay))
+    .with_default_workspace(Arc::new(default_workspace))
+}
+
+#[tokio::test]
+async fn a_group_of_the_default_workspace_reaches_its_local_members_as_an_invite() {
+    use rim_services::events::WorkspaceEvent;
+
+    let lobby = ServerId::from(Uuid::from_u128(7));
+    let elsewhere = ServerId::from(Uuid::from_u128(8));
+    for (workspace, invited) in [(lobby, true), (elsewhere, false)] {
+        let mut group = group_in(workspace);
+        group.encrypted_at = None;
+        let (ada, bob, carol) = (
+            group.created_by.expect("creator"),
+            UserId::new(),
+            UserId::new(),
+        );
+        let filed = Arc::default();
+        let writer = default_workspace_writer(lobby, group.clone(), bob, carol, Arc::clone(&filed));
+        writer
+            .write(&WorkspaceEvent::ConversationCreated {
+                workspace_id: workspace,
+                conversation_id: group.id,
+                title: None,
+                conversation_type: rim_core::conversation::model::ConversationType::Group
+                    .as_str()
+                    .to_string(),
+                member_user_ids: vec![ada, bob],
+                is_private: false,
+            })
+            .await
+            .expect("written");
+        writer
+            .write(&WorkspaceEvent::MemberAddedToConversation {
+                workspace_id: workspace,
+                conversation_id: group.id,
+                user_id: carol,
+                member_user_ids: vec![ada, bob, carol],
+                added_by: Some(bob),
+            })
+            .await
+            .expect("written");
+        let filed = filed.lock().expect("lock").clone();
+        if invited {
+            let invite = |to: &str, from: &str| {
+                (
+                    vec![to.to_string()],
+                    "DmInvite".to_string(),
+                    from.to_string(),
+                )
+            };
+            assert_eq!(
+                filed,
+                vec![invite(BOB, ALICE), invite("rimp1_carol", BOB)],
+                "an added member's invite comes from whoever added them"
+            );
+        } else {
+            assert!(filed.is_empty(), "{filed:?}");
+        }
+    }
 }

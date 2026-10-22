@@ -7,7 +7,8 @@
 //! one; a contact added on one's own still counts against the daily invites to other servers,
 //! while someone whose DM request was accepted does not; a partner server's people reach this
 //! one's while a server that is not a partner reads no identity; a member who leaves a group
-//! they accepted keeps no accepted request for it.
+//! they accepted keeps no accepted request for it; a group of the default workspace reaches each
+//! member as their DM settings say, and never one who blocked its starter.
 //!
 //! Run with:
 //! ```sh
@@ -596,6 +597,86 @@ async fn a_member_who_leaves_a_group_they_accepted_keeps_no_accepted_request() {
     })
     .await;
     assert!(!listed(&bob, &direct).await.contains(&group));
+
+    a.stop().await;
+}
+
+/// In the server's default workspace a group is started like a DM with each newcomer: one who
+/// takes the workspace's DMs as requests gets it in their request inbox, one who takes them
+/// directly sees it at once, and accepting the request lists it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_default_workspace_group_reaches_each_member_as_their_dm_settings_say() {
+    let (database, _) = databases_with(RESET).await;
+    let ctx = support::TestCtx::new().await;
+    let lobby = ctx.create_server("Lobby").await.id.to_string();
+    let a = start(&database, |c| {
+        open_registration(c);
+        c.default_workspace = Some(lobby.clone());
+    })
+    .await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    carol
+        .ok(&set_members(), json!({ "s": lobby, "m": "REQUESTS" }))
+        .await;
+    let (alice_id, carol_id) = (
+        user_id(&a, &alice.principal()).await,
+        user_id(&a, &carol.principal()).await,
+    );
+
+    let group = created(
+        &bob.post(
+            CREATE,
+            json!({ "input": {
+                "serverId": lobby,
+                "memberIds": [alice_id.to_string(), carol_id.to_string()],
+            } }),
+        )
+        .await,
+    );
+    let request = carol.pending_request(&bob).await;
+    assert_eq!(request["conversationId"], json!(group));
+    assert!(
+        !listed(&carol, &lobby).await.contains(&group),
+        "a request is not a live conversation"
+    );
+    assert!(listed(&alice, &lobby).await.contains(&group));
+
+    carol
+        .ok(
+            "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+            json!({ "id": request["id"] }),
+        )
+        .await;
+    assert!(listed(&carol, &lobby).await.contains(&group));
+
+    // Dave blocked Bob: Bob neither starts a group with him nor adds him to one.
+    let dave = sign_up(&a, "dave", 4).await;
+    dave.ok(
+        "mutation($p: String!) { blockPrincipal(principalId: $p) }",
+        json!({ "p": bob.principal() }),
+    )
+    .await;
+    let dave_id = user_id(&a, &dave.principal()).await;
+    let refused = bob
+        .post(
+            CREATE,
+            json!({ "input": {
+                "serverId": lobby,
+                "memberIds": [alice_id.to_string(), dave_id.to_string()],
+            } }),
+        )
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+    let refused = bob
+        .post(
+            "mutation($s: ID!, $c: ID!, $u: [ID!]!) { \
+             addConversationMembers(serverId: $s, conversationId: $c, userIds: $u) { id } }",
+            json!({ "s": lobby, "c": group, "u": [dave_id.to_string()] }),
+        )
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
 
     a.stop().await;
 }

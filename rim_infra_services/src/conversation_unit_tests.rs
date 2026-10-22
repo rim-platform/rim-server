@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
     use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
@@ -44,6 +45,29 @@ mod tests {
             .expect_current()
             .returning(move || Box::pin(async move { Ok(current) }));
         service
+    }
+
+    /// A request gate that records the users of each call and refuses any of `refuses`.
+    fn request_gate(
+        calls: Arc<Mutex<Vec<Vec<UserId>>>>,
+        refuses: Vec<UserId>,
+    ) -> rim_services::host::service::MockHostService {
+        let mut gate = rim_services::host::service::MockHostService::new();
+        gate.expect_ensure_may_request_group()
+            .returning(move |_, _, user_ids| {
+                let refused = user_ids.iter().any(|id| refuses.contains(id));
+                calls.lock().expect("lock").push(user_ids);
+                Box::pin(async move {
+                    if refused {
+                        Err(ServiceError::Forbidden(
+                            "their DM settings refuse it".to_string(),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+            });
+        gate
     }
 
     fn base_repos() -> (
@@ -689,6 +713,10 @@ mod tests {
         default_workspace: bool,
         /// The unarchived channels the workspace holds.
         channels: u64,
+        /// The users each request gate call named.
+        gate_calls: Arc<Mutex<Vec<Vec<UserId>>>>,
+        /// Users the request gate refuses, as their DM settings would.
+        gate_refuses: Vec<UserId>,
     }
 
     impl Fx {
@@ -712,7 +740,56 @@ mod tests {
                 cleared_notifications: Arc::default(),
                 default_workspace: false,
                 channels: 0,
+                gate_calls: Arc::default(),
+                gate_refuses: vec![],
             }
+        }
+
+        fn created_by(mut self, user: UserId) -> Self {
+            self.conversation.created_by = Some(user);
+            self
+        }
+
+        /// The request gate refuses `users`.
+        fn gate_refuses(mut self, users: &[UserId]) -> Self {
+            self.gate_refuses.extend_from_slice(users);
+            self
+        }
+
+        fn gate_calls(&self) -> Vec<Vec<UserId>> {
+            self.gate_calls.lock().expect("lock").clone()
+        }
+
+        async fn set_topic(&self, actor: UserId) -> Result<(), ServiceError> {
+            self.service()
+                .update_topic(UpdateConversationTopicCmd {
+                    actor: Actor::new(actor),
+                    server_id: self.server_id,
+                    conversation_id: self.conversation.id,
+                    topic: Some("news".to_string()),
+                })
+                .await
+                .map(|_| ())
+        }
+
+        async fn create_group(
+            &self,
+            actor: UserId,
+            members: &[UserId],
+        ) -> Result<(), ServiceError> {
+            self.service()
+                .create_conversation(CreateConversationCmd {
+                    actor: Actor::new(actor),
+                    server_id: self.server_id,
+                    participants: ConversationParticipants::Group {
+                        member_ids: members.to_vec(),
+                    },
+                    title: None,
+                    is_private: false,
+                    encrypted: false,
+                })
+                .await
+                .map(|_| ())
         }
 
         /// Makes the workspace the server's default workspace.
@@ -1012,6 +1089,10 @@ mod tests {
             .with_limits(self.limits)
             .with_default_workspace(Arc::new(default_workspace_service(
                 self.default_workspace.then_some(self.server_id),
+            )))
+            .with_request_gate(Arc::new(request_gate(
+                Arc::clone(&self.gate_calls),
+                self.gate_refuses.clone(),
             )))
         }
 
@@ -1549,6 +1630,180 @@ mod tests {
         create(&fx(false), member, true)
             .await
             .expect("a member creates channels in any other workspace");
+    }
+
+    #[tokio::test]
+    async fn a_channel_topic_is_changed_by_staff_or_a_private_channels_creator() {
+        let [member, moderator, owner] = users();
+        let fx = |kind, private: bool| {
+            Fx::new(kind, private, &[member, moderator, owner])
+                .with_workspace_member(member, ServerMemberRole::Member)
+                .with_workspace_member(moderator, ServerMemberRole::Moderator)
+                .with_workspace_member(owner, ServerMemberRole::Owner)
+        };
+        assert!(matches!(
+            fx(ConversationType::Channel, false).set_topic(member).await,
+            Err(ServiceError::Forbidden(m)) if m.contains("only the owner and moderators")
+        ));
+        assert!(matches!(
+            fx(ConversationType::Channel, true).set_topic(member).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        for actor in [moderator, owner] {
+            fx(ConversationType::Channel, false)
+                .set_topic(actor)
+                .await
+                .expect("staff");
+        }
+        fx(ConversationType::Channel, true)
+            .created_by(member)
+            .set_topic(member)
+            .await
+            .expect("the private channel's creator");
+        fx(ConversationType::Group, false)
+            .set_topic(member)
+            .await
+            .expect("a group's member");
+    }
+
+    #[tokio::test]
+    async fn in_the_default_workspace_only_staff_and_a_private_channels_creator_add_to_a_channel() {
+        let [member, moderator, newcomer] = users();
+        let fx = |private: bool, default: bool| {
+            let fx = Fx::new(ConversationType::Channel, private, &[member, moderator])
+                .with_workspace_member(member, ServerMemberRole::Member)
+                .with_workspace_member(moderator, ServerMemberRole::Moderator)
+                .with_workspace_member(newcomer, ServerMemberRole::Member);
+            if default { fx.default_workspace() } else { fx }
+        };
+        assert!(matches!(
+            fx(false, true).invite(member, &[newcomer]).await,
+            Err(ServiceError::Forbidden(m)) if m.contains("only the owner, moderators")
+        ));
+        assert!(matches!(
+            fx(true, true).invite(member, &[newcomer]).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        fx(false, true)
+            .invite(moderator, &[newcomer])
+            .await
+            .expect("a moderator");
+        fx(true, true)
+            .created_by(member)
+            .invite(member, &[newcomer])
+            .await
+            .expect("the private channel's creator");
+        let elsewhere = fx(false, false);
+        elsewhere
+            .invite(member, &[newcomer])
+            .await
+            .expect("any member elsewhere");
+        assert!(elsewhere.gate_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn adding_to_a_group_of_the_default_workspace_is_capped_and_asks_the_request_gate() {
+        let [alice, bob, carol, dave] = users();
+        let many: Vec<UserId> = (0..49).map(|_| UserId::new()).collect();
+        let group = |default: bool| {
+            let mut fx = Fx::new(ConversationType::Group, false, &[alice, bob])
+                .with_workspace_member(alice, ServerMemberRole::Member)
+                .with_workspace_member(bob, ServerMemberRole::Member)
+                .with_workspace_member(carol, ServerMemberRole::Member)
+                .with_workspace_member(dave, ServerMemberRole::Member)
+                .gate_refuses(&[dave]);
+            for &user in &many {
+                fx = fx.with_workspace_member(user, ServerMemberRole::Member);
+            }
+            if default { fx.default_workspace() } else { fx }
+        };
+
+        let fx = group(true);
+        let too_many: Vec<UserId> = (0..51).map(|_| UserId::new()).collect();
+        assert!(matches!(
+            fx.invite(alice, &too_many).await,
+            Err(ServiceError::Validation(m)) if m.contains("at most 50 people")
+        ));
+        assert!(matches!(
+            fx.invite(alice, &many).await,
+            Err(ServiceError::Validation(m)) if m.contains("at most 50 members")
+        ));
+        assert!(matches!(
+            fx.invite(alice, &[bob, dave]).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        fx.invite(alice, &[bob, carol]).await.expect("carol joins");
+        assert_eq!(fx.gate_calls(), vec![vec![dave], vec![carol]]);
+        assert_eq!(fx.members(), vec![alice, bob, carol]);
+
+        let elsewhere = group(false);
+        elsewhere
+            .invite(alice, &many)
+            .await
+            .expect("fifty-one members elsewhere");
+        assert!(elsewhere.gate_calls().is_empty());
+
+        let hundred: Vec<UserId> = (0..99).map(|_| UserId::new()).collect();
+        let mut big = Fx::new(ConversationType::Group, false, &[alice, bob])
+            .with_workspace_member(alice, ServerMemberRole::Member);
+        for &user in &hundred {
+            big = big.with_workspace_member(user, ServerMemberRole::Member);
+        }
+        assert!(matches!(
+            big.invite(alice, &hundred).await,
+            Err(ServiceError::Validation(m)) if m == "a group has at most 100 members"
+        ));
+    }
+
+    #[tokio::test]
+    async fn starting_a_group_in_the_default_workspace_is_capped_and_asks_the_request_gate() {
+        let [alice, bob, dave] = users();
+        let many: Vec<UserId> = (0..50).map(|_| UserId::new()).collect();
+        let fx = |default: bool| {
+            let mut fx = Fx::new(ConversationType::Group, false, &[])
+                .with_workspace_member(alice, ServerMemberRole::Member)
+                .with_workspace_member(bob, ServerMemberRole::Member)
+                .with_workspace_member(dave, ServerMemberRole::Member)
+                .gate_refuses(&[dave]);
+            for &user in &many {
+                fx = fx.with_workspace_member(user, ServerMemberRole::Member);
+            }
+            if default { fx.default_workspace() } else { fx }
+        };
+
+        let default = fx(true);
+        let mut fifty_one = many.clone();
+        fifty_one.push(bob);
+        assert!(matches!(
+            default.create_group(alice, &fifty_one).await,
+            Err(ServiceError::Validation(m)) if m.contains("at most 50 people")
+        ));
+        assert!(matches!(
+            default.create_group(alice, &many).await,
+            Err(ServiceError::Validation(m)) if m.contains("at most 50 members")
+        ));
+        assert!(matches!(
+            default.create_group(alice, &[bob, dave]).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        default.create_group(alice, &[bob]).await.expect("created");
+        let asked: Vec<HashSet<UserId>> = default
+            .gate_calls()
+            .into_iter()
+            .map(|ids| ids.into_iter().collect())
+            .collect();
+        assert_eq!(
+            asked,
+            vec![HashSet::from([bob, dave]), HashSet::from([bob])],
+            "the creator is never asked about"
+        );
+
+        let elsewhere = fx(false);
+        elsewhere
+            .create_group(alice, &many)
+            .await
+            .expect("no cap elsewhere");
+        assert!(elsewhere.gate_calls().is_empty());
     }
 
     #[tokio::test]
