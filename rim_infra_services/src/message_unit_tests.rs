@@ -1515,6 +1515,19 @@ mod tests {
         assert!(rows.is_empty());
     }
 
+    /// Who deletes the author's message in a DM, and what stands behind them.
+    #[derive(Clone, Copy)]
+    struct ReportedDelete {
+        role: rim_core::server_member::model::ServerMemberRole,
+        verified_report: bool,
+        /// Whether the DM is in the relay's direct space.
+        direct_space: bool,
+        /// Whether the actor is an instance operator.
+        operator: bool,
+        /// Whether the actor is a member of the DM.
+        in_conversation: bool,
+    }
+
     /// The author's message in a DM `actor` is not in, deleted by `actor` holding `role`, with
     /// or without a verified franked report of it; returns the result and the audit rows.
     async fn delete_outside_as(
@@ -1524,6 +1537,30 @@ mod tests {
         Result<(), ServiceError>,
         Vec<rim_services::audit::dto::AuditLogEntryDto>,
     ) {
+        delete_reported(ReportedDelete {
+            role,
+            verified_report,
+            direct_space: false,
+            operator: false,
+            in_conversation: false,
+        })
+        .await
+    }
+
+    /// The author's message deleted as `who` says; returns the result and the audit rows.
+    async fn delete_reported(
+        who: ReportedDelete,
+    ) -> (
+        Result<(), ServiceError>,
+        Vec<rim_services::audit::dto::AuditLogEntryDto>,
+    ) {
+        let ReportedDelete {
+            role,
+            verified_report,
+            direct_space,
+            operator,
+            in_conversation,
+        } = who;
         let server_id = ServerId::new();
         let mut conv = conversation(server_id);
         conv.conversation_type = rim_core::conversation::model::ConversationType::Direct;
@@ -1553,7 +1590,7 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(vec![]) }));
         conversation_member_repo
             .expect_is_member()
-            .returning(|_, _| Box::pin(async { Ok(false) }));
+            .returning(move |_, _| Box::pin(async move { Ok(in_conversation) }));
         let mut message_repo = MockMessageRepository::new();
         message_repo.expect_get_by_id().returning(move |_| {
             let m = msg.clone();
@@ -1567,6 +1604,10 @@ mod tests {
             .expect_has_verified_report()
             .withf(move |s, m| *s == server_id && *m == msg_id)
             .returning(move |_, _| Box::pin(async move { Ok(verified_report) }));
+        let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_is_instance_operator()
+            .returning(move |_| Ok(operator));
 
         let audit = Arc::new(RecordingAudit::default());
         let svc = DefaultMessageService::new(
@@ -1578,7 +1619,7 @@ mod tests {
                 message_mention_repo: Arc::new(MockMessageMentionRepository::new()),
                 message_thread_repo: Arc::new(MockMessageThreadRepository::new()),
                 server_member_repo: Arc::new(server_member_repo),
-                user_repo: Arc::new(MockUserRepository::new()),
+                user_repo: Arc::new(user_repo),
             },
             None,
             test_observers(),
@@ -1586,7 +1627,8 @@ mod tests {
         .with_audit_log_service(
             Arc::clone(&audit) as Arc<dyn rim_services::audit::service::AuditLogService>
         )
-        .with_moderation_repo(Arc::new(moderation_repo));
+        .with_moderation_repo(Arc::new(moderation_repo))
+        .with_direct_space(direct_space.then_some(server_id));
         let res = svc
             .delete_message(DeleteMessageCmd {
                 actor: Actor::new(actor),
@@ -1624,6 +1666,66 @@ mod tests {
                 "{role:?}"
             );
             assert!(rows.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_verified_report_lets_an_operator_delete_in_the_direct_space_only() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        let operator = ReportedDelete {
+            role: ServerMemberRole::Guest,
+            verified_report: true,
+            direct_space: true,
+            operator: true,
+            in_conversation: false,
+        };
+        for who in [
+            operator,
+            ReportedDelete {
+                in_conversation: true,
+                ..operator
+            },
+        ] {
+            let (res, rows) = delete_reported(who).await;
+            res.expect("operator delete");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].command_id, "admin.delete_message");
+        }
+        for (who, case) in [
+            (
+                ReportedDelete {
+                    verified_report: false,
+                    ..operator
+                },
+                "without a report",
+            ),
+            (
+                ReportedDelete {
+                    operator: false,
+                    ..operator
+                },
+                "a guest who is no operator",
+            ),
+            (
+                ReportedDelete {
+                    operator: false,
+                    in_conversation: true,
+                    ..operator
+                },
+                "a member of the DM who is no operator",
+            ),
+            (
+                ReportedDelete {
+                    direct_space: false,
+                    ..operator
+                },
+                "an operator in a workspace",
+            ),
+        ] {
+            let (res, rows) = delete_reported(who).await;
+            assert!(matches!(res, Err(ServiceError::PermissionDenied)), "{case}");
+            assert!(rows.is_empty(), "{case}");
         }
     }
 

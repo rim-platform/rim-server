@@ -47,9 +47,11 @@ use rim_services::moderation::service::ModerationService;
 use rim_services::moderation::{
     FRANKED_CONTENT_RETENTION_DAYS, MAX_SLOW_MODE_SECONDS, MAX_TIMEOUT_DAYS,
 };
+use rim_services::operator::OperatorCaller;
 use rim_services::server_member::dto::ServerMemberDto;
-use rim_services::{ServiceError, ServiceResult};
+use rim_services::{Actor, ServiceError, ServiceResult};
 
+use crate::operator::require_operator;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_in_server, ensure_conversation_member_access,
     ensure_not_archived,
@@ -251,6 +253,9 @@ pub struct DefaultModerationService {
     observers: Observers,
     /// `None` in unit tests; the composition root always wires it.
     audit_log_service: Option<Arc<dyn AuditLogService>>,
+    /// The relay's direct space, whose reports the instance operators handle. `None` where no
+    /// direct space is wired.
+    direct_space_id: Option<ServerId>,
 }
 
 impl DefaultModerationService {
@@ -259,7 +264,14 @@ impl DefaultModerationService {
             repos,
             observers,
             audit_log_service: None,
+            direct_space_id: None,
         }
+    }
+
+    /// Let the instance operators list, view and resolve the reports of the direct space.
+    pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
     }
 
     pub fn with_audit_log_service(mut self, audit_log_service: Arc<dyn AuditLogService>) -> Self {
@@ -303,6 +315,26 @@ impl DefaultModerationService {
             return Err(ServiceError::PermissionDenied);
         }
         Ok(member)
+    }
+
+    /// `Ok(())` when `actor` handles the reports of `server_id`: an instance operator for the
+    /// direct space, where everyone is a guest, and an Owner or Moderator for any other
+    /// workspace.
+    ///
+    /// # Errors
+    /// `Forbidden` for anyone but an operator in the direct space, `PermissionDenied` for
+    /// anyone but an Owner or Moderator elsewhere.
+    async fn ensure_report_moderator(
+        &self,
+        server_id: ServerId,
+        actor: Actor,
+    ) -> ServiceResult<()> {
+        if self.direct_space_id == Some(server_id) {
+            return require_operator(self.repos.user_repo.as_ref(), OperatorCaller::User(actor))
+                .await;
+        }
+        self.actor_moderator(server_id, actor.user_id).await?;
+        Ok(())
     }
 
     /// Shared prologue of kick/ban/timeout: the actor is a moderator, does not target
@@ -554,10 +586,10 @@ impl DefaultModerationService {
             .collect())
     }
 
-    /// The report, which must belong to a workspace where `actor` is Owner or Moderator.
+    /// The report, which must belong to a workspace whose reports `actor` handles.
     async fn moderated_report(
         &self,
-        actor: UserId,
+        actor: Actor,
         report_id: rim_core::moderation::model::MessageReportId,
     ) -> ServiceResult<MessageReport> {
         let report = self
@@ -566,7 +598,8 @@ impl DefaultModerationService {
             .get_report(report_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
-        self.actor_moderator(report.server_id, actor).await?;
+        self.ensure_report_moderator(report.server_id, actor)
+            .await?;
         Ok(report)
     }
 }
@@ -963,7 +996,7 @@ impl ModerationService for DefaultModerationService {
         &self,
         query: ListReportsQuery,
     ) -> ServiceResult<Page<MessageReportDto, ReportPageCursor>> {
-        self.actor_moderator(query.server_id, query.actor.user_id)
+        self.ensure_report_moderator(query.server_id, query.actor)
             .await?;
         let page = self
             .repos
@@ -987,7 +1020,7 @@ impl ModerationService for DefaultModerationService {
     }
 
     async fn resolve_report(&self, cmd: ResolveReportCmd) -> ServiceResult<MessageReportDto> {
-        self.actor_moderator(cmd.server_id, cmd.actor.user_id)
+        self.ensure_report_moderator(cmd.server_id, cmd.actor)
             .await?;
         let report = self
             .repos
@@ -1032,7 +1065,7 @@ impl ModerationService for DefaultModerationService {
     }
 
     async fn get_report(&self, query: GetReportQuery) -> ServiceResult<MessageReportDto> {
-        self.actor_moderator(query.server_id, query.actor.user_id)
+        self.ensure_report_moderator(query.server_id, query.actor)
             .await?;
         let report = self
             .repos
@@ -1077,11 +1110,11 @@ impl ModerationService for DefaultModerationService {
         query: AuthorizeReportAttachmentQuery,
     ) -> ServiceResult<ReportAttachmentDto> {
         let not_found = |e: ServiceError| match e {
-            ServiceError::PermissionDenied => ServiceError::NotFound,
+            ServiceError::PermissionDenied | ServiceError::Forbidden(_) => ServiceError::NotFound,
             e => e,
         };
         let report = self
-            .moderated_report(query.actor_user_id, query.report_id)
+            .moderated_report(Actor::new(query.actor_user_id), query.report_id)
             .await
             .map_err(not_found)?;
         let franked = report.franked.ok_or(ServiceError::NotFound)?;

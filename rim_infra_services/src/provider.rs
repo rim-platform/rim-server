@@ -269,6 +269,7 @@ impl DefaultAppServiceProvider {
             franking_keys.clone(),
         )
         .with_moderation_repo(Arc::clone(&repos.moderation_repo))
+        .with_direct_space(federation.direct_space_id)
         .with_limits(limits)
         .with_handle_domain(federation.handle_domain.clone());
         if let Some(rate) = federation.quotas.messages {
@@ -299,7 +300,8 @@ impl DefaultAppServiceProvider {
                 repos.for_moderation(),
                 observers.clone(),
             )
-            .with_audit_log_service(Arc::clone(&audit_log_service)),
+            .with_audit_log_service(Arc::clone(&audit_log_service))
+            .with_direct_space(federation.direct_space_id),
         );
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
             crate::message_attachment::DefaultMessageAttachmentService::new(

@@ -424,7 +424,8 @@ fn signup_inputs_take_the_accepted_terms_last() {
 fn instance_moderation_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
-        "instanceReports( openOnly: Boolean! = true ): [InstanceAbuseReport!]!",
+        "instanceReports( openOnly: Boolean! = true, after: ID, limit: Int! = 100 ): \
+         [InstanceAbuseReport!]!",
         "instancePrincipalBlocks: [InstancePrincipalBlock!]!",
         "instanceIpBlocks: [InstanceIpBlock!]!",
         "instanceBlockPrincipal( principalId: String!, reason: String!, cascade: Boolean! = \

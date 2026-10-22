@@ -368,6 +368,31 @@ impl TestCtx {
         (schema, provider)
     }
 
+    /// Build the schema and the provider it runs on with `direct` as the relay's direct space,
+    /// as the composition root wires the one it creates at start.
+    pub fn build_with_direct_space(
+        &self,
+        direct: rim_core::server::model::ServerId,
+    ) -> (rim_api::AppSchema, std::sync::Arc<dyn AppServiceProvider>) {
+        let (provider, observers) = test_provider(
+            &self.conn,
+            std::sync::Arc::new(NoopBroadcaster),
+            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
+            rim_infra_services::FederationHooks {
+                direct_space_id: Some(direct),
+                ..Default::default()
+            },
+            rim_services::limits::InstanceLimits::default(),
+        );
+        let provider: std::sync::Arc<dyn AppServiceProvider> = std::sync::Arc::new(provider);
+        let schema = schema_for(
+            std::sync::Arc::clone(&provider),
+            observers,
+            rim_services::auth::dto::RegistrationMode::InviteOnly,
+        );
+        (schema, provider)
+    }
+
     /// Build the schema and the provider it runs on with the instance caps `limits`, recording
     /// every event the services emit.
     pub fn build_with_limits(

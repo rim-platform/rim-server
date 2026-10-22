@@ -508,8 +508,8 @@ async fn read_stored_file(
 /// GET /api/reports/{report_id}/attachments/{blob_sha256}
 ///
 /// Serves the encrypted blob of an attachment of a reported encrypted message to an
-/// Owner/Moderator of the report's workspace, who decrypts it with the secret from the
-/// report's verified content. `blob_sha256` is unpadded base64url. Every refusal is a bare 404.
+/// Owner/Moderator of the report's workspace, or an instance operator for a report of the
+/// direct space, who decrypts it with the secret from the report's verified content. `blob_sha256` is unpadded base64url. Every refusal is a bare 404.
 pub async fn handle_report_attachment_download(
     req: HttpRequest,
     path: web::Path<(String, String)>,

@@ -133,6 +133,9 @@ pub struct DefaultMessageService {
     /// Lets a moderator delete a message with a verified report outside its conversation.
     /// `None` in unit tests that are not about it; the composition root wires it.
     moderation_repo: Option<Arc<dyn ModerationRepository>>,
+    /// The relay's direct space, where an instance operator deletes a message with a verified
+    /// report. `None` where no direct space is wired.
+    direct_space_id: Option<rim_core::server::model::ServerId>,
     /// Messages each user may send per minute, across every way of creating one. `None` sets
     /// no limit.
     message_budget: Option<Arc<TokenBucketLimiter<UserId>>>,
@@ -156,6 +159,7 @@ impl DefaultMessageService {
             notification_service: None,
             e2ee: None,
             moderation_repo: None,
+            direct_space_id: None,
             message_budget: None,
             probation_budget: None,
             limits: InstanceLimits::default(),
@@ -262,28 +266,44 @@ impl DefaultMessageService {
         self
     }
 
-    /// The conversation and the actor's standing when an Owner/Moderator who cannot read the
-    /// conversation deletes a message with a verified franked report; `None` otherwise.
+    /// Let an instance operator delete a message of the direct space that has a verified
+    /// report.
+    pub fn with_direct_space(
+        mut self,
+        direct_space_id: Option<rim_core::server::model::ServerId>,
+    ) -> Self {
+        self.direct_space_id = direct_space_id;
+        self
+    }
+
+    /// Whether the actor may delete the message for its verified franked report: an
+    /// Owner/Moderator of the workspace, or an instance operator in the direct space.
+    async fn may_delete_reported(&self, cmd: &DeleteMessageCmd) -> ServiceResult<bool> {
+        let Some(moderation_repo) = &self.moderation_repo else {
+            return Ok(false);
+        };
+        let handles_reports = if self.direct_space_id == Some(cmd.server_id) {
+            crate::operator::is_operator(self.repos.user_repo.as_ref(), cmd.actor).await?
+        } else {
+            self.repos
+                .server_member_repo
+                .get_member_standing(cmd.server_id, cmd.actor.user_id)
+                .await?
+                .is_some_and(|standing| standing.role.is_moderator())
+        };
+        Ok(handles_reports
+            && moderation_repo
+                .has_verified_report(cmd.server_id, cmd.message_id)
+                .await?)
+    }
+
+    /// The conversation when the actor, who cannot read it, may delete the message for its
+    /// verified franked report; `None` otherwise.
     async fn reported_message_reach(
         &self,
         cmd: &DeleteMessageCmd,
-    ) -> ServiceResult<Option<(Conversation, rim_core::server_member::model::MemberStanding)>> {
-        let Some(moderation_repo) = &self.moderation_repo else {
-            return Ok(None);
-        };
-        let Some(standing) = self
-            .repos
-            .server_member_repo
-            .get_member_standing(cmd.server_id, cmd.actor.user_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-        if !standing.role.is_moderator()
-            || !moderation_repo
-                .has_verified_report(cmd.server_id, cmd.message_id)
-                .await?
-        {
+    ) -> ServiceResult<Option<Conversation>> {
+        if !self.may_delete_reported(cmd).await? {
             return Ok(None);
         }
         let conv = crate::util::ensure_conversation_in_server(
@@ -292,7 +312,7 @@ impl DefaultMessageService {
             cmd.server_id,
         )
         .await?;
-        Ok(Some((conv, standing)))
+        Ok(Some(conv))
     }
 
     pub fn with_e2ee(
@@ -1865,11 +1885,11 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await;
-        let (conv, standing) = match readable {
-            Ok(reach) => reach,
+        let (conv, moderator) = match readable {
+            Ok((conv, standing)) => (conv, standing.role.is_moderator()),
             Err(e @ (ServiceError::PermissionDenied | ServiceError::NotFound)) => {
                 match self.reported_message_reach(&cmd).await? {
-                    Some(reach) => reach,
+                    Some(conv) => (conv, true),
                     None => return Err(e),
                 }
             }
@@ -1894,9 +1914,10 @@ impl MessageService for DefaultMessageService {
             return Err(ServiceError::NotFound);
         }
 
-        // The author, or an Owner/Moderator of the workspace.
+        // The author, an Owner/Moderator of the workspace, or whoever may delete it for its
+        // verified report.
         let moderator_delete = msg.sent_by != cmd.actor.user_id;
-        if moderator_delete && !standing.role.is_moderator() {
+        if moderator_delete && !moderator && !self.may_delete_reported(&cmd).await? {
             return Err(ServiceError::PermissionDenied);
         }
 

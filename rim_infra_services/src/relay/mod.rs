@@ -30,6 +30,7 @@ use rim_core::relay::model::{
     NewRelayItem, RelayItemRecord,
 };
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository, SubscriptionRepository};
+use rim_core::repository::error::RepoErrorKind;
 use rim_core::user::model::UserId;
 use rim_core::user::repository::UserRepository;
 use rim_identity::{ProfileCard, SignedStatement, UnverifiedDeviceRequest, is_principal_id};
@@ -1369,7 +1370,7 @@ impl RelayService for DefaultRelayService {
         if request.status == DmRequestStatus::Pending {
             self.ignore_dm_request(actor, id).await?;
         }
-        let report = self
+        let report = match self
             .repos
             .relay_abuse_repo
             .insert_report(NewAbuseReport {
@@ -1379,7 +1380,16 @@ impl RelayService for DefaultRelayService {
                 request_id: Some(request.id),
                 reason: reason.to_string(),
             })
-            .await?;
+            .await
+        {
+            Ok(report) => report,
+            Err(e) if matches!(e.kind(), RepoErrorKind::Conflict) => {
+                return Err(ServiceError::Conflict(
+                    "you already reported this request".to_string(),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
         info!(
             target: "audit",
             event = "relay.dm_request_reported",

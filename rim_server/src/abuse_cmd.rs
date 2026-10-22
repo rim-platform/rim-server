@@ -5,7 +5,7 @@
 //! rim_server principal unblock <principal-id>
 //! rim_server principal show <principal-id>
 //! rim_server principal list
-//! rim_server abuse-reports list [--open]
+//! rim_server abuse-reports list [--open] [--after <report-id>] [--limit <n>]
 //! rim_server abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text>
 //! rim_server abuse-reports resolve <report-id>
 //! ```
@@ -24,7 +24,8 @@ use rim_infra_services::AppRepos;
 use rim_infra_services::relay::abuse::DefaultRelayAbuseService;
 use rim_services::operator::OperatorCaller;
 use rim_services::relay::dto::{
-    AbuseReportDto, AccountSummaryDto, FileAbuseReport, PrincipalBlockOutcome, PrincipalRecordDto,
+    ABUSE_REPORT_PAGE, AbuseReportDto, AccountSummaryDto, FileAbuseReport, MAX_ABUSE_REPORT_PAGE,
+    PrincipalBlockOutcome, PrincipalRecordDto,
 };
 use rim_services::relay::service::RelayAbuseService;
 use sea_orm::Database;
@@ -37,7 +38,7 @@ const CLI: OperatorCaller = OperatorCaller::CommandLine;
 
 const USAGE: &str = "usage: rim_server principal block <principal-id> --reason <text> \
      [--cascade] | principal unblock <principal-id> | principal show <principal-id> | \
-     principal list | abuse-reports list [--open] | \
+     principal list | abuse-reports list [--open] [--after <report-id>] [--limit <n>] | \
      abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text> | \
      abuse-reports resolve <report-id>";
 
@@ -58,6 +59,8 @@ enum Command {
     ListBlocks,
     ListReports {
         open_only: bool,
+        after: Option<Uuid>,
+        limit: u32,
     },
     AddReport(FileAbuseReport),
     Resolve {
@@ -105,13 +108,35 @@ fn parse(group: &str, mut args: impl Iterator<Item = String>) -> Result<Command,
         ("principal", "list") => Command::ListBlocks,
         ("abuse-reports", "list") => {
             let mut open_only = false;
-            for flag in args.by_ref() {
+            let mut after = None;
+            let mut limit = ABUSE_REPORT_PAGE;
+            while let Some(flag) = args.next() {
                 match flag.as_str() {
                     "--open" => open_only = true,
+                    "--after" => {
+                        let id = value("--after", &mut args)?;
+                        after = Some(
+                            Uuid::parse_str(&id).map_err(|_| format!("{id} is not a report id"))?,
+                        );
+                    }
+                    "--limit" => {
+                        let n = value("--limit", &mut args)?;
+                        limit = n
+                            .parse()
+                            .ok()
+                            .filter(|n| (1..=MAX_ABUSE_REPORT_PAGE).contains(n))
+                            .ok_or_else(|| {
+                                format!("--limit takes 1 to {MAX_ABUSE_REPORT_PAGE}, not {n}")
+                            })?;
+                    }
                     other => return Err(format!("unknown argument: {other}")),
                 }
             }
-            return Ok(Command::ListReports { open_only });
+            return Ok(Command::ListReports {
+                open_only,
+                after,
+                limit,
+            });
         }
         ("abuse-reports", "add") => {
             let mut report = FileAbuseReport {
@@ -429,13 +454,23 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
                 );
             }
         }
-        Command::ListReports { open_only } => {
-            for report in service
-                .reports(CLI, open_only)
+        Command::ListReports {
+            open_only,
+            after,
+            limit,
+        } => {
+            let reports = service
+                .reports(CLI, open_only, after.map(AbuseReportId::from), limit)
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+            for report in &reports {
+                describe_report(&mut out, report);
+            }
+            if let Some(last) = reports
+                .last()
+                .filter(|_| reports.len() as u64 >= u64::from(limit))
             {
-                describe_report(&mut out, &report);
+                let _ = writeln!(out, "more: --after {}", last.id);
             }
         }
         Command::AddReport(report) => {
@@ -509,11 +544,31 @@ mod tests {
         assert_eq!(parse("principal", args(&["list"])), Ok(Command::ListBlocks));
         assert_eq!(
             parse("abuse-reports", args(&["list", "--open"])),
-            Ok(Command::ListReports { open_only: true })
+            Ok(Command::ListReports {
+                open_only: true,
+                after: None,
+                limit: ABUSE_REPORT_PAGE,
+            })
         );
         assert_eq!(
             parse("abuse-reports", args(&["list"])),
-            Ok(Command::ListReports { open_only: false })
+            Ok(Command::ListReports {
+                open_only: false,
+                after: None,
+                limit: ABUSE_REPORT_PAGE,
+            })
+        );
+        let after = Uuid::now_v7();
+        assert_eq!(
+            parse(
+                "abuse-reports",
+                args(&["list", "--after", &after.to_string(), "--limit", "20"])
+            ),
+            Ok(Command::ListReports {
+                open_only: false,
+                after: Some(after),
+                limit: 20,
+            })
         );
         assert_eq!(
             parse(
@@ -545,6 +600,9 @@ mod tests {
         assert!(parse("principal", args(&["show", P, "--cascade"])).is_err());
         assert!(parse("principal", args(&["list", "extra"])).is_err());
         assert!(parse("abuse-reports", args(&["list", "--all"])).is_err());
+        assert!(parse("abuse-reports", args(&["list", "--limit", "0"])).is_err());
+        assert!(parse("abuse-reports", args(&["list", "--limit", "501"])).is_err());
+        assert!(parse("abuse-reports", args(&["list", "--after", "x"])).is_err());
         assert!(parse("abuse-reports", args(&["add", "--reason", "x"])).is_err());
         assert!(parse("abuse-reports", args(&["add", "--principal", P])).is_err());
         assert!(parse("abuse-reports", args(&["resolve", "42"])).is_err());

@@ -43,6 +43,11 @@ other servers join when a local user adds them. Custom emojis, plugins, workspac
 pipelines, workspace state and channels answer `VALIDATION` ("not available in the direct
 space") there, reads and writes alike, and the refused call joins nobody.
 
+With no Owner or Moderator there, a report of a message in the direct space (`reportMessage`,
+`reportEncryptedMessage`) goes to the instance operators. They list, open and resolve these
+reports in the app with the workspace moderation roots and the direct space's id, and may delete
+a message with a verified report; nobody else can (`docs/api.md`, "Instance moderation").
+
 A conversation's home is the relay whose direct space holds it. The home sequences it: it stores
 the messages, Commits and Welcomes, and every member's app reads and writes there, through their
 own relay when it is elsewhere.
@@ -173,7 +178,7 @@ once.
 | `acceptDmRequest` | Held items released; later items flow; the sender becomes a contact |
 | `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days |
 | `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused |
-| `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored |
+| `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored. Once per user and request: a second report is `CONFLICT` |
 | Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request |
 
 Limits: 100 pending requests per recipient, `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
@@ -336,8 +341,11 @@ pins stay. The same job deletes cached identities of people on other servers 30 
 were fetched, except those of remote users held here. One origin holds at most 4 pins.
 
 **Abuse reports.** `reportDmRequest` in the app and reports that come by mail (`rim_server
-abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list` and
-`abuse-reports resolve` work through.
+abuse-reports add`) both end in `relay_abuse_report`, which `abuse-reports list` (oldest first,
+100 a page or up to 500 with `--limit`, `--after <report id>` for the next page) and
+`abuse-reports resolve` work through. Reports of messages in DMs and groups stay in
+`message_report` under the direct space, which the operators read in the app ("The direct
+space").
 
 ## For clients
 

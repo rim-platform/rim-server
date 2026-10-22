@@ -184,8 +184,9 @@ impl ModerationMutations {
         Ok(conversation.into())
     }
 
-    /// Report a message to the workspace moderators. Any member who can read it, once per
-    /// message (`CONFLICT` on a second report). Audited (`chat.report_message`).
+    /// Report a message to the workspace moderators, or in the direct space to the instance
+    /// operators. Any member who can read it, once per message (`CONFLICT` on a second
+    /// report). Audited (`chat.report_message`).
     async fn report_message(
         &self,
         ctx: &Context<'_>,
@@ -208,8 +209,8 @@ impl ModerationMutations {
         Ok(report.into())
     }
 
-    /// Close an open report as resolved or dismissed (Owner/Moderator). Audited
-    /// (`admin.resolve_report`).
+    /// Close an open report as resolved or dismissed (Owner/Moderator; for the direct space,
+    /// an instance operator). Audited (`admin.resolve_report`).
     async fn resolve_report(
         &self,
         ctx: &Context<'_>,

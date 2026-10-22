@@ -11,7 +11,9 @@ use tracing::{info, instrument};
 
 use rim_core::auth::repository::SessionRepository;
 use rim_core::key_identity::repository::KeyIdentityRepository;
-use rim_core::relay::model::{AbuseReport, AbuseReportId, NewAbuseReport, PrincipalBlock};
+use rim_core::relay::model::{
+    AbuseReport, AbuseReportFilter, AbuseReportId, NewAbuseReport, PrincipalBlock,
+};
 use rim_core::relay::repository::RelayAbuseRepository;
 use rim_core::user::model::{InviteKind, User, UserId};
 use rim_core::user::repository::UserRepository;
@@ -20,8 +22,8 @@ use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::operator::OperatorCaller;
 use rim_services::relay::dto::{
     AbuseReportDto, AccountRecordDto, AccountSummaryDto, CreatedInviteDto, FileAbuseReport,
-    InviteeDto, PrincipalBlockDto, PrincipalBlockOutcome, PrincipalRecordDto,
-    PrincipalUnblockOutcome,
+    InviteeDto, MAX_ABUSE_REPORT_PAGE, PrincipalBlockDto, PrincipalBlockOutcome,
+    PrincipalRecordDto, PrincipalUnblockOutcome,
 };
 use rim_services::relay::service::RelayAbuseService;
 use rim_services::session_revocation::SessionRevocations;
@@ -472,11 +474,13 @@ impl RelayAbuseService for DefaultRelayAbuseService {
         };
         let open_reports = repos
             .relay_abuse_repo
-            .list_reports(true)
-            .await?
-            .into_iter()
-            .filter(|r| r.subject_principal_id.as_deref() == Some(principal_id.as_str()))
-            .collect();
+            .list_reports(AbuseReportFilter {
+                open_only: true,
+                subject_principal_id: Some(principal_id.clone()),
+                after: None,
+                limit: u64::from(MAX_ABUSE_REPORT_PAGE),
+            })
+            .await?;
         let open_reports = Self::named_reports(repos, open_reports).await?;
         let account = match Self::account_of(repos, &principal_id).await? {
             Some(user) => {
@@ -585,9 +589,20 @@ impl RelayAbuseService for DefaultRelayAbuseService {
         &self,
         by: OperatorCaller,
         open_only: bool,
+        after: Option<AbuseReportId>,
+        limit: u32,
     ) -> ServiceResult<Vec<AbuseReportDto>> {
         self.check(by).await?;
-        let reports = self.repos.relay_abuse_repo.list_reports(open_only).await?;
+        let reports = self
+            .repos
+            .relay_abuse_repo
+            .list_reports(AbuseReportFilter {
+                open_only,
+                subject_principal_id: None,
+                after,
+                limit: u64::from(limit.clamp(1, MAX_ABUSE_REPORT_PAGE)),
+            })
+            .await?;
         Self::named_reports(&self.repos, reports).await
     }
 
@@ -772,7 +787,11 @@ mod tests {
                     }])
                 })
             });
-            abuse.expect_list_reports().returning(|_| {
+            let log = Arc::clone(&self.log);
+            abuse.expect_list_reports().returning(move |filter| {
+                log.lock()
+                    .unwrap()
+                    .push(format!("list reports {}", filter.limit));
                 let report = |principal: &str| AbuseReport {
                     id: AbuseReportId::new(),
                     reporter_user_id: None,
@@ -783,7 +802,15 @@ mod tests {
                     created_at: Utc::now(),
                     resolved_at: None,
                 };
-                let reports = vec![report(ADA), report(BOB)];
+                let reports = vec![report(ADA), report(BOB)]
+                    .into_iter()
+                    .filter(|r| {
+                        filter
+                            .subject_principal_id
+                            .as_ref()
+                            .is_none_or(|p| r.subject_principal_id.as_ref() == Some(p))
+                    })
+                    .collect::<Vec<_>>();
                 Box::pin(async move { Ok(reports) })
             });
 
@@ -1122,7 +1149,7 @@ mod tests {
             svc.principal_record(bob, ADA.to_string()).await.err(),
             svc.principal_blocks(bob).await.err(),
             svc.file_report(bob, report).await.err(),
-            svc.reports(bob, false).await.err(),
+            svc.reports(bob, false, None, 50).await.err(),
             svc.resolve_report(bob, AbuseReportId::new()).await.err(),
         ];
         for refusal in refusals {
@@ -1142,7 +1169,7 @@ mod tests {
             user_id: w.ada.id,
         });
         assert!(matches!(
-            w.service().reports(app, true).await,
+            w.service().reports(app, true, None, 50).await,
             Err(ServiceError::Forbidden(_))
         ));
     }
@@ -1164,7 +1191,10 @@ mod tests {
     async fn reports_and_blocks_name_the_accounts_holding_their_principals() {
         let w = World::new();
         let svc = w.service();
-        let reports = svc.reports(as_user(&w.ada), true).await.expect("reports");
+        let reports = svc
+            .reports(as_user(&w.ada), true, None, 50)
+            .await
+            .expect("reports");
         assert_eq!(
             reports
                 .iter()
@@ -1178,6 +1208,23 @@ mod tests {
         let blocks = svc.principal_blocks(CLI).await.expect("blocks");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].username.as_deref(), Some("ada"));
+    }
+
+    #[tokio::test]
+    async fn a_report_page_holds_one_to_the_most_reports() {
+        let w = World::new();
+        let svc = w.service();
+        for limit in [0, 7, 100_000] {
+            svc.reports(CLI, false, None, limit).await.expect("reports");
+        }
+        assert_eq!(
+            w.calls(),
+            vec![
+                "list reports 1".to_string(),
+                "list reports 7".to_string(),
+                format!("list reports {MAX_ABUSE_REPORT_PAGE}"),
+            ]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

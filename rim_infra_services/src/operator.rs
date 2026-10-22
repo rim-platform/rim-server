@@ -34,7 +34,10 @@ pub(crate) async fn require_operator(
 }
 
 /// Whether `actor` is a user, not an app or bot acting for one, whose account holds the role.
-async fn is_operator(user_repo: &dyn UserRepository, actor: Actor) -> ServiceResult<bool> {
+pub(crate) async fn is_operator(
+    user_repo: &dyn UserRepository,
+    actor: Actor,
+) -> ServiceResult<bool> {
     if actor.principal.kind != PrincipalKind::User {
         return Ok(false);
     }

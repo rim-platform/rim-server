@@ -217,11 +217,15 @@ pub trait RelayAbuseService: Send + Sync {
         report: FileAbuseReport,
     ) -> ServiceResult<AbuseReportDto>;
 
-    /// Reports, oldest first; only unresolved ones when `open_only`.
+    /// Reports, oldest first; only unresolved ones when `open_only`. A page of at most `limit`
+    /// (1 to [`MAX_ABUSE_REPORT_PAGE`](crate::relay::dto::MAX_ABUSE_REPORT_PAGE)), starting after
+    /// the report `after` when given.
     async fn reports(
         &self,
         by: OperatorCaller,
         open_only: bool,
+        after: Option<AbuseReportId>,
+        limit: u32,
     ) -> ServiceResult<Vec<AbuseReportDto>>;
 
     /// Mark a report resolved. `None` when there is no such report.

@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rim_core::relay::model::{AbuseReport, AbuseReportId, NewAbuseReport, PrincipalBlock};
+use rim_core::relay::model::{
+    AbuseReport, AbuseReportFilter, AbuseReportId, NewAbuseReport, PrincipalBlock,
+};
 use rim_core::relay::repository::RelayAbuseRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
@@ -179,13 +181,24 @@ impl RelayAbuseRepository for SeaOrmRelayAbuseRepository {
         .ok_or_else(|| RepoError::with_message(RepoErrorKind::Internal, "no report row"))
     }
 
-    async fn list_reports(&self, open_only: bool) -> RepoResult<Vec<AbuseReport>> {
+    async fn list_reports(&self, filter: AbuseReportFilter) -> RepoResult<Vec<AbuseReport>> {
+        let after: Option<Uuid> = filter.after.map(Into::into);
+        let limit = i64::try_from(filter.limit).unwrap_or(i64::MAX);
         Ok(ReportRow::find_by_statement(statement(
             &format!(
                 "SELECT {REPORT_COLUMNS} FROM relay_abuse_report \
-                 WHERE NOT $1 OR resolved_at IS NULL ORDER BY created_at, id"
+                 WHERE (NOT $1 OR resolved_at IS NULL) \
+                   AND ($2::text IS NULL OR subject_principal_id = $2) \
+                   AND ($3::uuid IS NULL OR (created_at, id) > \
+                        (SELECT created_at, id FROM relay_abuse_report WHERE id = $3)) \
+                 ORDER BY created_at, id LIMIT $4"
             ),
-            vec![open_only.into()],
+            vec![
+                filter.open_only.into(),
+                filter.subject_principal_id.into(),
+                after.into(),
+                limit.into(),
+            ],
         ))
         .all(&self.db)
         .await

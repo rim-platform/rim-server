@@ -45,7 +45,8 @@ stays up, and none against data loss. Accounts and what the relay holds may be r
 at any time, and the relay may end. Its terms (`deploy/terms.md`) say the same to everyone who
 signs up. Questions go to the project's GitHub issues
 (`https://github.com/rim-platform/rim-server/issues`), which are public; reports about content
-or a person go through the app's report function, which reaches the relay's moderators.
+or a person go through the app's report function, which reaches a workspace's moderators, or the
+relay's instance operators for direct messages and groups.
 
 ## If the relay shuts down
 
@@ -374,7 +375,7 @@ Alert thresholds are **FILL** until a month of normal traffic shows the baseline
 | `429` | logs `rate-limited a peer's server-to-server requests`, `a user's forwarded requests are over their quota`, `a user's invites to other servers are over their daily quota`; audit `signup_rate_limited` | **FILL** |
 | Proof-of-work signups | audit `relay.registration_pow` per hour; log `refused a signup's proof-of-work` | **FILL** above the weekly hourly mean |
 | Blocked principals knocking | audit `relay.blocked_principal_refused` and `blocked_email_refused` | **FILL** |
-| Open abuse reports | `rim-relay abuse-reports list --open` | any older than the response time below |
+| Open abuse reports | `rim-relay abuse-reports list --open`; reports of DMs and groups on the app's instance moderation page | any older than the response time below |
 | Accounts against the cap | the query in "The account cap"; audit `signup_refused_registration_full` | 90% of `RIM_LIMIT_ACCOUNTS`, once one is set |
 
 ```sh
@@ -407,7 +408,7 @@ Signs: `relay.registration_pow` far above normal, many reports, DM requests from
 
 1. Find the senders:
    `rim-sql -c "SELECT from_principal_id, count(*) FROM relay_dm_request WHERE created_at > now() - interval '1 hour' GROUP BY 1 ORDER BY 2 DESC LIMIT 20"`
-   and `rim-relay abuse-reports list --open`.
+   and `rim-relay abuse-reports list --open`, and the reports of DMs and groups in the app.
 2. Look at each: `rim-relay principal show <principalId>` prints the account, who invited it,
    the accounts its invites created and the reports naming it.
 3. Block each: `rim-relay principal block <principalId> --reason "spam wave <date>"`. Their
@@ -508,14 +509,36 @@ The text below is published with this page on the project site; the terms
 >
 > The workspaces this relay hosts, the RIM community workspace among them, are moderated from
 > the app: by each workspace's owners and moderators, who get the reports of its messages, and by
-> the instance operators, who block accounts and servers on the whole relay.
+> the instance operators, who get the reports of direct messages and groups and block accounts
+> and servers on the whole relay.
 >
 > This relay is a first test run, looked after by one person. We read reports as time allows,
 > usually within a few days, and block clear spam or attacks as soon as we see them. We keep
 > reports for one year and the blocked identity until it is unblocked. A blocked person may
 > ask for a review the same way; we answer as time allows.
 
-Reports from the abuse address go into the same list as those from the app:
+### Where the reports are
+
+A report ends up in one of three places. The first two are the operators', on the app's
+instance moderation page for an account made an instance operator (`operator grant`, "Command
+reference"):
+
+- **DM requests** a user reported (`reportDmRequest`), in `relay_abuse_report` with the
+  reports from the abuse address. `abuse-reports list` shows them too, 100 a page (`--limit` up
+  to 500, `--after <report id>` for the next page). A user reports one request once.
+- **Messages in DMs and groups.** These live in the relay's direct space, which has no owners
+  or moderators, so their reports (`message_report`) go to the instance operators only. A
+  report of an encrypted message carries the message exactly as the sender's device sent it,
+  verified by the server; opening it is audited (`e2ee.report_viewed`, ids only). The operator
+  may delete the reported message and resolves the report; 90 days after the resolution the
+  verified content is deleted. Until it is resolved the content is kept, so resolve every
+  report once it is handled. There is no command for these: `rim-sql -c "SELECT id, created_at,
+  status FROM message_report WHERE server_id = (SELECT id FROM server WHERE kind = 'direct')
+  AND status = 'open'"` lists the open ones without the app.
+- **Messages in a workspace** go to that workspace's owners and moderators, not to the
+  operators.
+
+Reports from the abuse address go into the same list as the DM requests:
 
 ```sh
 rim-relay abuse-reports add --principal rimp1_… --reason "mail of <date>: phishing links"
@@ -531,7 +554,7 @@ rim-relay server-key show | rotate | recover --recovery-key-file F [--new-recove
 rim-relay franking-key show | rotate
 rim-relay principal block <principalId> --reason <text> [--cascade] | unblock <principalId> | show <principalId> | list
 rim-relay peer block <serverId> | unblock <serverId> | reset <serverId>
-rim-relay abuse-reports list [--open] | add [--principal P] [--server S] --reason <text> | resolve <id>
+rim-relay abuse-reports list [--open] [--after <id>] [--limit N] | add [--principal P] [--server S] --reason <text> | resolve <id>
 rim-relay invite create [--email A] [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
 rim-relay audit purge [--dry-run] [--older-than-days N]
 rim-relay ip block <cidr> --reason <text> [--expires-in-days D] | unblock <cidr> | list
@@ -540,9 +563,9 @@ rim-relay operator grant <username> | revoke <username> | list
 
 `operator grant` makes an account an instance operator: it reads the abuse reports, principal
 blocks and IP blocks in the app and changes them as the `abuse-reports`, `principal` and `ip`
-commands do (`docs/api.md`, "Instance moderation"). A blocked account or one scheduled for
-deletion cannot be granted the role; `operator revoke` takes it back and `operator list` prints
-the operators.
+commands do, and handles the reports of messages in DMs and groups (`docs/api.md`, "Instance
+moderation"). A blocked account or one scheduled for deletion cannot be granted the role;
+`operator revoke` takes it back and `operator list` prints the operators.
 
 Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`, one per
 account a block reaches, `cascade` true for those after the first),

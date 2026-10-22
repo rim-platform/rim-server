@@ -41,6 +41,10 @@ const REPORTS: &str = r#"query {
 
 const ALL_REPORTS: &str = "query { instanceReports(openOnly: false) { id resolved } }";
 
+const REPORT_PAGE: &str = r#"query($after: ID, $limit: Int!) {
+  instanceReports(openOnly: false, after: $after, limit: $limit) { id }
+}"#;
+
 const RESOLVE: &str = r#"mutation($id: ID!) {
   instanceResolveReport(id: $id) { id resolved resolvedAt subjectUsername }
 }"#;
@@ -176,6 +180,21 @@ async fn an_operator_lists_reports_naming_local_accounts_and_resolves_one() {
     assert_eq!(open["instanceReports"].as_array().map(Vec::len), Some(1));
     let all = q.as_operator(ALL_REPORTS, json!({})).await;
     assert_eq!(all["instanceReports"].as_array().map(Vec::len), Some(2));
+
+    let first = q
+        .as_operator(REPORT_PAGE, json!({ "after": null, "limit": 1 }))
+        .await;
+    assert_eq!(first["instanceReports"], json!([{ "id": about_member }]));
+    let next = q
+        .as_operator(REPORT_PAGE, json!({ "after": about_member, "limit": 1 }))
+        .await;
+    let next = next["instanceReports"].as_array().expect("reports").clone();
+    assert_eq!(next.len(), 1);
+    assert_ne!(next[0]["id"], json!(about_member));
+    let past_the_end = q
+        .as_operator(REPORT_PAGE, json!({ "after": next[0]["id"], "limit": 1 }))
+        .await;
+    assert_eq!(past_the_end["instanceReports"], json!([]));
 
     let missing = exec_err_code(
         &q.schema,

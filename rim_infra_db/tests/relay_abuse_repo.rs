@@ -9,9 +9,11 @@ mod support;
 use chrono::{Duration, Utc};
 use migration::{Migrator, MigratorTrait};
 use rim_core::relay::model::{
-    AbuseReportId, DmRequestStatus, NewAbuseReport, NewDmRequest, NewRelayEnvelope, NewRelayItem,
+    AbuseReportFilter, AbuseReportId, DmRequestStatus, NewAbuseReport, NewDmRequest,
+    NewRelayEnvelope, NewRelayItem,
 };
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository};
+use rim_core::repository::error::RepoErrorKind;
 use rim_core::user::model::UserId;
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::relay::SeaOrmRelayRepository;
@@ -20,6 +22,7 @@ use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use uuid::Uuid;
 
 const MIGRATION_NAME: &str = "m20261010_010907_add_relay_abuse";
+const UNIQUE_REQUEST_MIGRATION: &str = "m20261021_222259_add_relay_abuse_report_unique_request";
 const HOST: &str = "rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
 const SPAMMER: &str = "rimp1_spammer";
 
@@ -43,6 +46,44 @@ async fn table_exists(db: &sea_orm::DatabaseConnection, table: &str) -> bool {
     .unwrap()
     .try_get::<bool>("", "present")
     .unwrap()
+}
+
+/// Every report, or only the open ones, in one page.
+fn every(open_only: bool) -> AbuseReportFilter {
+    AbuseReportFilter {
+        open_only,
+        subject_principal_id: None,
+        after: None,
+        limit: 1000,
+    }
+}
+
+/// The report `reporter` files about `request`.
+fn report_of(
+    reporter: UserId,
+    request: &rim_core::relay::model::DmRequest,
+    reason: &str,
+) -> NewAbuseReport {
+    NewAbuseReport {
+        reporter_user_id: Some(reporter),
+        subject_principal_id: Some(request.from_principal_id.clone()),
+        subject_server_id: Some(HOST.to_string()),
+        request_id: Some(request.id),
+        reason: reason.to_string(),
+    }
+}
+
+/// How many steps `Migrator::down` takes to undo `name` and every migration after it.
+fn steps_to_undo(name: &str) -> u32 {
+    let names: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
+    let index = names
+        .iter()
+        .position(|n| n == name)
+        .expect("migration must be registered");
+    u32::try_from(names.len() - index).expect("steps fit u32")
 }
 
 /// A pending request from `from` to `user` holding `held` items.
@@ -184,7 +225,7 @@ async fn reports_resolve_once_and_outlive_their_reporter_and_request() {
         .await
         .unwrap();
 
-    let all = abuse.list_reports(false).await.unwrap();
+    let all = abuse.list_reports(every(false)).await.unwrap();
     assert_eq!(
         all.iter().map(|r| r.id).collect::<Vec<_>>(),
         vec![from_user.id, from_operator.id]
@@ -208,7 +249,7 @@ async fn reports_resolve_once_and_outlive_their_reporter_and_request() {
             .unwrap()
             .is_none()
     );
-    let open = abuse.list_reports(true).await.unwrap();
+    let open = abuse.list_reports(every(true)).await.unwrap();
     assert_eq!(
         open.iter().map(|r| r.id).collect::<Vec<_>>(),
         vec![from_user.id]
@@ -221,7 +262,7 @@ async fn reports_resolve_once_and_outlive_their_reporter_and_request() {
         ))
         .await
         .unwrap();
-    let kept = abuse.list_reports(false).await.unwrap();
+    let kept = abuse.list_reports(every(false)).await.unwrap();
     assert_eq!(kept.len(), 2);
     let report = kept.iter().find(|r| r.id == from_user.id).expect("kept");
     assert_eq!(report.reporter_user_id, None);
@@ -291,4 +332,159 @@ async fn the_migration_refuses_down_while_blocks_or_reports_exist() {
     for table in ["relay_principal_block", "relay_abuse_report"] {
         assert!(table_exists(&conn, table).await, "{table} after up");
     }
+}
+
+#[tokio::test]
+async fn one_account_reports_one_request_once() {
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let carol = ctx.create_key_only_user("carol", "rimp1_carol").await;
+    let relay = SeaOrmRelayRepository::new(ctx.db.clone());
+    let abuse = SeaOrmRelayAbuseRepository::new(ctx.db.clone());
+    let request = pending_request(&relay, bob.id, SPAMMER, 1).await;
+
+    abuse
+        .insert_report(report_of(bob.id, &request, "ads"))
+        .await
+        .unwrap();
+    let again = abuse
+        .insert_report(report_of(bob.id, &request, "more ads"))
+        .await
+        .expect_err("a second report of the same request");
+    assert_eq!(again.kind(), RepoErrorKind::Conflict);
+    abuse
+        .insert_report(report_of(carol.id, &request, "ads"))
+        .await
+        .expect("another account reports the same request");
+    for _ in 0..2 {
+        abuse
+            .insert_report(NewAbuseReport {
+                reporter_user_id: None,
+                subject_principal_id: Some(SPAMMER.to_string()),
+                subject_server_id: None,
+                request_id: None,
+                reason: "mail to the abuse address".to_string(),
+            })
+            .await
+            .expect("reports without a request repeat");
+    }
+    assert_eq!(abuse.list_reports(every(false)).await.unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn report_lists_page_after_a_report_and_filter_by_principal() {
+    let ctx = support::TestCtx::new().await;
+    let abuse = SeaOrmRelayAbuseRepository::new(ctx.db.clone());
+    let mut ids = Vec::new();
+    for (minutes, principal) in [(30, SPAMMER), (20, "rimp1_other"), (10, SPAMMER)] {
+        let report = abuse
+            .insert_report(NewAbuseReport {
+                reporter_user_id: None,
+                subject_principal_id: Some(principal.to_string()),
+                subject_server_id: None,
+                request_id: None,
+                reason: "spam".to_string(),
+            })
+            .await
+            .unwrap();
+        ctx.db
+            .execute_unprepared(&format!(
+                "UPDATE relay_abuse_report SET created_at = now() - interval '{minutes} minutes' \
+                 WHERE id = '{}'",
+                Uuid::from(report.id)
+            ))
+            .await
+            .unwrap();
+        ids.push(report.id);
+    }
+    let page = |after: Option<AbuseReportId>, limit: u64| AbuseReportFilter {
+        open_only: false,
+        subject_principal_id: None,
+        after,
+        limit,
+    };
+    let listed = |reports: Vec<rim_core::relay::model::AbuseReport>| {
+        reports.into_iter().map(|r| r.id).collect::<Vec<_>>()
+    };
+
+    let first = listed(abuse.list_reports(page(None, 2)).await.unwrap());
+    assert_eq!(first, ids[..2]);
+    let rest = listed(abuse.list_reports(page(Some(ids[1]), 2)).await.unwrap());
+    assert_eq!(rest, ids[2..]);
+    assert!(
+        abuse
+            .list_reports(page(Some(ids[2]), 2))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    abuse.resolve_report(ids[0]).await.unwrap();
+    let open_about_spammer = listed(
+        abuse
+            .list_reports(AbuseReportFilter {
+                open_only: true,
+                subject_principal_id: Some(SPAMMER.to_string()),
+                after: None,
+                limit: 10,
+            })
+            .await
+            .unwrap(),
+    );
+    assert_eq!(open_about_spammer, vec![ids[2]]);
+}
+
+#[tokio::test]
+async fn the_unique_request_migration_keeps_the_oldest_report_of_each_pair() {
+    let ctx = support::TestCtx::new().await;
+    let conn = support::db_conn().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let carol = ctx.create_key_only_user("carol", "rimp1_carol").await;
+    let relay = SeaOrmRelayRepository::new(ctx.db.clone());
+    let abuse = SeaOrmRelayAbuseRepository::new(ctx.db.clone());
+    let request = pending_request(&relay, bob.id, SPAMMER, 1).await;
+    let steps = steps_to_undo(UNIQUE_REQUEST_MIGRATION);
+
+    Migrator::down(&conn, Some(steps)).await.expect("down");
+    let mut bobs = Vec::new();
+    for minutes in [10, 30, 20] {
+        let report = abuse
+            .insert_report(report_of(bob.id, &request, "ads"))
+            .await
+            .expect("duplicates are accepted without the index");
+        ctx.db
+            .execute_unprepared(&format!(
+                "UPDATE relay_abuse_report SET created_at = now() - interval '{minutes} minutes' \
+                 WHERE id = '{}'",
+                Uuid::from(report.id)
+            ))
+            .await
+            .unwrap();
+        bobs.push(report.id);
+    }
+    let carols = abuse
+        .insert_report(report_of(carol.id, &request, "ads"))
+        .await
+        .unwrap();
+    Migrator::up(&conn, None).await.expect("up");
+
+    let mut kept: Vec<AbuseReportId> = abuse
+        .list_reports(every(false))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    kept.sort_by_key(|id| Uuid::from(*id));
+    let mut expected = vec![bobs[1], carols.id];
+    expected.sort_by_key(|id| Uuid::from(*id));
+    assert_eq!(
+        kept, expected,
+        "the oldest of bob's reports and carol's stay"
+    );
+    let again = abuse
+        .insert_report(report_of(bob.id, &request, "ads"))
+        .await
+        .expect_err("the index refuses another");
+    assert_eq!(again.kind(), RepoErrorKind::Conflict);
 }
