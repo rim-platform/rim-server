@@ -1,7 +1,7 @@
 {
   "name": "RIM",
   "claimGrantsOperator": true,
-  "dm": { "outsideFloor": "REQUESTS", "memberDefault": "DIRECT" },
+  "dm": { "outsideFloor": "REQUESTS", "memberDefault": "REQUESTS" },
   "channels": [
     { "name": "general", "topic": "Anything about RIM" },
     { "name": "announcements", "topic": "Releases and news from the project" },

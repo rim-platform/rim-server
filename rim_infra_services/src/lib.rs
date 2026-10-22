@@ -20,6 +20,7 @@ pub(crate) mod custom_emoji;
 /// Public for `rim_server`, whose composition root checks the configured default workspace at
 /// start.
 pub mod default_workspace;
+pub(crate) mod default_workspace_rules;
 pub(crate) mod device_link;
 pub(crate) mod display_name;
 pub(crate) mod dm_policy;

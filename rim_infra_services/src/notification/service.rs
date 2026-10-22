@@ -36,7 +36,9 @@ use rim_services::notification::dto::{
 use rim_services::notification::service::NotificationService;
 use rim_services::{ServiceError, ServiceResult};
 
-use super::decide::{DecisionInput, ReactionDecisionInput, decide, decide_reaction};
+use super::decide::{
+    DecisionInput, ReactionDecisionInput, decide, decide_reaction, mentions_everyone,
+};
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_server_member,
 };
@@ -63,7 +65,8 @@ pub struct NotificationRepos {
 pub struct DefaultNotificationService {
     repos: NotificationRepos,
     observers: Observers,
-    /// The server's default workspace, whose members who never saved settings get `MENTIONS`.
+    /// The server's default workspace, whose members who never saved settings get `MENTIONS`
+    /// and where only the Owner and Moderators notify everyone with `@channel` and `@here`.
     /// `None` treats no workspace as the default one.
     default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
 }
@@ -85,6 +88,30 @@ impl DefaultNotificationService {
     ) -> Self {
         self.default_workspace = Some(default_workspace);
         self
+    }
+
+    /// Whether `sender`'s `@channel` and `@here` in `server_id` notify: everywhere but the
+    /// default workspace, and there when the sender is its Owner or a Moderator.
+    ///
+    /// # Errors
+    /// Storage errors reading the default workspace or the sender's membership.
+    async fn channel_mentions_allowed(
+        &self,
+        server_id: ServerId,
+        sender: UserId,
+    ) -> ServiceResult<bool> {
+        let Some(default_workspace) = &self.default_workspace else {
+            return Ok(true);
+        };
+        if default_workspace.current().await? != Some(server_id) {
+            return Ok(true);
+        }
+        Ok(self
+            .repos
+            .server_member_repo
+            .get_member(server_id, sender)
+            .await?
+            .is_some_and(|m| m.member_role.is_moderator()))
     }
 
     /// The settings of a member of `server_id` who never saved any: `MENTIONS` in the default
@@ -465,6 +492,8 @@ impl NotificationService for DefaultNotificationService {
             }
         }
 
+        let channel_mentions = !mentions_everyone(&cmd.message, cmd.encrypted_mentions.as_ref())
+            || self.channel_mentions_allowed(cmd.server_id, author).await?;
         let now = Utc::now();
         let decisions = decide(&DecisionInput {
             message: &cmd.message,
@@ -475,6 +504,7 @@ impl NotificationService for DefaultNotificationService {
             settings_by_user: &settings_by_user,
             now,
             encrypted_mentions: cmd.encrypted_mentions.as_ref(),
+            channel_mentions,
         });
         if decisions.is_empty() {
             return Ok(0);

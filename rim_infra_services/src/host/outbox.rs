@@ -28,6 +28,7 @@ use rim_identity::SignedStatement;
 use rim_infra_db::begin_transaction;
 use rim_s2s::SharedIdentity;
 use rim_s2s::host::{HostEventFields, read_host_event, sign_host_event};
+use rim_services::default_workspace::DefaultWorkspaceService;
 use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
@@ -446,6 +447,9 @@ pub struct HostEventWriter {
     relay: Option<Arc<dyn RelayService>>,
     /// The operator's DM settings: direct-space events go only to relays they admit.
     dm_policy: DmOperatorPolicy,
+    /// The server's default workspace, whose groups go through the request inbox like its DMs;
+    /// `None` where none is wired.
+    default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
 }
 
 /// Who a `DmInvite` is for.
@@ -475,6 +479,65 @@ impl HostEventWriter {
             wake,
             relay: None,
             dm_policy: DmOperatorPolicy::default(),
+            default_workspace: None,
+        }
+    }
+
+    /// Let the groups of the server's default workspace go through the request inbox like its
+    /// DMs.
+    pub fn with_default_workspace(
+        mut self,
+        default_workspace: Arc<dyn DefaultWorkspaceService>,
+    ) -> Self {
+        self.default_workspace = Some(default_workspace);
+        self
+    }
+
+    /// Whether `event` of `workspace_id` goes through the request inbox as a workspace's DM: it
+    /// is about a DM, or about a group of the default workspace. A member added to a
+    /// conversation is announced without its type, which is then read.
+    async fn is_workspace_dm(
+        &self,
+        workspace_id: ServerId,
+        event: &WorkspaceEvent,
+    ) -> ServiceResult<bool> {
+        let conversation_type = match (event.conversation_type(), event) {
+            (Some(conversation_type), _) => conversation_type.to_string(),
+            (
+                None,
+                WorkspaceEvent::MemberAddedToConversation {
+                    conversation_id, ..
+                },
+            ) => {
+                if !self.is_default_workspace(workspace_id).await? {
+                    return Ok(false);
+                }
+                match self
+                    .repos
+                    .conversation_repo
+                    .get_by_id(*conversation_id)
+                    .await?
+                {
+                    Some(conversation) => conversation.conversation_type.as_str().to_string(),
+                    None => return Ok(false),
+                }
+            }
+            _ => return Ok(false),
+        };
+        if conversation_type == ConversationType::Direct.as_str() {
+            return Ok(true);
+        }
+        if conversation_type != ConversationType::Group.as_str() {
+            return Ok(false);
+        }
+        self.is_default_workspace(workspace_id).await
+    }
+
+    /// Whether `workspace_id` is the server's default workspace now.
+    async fn is_default_workspace(&self, workspace_id: ServerId) -> ServiceResult<bool> {
+        match &self.default_workspace {
+            Some(default_workspace) => Ok(default_workspace.current().await? == Some(workspace_id)),
+            None => Ok(false),
         }
     }
 
@@ -540,10 +603,11 @@ impl HostEventWriter {
         }
         let in_direct_space = workspace_id == self.direct_space_id;
         let direct = in_direct_space && self.relay.is_some();
-        // A workspace's DMs go through its local members' request inbox too.
+        // A workspace's DMs, and the default workspace's groups, go through its local members'
+        // request inbox too.
         let workspace_dm = !in_direct_space
             && self.relay.is_some()
-            && event.conversation_type() == Some(ConversationType::Direct.as_str());
+            && self.is_workspace_dm(workspace_id, event).await?;
         let (members, delegated) = if in_direct_space {
             (
                 self.repos.host_repo.remote_members(workspace_id).await?,
@@ -673,17 +737,18 @@ impl HostEventWriter {
         event: &WorkspaceEvent,
         members: &[RemoteMember],
     ) -> ServiceResult<Vec<(Value, Invitee)>> {
-        let (conversation_id, added): (_, Vec<UserId>) = match event {
+        let (conversation_id, added, added_by): (_, Vec<UserId>, _) = match event {
             WorkspaceEvent::ConversationCreated {
                 conversation_id,
                 member_user_ids,
                 ..
-            } => (*conversation_id, member_user_ids.clone()),
+            } => (*conversation_id, member_user_ids.clone(), None),
             WorkspaceEvent::MemberAddedToConversation {
                 conversation_id,
                 user_id,
+                added_by,
                 ..
-            } => (*conversation_id, vec![*user_id]),
+            } => (*conversation_id, vec![*user_id], *added_by),
             _ => return Ok(Vec::new()),
         };
         if added.is_empty() {
@@ -700,8 +765,11 @@ impl HostEventWriter {
         let Some(creator) = conversation.created_by else {
             return Ok(Vec::new());
         };
-        let creator_user = self.repos.user_repo.get_by_id(creator).await?;
-        let Some(from_principal_id) = creator_user.and_then(|u| u.principal_id) else {
+        // An invite comes from whoever brought the member in, so their blocks and DM settings
+        // judge that person: the adder, else the creator.
+        let inviter = added_by.unwrap_or(creator);
+        let inviter_user = self.repos.user_repo.get_by_id(inviter).await?;
+        let Some(from_principal_id) = inviter_user.and_then(|u| u.principal_id) else {
             return Ok(Vec::new());
         };
         let member_ids = self
@@ -712,7 +780,7 @@ impl HostEventWriter {
         let users = self.repos.user_repo.get_by_ids(&member_ids).await?;
         let invitees: Vec<Invitee> = added
             .iter()
-            .filter(|id| **id != creator)
+            .filter(|id| **id != inviter)
             .filter_map(|id| match members.iter().find(|m| m.user_id == *id) {
                 Some(member) => Some(Invitee::Remote(member.clone())),
                 None => users
@@ -728,7 +796,7 @@ impl HostEventWriter {
             self.record_contacts(creator, &invitees).await?;
         }
         let Some(invite) = self
-            .invite_event(&conversation, &from_principal_id, &users)
+            .invite_event(&conversation, inviter, &from_principal_id, &users)
             .await?
         else {
             return Ok(Vec::new());
@@ -736,25 +804,23 @@ impl HostEventWriter {
         Ok(invitees.into_iter().map(|m| (invite.clone(), m)).collect())
     }
 
-    /// The `DmInvite` of `conversation` from its creator, whose principal id is
-    /// `from_principal_id`, naming the principal ids of `users`, its members. `None` when the
-    /// creator has no profile card.
+    /// The `DmInvite` of `conversation` from `inviter`, its creator or the member who added
+    /// someone, whose principal id is `from_principal_id`, naming the principal ids of `users`,
+    /// its members. `None` when the inviter has no profile card.
     async fn invite_event(
         &self,
         conversation: &Conversation,
+        inviter: UserId,
         from_principal_id: &str,
         users: &[User],
     ) -> ServiceResult<Option<Value>> {
-        let Some(creator) = conversation.created_by else {
-            return Ok(None);
-        };
         let Some(card) = self
             .repos
             .key_identity_repo
-            .get_profile_card(creator)
+            .get_profile_card(inviter)
             .await?
         else {
-            warn!(conversation_id = %conversation.id, "no DM invite: the creator has no profile card");
+            warn!(conversation_id = %conversation.id, "no DM invite: the inviter has no profile card");
             return Ok(None);
         };
         let member_principal_ids: Vec<String> = users
@@ -835,7 +901,7 @@ impl HostEventWriter {
             .await?;
         let users = self.repos.user_repo.get_by_ids(&member_ids).await?;
         let Some(invite) = self
-            .invite_event(&conversation, &from_principal_id, &users)
+            .invite_event(&conversation, creator, &from_principal_id, &users)
             .await?
         else {
             return Ok(0);

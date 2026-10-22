@@ -192,6 +192,12 @@ instance operator, and deletes the file. A lost or leaked link before the claim 
 (`dc restart rim`): each start revokes the previous link and writes a new one. After the claim,
 add the owner's name to `RIM_RESERVED_NAMES`.
 
+Its DM policy takes a fellow member's first DM or group as a request (`"memberDefault":
+"REQUESTS"`): every account on the relay is in this workspace, so a stranger's first message
+waits in the recipient's request inbox, under its limits, until they accept it. A member who
+wants DMs from everyone here directly sets that for themself in the app; the Owner and
+Moderators' DMs arrive directly.
+
 The file changes only through a release: each start applies it to the claimed workspace (new
 channels, topics, the name, the DM policy) and deletes nothing. A channel is renamed in the app
 first and then in the file. Ownership moves in the app.

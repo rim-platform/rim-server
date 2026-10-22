@@ -32,7 +32,14 @@ This document describes the backend contract for conversations, messages, thread
   by the client with `addConversationMembers` right after creation.
 - `addConversationMembers` (invite): the caller must be a member of the channel or group (for a
   public channel: join first, `FORBIDDEN` otherwise); targets must be workspace members;
-  existing members are skipped. Not valid for DMs.
+  existing members are skipped. Not valid for DMs. In the server's default workspace, which
+  every account joins, only an Owner or Moderator, or the creator of a private channel, adds
+  people to a channel (`FORBIDDEN` otherwise), and one call names at most 50 people
+  (`VALIDATION`). A group holds at most 100 members, plaintext or encrypted (`VALIDATION`).
+- A channel's topic (`updateConversationTopic`) is changed by an Owner or Moderator, or by the
+  creator of a private channel; anyone else gets `FORBIDDEN`. In a DM or group any member
+  changes it. Anyone who may write pins a message; a message someone else pinned in a channel is
+  unpinned by an Owner, a Moderator or a private channel's creator (`FORBIDDEN` otherwise).
 - `leaveConversation`: channels and groups, not DMs. Leaving a public channel you never joined
   is a no-op. Leaving a private channel as its last member is allowed; it then stays invisible to
   everyone, and only an Owner/Moderator can archive it, by id (from the audit log).
@@ -117,14 +124,17 @@ decide, and each may only tighten the one above it:
   it, so a DM in it meets probation like one in the direct space; any other workspace does. The
   instance operator is never on probation.
 - **Refused here.** A DM in the direct space that a recipient here refuses answers `FORBIDDEN`
-  when it is started (`createConversation`, `addConversationMembers`). A refused DM from another
+  when it is started (`createConversation`, `addConversationMembers`), and so does one whose
+  recipient blocked the sender or whose sender the operator blocked. An invite to a group
+  someone was added to comes from whoever added them, so their blocks and settings judge that
+  person. A refused DM from another
   server is answered as for a block, so its server stops addressing the recipient.
 - **Request limits.** A conversation that would file a DM request with someone here meets the
   request inbox's limits when it is started (`createConversation`, `addConversationMembers`, in
-  the direct space and for a workspace's DMs): `FORBIDDEN` ("their request inbox is full") while
-  the recipient holds 100 pending requests, and `RATE_LIMITED` with `retryAfterSeconds` (until
-  the sender's oldest request of the last 24 hours leaves the window) once the sender would file
-  more than `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) requests in 24 hours on this server; a group
+  the direct space, for a workspace's DMs and for the default workspace's groups): `FORBIDDEN`
+  ("their request inbox is full") while the recipient holds 100 pending requests, and
+  `RATE_LIMITED` with `retryAfterSeconds` (until the sender's oldest request of the last 24 hours
+  leaves the window) once the sender would file more than `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) requests in 24 hours on this server; a group
   counts each request it files. A DM delivered directly (from a contact, an Owner or Moderator,
   or a member the recipient takes DMs from directly) files no request and meets no limit, and
   reopening an existing DM files none. A conversation the request inbox still refuses for a
@@ -133,7 +143,15 @@ decide, and each may only tighten the one above it:
   as a request is held in their request inbox like a DM from outside: until they accept it, it stays out of their
   `inboxConversations` and `workspaceEvents`, and its notifications and unread counts out of
   theirs. Like the request inbox it needs server-to-server traffic to be on; without it workspace
-  DMs arrive directly. Groups are unchanged: their members are added by someone already in them.
+  DMs arrive directly.
+- **The default workspace's groups.** In the server's default workspace, which every account
+  joins, a group is started and grown like a DM with each newcomer: `createConversation` and
+  `addConversationMembers` (GraphQL or the `chat.create_group` and `chat.invite_to_conversation`
+  commands) are refused as that DM would be, by a newcomer's DM settings, the request limits and
+  probation, and a newcomer who takes it as a request holds it in their request inbox until they
+  accept it. One call names at most 50 people and a plaintext group holds at most 50 members
+  (`VALIDATION`); an encrypted group keeps its own cap. Groups of other workspaces are
+  unchanged: their members are added by someone already in them.
 - **The sender's view.** `Conversation.dmRequestPending` is true for a DM whose other member,
   on this server, has not yet accepted it as a request; false once they did or when it was no
   request, null for groups and channels.
@@ -369,7 +387,8 @@ Sound and preview stay device-local client settings.
 3. Effective level = conversation level, else workspace default. `NONE` yields nothing, direct
    messages and mentions included.
 4. Reason, strongest first: `direct` (a Direct conversation), `mention` (`<@user>` naming the
-   member, or `@channel` / `@here` as a whole word), `keyword` (a keyword as a whole word,
+   member, or `@channel` / `@here` as a whole word; in the server's default workspace these two
+   notify only from its Owner or a Moderator and are plain text from anyone else), `keyword` (a keyword as a whole word,
    case-insensitive, outside `<@…>` tokens), `thread_reply` (a reply in a thread whose root the
    member wrote or where they replied), else `all`.
 5. `MENTIONS` admits every reason but `all`; `ALL` admits everything.

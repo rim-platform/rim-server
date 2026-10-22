@@ -8,8 +8,8 @@
 //! 3. Effective level = the conversation override, else the workspace default. `NONE` yields
 //!    nothing, mentions and direct messages included.
 //! 4. Reason = the strongest that applies: direct conversation, then a mention (`<@user>`,
-//!    `@channel`, `@here`), then a keyword hit, then a reply in a thread the user started or
-//!    replied in, else `all`.
+//!    `@channel`, `@here` where the sender may use them), then a keyword hit, then a reply in
+//!    a thread the user started or replied in, else `all`.
 //! 5. `MENTIONS` admits every reason but `all`; `ALL` admits everything.
 //! 6. Inside the user's do-not-disturb window or pause the notification is still recorded, but
 //!    marked `quiet`.
@@ -53,6 +53,9 @@ pub(crate) struct DecisionInput<'a> {
     /// The declared mentions of an encrypted message, which has no text to read them from;
     /// keywords never match it.
     pub encrypted_mentions: Option<&'a EncryptedMentions>,
+    /// Whether `@channel`, `@here` and an encrypted message's mention of everyone notify; when
+    /// false they are plain text.
+    pub channel_mentions: bool,
 }
 
 /// One recipient of a notification.
@@ -62,6 +65,24 @@ pub(crate) struct Decision {
     pub reason: NotificationReason,
     /// Inside the user's do-not-disturb window or pause: recorded, but no toast or sound.
     pub quiet: bool,
+}
+
+/// Whether `message` mentions everyone: `@channel` or `@here` in its text, or for an encrypted
+/// message its declared mention of everyone.
+pub(crate) fn mentions_everyone(
+    message: &Message,
+    encrypted_mentions: Option<&EncryptedMentions>,
+) -> bool {
+    match encrypted_mentions {
+        Some(mentions) => mentions.all,
+        None => {
+            let plain_lower =
+                strip_mention_tokens(message.text.as_deref().unwrap_or("")).to_lowercase();
+            CHANNEL_MENTION_TOKENS
+                .iter()
+                .any(|token| contains_whole_word(&plain_lower, token))
+        }
+    }
 }
 
 /// Who is notified about `input.message`, and why. One entry per recipient, in member order.
@@ -91,6 +112,7 @@ pub(crate) fn decide(input: &DecisionInput<'_>) -> Vec<Decision> {
             )
         }
     };
+    let channel_mention = channel_mention && input.channel_mentions;
     let is_direct = input.conversation.conversation_type == ConversationType::Direct;
 
     let mut seen = HashSet::new();
@@ -328,6 +350,8 @@ mod tests {
         muted_until: Option<DateTime<Utc>>,
         dnd: Option<DndWindow>,
         pause: DndPause,
+        /// The sender may not use `@channel` and `@here`.
+        no_channel_mentions: bool,
     }
 
     impl Default for Case {
@@ -343,6 +367,7 @@ mod tests {
                 muted_until: None,
                 dnd: None,
                 pause: DndPause::Off,
+                no_channel_mentions: false,
             }
         }
     }
@@ -383,6 +408,7 @@ mod tests {
             settings_by_user: &settings_by_user,
             now: now(),
             encrypted_mentions: None,
+            channel_mentions: !case.no_channel_mentions,
         });
         assert!(
             decisions.iter().all(|d| d.user_id != alice),
@@ -534,6 +560,21 @@ mod tests {
                 bob,
             );
             assert_eq!(d, None, "{text}");
+        }
+        // A sender who may not use them: plain text, so a MENTIONS level hears nothing and an
+        // ALL level hears an ordinary message.
+        for (level, reason) in [(L::Mentions, None), (L::All, Some(R::All))] {
+            let bob = UserId::new();
+            let d = run(
+                Case {
+                    text: "heads up @channel @here".to_string(),
+                    default_level: Some(level),
+                    no_channel_mentions: true,
+                    ..Case::default()
+                },
+                bob,
+            );
+            assert_eq!(d.map(|d| d.reason), reason, "{level:?}");
         }
     }
 
@@ -705,6 +746,7 @@ mod tests {
             settings_by_user: &HashMap::new(),
             now: now(),
             encrypted_mentions: None,
+            channel_mentions: true,
         });
         assert_eq!(
             decisions,
@@ -732,6 +774,7 @@ mod tests {
             settings_by_user: &HashMap::new(),
             now: now(),
             encrypted_mentions: None,
+            channel_mentions: true,
         });
         assert!(decisions.is_empty());
     }

@@ -108,7 +108,7 @@ pub trait HostService: Send + Sync {
     /// Whether `actor` may start a conversation with `user_ids` in `server_id`, a DM when
     /// `direct_message`. In the direct space: `Forbidden` when one is on a server the
     /// operator's outbound DM setting does not admit, or a local one's DM settings refuse the
-    /// actor; `Validation` naming the time left while `actor`'s account is in probation and one
+    /// actor or they blocked the actor; `Validation` naming the time left while `actor`'s account is in probation and one
     /// is a stranger to them, someone neither their contact nor in a workspace with them, whom
     /// the conversation would send a DM request. There and in a workspace's DMs, a new
     /// conversation that files a DM request with a local user meets the request inbox's
@@ -121,6 +121,19 @@ pub trait HostService: Send + Sync {
         server_id: ServerId,
         user_ids: Vec<UserId>,
         direct_message: bool,
+    ) -> ServiceResult<()>;
+
+    /// Whether `actor` may bring `user_ids` into a group of the workspace `server_id` whose
+    /// groups are started like DMs: a local one's DM settings refuse the actor, or they blocked
+    /// the actor (`Forbidden`),
+    /// the request inbox's limits for each one the group would send a DM request
+    /// (`Forbidden`, `RateLimited`), and the probation of a new account toward strangers
+    /// (`Validation`), as [`Self::ensure_may_request`] judges a group of the direct space.
+    async fn ensure_may_request_group(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        user_ids: Vec<UserId>,
     ) -> ServiceResult<()>;
 }
 

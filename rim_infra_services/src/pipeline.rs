@@ -92,6 +92,9 @@ pub struct DefaultPipelineService {
     direct_space_id: Option<ServerId>,
     /// The cap on pipelines per workspace.
     limits: InstanceLimits,
+    /// The server's default workspace, where no per-workspace cap applies and accounts in
+    /// probation create none; `None` where none is wired.
+    default_workspace: Option<crate::default_workspace_rules::DefaultWorkspaceRules>,
 }
 
 impl DefaultPipelineService {
@@ -108,7 +111,34 @@ impl DefaultPipelineService {
             rate_limits: Arc::new(DashMap::new()),
             direct_space_id: None,
             limits: InstanceLimits::default(),
+            default_workspace: None,
         }
+    }
+
+    pub fn with_default_workspace(
+        mut self,
+        rules: crate::default_workspace_rules::DefaultWorkspaceRules,
+    ) -> Self {
+        self.default_workspace = Some(rules);
+        self
+    }
+
+    /// Whether `server_id` is the default workspace, after refusing `user_id` there while in
+    /// probation (`Validation` saying they can `action` once it ends).
+    async fn in_default_workspace(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+        action: &str,
+    ) -> ServiceResult<bool> {
+        let Some(rules) = &self.default_workspace else {
+            return Ok(false);
+        };
+        if !rules.is_default(server_id).await? {
+            return Ok(false);
+        }
+        rules.ensure_out_of_probation(user_id, action).await?;
+        Ok(true)
     }
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
@@ -554,6 +584,9 @@ impl PipelineService for DefaultPipelineService {
         )?;
 
         // Quota check
+        let in_default_workspace = self
+            .in_default_workspace(cmd.server_id, cmd.actor.user_id, "create a pipeline")
+            .await?;
         let is_moderator = self
             .repos
             .server_member_repo
@@ -576,7 +609,9 @@ impl PipelineService for DefaultPipelineService {
                 "quota exceeded: maximum {per_user} pipelines per user per server"
             )));
         }
-        if self.limits.pipelines_per_workspace.is_some() {
+        // Pipelines belong to their creator: in the default workspace the member share bounds
+        // them and no account can fill a workspace cap for everyone.
+        if !in_default_workspace && self.limits.pipelines_per_workspace.is_some() {
             let in_workspace = self
                 .repos
                 .pipeline_repo
@@ -1207,6 +1242,75 @@ mod tests {
                     assert_eq!(message, "this instance allows 50 pipelines per workspace");
                 }
                 Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_workspace_takes_a_members_share_but_no_workspace_cap_or_probation() {
+        let lobby = ServerId::new();
+        let now = chrono::Utc::now();
+        let (old, new) = (UserId::new(), UserId::new());
+        let accounts = vec![
+            crate::probation_fixtures::account(old, now - chrono::Duration::days(3), None),
+            crate::probation_fixtures::account(new, now - chrono::Duration::hours(1), None),
+        ];
+        let limits = rim_services::limits::InstanceLimits {
+            pipelines_per_workspace: Some(50),
+            probation_hours: Some(24),
+            ..Default::default()
+        };
+        for (actor, held, outcome) in [
+            (old, 9, Ok(())),
+            (
+                old,
+                10,
+                Err("quota exceeded: maximum 10 pipelines per user per server"),
+            ),
+            (
+                new,
+                0,
+                Err("a new account can create a pipeline in 1380 minutes"),
+            ),
+        ] {
+            let mut repo = MockPipelineRepository::new();
+            repo.expect_count_for_user().returning(move |_, _| Ok(held));
+            repo.expect_count_for_server().never();
+            repo.expect_create().returning(|p| Ok(p.clone()));
+            let svc = make_service(repo, make_member_repo())
+                .with_limits(limits)
+                .with_default_workspace(
+                    crate::default_workspace_rules::DefaultWorkspaceRules::testing(
+                        lobby,
+                        accounts.clone(),
+                        limits,
+                        now,
+                    ),
+                );
+            let result = svc
+                .create(CreatePipelineCmd {
+                    actor: Actor::new(actor),
+                    server_id: lobby,
+                    name: "Mine".to_string(),
+                    description: None,
+                    trigger: PipelineTriggerDto {
+                        kind: PipelineTriggerKindDto::NewMessage,
+                        conversation_id: None,
+                    },
+                    filter: None,
+                    actions: vec![PipelineActionDto::ExecuteCommand {
+                        command_id: "test.cmd".to_string(),
+                        args: None,
+                    }],
+                    cooldown_secs: None,
+                })
+                .await;
+            match (result, outcome) {
+                (Ok(_), Ok(())) => {}
+                (Err(ServiceError::Validation(message)), Err(expected)) => {
+                    assert_eq!(message, expected)
+                }
+                (other, expected) => panic!("expected {expected:?}, got {other:?}"),
             }
         }
     }

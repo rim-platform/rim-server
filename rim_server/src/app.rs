@@ -618,7 +618,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             terms_url: instance_policy.terms_url.clone(),
             signup_requires_keys: instance_policy.signup_requires_keys,
             dm_policy: dm_policy.clone(),
-            default_workspace,
+            default_workspace: default_workspace.clone(),
             handle_domain: s2s.descriptor_settings.handle_domain.clone(),
             minimum_age: instance_policy.minimum_age,
         },
@@ -791,7 +791,13 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             Arc::clone(&wake),
         )
         .with_relay(Arc::clone(&s2s.relay) as Arc<dyn RelayService>)
-        .with_dm_policy(dm_policy.clone());
+        .with_dm_policy(dm_policy.clone())
+        .with_default_workspace(Arc::new(
+            rim_infra_services::default_workspace::DefaultDefaultWorkspaceService::new(
+                default_workspace.clone(),
+                Arc::clone(&repos.default_workspace_repo),
+            ),
+        ));
         let (reinvite_tx, reinvites) = tokio::sync::mpsc::unbounded_channel();
         let sender = OutboxSender::new(
             repos.for_host(),

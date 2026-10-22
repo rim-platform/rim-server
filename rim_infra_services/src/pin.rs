@@ -12,8 +12,10 @@ use rim_services::pin::service::PinService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::PinRepos;
+use crate::conversation::manages_channel;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
+    ensure_conversation_writable_with_standing,
 };
 
 const MAX_PINS_PER_CONVERSATION: u64 = 50;
@@ -141,7 +143,7 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn unpin_message(&self, cmd: UnpinMessageCmd) -> ServiceResult<()> {
-        let conversation = ensure_conversation_writable(
+        let (conversation, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -154,6 +156,23 @@ impl PinService for DefaultPinService {
         .await?;
         self.ensure_message_in_conversation(cmd.message_id, cmd.conversation_id)
             .await?;
+        if !manages_channel(&conversation, standing.role, cmd.actor.user_id) {
+            let pinned_by = self
+                .repos
+                .message_pin_repo
+                .list_pinned(cmd.conversation_id)
+                .await?
+                .into_iter()
+                .find(|pin| pin.message_id == cmd.message_id)
+                .map(|pin| pin.pinned_by);
+            if pinned_by.is_some_and(|by| by != cmd.actor.user_id) {
+                return Err(ServiceError::Forbidden(
+                    "only the member who pinned it, an owner or a moderator can unpin this \
+                     message"
+                        .to_string(),
+                ));
+            }
+        }
 
         self.repos.message_pin_repo.unpin(cmd.message_id).await?;
 

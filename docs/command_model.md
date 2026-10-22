@@ -241,6 +241,13 @@ Two things compose commands, and only one of them is a command:
   its steps in order, each with its own arguments, in the context of the run. `commands` on the
   `AI` surface and `commandDiscover` offer an `ai_callable` macro to the agent as `macro.<id>`
 
+A user holds at most 50 macros (and 50 pipelines) in a workspace, and one who is neither Owner
+nor Moderator at most a fifth of `RIM_LIMIT_MACROS_PER_WORKSPACE` (`RIM_LIMIT_PIPELINES_PER_WORKSPACE`)
+when it is set. In the server's default workspace, which every account joins, that share is the
+only bound: the per-workspace caps do not apply there, since macros and pipelines belong to
+their author and no account may fill a cap for everyone, and an account in probation creates
+none (`VALIDATION` saying when it can).
+
 Neither pipes: each step's payload is collected under its command id in the result, and no step
 receives another step's result. Only `executeCommand` with `isPipe` (the palette's `|`) passes
 one command's result to the next stage.

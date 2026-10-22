@@ -268,6 +268,30 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- In the server's default workspace a group is started and grown like a DM with each newcomer:
+  `createConversation` and `addConversationMembers` (and the `chat.create_group` and
+  `chat.invite_to_conversation` commands) follow each newcomer's DM settings, the request
+  limits and probation, and a newcomer who takes it as a request holds it in their request
+  inbox until they accept it. One call names at most 50 people and a plaintext group holds at
+  most 50 members (`VALIDATION`). There only an Owner or Moderator, or a private channel's
+  creator, adds people to a channel (`FORBIDDEN`), and `@channel` and `@here` notify everyone
+  only from an Owner or Moderator; from anyone else they are plain text.
+- **Upgrade:** the committed `deploy/default-workspace.json` sets `"memberDefault": "REQUESTS"`:
+  a fellow member's first DM or group in the default workspace waits in the recipient's request
+  inbox until they accept it. A server running the committed file applies it at its next start;
+  set `DIRECT` in your copy to keep members' DMs direct.
+- Starting a DM or group, or adding someone to a group, is refused (`FORBIDDEN`) when the
+  recipient blocked the caller or the operator blocked the caller's principal, as when their DM
+  settings refuse it. A member added to a group gets its invite from whoever added them, so
+  their blocks and DM settings judge that person rather than the group's creator. A plaintext
+  group holds at most 100 members, like an encrypted one (`VALIDATION`).
+- In the default workspace macros and pipelines meet each member's share of
+  `RIM_LIMIT_MACROS_PER_WORKSPACE` and `RIM_LIMIT_PIPELINES_PER_WORKSPACE` but not the
+  per-workspace caps, which a handful of accounts could otherwise fill for everyone, and an
+  account in probation creates none there (`VALIDATION`).
+- A channel's topic is changed by an Owner or Moderator, or by a private channel's creator, and
+  a message someone else pinned in a channel is unpinned by them alone; anyone else gets
+  `FORBIDDEN`. DMs and groups are unchanged.
 - Workspace-scoped workspace state (`setWorkspaceState`, `deleteWorkspaceState`, `state.set`,
   `state.incr`, `state.delete` with the `SERVER` scope) takes a Member, Moderator or Owner who
   is not timed out and whose account is out of probation; a guest gets `FORBIDDEN`. A Member
