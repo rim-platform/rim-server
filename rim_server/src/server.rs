@@ -6,7 +6,8 @@ use crate::file_handlers::{
     handle_report_attachment_download,
 };
 use crate::graphql_support::{
-    apply_auth_cookies, enforce_csrf_for_batch, extract_auth, internal_graphql_error_response,
+    RootFields, apply_auth_cookies, batch_has_mutation, batch_root_fields, enforce_csrf_for_batch,
+    extract_auth, internal_graphql_error_response,
 };
 use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
@@ -240,7 +241,7 @@ async fn graphql_handler(
     req: HttpRequest,
     payload: web::Payload,
 ) -> Either<GraphQLResponse, HttpResponse> {
-    let batch = match crate::graphql_body::read_batch(&req, payload).await {
+    let mut batch = match crate::graphql_body::read_batch(&req, payload).await {
         Ok(batch) => batch,
         Err(response) => return Either::Right(response),
     };
@@ -254,7 +255,8 @@ async fn graphql_handler(
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::now_v7().to_string());
 
-    let has_mutation = batch_has_mutation(&batch);
+    let fields = batch_root_fields(&mut batch);
+    let has_mutation = batch_has_mutation(&fields);
     let span = info_span!(
         "graphql.request",
         request_id = %request_id,
@@ -264,7 +266,7 @@ async fn graphql_handler(
 
     let response = async move {
         // CSRF is enforced once at the HTTP level for the entire batch.
-        if let Err(resp) = enforce_csrf_for_batch(&req, &batch) {
+        if let Err(resp) = enforce_csrf_for_batch(&req, &fields) {
             return resp;
         }
         // `Schema::data` is only available via GraphQL execution context, so auth is injected here
@@ -290,14 +292,14 @@ async fn graphql_handler(
             (None, None) => None,
         };
         if let Some(caller) = caller
-            && let Err(retry_after_seconds) = edge_limits.charge_batch(&caller, &batch)
+            && let Err(retry_after_seconds) = edge_limits.charge_batch(&caller, &fields)
         {
             return GraphQLResponse::from(crate::edge::mutation_budget_refusal(
                 retry_after_seconds,
             ));
         }
         if let Some(user_id) = auth.user_id
-            && let Some(response) = refuse_remote_account_mutation(&req, &batch, user_id).await
+            && let Some(response) = refuse_remote_account_mutation(&req, &fields, user_id).await
         {
             return response;
         }
@@ -345,14 +347,12 @@ async fn graphql_handler(
 /// mutation that changes their account rather than a space: those run at their relay.
 async fn refuse_remote_account_mutation(
     req: &HttpRequest,
-    batch: &async_graphql::BatchRequest,
+    fields: &[RootFields],
     user_id: rim_core::user::model::UserId,
 ) -> Option<GraphQLResponse> {
-    let field = batch.iter().find_map(|request| {
-        rim_api::federation::refused_account_mutation(
-            &request.query,
-            request.operation_name.as_deref(),
-        )
+    let field = fields.iter().find_map(|fields| match fields {
+        Ok(fields) => rim_api::federation::refused_account_mutation_in(fields),
+        Err(message) => Some(message.clone()),
     })?;
     let state = req.app_data::<web::Data<crate::s2s::S2sState>>()?;
     match state.host.is_remote_user(user_id).await {
@@ -468,24 +468,6 @@ async fn graphql_ws_handler(
         &req,
         payload,
     )
-}
-
-fn request_has_mutation(req: &async_graphql::Request) -> bool {
-    let doc = match async_graphql_parser::parse_query(req.query.as_str()) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-
-    doc.operations.iter().any(|(_, op)| {
-        matches!(
-            op.node.ty,
-            async_graphql_parser::types::OperationType::Mutation
-        )
-    })
-}
-
-fn batch_has_mutation(batch: &async_graphql::BatchRequest) -> bool {
-    batch.iter().any(request_has_mutation)
 }
 
 fn log_batch_errors(

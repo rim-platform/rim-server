@@ -11,7 +11,7 @@ use rim_services::relay::service::RelayService;
 use rim_services::remote_workspace::service::{WorkspaceHostService, WorkspaceRelayService};
 
 use crate::errors::map_service_error;
-use crate::operation::{Classification, parse_root_fields};
+use crate::operation::{Classification, OperationFields, parse_root_fields};
 
 /// The relay and host services and this server's roles, injected into the schema.
 #[derive(Clone)]
@@ -180,10 +180,14 @@ pub const ACCOUNT_MUTATIONS: &[&str] = &[
 /// through fragments at any depth; or why the request cannot be cleared: a parse failure, or a
 /// mutation whose root fields cannot all be found.
 pub fn refused_account_mutation(query: &str, operation_name: Option<&str>) -> Option<String> {
-    let fields = match parse_root_fields(query, operation_name) {
-        Ok(fields) => fields,
-        Err(e) => return Some(e.to_string()),
-    };
+    match parse_root_fields(query, operation_name) {
+        Ok(fields) => refused_account_mutation_in(&fields),
+        Err(e) => Some(e.to_string()),
+    }
+}
+
+/// [`refused_account_mutation`] for root fields already walked from a parsed document.
+pub fn refused_account_mutation_in(fields: &OperationFields) -> Option<String> {
     if !fields.may_mutate() {
         return None;
     }
@@ -192,8 +196,9 @@ pub fn refused_account_mutation(query: &str, operation_name: Option<&str>) -> Op
     }
     fields
         .fields
-        .into_iter()
+        .iter()
         .find(|name| ACCOUNT_MUTATIONS.contains(&name.as_str()))
+        .cloned()
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rim_api::AppSchema;
 use rim_api::auth_context::{AuthActorCtx, RemoteIp};
 use rim_api::auth_intent::AuthIntentCtx;
-use rim_api::federation::{ForwardedRequest, refused_account_mutation};
+use rim_api::federation::{ForwardedRequest, refused_account_mutation_in};
 use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
 use rim_s2s::host::sign_host_response;
@@ -24,6 +24,7 @@ use serde_json::json;
 
 use crate::edge::{EdgeLimits, MutationCaller};
 use crate::graphql_body::{Oversize, check_body, check_documents};
+use crate::graphql_support::{RootFields, batch_root_fields};
 use crate::s2s::S2sState;
 use crate::s2s::guard::{Reply, Verified, internal};
 
@@ -100,6 +101,7 @@ fn over_limits(
     limits: &EdgeLimits,
     auth: &ForwardAuth,
     batch: &async_graphql::BatchRequest,
+    fields: &[RootFields],
 ) -> Option<Reply> {
     if limits.refuses_batch(batch) {
         return Some(Reply::json(
@@ -108,7 +110,7 @@ fn over_limits(
         ));
     }
     let retry_after_seconds = limits
-        .charge_batch(&MutationCaller::Device(auth.device_key_id), batch)
+        .charge_batch(&MutationCaller::Device(auth.device_key_id), fields)
         .err()?;
     Some(
         match serde_json::to_value(crate::edge::mutation_budget_refusal(retry_after_seconds)) {
@@ -131,7 +133,7 @@ async fn graphql(
     if let Err(oversize) = check_body(body) {
         return too_large(oversize);
     }
-    let batch: async_graphql::BatchRequest = match serde_json::from_slice(body) {
+    let mut batch: async_graphql::BatchRequest = match serde_json::from_slice(body) {
         Ok(batch) => batch,
         Err(_) => {
             return Reply::error(StatusCode::BAD_REQUEST, "bad_request", "malformed GraphQL");
@@ -146,11 +148,13 @@ async fn graphql(
     ) else {
         return internal("the schema or the API limits are not configured");
     };
-    if let Some(refused) = over_limits(edge_limits, auth, &batch) {
+    let fields = batch_root_fields(&mut batch);
+    if let Some(refused) = over_limits(edge_limits, auth, &batch, &fields) {
         return refused;
     }
-    if let Some(field) = batch.iter().find_map(|request| {
-        refused_account_mutation(&request.query, request.operation_name.as_deref())
+    if let Some(field) = fields.iter().find_map(|fields| match fields {
+        Ok(fields) => refused_account_mutation_in(fields),
+        Err(message) => Some(message.clone()),
     }) {
         tracing::info!(field, user_id = %auth.user_id, "refused an account mutation for a remote member");
         return Reply::ok(json!({
@@ -401,6 +405,16 @@ mod tests {
         serde_json::from_value(Value::Array(requests)).expect("a batch")
     }
 
+    /// [`over_limits`] for `batch`, its root fields found as [`graphql`] finds them.
+    fn over(
+        limits: &EdgeLimits,
+        auth: &ForwardAuth,
+        mut batch: async_graphql::BatchRequest,
+    ) -> Option<Reply> {
+        let fields = batch_root_fields(&mut batch);
+        over_limits(limits, auth, &batch, &fields)
+    }
+
     fn body(reply: &Reply) -> Value {
         serde_json::from_slice(&reply.body).expect("json")
     }
@@ -437,13 +451,13 @@ mod tests {
     fn a_forwarded_batch_over_the_cap_is_refused_as_on_api() {
         let limits = limits();
         let auth = device();
-        let reply = over_limits(&limits, &auth, &batch(&["{ a }"; 3])).expect("refused");
+        let reply = over(&limits, &auth, batch(&["{ a }"; 3])).expect("refused");
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
         assert_eq!(body(&reply), json!({ "error": "batch_too_large" }));
-        assert!(over_limits(&limits, &auth, &batch(&["{ a }"; 2])).is_none());
+        assert!(over(&limits, &auth, batch(&["{ a }"; 2])).is_none());
         let single: async_graphql::BatchRequest =
             serde_json::from_value(json!({ "query": "{ a }" })).expect("a request");
-        assert!(over_limits(&limits, &auth, &single).is_none());
+        assert!(over(&limits, &auth, single).is_none());
     }
 
     #[actix_web::test]
@@ -475,11 +489,11 @@ mod tests {
     fn forwarded_mutations_spend_a_budget_of_their_own_device() {
         let limits = limits();
         let first = device();
-        assert!(over_limits(&limits, &first, &batch(&["mutation { a b }"])).is_none());
-        let reply = over_limits(
+        assert!(over(&limits, &first, batch(&["mutation { a b }"])).is_none());
+        let reply = over(
             &limits,
             &first,
-            &batch(&["mutation { a }", "mutation { b }"]),
+            batch(&["mutation { a }", "mutation { b }"]),
         )
         .expect("over the budget");
         assert_eq!(reply.status, StatusCode::OK);
@@ -487,7 +501,7 @@ mod tests {
         assert_eq!(body["errors"][0]["extensions"]["code"], "RATE_LIMITED");
         assert_eq!(body["errors"][0]["extensions"]["retryAfterSeconds"], 20);
         assert!(
-            over_limits(&limits, &first, &batch(&["{ a }"])).is_none(),
+            over(&limits, &first, batch(&["{ a }"])).is_none(),
             "queries are free"
         );
         let same_user_other_device = ForwardAuth {
@@ -495,14 +509,14 @@ mod tests {
             ..first.clone()
         };
         assert!(
-            over_limits(
+            over(
                 &limits,
                 &same_user_other_device,
-                &batch(&["mutation { a b c }"])
+                batch(&["mutation { a b c }"])
             )
             .is_none(),
             "another device has its own budget"
         );
-        assert!(over_limits(&limits, &device(), &batch(&["mutation { a b c }"])).is_none());
+        assert!(over(&limits, &device(), batch(&["mutation { a b c }"])).is_none());
     }
 }

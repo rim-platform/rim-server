@@ -9,7 +9,8 @@ use crate::body::{BodyError, read_bounded};
 
 /// Largest GraphQL request body. The largest request the API takes is `submitMlsCommit` with a
 /// Commit and a Welcome of up to 4 MiB each, base64 in its variables (about 10.7 MiB); the rest
-/// leaves room for the query and the other variables.
+/// leaves room for the query and the other variables. The next largest, a key log of 256 signed
+/// statements at their 16 KiB payload cap with hybrid signatures, is about 6 MiB.
 pub(crate) const MAX_GRAPHQL_BODY_BYTES: usize = 12 * 1024 * 1024;
 
 /// Most `,`, `[` and `{` bytes in a GraphQL body. A JSON document holds at most one value more
@@ -191,6 +192,29 @@ mod tests {
         }))
         .expect("json");
         assert!(body.len() > 10 * 1024 * 1024);
+        assert_eq!(
+            post(body, Some("application/json")).await,
+            (StatusCode::OK, serde_json::json!({ "requests": 1 }))
+        );
+    }
+
+    #[actix_web::test]
+    async fn a_key_log_of_256_entries_at_their_caps_fits() {
+        let key = format!("ed25519+mldsa87:{}", "A".repeat(3_500));
+        let payload =
+            serde_json::json!({ "v": 2, "type": "key-rotation", "seq": 1, "keys": [key, key] })
+                .to_string();
+        let payload = format!("{payload}{}", " ".repeat(16 * 1024 - payload.len()));
+        let entry = serde_json::json!({
+            "payload": payload,
+            "signature": format!("ed25519+mldsa87:{}", "B".repeat(8 * 1024)),
+        });
+        let body = serde_json::to_vec(&serde_json::json!({
+            "query": "mutation($log: [SignedStatementInput!]!) { enrollKeyLog(keyLog: $log) }",
+            "variables": { "log": vec![entry; 256] },
+        }))
+        .expect("json");
+        assert!(body.len() > 6 * 1024 * 1024);
         assert_eq!(
             post(body, Some("application/json")).await,
             (StatusCode::OK, serde_json::json!({ "requests": 1 }))

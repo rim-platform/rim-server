@@ -5040,7 +5040,6 @@ dependencies = [
  "async-channel",
  "async-graphql",
  "async-graphql-actix-web",
- "async-graphql-parser",
  "async-trait",
  "base64 0.22.1",
  "chrono",

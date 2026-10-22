@@ -30,7 +30,6 @@ actix-http = "3.11.2"
 actix-web-actors = "4.3.1"
 async-channel = "2.5.0"
 async-graphql = "7.0.17"
-async-graphql-parser = "7.0.17"
 tracing = "0.1.41"
 uuid = { version = "1.19.0", features = ["v7"] }
 tokio = { version = "1", features = ["rt", "time", "sync", "macros", "fs"] }
