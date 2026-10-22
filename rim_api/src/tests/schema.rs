@@ -134,14 +134,15 @@ fn workspace_plugin_sdl_has_the_registry_api() {
     }
 }
 
-/// Verified reports of encrypted messages: the franking fields and the single-report query.
+/// Verified reports of encrypted messages: the franking fields and the single-report query;
+/// the principal of a direct-space report's author.
 #[test]
 fn message_report_sdl_has_the_franked_report_fields() {
     let sdl = test_sdl();
     let compact = compact_without_descriptions(&sdl);
     for definition in [
         "messageReadable: Boolean! messageText: String messageAuthorId: ID \
-         messageSentAt: DateTime frankingVerifiedAt: DateTime frankedSenderDeviceId: ID \
+         messageAuthorPrincipalId: String messageSentAt: DateTime frankingVerifiedAt: DateTime frankedSenderDeviceId: ID \
          frankedContent: String frankedContentExpiresAt: DateTime }",
         "messageReport(serverId: ID!, reportId: ID!): MessageReport!",
         "reportEncryptedMessage(input: ReportEncryptedMessageInput!): Boolean!",

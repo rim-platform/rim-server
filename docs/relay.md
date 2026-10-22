@@ -45,8 +45,10 @@ space") there, reads and writes alike, and the refused call joins nobody.
 
 With no Owner or Moderator there, a report of a message in the direct space (`reportMessage`,
 `reportEncryptedMessage`) goes to the instance operators. They list, open and resolve these
-reports in the app with the workspace moderation roots and the direct space's id, and may delete
-a message with a verified report; nobody else can (`docs/api.md`, "Instance moderation").
+reports in the app with the workspace moderation roots and the direct space's id, read the one
+reported message when it is not encrypted, see its author's principal id to block it, and may
+delete a reported unencrypted message or a message with a verified report; nobody else can
+(`docs/api.md`, "Instance moderation").
 
 A conversation's home is the relay whose direct space holds it. The home sequences it: it stores
 the messages, Commits and Welcomes, and every member's app reads and writes there, through their

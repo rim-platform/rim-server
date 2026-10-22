@@ -82,4 +82,21 @@ pub trait ConversationMemberRepository: Send + Sync {
         conversation_id: ConversationId,
         user_id: UserId,
     ) -> RepoResult<bool>;
+
+    /// Records `invited_by` as the member who added `user_id`, active or pending. `false` when
+    /// `user_id` is not a member.
+    async fn set_invited_by(
+        &self,
+        conversation_id: ConversationId,
+        user_id: UserId,
+        invited_by: UserId,
+    ) -> RepoResult<bool>;
+
+    /// The member recorded as having added `user_id`; `None` when nothing is recorded or
+    /// `user_id` is not a member.
+    async fn invited_by(
+        &self,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    ) -> RepoResult<Option<UserId>>;
 }

@@ -202,6 +202,17 @@ mod tests {
                 conversation_id: ConversationId,
                 user_id: UserId,
             ) -> RepoResult<bool>;
+            async fn set_invited_by(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+                invited_by: UserId,
+            ) -> RepoResult<bool>;
+            async fn invited_by(
+                &self,
+                conversation_id: ConversationId,
+                user_id: UserId,
+            ) -> RepoResult<Option<UserId>>;
         }
     }
 

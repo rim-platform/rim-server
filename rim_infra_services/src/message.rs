@@ -130,11 +130,11 @@ pub struct DefaultMessageService {
     /// Encrypted messages. `None` in unit tests that are not about them; the composition root
     /// wires it.
     e2ee: Option<MessageE2ee>,
-    /// Lets a moderator delete a message with a verified report outside its conversation.
+    /// Lets a moderator delete a reported message outside its conversation.
     /// `None` in unit tests that are not about it; the composition root wires it.
     moderation_repo: Option<Arc<dyn ModerationRepository>>,
-    /// The relay's direct space, where an instance operator deletes a message with a verified
-    /// report. `None` where no direct space is wired.
+    /// The relay's direct space, where an instance operator deletes a reported message. `None`
+    /// where no direct space is wired.
     direct_space_id: Option<rim_core::server::model::ServerId>,
     /// Messages each user may send per minute, across every way of creating one. `None` sets
     /// no limit.
@@ -266,8 +266,7 @@ impl DefaultMessageService {
         self
     }
 
-    /// Let an instance operator delete a message of the direct space that has a verified
-    /// report.
+    /// Let an instance operator delete a reported message of the direct space.
     pub fn with_direct_space(
         mut self,
         direct_space_id: Option<rim_core::server::model::ServerId>,
@@ -276,29 +275,50 @@ impl DefaultMessageService {
         self
     }
 
-    /// Whether the actor may delete the message for its verified franked report: an
-    /// Owner/Moderator of the workspace, or an instance operator in the direct space.
+    /// Whether the actor may delete the message for its report: an Owner/Moderator of the
+    /// workspace when the report is verified and franked, or an instance operator in the
+    /// direct space when it is, or when the message is not encrypted and has any report.
     async fn may_delete_reported(&self, cmd: &DeleteMessageCmd) -> ServiceResult<bool> {
         let Some(moderation_repo) = &self.moderation_repo else {
             return Ok(false);
         };
-        let handles_reports = if self.direct_space_id == Some(cmd.server_id) {
-            crate::operator::is_operator(self.repos.user_repo.as_ref(), cmd.actor).await?
-        } else {
-            self.repos
-                .server_member_repo
-                .get_member_standing(cmd.server_id, cmd.actor.user_id)
+        if self.direct_space_id == Some(cmd.server_id) {
+            if !crate::operator::is_operator(self.repos.user_repo.as_ref(), cmd.actor).await? {
+                return Ok(false);
+            }
+            if moderation_repo
+                .has_verified_report(cmd.server_id, cmd.message_id)
                 .await?
-                .is_some_and(|standing| standing.role.is_moderator())
-        };
-        Ok(handles_reports
+            {
+                return Ok(true);
+            }
+            let plaintext = self
+                .repos
+                .message_repo
+                .get_by_id(cmd.message_id)
+                .await?
+                .is_some_and(|m| {
+                    m.conversation_id == cmd.conversation_id && m.encryption.is_none()
+                });
+            return Ok(plaintext
+                && moderation_repo
+                    .has_report(cmd.server_id, cmd.message_id)
+                    .await?);
+        }
+        let moderator = self
+            .repos
+            .server_member_repo
+            .get_member_standing(cmd.server_id, cmd.actor.user_id)
+            .await?
+            .is_some_and(|standing| standing.role.is_moderator());
+        Ok(moderator
             && moderation_repo
                 .has_verified_report(cmd.server_id, cmd.message_id)
                 .await?)
     }
 
     /// The conversation when the actor, who cannot read it, may delete the message for its
-    /// verified franked report; `None` otherwise.
+    /// report; `None` otherwise.
     async fn reported_message_reach(
         &self,
         cmd: &DeleteMessageCmd,
@@ -1915,7 +1935,7 @@ impl MessageService for DefaultMessageService {
         }
 
         // The author, an Owner/Moderator of the workspace, or whoever may delete it for its
-        // verified report.
+        // report.
         let moderator_delete = msg.sent_by != cmd.actor.user_id;
         if moderator_delete && !moderator && !self.may_delete_reported(&cmd).await? {
             return Err(ServiceError::PermissionDenied);

@@ -325,6 +325,26 @@ async fn reports_are_unique_paginated_and_resolved_once() {
         .unwrap();
     assert_eq!(open.items.len(), 2);
     assert!(repo.get_report(reports[0].id).await.unwrap().is_some());
+
+    // Any report counts, open or resolved, but only in its own workspace.
+    for report in &reports {
+        assert!(repo.has_report(server.id, report.message_id).await.unwrap());
+        assert!(
+            !repo
+                .has_verified_report(server.id, report.message_id)
+                .await
+                .unwrap()
+        );
+    }
+    let unreported = ctx.create_message(channel.id, author, "fine").await;
+    assert!(!repo.has_report(server.id, unreported.id).await.unwrap());
+    let other = ctx.create_server("elsewhere").await;
+    assert!(
+        !repo
+            .has_report(other.id, reports[0].message_id)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

@@ -287,6 +287,51 @@ async fn activate_member_flips_a_pending_member_once() {
     assert!(joined_at > pending.joined_at);
 }
 
+/// The member who added someone is recorded on their membership, active or pending, read
+/// back, and cleared when that account is deleted.
+#[tokio::test]
+async fn invited_by_is_recorded_per_membership() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+    let server = ctx.create_server("s").await;
+    let alice = ctx.create_user("inv-alice").await.id;
+    let bob = ctx.create_user("inv-bob").await.id;
+    let carol = ctx.create_user("inv-carol").await.id;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    repo.add_member(conv.id, alice).await.unwrap();
+    repo.add_member(conv.id, bob).await.unwrap();
+    repo.add_pending_member(conv.id, carol).await.unwrap();
+
+    assert_eq!(repo.invited_by(conv.id, bob).await.unwrap(), None);
+    assert!(repo.set_invited_by(conv.id, bob, alice).await.unwrap());
+    assert!(repo.set_invited_by(conv.id, carol, bob).await.unwrap());
+    assert!(
+        !repo
+            .set_invited_by(conv.id, UserId::new(), alice)
+            .await
+            .unwrap()
+    );
+    assert_eq!(repo.invited_by(conv.id, bob).await.unwrap(), Some(alice));
+    assert_eq!(repo.invited_by(conv.id, carol).await.unwrap(), Some(bob));
+    assert_eq!(repo.invited_by(conv.id, alice).await.unwrap(), None);
+    assert_eq!(repo.invited_by(conv.id, UserId::new()).await.unwrap(), None);
+
+    sea_orm::ConnectionTrait::execute_raw(
+        &ctx.db,
+        sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "DELETE FROM \"user\" WHERE id = $1",
+            [sea_orm::prelude::Uuid::from(alice).into()],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(repo.invited_by(conv.id, bob).await.unwrap(), None);
+    assert_eq!(repo.invited_by(conv.id, carol).await.unwrap(), Some(bob));
+}
+
 /// The expiry purge deletes only pending memberships that started before the cutoff.
 #[tokio::test]
 async fn delete_pending_before_removes_old_invitations_only() {

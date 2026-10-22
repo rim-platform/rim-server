@@ -523,7 +523,10 @@ impl DefaultModerationService {
     /// Reports with the message details the moderator may see: the body and author only when
     /// the moderator can read the conversation (public channel, or conversation member); the
     /// author, send time and franking details of a verified franked report in any case. The
-    /// verified content itself is left out.
+    /// verified content itself is left out. A report of the direct space, which only an
+    /// instance operator gets this far with, also shows the author, send time and text of the
+    /// one reported message when it is not encrypted, and the author's principal id whenever
+    /// the author is shown.
     async fn reports_with_messages(
         &self,
         moderator: UserId,
@@ -555,9 +558,12 @@ impl DefaultModerationService {
                 readable.insert(*id);
             }
         }
+        let in_direct_space = |r: &MessageReport| self.direct_space_id == Some(r.server_id);
         let shown_message_ids: Vec<_> = reports
             .iter()
-            .filter(|r| readable.contains(&r.conversation_id) || r.franked.is_some())
+            .filter(|r| {
+                readable.contains(&r.conversation_id) || r.franked.is_some() || in_direct_space(r)
+            })
             .map(|r| r.message_id)
             .collect();
         let messages = if shown_message_ids.is_empty() {
@@ -568,21 +574,46 @@ impl DefaultModerationService {
                 .get_by_ids(&shown_message_ids)
                 .await?
         };
+        let direct_authors: Vec<UserId> = reports
+            .iter()
+            .filter(|r| in_direct_space(r))
+            .filter_map(|r| messages.get(&r.message_id).map(|m| m.sent_by))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let principals: HashMap<UserId, String> = if direct_authors.is_empty() {
+            HashMap::new()
+        } else {
+            self.repos
+                .user_repo
+                .get_by_ids(&direct_authors)
+                .await?
+                .into_iter()
+                .filter_map(|u| u.principal_id.map(|p| (u.id, p)))
+                .collect()
+        };
 
         Ok(reports
             .into_iter()
             .map(|report| {
                 let is_readable = readable.contains(&report.conversation_id);
+                let direct = in_direct_space(&report);
                 let message = messages.get(&report.message_id).cloned();
                 let franked = report.franked.clone();
                 let resolved_at = report.resolved_at;
                 let mut dto = MessageReportDto::without_message(report);
-                if is_readable || franked.is_some() {
-                    dto.message_readable = is_readable;
-                    if let Some(message) = message {
+                dto.message_readable = is_readable;
+                if let Some(message) = message {
+                    let plaintext_here = direct && message.encryption.is_none();
+                    if is_readable || franked.is_some() || plaintext_here {
                         dto.message_author_id = Some(message.sent_by);
                         dto.message_sent_at = Some(message.sent_at);
-                        dto.message_text = if message.is_deleted || !is_readable {
+                        if direct {
+                            dto.message_author_principal_id =
+                                principals.get(&message.sent_by).cloned();
+                        }
+                        dto.message_text = if message.is_deleted || !(is_readable || plaintext_here)
+                        {
                             None
                         } else {
                             message.text

@@ -72,10 +72,15 @@ pub struct MessageReportDto {
     pub resolved_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub message_readable: bool,
-    /// `None` when unreadable or when the message was deleted.
+    /// `None` when unreadable or when the message was deleted. An instance operator reads the
+    /// text of a reported unencrypted message of the direct space.
     pub message_text: Option<String>,
-    /// Shown when the conversation is readable, and for a verified franked report.
+    /// Shown when the conversation is readable, for a verified franked report, and to an
+    /// instance operator for a report of an unencrypted message of the direct space.
     pub message_author_id: Option<UserId>,
+    /// The author's principal id, for a report of the direct space whose author is shown;
+    /// `None` elsewhere and for an author without one.
+    pub message_author_principal_id: Option<String>,
     pub message_sent_at: Option<DateTime<Utc>>,
     /// Set for a verified franked report of an encrypted message.
     pub franking_verified_at: Option<DateTime<Utc>>,
@@ -106,6 +111,7 @@ impl MessageReportDto {
             message_readable: false,
             message_text: None,
             message_author_id: None,
+            message_author_principal_id: None,
             message_sent_at: None,
             franking_verified_at: None,
             franked_sender_device_id: None,

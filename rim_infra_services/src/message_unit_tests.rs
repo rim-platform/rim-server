@@ -1520,6 +1520,10 @@ mod tests {
     struct ReportedDelete {
         role: rim_core::server_member::model::ServerMemberRole,
         verified_report: bool,
+        /// Whether the message has a report without franking.
+        unverified_report: bool,
+        /// Whether the message is encrypted.
+        encrypted: bool,
         /// Whether the DM is in the relay's direct space.
         direct_space: bool,
         /// Whether the actor is an instance operator.
@@ -1540,6 +1544,8 @@ mod tests {
         delete_reported(ReportedDelete {
             role,
             verified_report,
+            unverified_report: false,
+            encrypted: true,
             direct_space: false,
             operator: false,
             in_conversation: false,
@@ -1557,6 +1563,8 @@ mod tests {
         let ReportedDelete {
             role,
             verified_report,
+            unverified_report,
+            encrypted,
             direct_space,
             operator,
             in_conversation,
@@ -1568,7 +1576,19 @@ mod tests {
         let conv_id = conv.id;
         let author = UserId::new();
         let actor = UserId::new();
-        let msg = message(author, conv_id);
+        let mut msg = message(author, conv_id);
+        if encrypted {
+            msg.text = None;
+            msg.encryption = Some(rim_core::message::model::MessageEncryption {
+                incarnation: 1,
+                epoch: 1,
+                sender_device_key_id: None,
+                ciphertext: Some(vec![1]),
+                franking_commitment: vec![2],
+                franking_receipt: vec![3],
+                franking_key_id: 1,
+            });
+        }
         let msg_id = msg.id;
 
         let mut server_member_repo = MockServerMemberRepository::new();
@@ -1604,6 +1624,12 @@ mod tests {
             .expect_has_verified_report()
             .withf(move |s, m| *s == server_id && *m == msg_id)
             .returning(move |_, _| Box::pin(async move { Ok(verified_report) }));
+        moderation_repo
+            .expect_has_report()
+            .withf(move |s, m| *s == server_id && *m == msg_id)
+            .returning(move |_, _| {
+                Box::pin(async move { Ok(verified_report || unverified_report) })
+            });
         let mut user_repo = MockUserRepository::new();
         user_repo
             .expect_is_instance_operator()
@@ -1676,6 +1702,8 @@ mod tests {
         let operator = ReportedDelete {
             role: ServerMemberRole::Guest,
             verified_report: true,
+            unverified_report: false,
+            encrypted: true,
             direct_space: true,
             operator: true,
             in_conversation: false,
@@ -1721,6 +1749,70 @@ mod tests {
                     ..operator
                 },
                 "an operator in a workspace",
+            ),
+            (
+                ReportedDelete {
+                    verified_report: false,
+                    unverified_report: true,
+                    ..operator
+                },
+                "an encrypted message with an unverified report",
+            ),
+        ] {
+            let (res, rows) = delete_reported(who).await;
+            assert!(matches!(res, Err(ServiceError::PermissionDenied)), "{case}");
+            assert!(rows.is_empty(), "{case}");
+        }
+    }
+
+    #[tokio::test]
+    async fn any_report_lets_an_operator_delete_an_unencrypted_message_of_the_direct_space() {
+        use rim_core::server_member::model::ServerMemberRole;
+
+        let operator = ReportedDelete {
+            role: ServerMemberRole::Guest,
+            verified_report: false,
+            unverified_report: true,
+            encrypted: false,
+            direct_space: true,
+            operator: true,
+            in_conversation: false,
+        };
+        for who in [
+            operator,
+            ReportedDelete {
+                in_conversation: true,
+                ..operator
+            },
+        ] {
+            let (res, rows) = delete_reported(who).await;
+            res.expect("operator delete");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].command_id, "admin.delete_message");
+        }
+        for (who, case) in [
+            (
+                ReportedDelete {
+                    unverified_report: false,
+                    ..operator
+                },
+                "without a report",
+            ),
+            (
+                ReportedDelete {
+                    operator: false,
+                    in_conversation: true,
+                    ..operator
+                },
+                "a member of the DM who is no operator",
+            ),
+            (
+                ReportedDelete {
+                    direct_space: false,
+                    role: ServerMemberRole::Moderator,
+                    ..operator
+                },
+                "a workspace moderator without a verified report",
             ),
         ] {
             let (res, rows) = delete_reported(who).await;
