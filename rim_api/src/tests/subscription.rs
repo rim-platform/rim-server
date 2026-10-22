@@ -75,7 +75,6 @@ fn state_changed(server_id: ServerId, version: i64) -> WorkspaceEvent {
     WorkspaceEvent::WorkspaceStateChanged {
         workspace_id: server_id,
         key: "topic".to_string(),
-        value: serde_json::json!(version),
         scope: WorkspaceStateScopeDto::Server,
         user_id: None,
         version,

@@ -62,7 +62,8 @@ impl ModerationMutations {
     }
 
     /// Remove a member from the workspace (Owner/Moderator; nobody can kick the owner, and a
-    /// moderator cannot kick a moderator). They may re-join with a new invite. Audited.
+    /// moderator cannot kick a moderator), with their macros and pipelines there. They may
+    /// re-join with a new invite. Audited.
     async fn kick_member(
         &self,
         ctx: &Context<'_>,

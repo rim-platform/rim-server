@@ -47,3 +47,11 @@ pub struct NewWorkspaceState {
     pub created_by: UserId,
     pub expires_at: Option<DateTime<Utc>>,
 }
+
+/// What one account created in a workspace's shared scope: unexpired entries, and the bytes of
+/// their values as stored JSON text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkspaceStateUsage {
+    pub entries: u64,
+    pub bytes: u64,
+}

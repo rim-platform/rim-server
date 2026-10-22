@@ -16,6 +16,7 @@ use rim_core::dm_policy::repository::DmPolicyRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
+use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
 use rim_services::ServiceResult;
 use rim_services::default_workspace::DefaultWorkspaceService;
@@ -69,6 +70,9 @@ pub struct StartRepos {
     pub server_repo: Arc<dyn ServerRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
+    /// Tells whether the creator of a channel the definition names is the workspace's Owner or
+    /// a Moderator.
+    pub server_member_repo: Arc<dyn ServerMemberRepository>,
 }
 
 /// What the start found and did.
@@ -101,6 +105,9 @@ pub struct AppliedChanges {
     pub channels_added: Vec<String>,
     /// The titles of the channels whose topic was set.
     pub topics_set: Vec<String>,
+    /// The titles of the channels left alone because a channel of that title exists that
+    /// neither the definition nor an Owner or Moderator created.
+    pub channels_taken: Vec<String>,
     /// Whether the DM policy was set.
     pub dm_policy_set: bool,
 }
@@ -227,6 +234,8 @@ fn remove_claim_link(file: &Path) -> std::io::Result<()> {
 /// channels missing by title (with no members; new members join the public ones), set the
 /// topics the definition gives where they differ, and set the DM policy when it differs.
 /// Nothing is deleted, no channel's privacy changes and nobody's membership or role changes.
+/// A channel of a definition's title is taken as the definition's only when the definition, the
+/// Owner or a Moderator created it; any other is left alone and named in `channels_taken`.
 ///
 /// # Errors
 /// Storage errors; a workspace that no longer exists is `NotFound`.
@@ -254,6 +263,12 @@ pub async fn apply(
             .get_channel_by_title(workspace, &channel.title)
             .await?;
         let (id, topic) = match existing {
+            Some(conversation)
+                if !created_by_staff(repos, workspace, conversation.created_by).await? =>
+            {
+                changes.channels_taken.push(channel.title.clone());
+                continue;
+            }
             Some(conversation) => (conversation.id, conversation.topic),
             None => {
                 let created = repos
@@ -289,6 +304,23 @@ pub async fn apply(
         }
     }
     Ok(changes)
+}
+
+/// Whether a channel of `workspace` created by `creator` counts as the workspace's own: one the
+/// definition created (no creator), or one its Owner or a Moderator created.
+async fn created_by_staff(
+    repos: &StartRepos,
+    workspace: ServerId,
+    creator: Option<UserId>,
+) -> ServiceResult<bool> {
+    let Some(creator) = creator else {
+        return Ok(true);
+    };
+    Ok(repos
+        .server_member_repo
+        .get_member(workspace, creator)
+        .await?
+        .is_some_and(|m| m.member_role.is_moderator()))
 }
 
 fn new_channel(

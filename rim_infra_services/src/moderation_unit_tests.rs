@@ -151,6 +151,9 @@ mod tests {
         }
     }
 
+    /// What a removal deleted: `macros` or `pipelines`, of whom, in which workspace.
+    type Cleared = (&'static str, UserId, ServerId);
+
     struct Fx {
         server_id: ServerId,
         roles: Vec<(UserId, ServerMemberRole)>,
@@ -158,6 +161,8 @@ mod tests {
         events: Arc<RecordingBroadcaster>,
         /// `(user, workspace)` pairs whose notifications were deleted.
         cleared_notifications: Arc<Mutex<Vec<(UserId, ServerId)>>>,
+        /// `(kind, user, workspace)` for each user's macros and pipelines deleted.
+        cleared_automations: Arc<Mutex<Vec<Cleared>>>,
         conversation: Option<Conversation>,
         message: Option<Message>,
         /// Whether every moderator is a member of every conversation.
@@ -180,6 +185,7 @@ mod tests {
                 audit: Arc::default(),
                 events: Arc::default(),
                 cleared_notifications: Arc::default(),
+                cleared_automations: Arc::default(),
                 conversation: None,
                 message: None,
                 conversation_member: true,
@@ -206,6 +212,10 @@ mod tests {
 
         fn cleared_notifications(&self) -> Vec<(UserId, ServerId)> {
             self.cleared_notifications.lock().expect("lock").clone()
+        }
+
+        fn cleared_automations(&self) -> Vec<Cleared> {
+            self.cleared_automations.lock().expect("lock").clone()
         }
 
         fn service(&self, moderation_repo: MockModerationRepository) -> DefaultModerationService {
@@ -327,6 +337,29 @@ mod tests {
                     Box::pin(async { Ok(1) })
                 });
 
+            let mut macro_repo = rim_core::macro_def::repository::MockMacroRepository::new();
+            let cleared = Arc::clone(&self.cleared_automations);
+            macro_repo
+                .expect_delete_for_user()
+                .returning(move |server_id, user_id| {
+                    cleared
+                        .lock()
+                        .expect("lock")
+                        .push(("macros", user_id, server_id));
+                    Box::pin(async { Ok(1) })
+                });
+            let mut pipeline_repo = rim_core::pipeline::repository::MockPipelineRepository::new();
+            let cleared = Arc::clone(&self.cleared_automations);
+            pipeline_repo
+                .expect_delete_for_user()
+                .returning(move |server_id, user_id| {
+                    cleared
+                        .lock()
+                        .expect("lock")
+                        .push(("pipelines", user_id, server_id));
+                    Box::pin(async { Ok(1) })
+                });
+
             DefaultModerationService::new(
                 ModerationRepos {
                     server_member_repo: Arc::new(server_member_repo),
@@ -337,6 +370,8 @@ mod tests {
                     message_attachment_repo: Arc::new(message_attachment_repo),
                     moderation_repo: Arc::new(moderation_repo),
                     notification_repo: Arc::new(notification_repo),
+                    macro_repo: Arc::new(macro_repo),
+                    pipeline_repo: Arc::new(pipeline_repo),
                 },
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
@@ -396,6 +431,10 @@ mod tests {
             fx.cleared_notifications().is_empty(),
             "refused kicks keep notifications"
         );
+        assert!(
+            fx.cleared_automations().is_empty(),
+            "refused kicks keep macros and pipelines"
+        );
 
         svc.kick(kick(&fx, mod_a, member))
             .await
@@ -416,6 +455,15 @@ mod tests {
         assert_eq!(
             fx.cleared_notifications(),
             [(member, fx.server_id), (mod_b, fx.server_id)]
+        );
+        assert_eq!(
+            fx.cleared_automations(),
+            [
+                ("macros", member, fx.server_id),
+                ("pipelines", member, fx.server_id),
+                ("macros", mod_b, fx.server_id),
+                ("pipelines", mod_b, fx.server_id),
+            ]
         );
     }
 
@@ -455,6 +503,13 @@ mod tests {
             |e| matches!(e, WorkspaceEvent::MemberLeft { user_id, .. } if *user_id == member)
         ));
         assert_eq!(fx.cleared_notifications(), [(member, fx.server_id)]);
+        assert_eq!(
+            fx.cleared_automations(),
+            [
+                ("macros", member, fx.server_id),
+                ("pipelines", member, fx.server_id),
+            ]
+        );
     }
 
     #[tokio::test]

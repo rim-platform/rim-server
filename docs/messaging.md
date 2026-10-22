@@ -148,7 +148,9 @@ decide, and each may only tighten the one above it:
 ## Archived Channels
 
 - Owner/Moderator archive and unarchive channels (`setConversationArchived`); other roles get
-  `FORBIDDEN`. Only channels can be archived (`VALIDATION` otherwise).
+  `FORBIDDEN`. Only channels can be archived (`VALIDATION` otherwise). An archived channel does
+  not count against `RIM_LIMIT_CHANNELS_PER_WORKSPACE`; unarchiving one past the cap is
+  `VALIDATION`.
 - An archived conversation is read-only: sending, replying, editing, deleting and forwarding into
   it, reactions, pins, topic edits, threads, attachments, typing, joining and inviting fail with
   `CONVERSATION_ARCHIVED`. Leaving and removing members still work.
@@ -163,7 +165,7 @@ decide, and each may only tighten the one above it:
 |---|---|
 | `OWNER` | Everything. One per workspace; the role cannot be granted (`setMemberRole` with `OWNER` is `VALIDATION`). |
 | `MODERATOR` | Moderation (kick, ban, timeout, delete any message, slow mode, reports) and channel management (archive, remove members). Changes roles only between `MEMBER` and `GUEST`. |
-| `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining), creates channels and groups, joins public channels, invites people into conversations. |
+| `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining), creates channels and groups, joins public channels, invites people into conversations. In the server's default workspace only the Owner and Moderators create channels (`FORBIDDEN`). |
 | `GUEST` | Restricted. Reads and writes only in conversations they were explicitly added to. |
 
 - **Migration:** before the member role existed every new member was created as `guest`, so "guest" meant an
@@ -229,8 +231,8 @@ Who may target whom (kick, ban, timeout, clear timeout): the actor must be Owner
 nobody can target the Owner; a Moderator cannot target another Moderator; nobody targets
 themselves (`VALIDATION`). Otherwise `FORBIDDEN`.
 
-- `kickMember`: removes the member from the workspace and from every conversation of it, emits
-  `MemberLeft`. They can re-join with a new invite.
+- `kickMember`: removes the member from the workspace and from every conversation of it, deletes
+  their macros and pipelines there, emits `MemberLeft`. They can re-join with a new invite.
 - `banMember(reason, expiresAt)`: records a ban (`server_ban`), then removes the member like a
   kick. A user who is not a member can be banned pre-emptively. While a ban is active (no
   `expiresAt`, or `expiresAt` in the future) accepting an invite, joining by invite and being

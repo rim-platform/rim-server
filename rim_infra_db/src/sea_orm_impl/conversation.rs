@@ -580,6 +580,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
         conversation::Entity::find()
             .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
             .filter(conversation::Column::ConversationType.eq(channel))
+            .filter(conversation::Column::ArchivedAt.is_null())
             .count(&self.db)
             .await
             .map_err(map_db_err)

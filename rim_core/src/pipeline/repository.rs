@@ -36,4 +36,6 @@ pub trait PipelineRepository: Send + Sync {
     ) -> RepoResult<()>;
     /// How many pipelines `server_id` holds, of every user.
     async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64>;
+    /// Delete every pipeline `user_id` created in `server_id`; returns how many were deleted.
+    async fn delete_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
 }

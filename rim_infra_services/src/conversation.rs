@@ -22,6 +22,7 @@ use rim_services::conversation::command::{
 use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::ConversationService;
 use rim_services::conversation::types::ConversationParticipants;
+use rim_services::default_workspace::DefaultWorkspaceService;
 use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::{ServiceError, ServiceResult};
 
@@ -64,6 +65,9 @@ pub struct DefaultConversationService {
     limits: InstanceLimits,
     /// Conversations each user started in the direct space today.
     direct_space_starts: Arc<DailyCounter>,
+    /// Which workspace every new account joins, where only its Owner and Moderators create
+    /// channels; `None` where none is wired.
+    default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
 }
 
 impl DefaultConversationService {
@@ -77,6 +81,7 @@ impl DefaultConversationService {
             direct_space_starts: Arc::new(DailyCounter::per_day(
                 MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY,
             )),
+            default_workspace: None,
         }
     }
 
@@ -102,6 +107,46 @@ impl DefaultConversationService {
                 )))
             }
         }
+    }
+
+    pub fn with_default_workspace(
+        mut self,
+        default_workspace: Arc<dyn DefaultWorkspaceService>,
+    ) -> Self {
+        self.default_workspace = Some(default_workspace);
+        self
+    }
+
+    /// Whether `server_id` is the server's default workspace now.
+    async fn is_default_workspace(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+    ) -> ServiceResult<bool> {
+        match &self.default_workspace {
+            Some(default_workspace) => Ok(default_workspace.current().await? == Some(server_id)),
+            None => Ok(false),
+        }
+    }
+
+    /// `Validation` naming the cap when `server_id` already has as many unarchived channels as
+    /// the instance allows.
+    async fn ensure_channel_below_cap(
+        &self,
+        server_id: rim_core::server::model::ServerId,
+    ) -> ServiceResult<()> {
+        if self.limits.channels_per_workspace.is_none() {
+            return Ok(());
+        }
+        let channels = self
+            .repos
+            .conversation_repo
+            .count_channels(server_id)
+            .await?;
+        ensure_below(
+            self.limits.channels_per_workspace,
+            channels,
+            "channels per workspace",
+        )
     }
 
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
@@ -607,6 +652,13 @@ impl ConversationService for DefaultConversationService {
                 (CoreConversationType::Group, unique)
             }
             ConversationParticipants::Channel => {
+                if !standing.role.is_moderator() && self.is_default_workspace(cmd.server_id).await?
+                {
+                    return Err(ServiceError::Forbidden(
+                        "in this workspace only the owner and moderators create channels"
+                            .to_string(),
+                    ));
+                }
                 if let Some(ref channel_title) = title {
                     let exists = self
                         .repos
@@ -620,18 +672,7 @@ impl ConversationService for DefaultConversationService {
                         ));
                     }
                 }
-                if self.limits.channels_per_workspace.is_some() {
-                    let channels = self
-                        .repos
-                        .conversation_repo
-                        .count_channels(cmd.server_id)
-                        .await?;
-                    ensure_below(
-                        self.limits.channels_per_workspace,
-                        channels,
-                        "channels per workspace",
-                    )?;
-                }
+                self.ensure_channel_below_cap(cmd.server_id).await?;
 
                 // The creator is always a member of the channel, public or private.
                 (CoreConversationType::Channel, vec![cmd.actor.user_id])
@@ -1099,6 +1140,9 @@ impl ConversationService for DefaultConversationService {
 
         if conversation.is_archived() == cmd.archived {
             return self.to_dto(conversation).await;
+        }
+        if !cmd.archived {
+            self.ensure_channel_below_cap(cmd.server_id).await?;
         }
 
         let updated = self

@@ -24,7 +24,7 @@ use rim_services::command::sanitize::{MAX_INTENT_SAMPLE_LEN, MAX_NL_DESCRIPTION_
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::service::CommandService;
 use rim_services::command::verb::TypedVerb;
-use rim_services::limits::{InstanceLimits, ensure_below};
+use rim_services::limits::{InstanceLimits, ensure_below, member_share};
 use rim_services::macro_def::dto::{MacroDto, MacroStepDto};
 use rim_services::macro_def::request::{
     CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListUserMacrosQuery,
@@ -280,14 +280,25 @@ impl MacroService for DefaultMacroService {
         )
         .await?;
 
+        let is_moderator = self
+            .repos
+            .server_member_repo
+            .get_member(cmd.server_id, cmd.actor.user_id)
+            .await?
+            .is_some_and(|m| m.member_role.is_moderator());
+        let per_user = member_share(
+            self.limits.macros_per_workspace,
+            MAX_MACROS_PER_USER,
+            is_moderator,
+        );
         let count = self
             .repos
             .macro_repo
             .count_for_user(cmd.server_id, cmd.actor.user_id)
             .await?;
-        if count >= MAX_MACROS_PER_USER {
+        if count >= per_user {
             return Err(ServiceError::Validation(format!(
-                "user may have at most {MAX_MACROS_PER_USER} macros per server"
+                "user may have at most {per_user} macros per server"
             )));
         }
         if self.limits.macros_per_workspace.is_some() {
@@ -823,8 +834,23 @@ mod tests {
     }
 
     fn make_member_repo() -> MockServerMemberRepository {
+        member_repo_as(ServerMemberRole::Member)
+    }
+
+    /// A member repository where everyone is a member with `role`.
+    fn member_repo_as(role: ServerMemberRole) -> MockServerMemberRepository {
         let mut repo = MockServerMemberRepository::new();
         repo.expect_is_member().returning(|_, _| Ok(true));
+        repo.expect_get_member()
+            .returning(move |server_id, user_id| {
+                Ok(Some(ServerMember {
+                    id: rim_core::server_member::model::ServerMemberId::new(),
+                    server_id,
+                    user_id,
+                    member_role: role,
+                    joined_at: chrono::Utc::now(),
+                }))
+            });
         repo
     }
 
@@ -853,6 +879,7 @@ mod tests {
             async fn create(&self, new_macro: rim_core::macro_def::model::NewMacroDef) -> RepoResult<MacroDef>;
             async fn update(&self, id: MacroId, update: rim_core::macro_def::model::UpdateMacroDef) -> RepoResult<MacroDef>;
             async fn delete(&self, id: MacroId) -> RepoResult<()>;
+            async fn delete_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
         }
     }
 
@@ -1123,6 +1150,77 @@ mod tests {
                 Err(ServiceError::Validation(message)) => {
                     assert!(!allowed, "{cap:?} {in_workspace:?}");
                     assert_eq!(message, "this instance allows 50 macros per workspace");
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_member_holds_a_fifth_of_the_macros_per_workspace_cap() {
+        for (role, held, allowed) in [
+            (ServerMemberRole::Member, 9, true),
+            (ServerMemberRole::Member, 10, false),
+            (ServerMemberRole::Moderator, 10, true),
+            (ServerMemberRole::Owner, 49, true),
+        ] {
+            let mut repo = MockMacroRepository::new();
+            repo.expect_count_for_user().returning(move |_, _| Ok(held));
+            repo.expect_count_for_server().returning(|_| Ok(0));
+            repo.expect_create()
+                .times(usize::from(allowed))
+                .returning(|new_macro| {
+                    Ok(MacroDef {
+                        id: MacroId::new(),
+                        server_id: new_macro.server_id,
+                        user_id: new_macro.user_id,
+                        name: new_macro.name,
+                        description: new_macro.description,
+                        steps_json: new_macro.steps_json,
+                        ai_callable: new_macro.ai_callable,
+                        nl_description: new_macro.nl_description,
+                        intent_samples: new_macro.intent_samples,
+                        sensitivity: new_macro.sensitivity,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                    })
+                });
+            let svc = DefaultMacroService::new(
+                MacroRepos {
+                    macro_repo: Arc::new(repo),
+                    server_member_repo: Arc::new(member_repo_as(role)),
+                },
+                MacroServices {
+                    command_service: Arc::new(MockCommandService::new()),
+                    audit_log_service: None,
+                    confirmation_store: None,
+                },
+            )
+            .with_limits(rim_services::limits::InstanceLimits {
+                macros_per_workspace: Some(50),
+                ..Default::default()
+            });
+            let result = svc
+                .create_macro(CreateMacroCmd {
+                    actor: Actor::new(UserId::new()),
+                    server_id: ServerId::new(),
+                    name: "Shared".to_string(),
+                    description: None,
+                    steps: vec![MacroStepDto {
+                        command_id: "chat.post_message".to_string(),
+                        args: None,
+                    }],
+                    ai_callable: false,
+                    nl_description: String::new(),
+                    intent_samples: vec![],
+                    sensitivity: CommandSensitivityDto::Safe,
+                })
+                .await;
+            match result {
+                Ok(_) => assert!(allowed, "{role:?} {held}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{role:?} {held}");
+                    assert_eq!(message, "user may have at most 10 macros per server");
                 }
                 Err(other) => panic!("unexpected {other:?}"),
             }

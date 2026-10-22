@@ -239,6 +239,7 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `api_ip` | Requests to `/api` routes per client address (`RIM_RATE_REQUESTS_PER_MIN_PER_IP`). |
 | `api_mutations` | Mutation fields per session, per device for requests forwarded by another server, or per address otherwise (`RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`). |
 | `messages` | Messages per user (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`). |
+| `workspace_state_writes` | Workspace state writes per user, 60 a minute in bursts of up to 30. |
 | `ws_connections` | Open WebSocket connections per user (`RIM_RATE_WS_CONNECTIONS_PER_USER`). |
 | `ws_subscriptions` | Subscriptions per WebSocket connection (`RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION`). |
 | `ws_subscribe_rate` | Subscriptions started per WebSocket connection, 10 a second in bursts of up to 50; past it the connection closes with `1008`. |

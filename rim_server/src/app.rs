@@ -384,6 +384,7 @@ async fn start_default_workspace(
             server_repo: Arc::clone(&repos.server_repo),
             conversation_repo: Arc::clone(&repos.conversation_repo),
             dm_policy_repo: Arc::clone(&repos.dm_policy_repo),
+            server_member_repo: Arc::clone(&repos.server_member_repo),
         },
         setting,
         StartContext {
@@ -402,16 +403,28 @@ async fn start_default_workspace(
             server_id = %workspace,
             "RIM_DEFAULT_WORKSPACE is set: every new account joins this workspace"
         ),
-        Started::Applied { workspace, changes } => tracing::info!(
-            target: "audit",
-            server_id = %workspace,
-            renamed_to = ?changes.renamed_to,
-            channels_added = ?changes.channels_added,
-            topics_set = ?changes.topics_set,
-            dm_policy_set = changes.dm_policy_set,
-            "RIM_DEFAULT_WORKSPACE_FILE applied to the default workspace; every new account \
-             joins it"
-        ),
+        Started::Applied { workspace, changes } => {
+            tracing::info!(
+                target: "audit",
+                server_id = %workspace,
+                renamed_to = ?changes.renamed_to,
+                channels_added = ?changes.channels_added,
+                topics_set = ?changes.topics_set,
+                dm_policy_set = changes.dm_policy_set,
+                "RIM_DEFAULT_WORKSPACE_FILE applied to the default workspace; every new account \
+                 joins it"
+            );
+            if !changes.channels_taken.is_empty() {
+                tracing::warn!(
+                    target: "audit",
+                    server_id = %workspace,
+                    channels = ?changes.channels_taken,
+                    "channels of RIM_DEFAULT_WORKSPACE_FILE are left alone: a member who is \
+                     neither the owner nor a moderator created a channel of that name; give \
+                     the file's channel another name"
+                );
+            }
+        }
         Started::ClaimWaiting {
             file,
             expires_at,

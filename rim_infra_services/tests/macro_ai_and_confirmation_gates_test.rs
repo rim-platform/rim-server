@@ -84,6 +84,7 @@ mockall::mock! {
         async fn create(&self, new_macro: rim_core::macro_def::model::NewMacroDef) -> RepoResult<MacroDef>;
         async fn update(&self, id: MacroId, update: rim_core::macro_def::model::UpdateMacroDef) -> RepoResult<MacroDef>;
         async fn delete(&self, id: MacroId) -> RepoResult<()>;
+        async fn delete_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
     }
 }
 

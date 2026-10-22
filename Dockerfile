@@ -161,15 +161,15 @@ USER rim
 #   RIM_MINIMUM_AGE       — age, 13-21, every signup confirms the person has reached; self-
 #                           declared (default: none); outside the range stops the server at boot
 #   Instance limits, each off when unset or 0; past one a write answers VALIDATION:
-#   RIM_LIMIT_WORKSPACES_PER_USER — workspaces one user owns
+#   RIM_LIMIT_WORKSPACES_PER_USER — workspaces one user owns, created or handed over
 #   RIM_LIMIT_MEMBERS_PER_WORKSPACE — members of a workspace (the direct space has none)
-#   RIM_LIMIT_CHANNELS_PER_WORKSPACE — channels of a workspace, public and private
+#   RIM_LIMIT_CHANNELS_PER_WORKSPACE — unarchived channels of a workspace, public and private
 #   RIM_LIMIT_DEVICES_PER_USER — devices on one account; the stricter of this and
 #                           RIM_RELAY_DEVICES_PER_USER applies
 #   RIM_LIMIT_DM_REQUESTS_PER_DAY — DM requests to strangers per user per day; the stricter of
 #                           this and RIM_RELAY_DM_REQUESTS_PER_DAY applies
-#   RIM_LIMIT_MACROS_PER_WORKSPACE — macros of a workspace
-#   RIM_LIMIT_PIPELINES_PER_WORKSPACE — pipelines of a workspace
+#   RIM_LIMIT_MACROS_PER_WORKSPACE — macros of a workspace; a member holds a fifth
+#   RIM_LIMIT_PIPELINES_PER_WORKSPACE — pipelines of a workspace; a member holds a fifth
 #   RIM_LIMIT_PLUGINS_PER_WORKSPACE — plugins of a workspace's registry
 #   RIM_LIMIT_INVITES_PER_USER_PER_DAY — workspace invites one user creates per day
 #   RIM_LIMIT_INVITE_MAX_USES — the uses one invite may have
@@ -179,8 +179,9 @@ USER rim
 #                           holds; unlike the others it is on unless set to 0 (default: 50)
 #   RIM_LIMIT_ACCOUNTS    — local accounts the instance holds, those in their deletion grace
 #                           period included; at it every signup answers REGISTRATION_FULL
-#   RIM_PROBATION_HOURS   — hours after creation during which an account creates no workspace
-#                           and sends no DM request to a stranger; never an instance operator
+#   RIM_PROBATION_HOURS   — hours after creation during which an account creates no workspace,
+#                           writes no shared workspace state and sends no DM request to a
+#                           stranger; never an instance operator
 #                           (default: off)
 #   RIM_RATE_PROBATION_MESSAGES_PER_MIN — messages per minute of an account in probation,
 #                           instead of the normal rate (default: the normal rate)

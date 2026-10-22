@@ -95,6 +95,16 @@ impl DefaultServerService {
         Ok((scope, repos))
     }
 
+    /// The workspaces `user_id` owns, counted after locking their account's row in the
+    /// transaction `repos` run in, so a creation or a hand-over to the same user waits for this
+    /// one to commit and counts its result.
+    async fn count_owned_locked(repos: &ServerRepos, user_id: UserId) -> ServiceResult<u64> {
+        if !repos.user_repo.lock_user(user_id).await? {
+            return Err(ServiceError::NotFound);
+        }
+        Ok(repos.server_repo.count_owned(user_id).await?)
+    }
+
     /// Delete stored files of a deleted workspace; a file already gone or that cannot be deleted
     /// is logged and left.
     async fn delete_files(&self, server_id: ServerId, keys: &[String]) {
@@ -235,33 +245,17 @@ impl ServerService for DefaultServerService {
             )));
         }
         self.ensure_out_of_probation(cmd.actor.user_id).await?;
+
+        // Run create + add_member inside a transaction when DB is available.
+        let (scope, repos) = self.transaction().await?;
         if self.limits.workspaces_per_user.is_some() {
-            let owned = self
-                .repos
-                .server_repo
-                .count_owned(cmd.actor.user_id)
-                .await?;
+            let owned = Self::count_owned_locked(&repos, cmd.actor.user_id).await?;
             ensure_below(
                 self.limits.workspaces_per_user,
                 owned,
                 "workspaces per user",
             )?;
         }
-
-        // Run create + add_member inside a transaction when DB is available.
-        let scope = if let Some(db) = &self.db {
-            Some(
-                begin_transaction(db)
-                    .await
-                    .map_err(ServiceError::internal)?,
-            )
-        } else {
-            None
-        };
-        let repos = match &scope {
-            Some(s) => AppRepos::with_handle(&s.handle()).for_server(),
-            None => self.repos.clone(),
-        };
 
         let server = repos.server_repo.create_server(name).await?;
 
@@ -343,6 +337,15 @@ impl ServerService for DefaultServerService {
         }
 
         let (scope, repos) = self.transaction().await?;
+        if let Some(cap) = self.limits.workspaces_per_user {
+            let owned = Self::count_owned_locked(&repos, cmd.user_id).await?;
+            if owned >= u64::from(cap) {
+                return Err(ServiceError::Validation(format!(
+                    "this instance allows {cap} workspaces per user, and the new owner already \
+                     owns {owned}"
+                )));
+            }
+        }
         repos
             .server_member_repo
             .change_member_role(cmd.server_id, cmd.user_id, ServerMemberRole::Owner)

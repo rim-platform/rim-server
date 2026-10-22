@@ -28,4 +28,6 @@ pub trait MacroRepository: Send + Sync {
     async fn delete(&self, id: MacroId) -> RepoResult<()>;
     /// How many macros `server_id` holds, of every user.
     async fn count_for_server(&self, server_id: ServerId) -> RepoResult<u64>;
+    /// Delete every macro `user_id` holds in `server_id`; returns how many were deleted.
+    async fn delete_for_user(&self, server_id: ServerId, user_id: UserId) -> RepoResult<u64>;
 }

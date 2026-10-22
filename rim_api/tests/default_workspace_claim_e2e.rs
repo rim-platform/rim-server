@@ -26,6 +26,7 @@ use rim_infra_db::sea_orm_impl::default_workspace::SeaOrmDefaultWorkspaceReposit
 use rim_infra_db::sea_orm_impl::dm_policy::SeaOrmDmPolicyRepository;
 use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
+use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 use rim_infra_services::default_workspace::{
     DefaultWorkspace, DefinedWorkspace, StartContext, StartRepos, Started, WorkspaceDefinition,
     start,
@@ -80,6 +81,7 @@ async fn run_start(
         server_repo: Arc::new(SeaOrmServerRepository::new(ctx.db.clone())),
         conversation_repo: Arc::new(SeaOrmConversationRepository::new(ctx.db.clone())),
         dm_policy_repo: Arc::new(SeaOrmDmPolicyRepository::new(ctx.db.clone())),
+        server_member_repo: Arc::new(SeaOrmServerMemberRepository::new(ctx.db.clone())),
     };
     start(
         &repos,
@@ -556,6 +558,88 @@ async fn a_later_start_adds_and_updates_but_deletes_nothing() {
     assert!(
         matches!(&started, Started::Applied { changes, .. } if *changes == Default::default()),
         "{started:?}"
+    );
+    cleanup(&file);
+}
+
+/// A channel of a title the file adds later, created by a member who is neither the owner nor
+/// a moderator, is left alone by the next start and named in `channels_taken`; one the owner
+/// created is taken as the file's.
+#[tokio::test]
+async fn a_later_start_leaves_a_members_channel_of_a_defined_title_alone() {
+    let ctx = TestCtx::new().await;
+    let defined = defined(DEFINITION);
+    let file = defined.claim_link_file.clone();
+    let setting = DefaultWorkspace::Defined(Arc::new(defined.clone()));
+    run_start(&ctx, &setting, true).await.expect("start");
+    let token = claim_token(&file);
+    let schema = ctx.build_schema_with_defined_workspace(defined, RegistrationMode::InviteOnly);
+    let data = exec_ok(
+        &schema,
+        password_signup("dwc-squat-owner", json!({ "instanceInviteToken": token })),
+    )
+    .await;
+    let owner = id(&data["signupWithInvite"]["userId"]);
+    let workspace = id(&data["signupWithInvite"]["serverId"]);
+    let owner_caller = caller_for(&ctx, &owner).await;
+    for title in ["plugins", "events"] {
+        exec_ok(
+            &schema,
+            owner_caller.request(
+                CREATE_CHANNEL,
+                json!({ "input": {
+                    "serverId": workspace, "isChannel": true, "title": title, "isPrivate": true,
+                } }),
+            ),
+        )
+        .await;
+    }
+    let squatter = ctx.create_user("dwc-squatter").await;
+    let squatter = ctx.caller(&squatter).await;
+    ctx.join(
+        &workspace,
+        &squatter,
+        rim_core::server_member::model::ServerMemberRole::Member,
+    )
+    .await;
+    rows(
+        &ctx,
+        "UPDATE conversation SET created_by = $2::uuid \
+         WHERE server_id = $1::uuid AND title = 'plugins'",
+        vec![
+            workspace.as_str().into(),
+            squatter.user_id.to_string().into(),
+        ],
+    )
+    .await;
+
+    let later = defined_with(
+        &file,
+        r#"{
+          "name": "RIM",
+          "channels": [
+            { "name": "plugins", "topic": "Writing plugins" },
+            { "name": "events", "topic": "Meetups" }
+          ]
+        }"#,
+    );
+    let started = run_start(&ctx, &DefaultWorkspace::Defined(Arc::new(later)), true)
+        .await
+        .expect("later start");
+    let Started::Applied { changes, .. } = started else {
+        panic!("expected the file applied, got {started:?}");
+    };
+    assert_eq!(changes.channels_taken, ["plugins"]);
+    assert_eq!(changes.topics_set, ["events"]);
+    assert!(changes.channels_added.is_empty());
+    let all = channels(&ctx, &workspace).await;
+    assert!(
+        all.contains(&("plugins".to_string(), None, true)),
+        "the member's channel keeps no topic: {all:?}"
+    );
+    assert!(
+        all.contains(&("events".to_string(), Some("Meetups".to_string()), true)),
+        "{all:?}"
     );
     cleanup(&file);
 }

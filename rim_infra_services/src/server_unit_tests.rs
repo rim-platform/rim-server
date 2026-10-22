@@ -294,12 +294,14 @@ mod tests {
         conversation_repo: MockConversationRepository,
         limits: rim_services::limits::InstanceLimits,
     ) -> DefaultServerService {
-        limited_service_for(
-            server_repo,
-            conversation_repo,
-            MockUserRepository::new(),
-            limits,
-        )
+        limited_service_for(server_repo, conversation_repo, lockable_users(), limits)
+    }
+
+    /// A user repository whose every row can be locked.
+    fn lockable_users() -> MockUserRepository {
+        let mut repo = MockUserRepository::new();
+        repo.expect_lock_user().returning(|_| Ok(true));
+        repo
     }
 
     fn limited_service_for(
@@ -590,6 +592,64 @@ mod tests {
                 other => panic!("unexpected {other:?}"),
             };
             assert_eq!(got, want, "{actor} -> {to}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ownership_moves_only_to_a_member_below_the_workspaces_per_user_cap() {
+        for (owned, allowed) in [(4, true), (5, false)] {
+            let (server_id, owner, bob) = (ServerId::new(), UserId::new(), UserId::new());
+            let mut repo = members(vec![
+                (owner, ServerMemberRole::Owner),
+                (bob, ServerMemberRole::Member),
+            ]);
+            repo.expect_change_member_role()
+                .times(if allowed { 2 } else { 0 })
+                .returning(|_, _, _| Ok(()));
+            let mut servers = MockServerRepository::new();
+            servers
+                .expect_count_owned()
+                .withf(move |user| *user == bob)
+                .returning(move |_| Ok(owned));
+            servers
+                .expect_get_by_id()
+                .returning(|id| Ok(Some(server_named(id, "Team"))));
+            let mut users = MockUserRepository::new();
+            users
+                .expect_lock_user()
+                .withf(move |user| *user == bob)
+                .times(1)
+                .returning(|_| Ok(true));
+            let svc = DefaultServerService::new(
+                ServerRepos {
+                    server_repo: Arc::new(servers),
+                    server_member_repo: Arc::new(repo),
+                    conversation_repo: Arc::new(mock_conversation_repo()),
+                    conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                    user_repo: Arc::new(users),
+                },
+                None,
+                noop_observers(),
+            )
+            .with_limits(rim_services::limits::InstanceLimits {
+                workspaces_per_user: Some(5),
+                ..Default::default()
+            });
+            match svc
+                .transfer_ownership(transfer(server_id, owner, bob))
+                .await
+            {
+                Ok(_) => assert!(allowed, "{owned}"),
+                Err(ServiceError::Validation(message)) => {
+                    assert!(!allowed, "{owned}");
+                    assert_eq!(
+                        message,
+                        "this instance allows 5 workspaces per user, and the new owner already \
+                         owns 5"
+                    );
+                }
+                Err(other) => panic!("unexpected {other:?}"),
+            }
         }
     }
 

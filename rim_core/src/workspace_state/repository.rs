@@ -5,7 +5,9 @@ use mockall::automock;
 use crate::repository::error::RepoResult;
 use crate::server::model::ServerId;
 use crate::user::model::UserId;
-use crate::workspace_state::model::{NewWorkspaceState, WorkspaceState, WorkspaceStateScope};
+use crate::workspace_state::model::{
+    NewWorkspaceState, WorkspaceState, WorkspaceStateScope, WorkspaceStateUsage,
+};
 
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
@@ -33,6 +35,14 @@ pub trait WorkspaceStateRepository: Send + Sync {
         scope: WorkspaceStateScope,
         user_id: Option<UserId>,
     ) -> RepoResult<u64>;
+
+    /// The unexpired workspace-scoped entries of `server_id` that `creator` created, counted
+    /// with the bytes of their values.
+    async fn creator_usage(
+        &self,
+        server_id: ServerId,
+        creator: UserId,
+    ) -> RepoResult<WorkspaceStateUsage>;
 
     async fn upsert(&self, new: NewWorkspaceState) -> RepoResult<WorkspaceState>;
 
