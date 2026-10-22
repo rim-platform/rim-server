@@ -432,6 +432,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   `VALIDATION`, while joining an existing emoji and removing a reaction still work. Before, any
   text of up to 32 characters showed as a reaction pill and the reaction groups of a message,
   sent to every member on each toggle, grew without bound.
+- `editEncryptedMessage` counts against the message budget (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`)
+  as `editMessage` does, so a member can no longer edit an encrypted message in a loop, each edit
+  storing a franking revision and reaching every member; resending an edit already stored is
+  not counted.
 - A reaction replacing the author's reaction notification while it is unread and less than 10
   minutes old updates it without another `NotificationDue`, so adding and removing a reaction
   in a loop no longer makes the author's client toast and play a sound each time.

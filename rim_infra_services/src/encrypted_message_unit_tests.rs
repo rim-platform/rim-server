@@ -612,6 +612,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn encrypted_edits_spend_the_message_budget_and_retries_are_free() {
+        let mut f = Fixture::new(true);
+        let rate = crate::token_bucket::BucketRate::new(1, 2).expect("a rate");
+        f.service = f.service.clone().with_message_budget(rate);
+        let id = MessageId::new();
+        f.service
+            .send_encrypted_message(f.send(&f.alice, id, f.envelope(id, &[])))
+            .await
+            .expect("sent");
+        let edit = |franking: u8| EditEncryptedMessageCmd {
+            caller: f.alice.caller(),
+            server_id: f.server,
+            conversation_id: f.conv.id,
+            message_id: id,
+            envelope: f.envelope_at(mls_group_id(f.conv.id, 2), 3, id, &[], franking),
+        };
+        f.service
+            .edit_encrypted_message(edit(0x72))
+            .await
+            .expect("within the burst");
+        f.service
+            .edit_encrypted_message(edit(0x72))
+            .await
+            .expect("a retry of the stored edit is free");
+        f.events();
+
+        let err = f
+            .service
+            .edit_encrypted_message(edit(0x73))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::RateLimited { .. }), "{err:?}");
+        let stored = f.repo.state().messages.get(&id).cloned().expect("stored");
+        assert_eq!(
+            stored.encryption.expect("envelope").franking_commitment,
+            vec![0x72; 32]
+        );
+        assert_eq!(f.repo.state().revisions.len(), 2);
+        assert!(f.events().is_empty());
+    }
+
+    #[tokio::test]
     async fn plaintext_and_encrypted_writes_stay_in_their_own_conversations() {
         let f = Fixture::new(true);
         let err = f
