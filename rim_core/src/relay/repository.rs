@@ -6,10 +6,10 @@ use uuid::Uuid;
 
 use crate::key_identity::model::DeviceKeyId;
 use crate::relay::model::{
-    AbuseReport, AbuseReportId, CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus,
-    DroppedSpace, DueFanout, FanoutStatus, NewAbuseReport, NewDmRequest, NewRelayEnvelope,
-    NewRelayItem, PrincipalBlock, RelayItemRecord, RelayQueueStats, RelaySubscription,
-    RevocationFanout, SubscriptionStatus,
+    AbuseReport, AbuseReportFilter, AbuseReportId, CachedIdentity, Contact, DmRequest, DmRequestId,
+    DmRequestStatus, DroppedSpace, DueFanout, FanoutStatus, NewAbuseReport, NewDmRequest,
+    NewRelayEnvelope, NewRelayItem, PrincipalBlock, RelayItemRecord, RelayQueueStats,
+    RelaySubscription, RevocationFanout, SubscriptionStatus,
 };
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
@@ -342,10 +342,11 @@ pub trait RelayAbuseRepository: Send + Sync {
         expires_at: DateTime<Utc>,
     ) -> RepoResult<u64>;
 
+    /// File a report. `Conflict` when the reporter already reported the same DM request.
     async fn insert_report(&self, report: NewAbuseReport) -> RepoResult<AbuseReport>;
 
-    /// Reports, oldest first; only those not resolved yet when `open_only`.
-    async fn list_reports(&self, open_only: bool) -> RepoResult<Vec<AbuseReport>>;
+    /// The reports `filter` selects, oldest first.
+    async fn list_reports(&self, filter: AbuseReportFilter) -> RepoResult<Vec<AbuseReport>>;
 
     /// Mark a report resolved, keeping the time of an earlier resolution. `None` when there is
     /// no such report.

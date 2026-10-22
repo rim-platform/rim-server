@@ -4,10 +4,12 @@ use async_graphql::*;
 use rim_services::Actor;
 use rim_services::ip_block::service::IpBlockService;
 use rim_services::operator::OperatorCaller;
+use rim_services::relay::dto::ABUSE_REPORT_PAGE;
 use rim_services::relay::service::RelayAbuseService;
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
+use crate::ids::parse_uuid_id;
 use crate::types::{InstanceAbuseReport, InstanceIpBlock, InstancePrincipalBlock};
 
 /// The signed-in viewer as the caller of an instance operator's tool.
@@ -20,17 +22,25 @@ pub(crate) struct InstanceModerationQueries;
 
 #[Object]
 impl InstanceModerationQueries {
-    /// Abuse reports filed with this server, oldest first. Instance operators only; anyone
-    /// else gets `FORBIDDEN`.
+    /// Abuse reports filed with this server, oldest first, a page at a time. Instance
+    /// operators only; anyone else gets `FORBIDDEN`.
     async fn instance_reports(
         &self,
         ctx: &Context<'_>,
         #[graphql(default = true, desc = "Only the reports not yet resolved.")] open_only: bool,
+        #[graphql(desc = "Start after this report: the last one of the previous page.")]
+        after: Option<ID>,
+        #[graphql(
+            default_with = "ABUSE_REPORT_PAGE as i32",
+            desc = "The most reports to return, 1 to 500."
+        )]
+        limit: i32,
     ) -> Result<Vec<InstanceAbuseReport>> {
         let by = operator_caller(ctx)?;
+        let after = after.as_ref().map(parse_uuid_id).transpose()?;
         let reports = ctx
             .data::<Arc<dyn RelayAbuseService>>()?
-            .reports(by, open_only)
+            .reports(by, open_only, after, u32::try_from(limit).unwrap_or(0))
             .await
             .map_err(map_service_error)?;
         Ok(reports.into_iter().map(Into::into).collect())

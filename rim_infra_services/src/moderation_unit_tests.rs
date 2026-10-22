@@ -166,6 +166,10 @@ mod tests {
         attachments: Vec<MessageAttachment>,
         /// Stored attachments anywhere in the workspace, found by blob hash.
         workspace_attachments: Vec<MessageAttachment>,
+        /// The instance operators.
+        operators: Vec<UserId>,
+        /// Whether the fixture's workspace is the relay's direct space.
+        direct_space: bool,
     }
 
     impl Fx {
@@ -181,6 +185,8 @@ mod tests {
                 conversation_member: true,
                 attachments: Vec::new(),
                 workspace_attachments: Vec::new(),
+                operators: Vec::new(),
+                direct_space: false,
             }
         }
 
@@ -230,6 +236,10 @@ mod tests {
             user_repo
                 .expect_get_by_id()
                 .returning(|id| Ok(Some(user(id))));
+            let operators = self.operators.clone();
+            user_repo
+                .expect_is_instance_operator()
+                .returning(move |id| Ok(operators.contains(&id)));
 
             let mut conversation_repo = MockConversationRepository::new();
             conversation_repo
@@ -331,6 +341,7 @@ mod tests {
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
             .with_audit_log_service(Arc::clone(&self.audit) as Arc<dyn AuditLogService>)
+            .with_direct_space(self.direct_space.then_some(self.server_id))
         }
     }
 
@@ -1154,5 +1165,136 @@ mod tests {
             crate::moderation::content_blob_hashes(br#"{"attachments":[{"blobSha256":"!"}]}"#)
                 .is_empty()
         );
+    }
+
+    // ── The direct space ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn an_operator_handles_the_reports_of_the_direct_space_and_nothing_else() {
+        let [operator, member, author] = users();
+        let mut fx = Fx::new(&[(member, Guest), (author, Guest)]);
+        fx.direct_space = true;
+        fx.operators = vec![operator];
+        let conversation = encrypted_dm(fx.server_id);
+        let message = message_in(conversation.id, author);
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        fx.conversation_member = false;
+        fx.attachments = vec![attachment(&message, vec![7; 32], "uploads/own")];
+        let report = franked_report_of(&fx, &message, member);
+        let resolved = MessageReport {
+            status: MessageReportStatus::Resolved,
+            resolved_by: Some(operator),
+            resolved_at: Some(Utc::now()),
+            ..report.clone()
+        };
+        let mut repo = holding(&report);
+        let listed = report.clone();
+        repo.expect_list_reports().returning(move |_, _, _, _, _| {
+            let items = vec![listed.clone()];
+            Box::pin(async move {
+                Ok(rim_core::repository::pagination::Page::new(
+                    items, None, None,
+                ))
+            })
+        });
+        repo.expect_resolve_report().returning(move |_, _, _, _| {
+            let r = resolved.clone();
+            Box::pin(async move { Ok(r) })
+        });
+        let svc = fx.service(repo);
+        let list = |actor| rim_services::moderation::command::ListReportsQuery {
+            actor: Actor::new(actor),
+            server_id: fx.server_id,
+            status: None,
+            limit: 20,
+            dir: rim_core::repository::pagination::PageDir::After,
+            cursor: None,
+        };
+        let get = |actor| GetReportQuery {
+            actor: Actor::new(actor),
+            server_id: fx.server_id,
+            report_id: report.id,
+        };
+
+        // Everyone in the direct space is a guest: no one there handles its reports.
+        assert!(matches!(
+            svc.list_reports(list(member)).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        assert!(matches!(
+            svc.get_report(get(author)).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        assert!(matches!(
+            svc.authorize_report_attachment(AuthorizeReportAttachmentQuery {
+                actor_user_id: member,
+                report_id: report.id,
+                blob_sha256: vec![7; 32],
+            })
+            .await,
+            Err(ServiceError::NotFound)
+        ));
+        assert!(fx.audited().is_empty());
+
+        // The operator lists, opens (audited), downloads and resolves it.
+        let page = svc.list_reports(list(operator)).await.expect("list");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].franked_content, None);
+        let dto = svc.get_report(get(operator)).await.expect("report");
+        assert_eq!(
+            dto.franked_content.as_deref(),
+            Some(FRANKED_CONTENT.as_bytes())
+        );
+        assert_eq!(dto.message_author_id, Some(author));
+        let served = svc
+            .authorize_report_attachment(AuthorizeReportAttachmentQuery {
+                actor_user_id: operator,
+                report_id: report.id,
+                blob_sha256: vec![7; 32],
+            })
+            .await
+            .expect("served");
+        assert_eq!(served.storage_key, "uploads/own");
+        svc.resolve_report(ResolveReportCmd {
+            actor: Actor::new(operator),
+            server_id: fx.server_id,
+            report_id: report.id,
+            outcome: ReportOutcome::Resolved,
+        })
+        .await
+        .expect("resolve");
+        assert_eq!(
+            fx.audited(),
+            [audit_ids::REPORT_VIEWED, audit_ids::RESOLVE_REPORT]
+        );
+
+        // No other moderation: the operator kicks no one there.
+        assert!(matches!(
+            svc.kick(kick(&fx, operator, author)).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_operator_handles_no_reports_of_another_workspace() {
+        let [operator, member, author] = users();
+        let mut fx = Fx::new(&[(member, Member), (author, Member)]);
+        fx.operators = vec![operator];
+        let conversation = encrypted_dm(fx.server_id);
+        let message = message_in(conversation.id, author);
+        fx.conversation = Some(conversation);
+        fx.message = Some(message.clone());
+        let report = franked_report_of(&fx, &message, member);
+        let svc = fx.service(holding(&report));
+        assert!(matches!(
+            svc.get_report(GetReportQuery {
+                actor: Actor::new(operator),
+                server_id: fx.server_id,
+                report_id: report.id,
+            })
+            .await,
+            Err(ServiceError::PermissionDenied)
+        ));
     }
 }

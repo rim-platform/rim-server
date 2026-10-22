@@ -35,8 +35,8 @@ impl ModerationQueries {
     }
 
     /// Message reports of the workspace (all statuses when `status` is omitted), ordered
-    /// `createdAt ASC, id ASC`. Owner/Moderator only. The message body is included only when
-    /// the moderator can read the conversation.
+    /// `createdAt ASC, id ASC`. Owner/Moderator only; for the direct space, instance operators
+    /// only. The message body is included only when the moderator can read the conversation.
     async fn message_reports(
         &self,
         ctx: &Context<'_>,
@@ -64,9 +64,9 @@ impl ModerationQueries {
         Ok(MessageReportPage::from_page(page))
     }
 
-    /// One report of the workspace. Owner/Moderator only. For a verified report of an
-    /// encrypted message it includes `frankedContent`, and records that the moderator viewed
-    /// it (`e2ee.report_viewed`).
+    /// One report of the workspace. Owner/Moderator only; for the direct space, instance
+    /// operators only. For a verified report of an encrypted message it includes
+    /// `frankedContent`, and records that the moderator viewed it (`e2ee.report_viewed`).
     async fn message_report(
         &self,
         ctx: &Context<'_>,

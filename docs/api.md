@@ -449,7 +449,7 @@ user).
 
 | Root | Does what the command line does |
 |---|---|
-| `instanceReports(openOnly: true)` | `abuse-reports list [--open]`, oldest first |
+| `instanceReports(openOnly: true, after, limit: 100)` | `abuse-reports list [--open] [--after] [--limit]`, oldest first, at most 500 a page |
 | `instanceResolveReport(id)` | `abuse-reports resolve`; `NOT_FOUND` for no such report |
 | `instancePrincipalBlocks` | `principal list`, newest first |
 | `instanceBlockPrincipal(principalId, reason, cascade: false)` | `principal block [--cascade]` |
@@ -463,6 +463,18 @@ null when no account here holds it. Each root needs a session and the mutations 
 header. Anyone but an instance operator gets `FORBIDDEN`, an app or bot acting for one too.
 Each change writes the same audit line as its command, with the operator's user id as
 `actor_id` (`cli` for the command line).
+
+`instanceReports` pages from the oldest report: the next page passes the last report's `id` as
+`after`. A user reports a DM request once (`reportDmRequest` answers `CONFLICT` the second
+time).
+
+Reports of messages in the direct space (DMs and groups, where everyone is a guest) reach the
+instance operators, not a workspace's moderators. An operator handles them with the workspace
+moderation roots and the direct space's id (`relayInfo.directSpaceId`): `messageReports`,
+`messageReport` (with `frankedContent`, audited as `e2ee.report_viewed` with ids only),
+`resolveReport`, the report's attachment route and `deleteMessage` of a message with a verified
+report (`docs/messaging.md`, "Reports"). Resolving a report starts the 90 days after which its
+verified content is deleted.
 
 ## Errors
 

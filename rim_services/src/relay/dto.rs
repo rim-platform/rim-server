@@ -391,6 +391,11 @@ pub struct FileAbuseReport {
     pub reason: String,
 }
 
+/// The abuse reports listed at once when the caller names no page size.
+pub const ABUSE_REPORT_PAGE: u32 = 100;
+/// The most abuse reports listed at once.
+pub const MAX_ABUSE_REPORT_PAGE: u32 = 500;
+
 /// An abuse report as an operator reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbuseReportDto {

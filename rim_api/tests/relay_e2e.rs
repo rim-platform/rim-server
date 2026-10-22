@@ -403,6 +403,15 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
         )
         .await;
     assert_eq!(report["reportDmRequest"], json!(true));
+    assert_eq!(
+        bob.err(
+            "mutation($id: ID!, $r: String!) { reportDmRequest(id: $id, reason: $r) }",
+            json!({ "id": from_carol["id"], "r": "spam again" }),
+        )
+        .await,
+        "CONFLICT",
+        "one account reports one request once"
+    );
     let unblocked = bob
         .ok(
             "mutation($p: String!) { unblockPrincipal(principalId: $p) }",

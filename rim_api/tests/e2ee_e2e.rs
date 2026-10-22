@@ -23,17 +23,21 @@ use uuid::Uuid;
 use rim_api::AppSchema;
 use rim_api::auth_context::AuthActorCtx;
 use rim_core::auth::repository::SessionRepository;
+use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::message::model::NewMessage;
 use rim_core::message::repository::MessageRepository;
 use rim_core::server::model::Server;
+use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::User;
 use rim_identity::testing::{TestIdentity, device_self_revoke, signing_key};
 use rim_identity::{KeyState, StatementVersion};
+use rim_infra_db::sea_orm_impl::host::SeaOrmHostRepository;
 use rim_infra_db::sea_orm_impl::key_identity::SeaOrmKeyIdentityRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
+use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_services::email::{EmailMessage, EmailSender};
 use rim_services::auth::dto::RegistrationMode;
@@ -242,6 +246,32 @@ async fn fixture() -> Fixture {
     ctx.add_owner(&server, &alice.user).await;
     ctx.add_member(&server, &bob.user, ServerMemberRole::Member)
         .await;
+    Fixture {
+        ctx,
+        schema,
+        provider,
+        server,
+        alice,
+        bob,
+    }
+}
+
+/// [`fixture`] in the relay's direct space, where alice and bob join as guests on first use
+/// and no one is Owner or Moderator.
+async fn direct_space_fixture() -> Fixture {
+    let ctx = TestCtx::new().await;
+    let direct = SeaOrmHostRepository::new(ctx.db.clone())
+        .ensure_direct_space("Direct messages")
+        .await
+        .expect("direct space");
+    let (schema, provider) = ctx.build_with_direct_space(direct);
+    let server = SeaOrmServerRepository::new(ctx.db.clone())
+        .get_by_id(direct)
+        .await
+        .expect("read")
+        .expect("the direct space row");
+    let alice = member(&ctx, &schema, "alice", 1).await;
+    let bob = member(&ctx, &schema, "bob", 2).await;
     Fixture {
         ctx,
         schema,
@@ -1780,6 +1810,133 @@ async fn a_moderator_outside_the_dm_reads_downloads_and_deletes_a_reported_messa
     let reopened =
         exec_ok(&f.schema, carol.request(REPORT_ONE, one)).await["messageReport"].clone();
     assert_eq!(reopened["frankedContent"], json!(b64(&sent_content)));
+}
+
+/// A verified report of a DM in the direct space goes to the instance operators: they list
+/// it, read its content (audited), delete the message and resolve it. The DM's members and
+/// accounts that are not operators can do none of it, and the operator gains no other
+/// moderation there.
+#[tokio::test]
+async fn an_operator_handles_a_report_of_a_dm_in_the_direct_space() {
+    let mut f = direct_space_fixture().await;
+    let conv = f.encrypted_dm().await;
+    let server_id = f.server_id();
+    let opal = f.ctx.create_user("opal").await;
+    let opal = f.ctx.caller(&opal).await;
+    f.provider
+        .instance_operator_service()
+        .grant("opal".to_string())
+        .await
+        .expect("grant");
+
+    let id = Uuid::now_v7();
+    let (request, sent_content, fk) = f.send_request(Who::Alice, &conv, id, "abuse", &[]);
+    let sent = exec_ok(&f.schema, request).await["sendEncryptedMessage"].clone();
+    let valid = report(
+        &server_id,
+        &conv,
+        id,
+        &sent_content,
+        &fk,
+        &sent["encryption"],
+        &f.alice,
+    );
+    exec_ok(&f.schema, f.bob.request(REPORT, valid)).await;
+
+    // Nobody in the direct space handles its reports: everyone there is a guest.
+    let list = json!({ "serverId": server_id });
+    for member in [&f.alice, &f.bob] {
+        assert_eq!(
+            exec_err_code(&f.schema, member.request(REPORTS, list.clone())).await,
+            "FORBIDDEN"
+        );
+    }
+
+    // The operator lists it without its content, then opens it.
+    let items =
+        exec_ok(&f.schema, opal.request(REPORTS, list.clone())).await["messageReports"]["items"]
+            .clone();
+    assert_eq!(items.as_array().map(Vec::len), Some(1));
+    assert_eq!(items[0]["messageId"], json!(id.to_string()));
+    assert_eq!(items[0]["messageReadable"], json!(false));
+    assert_eq!(
+        items[0]["messageAuthorId"],
+        json!(f.alice.user.id.to_string())
+    );
+    assert_eq!(items[0]["frankedContent"], Value::Null);
+    let report_id = items[0]["id"].as_str().expect("id").to_string();
+    let one = json!({ "serverId": server_id, "reportId": report_id });
+    assert_eq!(
+        exec_err_code(&f.schema, f.bob.request(REPORT_ONE, one.clone())).await,
+        "FORBIDDEN"
+    );
+    let opened =
+        exec_ok(&f.schema, opal.request(REPORT_ONE, one.clone())).await["messageReport"].clone();
+    assert_eq!(opened["frankedContent"], json!(b64(&sent_content)));
+    let viewed = f
+        .ctx
+        .conn
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            "SELECT count(*) AS n FROM command_audit_log \
+             WHERE command_id = 'e2ee.report_viewed' AND actor_user_id = $1 \
+               AND args_redacted->>'report_id' = $2 AND args_redacted->>'content' IS NULL",
+            [Uuid::from(opal.user_id).into(), report_id.clone().into()],
+        ))
+        .await
+        .expect("query")
+        .expect("row")
+        .try_get::<i64>("", "n")
+        .expect("count");
+    assert_eq!(viewed, 1);
+
+    // The operator deletes only the reported message, and gains no other moderation here.
+    let other = Uuid::now_v7();
+    let (request, _, _) = f.send_request(Who::Alice, &conv, other, "unreported", &[]);
+    exec_ok(&f.schema, request).await;
+    let delete = |caller: &Caller, message_id: Uuid| {
+        caller.request(
+            DELETE,
+            json!({ "input": { "serverId": server_id, "conversationId": conv, "messageId": message_id } }),
+        )
+    };
+    assert_eq!(
+        exec_err_code(&f.schema, delete(&opal, other)).await,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        exec_err_code(
+            &f.schema,
+            f.bob.request(
+                DELETE,
+                json!({ "input": {
+            "serverId": server_id, "conversationId": conv, "messageId": id,
+        } })
+            )
+        )
+        .await,
+        "FORBIDDEN",
+        "a member of the DM deletes only their own messages"
+    );
+    exec_ok(&f.schema, delete(&opal, id)).await;
+    let bans = opal.request(
+        "query($s: ID!) { serverBans(serverId: $s) { userId } }",
+        json!({ "s": server_id }),
+    );
+    assert_eq!(exec_err_code(&f.schema, bans).await, "FORBIDDEN");
+
+    // Resolving starts the retention of the content.
+    let resolved =
+        exec_ok(&f.schema, opal.request(RESOLVE, one.clone())).await["resolveReport"].clone();
+    assert!(resolved["resolvedAt"].is_string(), "{resolved}");
+    assert!(
+        resolved["frankedContentExpiresAt"].is_string(),
+        "{resolved}"
+    );
+    assert_eq!(
+        exec_err_code(&f.schema, f.alice.request(RESOLVE, one)).await,
+        "FORBIDDEN"
+    );
 }
 
 /// A device whose clock runs a few minutes ahead of the server's still uploads key packages

@@ -120,6 +120,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261020_204601_add_instance_default_workspace::Migration),
             Box::new(m20261020_204805_add_minimum_age_confirmed_to_user::Migration),
             Box::new(m20261020_204850_add_user_handles::Migration),
+            Box::new(m20261021_222259_add_relay_abuse_report_unique_request::Migration),
         ]
     }
 }
@@ -227,3 +228,4 @@ mod m20261019_230105_add_peer_pin_forgotten;
 mod m20261020_204601_add_instance_default_workspace;
 mod m20261020_204805_add_minimum_age_confirmed_to_user;
 mod m20261020_204850_add_user_handles;
+mod m20261021_222259_add_relay_abuse_report_unique_request;

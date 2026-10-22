@@ -264,6 +264,19 @@ pub struct AbuseReport {
     pub resolved_at: Option<DateTime<Utc>>,
 }
 
+/// Which abuse reports to list, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbuseReportFilter {
+    /// Only the reports not resolved yet.
+    pub open_only: bool,
+    /// Only the reports about this principal.
+    pub subject_principal_id: Option<String>,
+    /// Only the reports after this one in the order.
+    pub after: Option<AbuseReportId>,
+    /// At most this many.
+    pub limit: u64,
+}
+
 /// A report to file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAbuseReport {

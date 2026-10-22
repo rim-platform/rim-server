@@ -654,6 +654,10 @@ A report proves one message's content to the moderators without the server havin
      `404`.
    - `deleteMessage` by an Owner/Moderator who cannot read the conversation succeeds when the
      message has a verified report.
+   - In the direct space, where everyone is a guest, the instance operators take the
+     moderators' place for reports: they list, open and resolve them, download their
+     attachments and delete a message with a verified report, and nobody else in the direct
+     space can (`docs/messaging.md`, "Reports").
 
 **Franking keys.** `K` lives in the franking key file, `RIM_FRANKING_KEY_FILE` (default
 `<RIM_DATA_DIR>/franking-key.json`, mode `0600`; the server refuses a file the group or others
@@ -992,7 +996,7 @@ type Query {
   myMlsWelcomes(after: MlsWelcomeCursorInput, limit: Int): [MlsWelcome!]!   # session device, pending
   mlsCommits(serverId: ID!, conversationId: ID!, incarnation: Int!, afterEpoch: Int, limit: Int): MlsCommitPage!
   principalDevices(principalIds: [String!]!): [PrincipalDevices!]!     # principals sharing a workspace with the caller
-  messageReport(serverId: ID!, reportId: ID!): MessageReport!           # Owner/Moderator
+  messageReport(serverId: ID!, reportId: ID!): MessageReport!           # Owner/Moderator; instance operator in the direct space
 }
 type Mutation {
   uploadMlsKeyPackages(keyPackages: [String!]!): MlsKeyPackageStatus!

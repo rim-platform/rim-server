@@ -385,6 +385,19 @@ tag `v<version>`, the version every crate in the workspace carries.
   mentions are checked against the conversation's members and, for a public channel, in one
   query for the rest, instead of one or two queries each.
 
+- Reports of messages in DMs and groups reach someone: the direct space has no Owner or
+  Moderator, so its reports now go to the instance operators. An operator lists, opens and
+  resolves them with `messageReports`, `messageReport` and `resolveReport` and the direct
+  space's id (`relayInfo.directSpaceId`), downloads their attachments and deletes a message with
+  a verified report; nobody else can, and an operator gets no other moderation there. Before,
+  nobody could read them, and the verified content of an encrypted message stayed stored for
+  good because only a resolved report's content is deleted.
+- `reportDmRequest` files one report per user and request: a second report is `CONFLICT`
+  ("you already reported this request"). A migration deletes the repeated reports already
+  stored, keeping the oldest of each, and adds a unique index. GraphQL `instanceReports`
+  returns a page, with `after` (the last report's id) and `limit` (default 100, at most 500),
+  and `abuse-reports list` takes `--after` and `--limit`. Before, one account could report the
+  same request without end, and every open report came back in one list.
 - `RIM_FEATURES_DISABLED` and `RIM_AUDIT_RETENTION_DAYS` set in `deploy/.env` reach the server:
   `deploy/compose.yml` passes both through like every other setting. Before, the two lines were
   commented out in the `rim` service and a value in `.env` was silently ignored, so every

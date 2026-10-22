@@ -90,7 +90,7 @@ pub struct ReportMessageCmd {
     pub reason: String,
 }
 
-/// Owner/Moderator.
+/// Owner/Moderator; an instance operator for the direct space.
 #[derive(Debug, Clone)]
 pub struct ListReportsQuery {
     pub actor: Actor,
@@ -102,8 +102,8 @@ pub struct ListReportsQuery {
     pub cursor: Option<ReportPageCursor>,
 }
 
-/// Owner/Moderator; the report must belong to `server_id`. Reveals a verified report's
-/// content and records that the moderator viewed it.
+/// Owner/Moderator, or an instance operator for the direct space; the report must belong to
+/// `server_id`. Reveals a verified report's content and records that the moderator viewed it.
 #[derive(Debug, Clone)]
 pub struct GetReportQuery {
     pub actor: Actor,
@@ -111,8 +111,9 @@ pub struct GetReportQuery {
     pub report_id: MessageReportId,
 }
 
-/// Owner/Moderator of the report's workspace; the blob must be an attachment of the reported
-/// message or be listed in the report's verified content.
+/// Owner/Moderator of the report's workspace, or an instance operator for a report of the
+/// direct space; the blob must be an attachment of the reported message or be listed in the
+/// report's verified content.
 #[derive(Debug, Clone)]
 pub struct AuthorizeReportAttachmentQuery {
     pub actor_user_id: UserId,
@@ -137,7 +138,8 @@ impl From<ReportOutcome> for MessageReportStatus {
     }
 }
 
-/// Owner/Moderator; the report must belong to `server_id` and still be open.
+/// Owner/Moderator, or an instance operator for the direct space; the report must belong to
+/// `server_id` and still be open.
 #[derive(Debug, Clone)]
 pub struct ResolveReportCmd {
     pub actor: Actor,

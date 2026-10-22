@@ -264,6 +264,12 @@ text). `MessageDeleted` is unchanged.
   reporter's reason are shown.
 - `resolveReport(serverId, reportId, outcome: RESOLVED | DISMISSED)`: Owner/Moderator; a report
   that is no longer open is `CONFLICT`.
+- The direct space has no Owner or Moderator: everyone there is a guest. Its reports (of DMs and
+  groups) go to the instance operators instead (`docs/api.md`, "Instance moderation"):
+  `messageReports`, `messageReport` and `resolveReport` with the direct space's id
+  (`relayInfo.directSpaceId`) answer an instance operator and refuse everyone else with
+  `FORBIDDEN`, an app or bot acting for an operator too. An operator gets nothing else there: no
+  kick, ban, timeout, role change or slow mode.
 
 ### Audit
 
