@@ -503,6 +503,14 @@ mod tests {
             Ok(vec![])
         }
 
+        async fn get_members(
+            &self,
+            _server_id: ServerId,
+            _user_ids: &[UserId],
+        ) -> RepoResult<Vec<ServerMember>> {
+            Ok(vec![])
+        }
+
         async fn is_member(&self, _server_id: ServerId, _user_id: UserId) -> RepoResult<bool> {
             Ok(self.is_member)
         }

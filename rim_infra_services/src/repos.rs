@@ -199,6 +199,8 @@ pub struct AttachmentRepos {
 #[derive(Clone)]
 pub struct ReactionRepos {
     pub message_reaction_repo: Arc<dyn MessageReactionRepository>,
+    /// The workspace's custom emoji, which a `:name:` reaction must name.
+    pub custom_emoji_repo: Arc<dyn CustomEmojiRepository>,
     pub conversation_repo: Arc<dyn ConversationRepository>,
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     pub message_repo: Arc<dyn MessageRepository>,
@@ -491,6 +493,7 @@ impl AppRepos {
     pub fn for_reaction(&self) -> ReactionRepos {
         ReactionRepos {
             message_reaction_repo: Arc::clone(&self.message_reaction_repo),
+            custom_emoji_repo: Arc::clone(&self.custom_emoji_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             message_repo: Arc::clone(&self.message_repo),

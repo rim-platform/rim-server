@@ -63,7 +63,8 @@ pub trait NotificationService: Send + Sync {
 
     /// Internal (not exposed over GraphQL): tell a message's author that someone reacted to it,
     /// store or re-surface their one reaction notification for the message and emit
-    /// `NotificationDue`. Returns whether a notification was stored. Callers treat errors as
+    /// `NotificationDue`, unless it replaced one still unread that surfaced less than ten
+    /// minutes ago. Returns whether a notification was stored. Callers treat errors as
     /// best-effort (log, never fail the reaction).
     async fn notify_for_reaction(&self, cmd: NotifyForReactionCmd) -> ServiceResult<bool>;
 

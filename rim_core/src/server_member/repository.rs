@@ -33,6 +33,14 @@ pub trait ServerMemberRepository: Send + Sync {
 
     async fn get_members_for_server(&self, server_id: ServerId) -> RepoResult<Vec<ServerMember>>;
 
+    /// The members of `server_id` among `user_ids`, in one call; users who are not members are
+    /// left out.
+    async fn get_members(
+        &self,
+        server_id: ServerId,
+        user_ids: &[UserId],
+    ) -> RepoResult<Vec<ServerMember>>;
+
     async fn is_member(&self, server_id: ServerId, user_id: UserId) -> RepoResult<bool>;
 
     /// Make a local user a guest of `server_id` when it is a direct space and they are not a

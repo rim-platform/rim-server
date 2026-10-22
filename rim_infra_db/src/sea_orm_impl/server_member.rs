@@ -44,6 +44,24 @@ impl ServerMemberRepository for SeaOrmServerMemberRepository {
         Ok(model.map(Into::into))
     }
 
+    async fn get_members(
+        &self,
+        server_id: ServerId,
+        user_ids: &[UserId],
+    ) -> RepoResult<Vec<ServerMember>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let models = server_member::Entity::find()
+            .filter(server_member::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(server_member::Column::UserId.is_in(user_ids.iter().map(|id| Uuid::from(*id))))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(models.into_iter().map(Into::into).collect())
+    }
+
     async fn add_member(
         &self,
         server_id: ServerId,

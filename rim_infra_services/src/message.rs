@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -424,16 +424,21 @@ impl DefaultMessageService {
     }
 
     /// Parse mentions from message text, validate them against the users who can read the
-    /// conversation, store in DB, and emit UserMentioned event.
+    /// conversation, store in DB, and emit UserMentioned event. `member_user_ids` are the
+    /// conversation's members.
     async fn process_mentions(
         &self,
         text: Option<&str>,
         message_id: rim_core::message::model::MessageId,
         conversation: &rim_core::conversation::model::Conversation,
         author_id: rim_core::user::model::UserId,
+        member_user_ids: &[rim_core::user::model::UserId],
     ) {
         let Some(text) = text else { return };
-        let mention_ids = parse_mention_ids(text);
+        let mention_ids: Vec<_> = parse_mention_ids(text)
+            .into_iter()
+            .filter(|uid| *uid != author_id)
+            .collect();
         if mention_ids.is_empty() {
             return;
         }
@@ -441,33 +446,29 @@ impl DefaultMessageService {
         let conversation_id = conversation.id;
 
         // Validate: each mentioned user must be a workspace member who can read the
-        // conversation — anyone for a public channel, otherwise a conversation member. A
-        // mention of anyone else would tell them (via `UserMentioned`) that a private
-        // conversation exists.
-        let mut valid_ids = Vec::new();
-        for uid in &mention_ids {
-            if *uid == author_id {
-                continue; // Don't mention yourself
-            }
-            let Ok(Some(member)) = self
+        // conversation — a conversation member, or for a public channel any workspace member
+        // but a guest. A mention of anyone else would tell them (via `UserMentioned`) that a
+        // private conversation exists.
+        let members: HashSet<_> = member_user_ids.iter().copied().collect();
+        let (mut valid_ids, outside): (Vec<_>, Vec<_>) = mention_ids
+            .into_iter()
+            .partition(|uid| members.contains(uid));
+        if conversation.is_public_channel() && !outside.is_empty() {
+            match self
                 .repos
                 .server_member_repo
-                .get_member(server_id, *uid)
+                .get_members(server_id, &outside)
                 .await
-            else {
-                continue;
-            };
-            // A guest can read a public channel only as a conversation member.
-            if (conversation.is_public_channel() && !member.member_role.is_guest())
-                || matches!(
-                    self.repos
-                        .conversation_member_repo
-                        .is_member(conversation_id, *uid)
-                        .await,
-                    Ok(true)
-                )
             {
-                valid_ids.push(*uid);
+                Ok(found) => {
+                    let readers: HashSet<_> = found
+                        .into_iter()
+                        .filter(|m| !m.member_role.is_guest())
+                        .map(|m| m.user_id)
+                        .collect();
+                    valid_ids.extend(outside.into_iter().filter(|uid| readers.contains(uid)));
+                }
+                Err(e) => tracing::warn!(error = %e, "failed to validate mentions"),
             }
         }
 
@@ -1054,8 +1055,14 @@ impl MessageService for DefaultMessageService {
             message: MessageEventData::from(&dto),
         });
 
-        self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
-            .await;
+        self.process_mentions(
+            dto.text.as_deref(),
+            dto.id,
+            &conv,
+            cmd.actor.user_id,
+            &member_user_ids,
+        )
+        .await;
         self.notify_recipients(cmd.server_id, &conv, message, member_user_ids, None)
             .await;
 
@@ -1213,8 +1220,14 @@ impl MessageService for DefaultMessageService {
             message: MessageEventData::from(&dto),
         });
 
-        self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
-            .await;
+        self.process_mentions(
+            dto.text.as_deref(),
+            dto.id,
+            &conv,
+            cmd.actor.user_id,
+            &member_user_ids,
+        )
+        .await;
         // 11. Notifications (best-effort, after commit)
         self.notify_recipients(cmd.server_id, &conv, message, member_user_ids, None)
             .await;
@@ -1627,6 +1640,7 @@ impl MessageService for DefaultMessageService {
     }
 
     async fn edit_message(&self, cmd: EditMessageCmd) -> ServiceResult<MessageDto> {
+        self.ensure_message_budget(cmd.actor.user_id).await?;
         let conv = ensure_conversation_writable(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
@@ -1697,7 +1711,7 @@ impl MessageService for DefaultMessageService {
             conversation_id: dto.conversation_id,
             conversation_type: conv.conversation_type.as_str().to_string(),
             is_private: conv.is_private,
-            member_user_ids,
+            member_user_ids: member_user_ids.clone(),
             message: MessageEventData::from(&dto),
         });
 
@@ -1707,8 +1721,14 @@ impl MessageService for DefaultMessageService {
             .message_mention_repo
             .delete_mentions_for_message(cmd.message_id)
             .await;
-        self.process_mentions(dto.text.as_deref(), dto.id, &conv, cmd.actor.user_id)
-            .await;
+        self.process_mentions(
+            dto.text.as_deref(),
+            dto.id,
+            &conv,
+            cmd.actor.user_id,
+            &member_user_ids,
+        )
+        .await;
 
         Ok(dto)
     }

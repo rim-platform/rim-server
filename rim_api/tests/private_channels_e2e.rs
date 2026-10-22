@@ -126,6 +126,9 @@ mutation Send($input: SendMessageInput!) {
 }
 "#;
 
+const EDIT_MESSAGE: &str = r#"
+mutation Edit($input: EditMessageInput!) { editMessage(input: $input) { id } }"#;
+
 const PIN_MESSAGE: &str = r#"
 mutation Pin($input: PinMessageInput!) { pinMessage(input: $input) }
 "#;
@@ -154,6 +157,7 @@ struct Fixture {
     ctx: TestCtx,
     schema: AppSchema,
     server_id: String,
+    server: rim_core::server::model::Server,
     /// Workspace owner.
     alice: Caller,
     bob: Caller,
@@ -179,6 +183,7 @@ async fn setup() -> Fixture {
         bob: ctx.caller(&bob_user).await,
         carol: ctx.caller(&carol_user).await,
         server_id: server.id.to_string(),
+        server,
         schema,
         ctx,
     }
@@ -340,6 +345,53 @@ fn id_of(conversation: &Value) -> String {
         .as_str()
         .expect("conversation id")
         .to_string()
+}
+
+/// In a public channel a mention reaches any workspace member but a guest, joined or not; the
+/// author and unknown ids are dropped, and an edit replaces the message's mentions.
+#[tokio::test]
+async fn public_channel_mentions_reach_workspace_members_but_not_outside_guests() {
+    let f = setup().await;
+    let guest = f.ctx.create_user("pc-guest").await;
+    f.ctx
+        .add_member(&f.server, &guest, ServerMemberRole::Guest)
+        .await;
+
+    let lobby = id_of(&f.create_channel(&f.alice, "lobby", false).await);
+    let msg = f
+        .send(
+            &f.alice,
+            &lobby,
+            &format!(
+                "<@{}> <@{}> <@{}> <@{}> look",
+                f.alice.user_id,
+                f.bob.user_id,
+                guest.id,
+                uuid::Uuid::new_v4()
+            ),
+        )
+        .await;
+    let msg_id = msg["id"].as_str().expect("id").to_string();
+    assert_eq!(
+        f.mentioned_user_ids(&msg_id).await,
+        vec![f.bob.user_id.to_string()]
+    );
+
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            EDIT_MESSAGE,
+            json!({ "input": {
+                "serverId": f.server_id, "conversationId": lobby, "messageId": msg_id,
+                "text": format!("<@{}> instead", f.carol.user_id),
+            } }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        f.mentioned_user_ids(&msg_id).await,
+        vec![f.carol.user_id.to_string()]
+    );
 }
 
 /// A private channel is invisible to a workspace member outside it: `NOT_FOUND` on every read,

@@ -6,8 +6,8 @@ use mockall::automock;
 use crate::conversation::model::ConversationId;
 use crate::message::model::MessageId;
 use crate::notification::model::{
-    DigestCandidate, NewReactionNotification, NewUserNotification, UserNotification,
-    UserNotificationId, UserNotificationSettings,
+    DigestCandidate, NewReactionNotification, NewUserNotification, StoredReactionNotification,
+    UserNotification, UserNotificationId, UserNotificationSettings,
 };
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir};
@@ -74,7 +74,7 @@ pub trait NotificationRepository: Send + Sync {
         &self,
         notification: NewReactionNotification,
         created_at: DateTime<Utc>,
-    ) -> RepoResult<Option<UserNotification>>;
+    ) -> RepoResult<Option<StoredReactionNotification>>;
 
     /// A user's notifications in one workspace, ordered `created_at DESC, id DESC`, with the
     /// standard cursor semantics (DESC endpoint).

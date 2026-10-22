@@ -241,11 +241,19 @@ impl DefaultAppServiceProvider {
             .with_direct_space(federation.direct_space_id)
             .with_limits(limits),
         );
-        let notification_service: Arc<dyn NotificationService> =
-            Arc::new(crate::notification::DefaultNotificationService::new(
+        let default_workspace_service: Arc<dyn DefaultWorkspaceService> = Arc::new(
+            crate::default_workspace::DefaultDefaultWorkspaceService::new(
+                federation.default_workspace.clone(),
+                Arc::clone(&repos.default_workspace_repo),
+            ),
+        );
+        let notification_service: Arc<dyn NotificationService> = Arc::new(
+            crate::notification::DefaultNotificationService::new(
                 repos.for_notification(),
                 observers.clone(),
-            ));
+            )
+            .with_default_workspace(Arc::clone(&default_workspace_service)),
+        );
         let mls_wire: Arc<dyn rim_services::e2ee::wire::MlsWire> =
             Arc::new(crate::e2ee::openmls_wire::OpenMlsWire::new());
         let mut message_concrete = crate::message::DefaultMessageService::new(
@@ -316,7 +324,8 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
                 observers,
             )
-            .with_notification_service(Arc::clone(&notification_service)),
+            .with_notification_service(Arc::clone(&notification_service))
+            .with_feature_gate(Arc::clone(&feature_gate)),
         );
         let notification_preference_service: Arc<dyn NotificationPreferenceService> = Arc::new(
             crate::notification_preference::DefaultNotificationPreferenceService::new(
@@ -503,12 +512,6 @@ impl DefaultAppServiceProvider {
             ));
         let instance_operator_service: Arc<dyn InstanceOperatorService> = Arc::new(
             crate::operator::DefaultInstanceOperatorService::new(repos.for_relay_abuse()),
-        );
-        let default_workspace_service: Arc<dyn DefaultWorkspaceService> = Arc::new(
-            crate::default_workspace::DefaultDefaultWorkspaceService::new(
-                federation.default_workspace.clone(),
-                Arc::clone(&repos.default_workspace_repo),
-            ),
         );
         let dm_policy_service: Arc<dyn rim_services::dm_policy::service::DmPolicyService> =
             Arc::new(crate::dm_policy::DefaultDmPolicyService::new(

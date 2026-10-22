@@ -650,6 +650,11 @@ mod tests {
                 &self,
                 server_id: rim_core::server::model::ServerId,
             ) -> RepoResult<Vec<ServerMember>>;
+            async fn get_members(
+                &self,
+                server_id: rim_core::server::model::ServerId,
+                user_ids: &[rim_core::user::model::UserId],
+            ) -> RepoResult<Vec<ServerMember>>;
             async fn get_member(
                 &self,
                 server_id: rim_core::server::model::ServerId,
