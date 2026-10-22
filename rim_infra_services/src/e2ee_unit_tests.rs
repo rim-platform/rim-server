@@ -13,7 +13,7 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::e2ee::model::{
-        E2eeDevice, FrankingRevision, MlsCommitId, MlsDevice, MlsGroup, MlsGroupDevice,
+        E2eeDevice, FrankingRevision, MlsCommit, MlsCommitId, MlsDevice, MlsGroup, MlsGroupDevice,
         MlsKeyPackage, MlsKeyPackageId, MlsReaddRequest, MlsReaddRequestId, MlsWelcomeCursor,
         MlsWelcomeId, NewMlsWelcome,
     };
@@ -43,8 +43,9 @@ mod tests {
     use rim_services::e2ee::service::E2eeService;
 
     use rim_services::e2ee::{
-        MAX_PENDING_WELCOME_BYTES, MAX_PENDING_WELCOMES, MAX_WELCOME_BYTES,
-        MlsCommitRequiredReason, mls_group_id,
+        MAX_COMMIT_BYTES, MAX_DAILY_COMMIT_BYTES_PER_MEMBER, MAX_PENDING_WELCOME_BYTES,
+        MAX_PENDING_WELCOMES, MAX_WELCOME_BYTES, MlsCommitRequiredReason,
+        max_commit_bytes_without_adds, mls_group_id,
     };
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::{Actor, ServiceError};
@@ -54,6 +55,7 @@ mod tests {
     use crate::e2ee::{DefaultE2eeService, E2eeRepos};
     use crate::franking_keys::{FrankingKey, FrankingKeys, SharedFrankingKeys};
     use crate::registration_rate_limiter::RegistrationRateLimiter;
+    use crate::token_bucket::BucketRate;
 
     use crate::e2ee_test_support::{
         EMPTY_COMMIT, FakeE2ee, FakeWire, SUITE, StoredPackage, b64, frame, welcome_bytes,
@@ -938,6 +940,113 @@ mod tests {
                 incarnation: 1,
                 epoch: 2
             }
+        ));
+    }
+
+    // ── Commit sizes and budgets ──────────────────────────────────────────────────────
+
+    /// `cmd` with its Commit padded with trailing whitespace to `len` bytes.
+    fn padded(mut cmd: SubmitMlsCommitCmd, len: usize) -> SubmitMlsCommitCmd {
+        let mut bytes = URL_SAFE_NO_PAD.decode(&cmd.commit).expect("commit");
+        assert!(bytes.len() <= len);
+        bytes.resize(len, b' ');
+        cmd.commit = b64(&bytes);
+        cmd
+    }
+
+    #[tokio::test]
+    async fn a_commit_that_adds_nobody_is_capped_by_the_group_size() {
+        let f = Fixture::new();
+        f.group(1, 1, &[&f.alice, &f.bob]);
+        let cap = max_commit_bytes_without_adds(2);
+        assert_eq!(cap, 20 * 1024);
+        let err = f
+            .submit(padded(f.commit_cmd(&f.alice, 1, 1, &[], &[]), cap + 1))
+            .await
+            .unwrap_err();
+        assert!(validation(err).contains("adds no device"));
+        f.submit(padded(f.commit_cmd(&f.alice, 1, 1, &[], &[]), cap))
+            .await
+            .expect("a Commit at the cap");
+        // One that adds a device may be larger.
+        let r = f.package(&f.bob2, 1, false, Some((&f.alice, Duration::minutes(1))));
+        f.submit(padded(
+            f.commit_cmd(&f.alice, 1, 2, &[(&f.bob2, &r)], &[]),
+            cap * 4,
+        ))
+        .await
+        .expect("an add");
+        assert_eq!(max_commit_bytes_without_adds(100_000), MAX_COMMIT_BYTES);
+    }
+
+    #[tokio::test]
+    async fn a_member_sends_a_bounded_number_of_commit_bytes_a_day() {
+        let f = Fixture::new();
+        f.group(1, 3, &[&f.alice, &f.bob, &f.bob2]);
+        let stored = |sender: &Device, epoch: i64, bytes: usize, age: Duration| MlsCommit {
+            id: MlsCommitId::new(),
+            conversation_id: f.conv.id,
+            incarnation: 1,
+            epoch,
+            sender_user_id: Some(sender.user),
+            sender_device_key_id: Some(sender.id),
+            sender_principal_id: None,
+            sender_device_id: None,
+            message: vec![0; bytes],
+            created_at: Utc::now() - age,
+        };
+        let almost = usize::try_from(MAX_DAILY_COMMIT_BYTES_PER_MEMBER).expect("cap") - 1024;
+        {
+            let mut state = f.repo.state();
+            state
+                .commits
+                .push(stored(&f.alice, 0, almost, Duration::hours(2)));
+            // Older than a day, and another member's: neither counts toward alice's.
+            state
+                .commits
+                .push(stored(&f.alice, 1, almost, Duration::hours(25)));
+            state
+                .commits
+                .push(stored(&f.bob, 2, almost, Duration::hours(2)));
+        }
+        let err = f
+            .submit(padded(f.commit_cmd(&f.alice, 1, 3, &[], &[]), 2048))
+            .await
+            .unwrap_err();
+        assert!(validation(err).contains("MiB of Commits"));
+        f.submit(f.commit_cmd(&f.alice, 1, 3, &[], &[]))
+            .await
+            .expect("a Commit within the day's bytes");
+        f.submit(f.commit_cmd(&f.bob, 1, 4, &[], &[]))
+            .await
+            .expect("another member's budget is their own");
+    }
+
+    #[tokio::test]
+    async fn commits_draw_on_a_budget_per_user() {
+        let mut f = Fixture::new();
+        f.group(1, 1, &[&f.alice, &f.bob, &f.bob2]);
+        let rate = |per_minute, burst| BucketRate::new(per_minute, burst).expect("rate");
+        f.service = Fixture::build(&f.repo, &f.events, &f.conv, &f.messages, &f.reports)
+            .with_commit_budgets(rate(1, 2), rate(1, 4));
+        f.submit(f.commit_cmd(&f.alice, 1, 1, &[], &[]))
+            .await
+            .expect("first");
+        f.submit(f.commit_cmd(&f.alice, 1, 2, &[], &[]))
+            .await
+            .expect("second");
+        assert!(matches!(
+            f.submit(f.commit_cmd(&f.alice, 1, 3, &[], &[]))
+                .await
+                .unwrap_err(),
+            ServiceError::RateLimited { .. }
+        ));
+        // Bob's budget is his own, but a Commit of more KiB than it holds is refused.
+        assert!(matches!(
+            f.submit(padded(f.commit_cmd(&f.bob, 1, 3, &[], &[]), 5 * 1024))
+                .await
+                .unwrap_err(),
+            ServiceError::RateLimited { .. }
         ));
     }
 

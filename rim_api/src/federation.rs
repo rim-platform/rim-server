@@ -72,8 +72,10 @@ pub(crate) fn direct_space<'a>(ctx: &'a Context<'_>) -> Result<&'a FederationCon
 /// `direct_message`. In the direct space: `FORBIDDEN` when one is on a server the operator's
 /// outbound DM setting does not admit, or a local one's DM settings refuse the caller;
 /// `VALIDATION` while the caller's account is in probation and the conversation would send a DM
-/// request to a stranger among them. There and in a workspace's DMs, a conversation that files
-/// a DM request answers `FORBIDDEN` when its recipient's request inbox is full and
+/// request to a stranger among them. There and in a workspace's DMs, `VALIDATION` when the
+/// caller has a principal id but no profile card and one of them is a local user with a
+/// principal id, and a conversation that files a DM request answers `FORBIDDEN` when its
+/// recipient's request inbox is full and
 /// `RATE_LIMITED` (with `retryAfterSeconds`) when the caller would file more requests than they
 /// may per day. Everything else, and everything on a server without server-to-server traffic,
 /// is allowed.

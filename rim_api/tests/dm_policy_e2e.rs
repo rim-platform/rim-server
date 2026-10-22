@@ -24,7 +24,8 @@ use serde_json::{Value, json};
 
 use support::nodes::{Node, databases_with, start};
 use support::relay::{
-    CREATE, Person, REQUESTS, RESET, eventually, open_registration, sign_up, user_id, verify_item,
+    CREATE, Person, REQUESTS, RESET, eventually, open_registration, sign_up, sign_up_without_card,
+    user_id, verify_item,
 };
 
 const CREATE_SERVER: &str =
@@ -426,6 +427,34 @@ async fn a_strangers_dm_request_past_the_daily_limit_is_refused_and_reaches_no_o
     .await;
     let delivered = created(&dm(&a, &sam, &direct, last).await);
     assert!(listed(last, &direct).await.contains(&delivered));
+
+    a.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_account_without_a_profile_card_starts_no_conversation_with_someone_here() {
+    let a = one_server(|_| {}).await;
+    let sam = sign_up_without_card(&a, "sam", 1).await;
+    let ada = sign_up(&a, "ada", 2).await;
+    let direct = direct_space(&sam).await;
+
+    // Without a card no invite could take the DM through Ada's request inbox: refused.
+    let refused = dm(&a, &sam, &direct, &ada).await;
+    assert_eq!(code(&refused), "VALIDATION", "{refused}");
+    assert!(
+        refused["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("publish a profile card")),
+        "{refused}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(listed(&ada, &direct).await, Vec::<String>::new());
+
+    // Once Sam publishes one, the DM is a request Ada sees.
+    sam.publish_card(1, &[a.origin.as_str()]).await;
+    let conversation = created(&dm(&a, &sam, &direct, &ada).await);
+    let request = ada.pending_request(&sam).await;
+    assert_eq!(request["conversationId"], json!(conversation));
 
     a.stop().await;
 }

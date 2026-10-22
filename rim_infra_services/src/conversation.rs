@@ -12,6 +12,7 @@ use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
+use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::conversation::command::{
     AddConversationMembersCmd, ArchiveConversationCmd, ConversationInviteCmd,
     CreateConversationCmd, GetConversationQuery, JoinChannelCmd, LeaveConversationCmd,
@@ -30,12 +31,16 @@ use rim_services::conversation::dto::{ChannelPageCursor, InboxPageCursor};
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::ConversationRepos;
+use crate::quota::DailyCounter;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_access_as, ensure_conversation_in_server,
     ensure_conversation_member_access, ensure_conversation_writable, ensure_not_archived,
     ensure_not_timed_out, ensure_server_member, ensure_server_owner_or_moderator,
     ensure_workspace_features, ensure_workspace_writable, member_standing,
 };
+
+/// Most conversations one user starts in the direct space per day.
+pub(crate) const MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY: u64 = 50;
 
 /// The refusal of a member who cannot read an encrypted conversation.
 fn not_ready() -> ServiceError {
@@ -57,6 +62,8 @@ pub struct DefaultConversationService {
     direct_space_id: Option<rim_core::server::model::ServerId>,
     /// The cap on channels per workspace.
     limits: InstanceLimits,
+    /// Conversations each user started in the direct space today.
+    direct_space_starts: Arc<DailyCounter>,
 }
 
 impl DefaultConversationService {
@@ -67,6 +74,33 @@ impl DefaultConversationService {
             e2ee_repo: None,
             direct_space_id: None,
             limits: InstanceLimits::default(),
+            direct_space_starts: Arc::new(DailyCounter::per_day(
+                MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY,
+            )),
+        }
+    }
+
+    /// Count one conversation `user_id` starts in the direct space.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` once they started their most conversations there today.
+    fn count_direct_space_start(&self, user_id: UserId) -> ServiceResult<()> {
+        match self
+            .direct_space_starts
+            .check_and_record(&user_id.to_string(), chrono::Utc::now())
+        {
+            RateLimitDecision::Allowed => Ok(()),
+            RateLimitDecision::Limited {
+                retry_after_seconds,
+            } => {
+                crate::metrics::rate_limited("direct_space_conversations");
+                Err(ServiceError::Validation(format!(
+                    "you can start at most {MAX_DIRECT_SPACE_CONVERSATIONS_PER_DAY} new \
+                     conversations a day; try again in {} hours",
+                    retry_after_seconds.div_ceil(3600)
+                )))
+            }
         }
     }
 
@@ -622,6 +656,9 @@ impl ConversationService for DefaultConversationService {
         } else {
             (member_ids, Vec::new())
         };
+        if direct {
+            self.count_direct_space_start(cmd.actor.user_id)?;
+        }
 
         let conversation = self
             .repos

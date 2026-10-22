@@ -175,27 +175,30 @@ fn relay_with_peer_bytes(
 // ── The relay's claims for hosts ─────────────────────────────────────────────────────────
 
 /// A relay holding Bob, whose one device has packages; `one_time` records each claim's flag.
-fn relay(contact: bool, blocked: bool, one_time: Arc<Mutex<Vec<bool>>>) -> DefaultRelayService {
-    relay_with_blocks(contact, blocked, one_time, &[])
+/// Bob accepted a conversation `PEER` homes when `tied`.
+fn relay(tied: bool, blocked: bool, one_time: Arc<Mutex<Vec<bool>>>) -> DefaultRelayService {
+    relay_with_blocks(tied, blocked, one_time, &[])
 }
 
 /// [`relay`] with operator blocks of `server_blocks`.
 fn relay_with_blocks(
-    contact: bool,
+    tied: bool,
     blocked: bool,
     one_time: Arc<Mutex<Vec<bool>>>,
     server_blocks: &[&str],
 ) -> DefaultRelayService {
     relay_service(
-        claim_repos(contact, blocked, one_time, server_blocks),
+        claim_repos(tied, blocked, one_time, server_blocks),
         MockPeerService::new(),
         MockS2sClient::new(),
     )
 }
 
-/// The repositories of [`relay_with_blocks`].
+/// The repositories of [`relay_with_blocks`]: Bob holds no subscription, and whom the claimer
+/// knows is never read, so the claimer's contacts, accepted requests and workspaces fail the
+/// test when asked for.
 fn claim_repos(
-    contact: bool,
+    tied: bool,
     blocked: bool,
     one_time: Arc<Mutex<Vec<bool>>>,
     server_blocks: &[&str],
@@ -204,18 +207,14 @@ fn claim_repos(
     let mut host = MockHostRepository::new();
     host.expect_find_user()
         .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
-    host.expect_shares_workspace()
-        .returning(|_, _, _| Box::pin(async { Ok(false) }));
     let mut relay = MockRelayRepository::new();
     relay
         .expect_is_blocked()
         .returning(move |_, _| Box::pin(async move { Ok(blocked) }));
-    relay
-        .expect_is_contact()
-        .returning(move |_, _| Box::pin(async move { Ok(contact) }));
-    relay
-        .expect_accepted_from()
-        .returning(|_, _| Box::pin(async { Ok(false) }));
+    relay.expect_accepted_at_host().returning(move |_, host| {
+        let accepted = tied && host == PEER;
+        Box::pin(async move { Ok(accepted) })
+    });
     let mut keys = MockKeyIdentityRepository::new();
     keys.expect_get_device().returning(move |user, _| {
         Box::pin(async move { Ok(Some(device(DeviceKeyId::new(), user, false))) })
@@ -239,6 +238,7 @@ fn claim_repos(
         host_repo: Arc::new(host),
         key_identity_repo: Arc::new(keys),
         e2ee_repo: Arc::new(e2ee),
+        subscription_repo: Arc::new(subscribed_at(&[])),
         relay_abuse_repo: Arc::new(blocks(server_blocks)),
         ..empty_repos()
     }
@@ -274,7 +274,7 @@ async fn a_stranger_gets_the_last_resort_package_only() {
 }
 
 #[tokio::test]
-async fn a_contact_gets_a_one_time_package() {
+async fn a_user_tied_to_the_claiming_host_gives_a_one_time_package() {
     let flags = Arc::default();
     let svc = relay(true, false, Arc::clone(&flags));
     let answer = svc
@@ -283,6 +283,42 @@ async fn a_contact_gets_a_one_time_package() {
         .expect("claim");
     assert_eq!(*flags.lock().expect("lock"), vec![true]);
     assert!(!answer.key_packages[0].last_resort);
+}
+
+#[tokio::test]
+async fn only_a_tie_to_the_claiming_host_makes_a_claimer_known() {
+    let claims = |hosts: &[&str]| {
+        let flags = Arc::default();
+        let svc = relay_service(
+            RelayRepos {
+                subscription_repo: Arc::new(subscribed_at(hosts)),
+                ..claim_repos(false, false, Arc::clone(&flags), &[])
+            },
+            MockPeerService::new(),
+            MockS2sClient::new(),
+        );
+        (svc, flags)
+    };
+    let (elsewhere, flags) = claims(&[OTHER]);
+    elsewhere
+        .claim_for_peer(PEER.to_string(), claim(PEER))
+        .await
+        .expect("claim");
+    assert_eq!(
+        *flags.lock().expect("lock"),
+        vec![false],
+        "a workspace on another host is no tie to this one"
+    );
+    let (subscribed, flags) = claims(&[PEER]);
+    subscribed
+        .claim_for_peer(PEER.to_string(), claim(PEER))
+        .await
+        .expect("claim");
+    assert_eq!(
+        *flags.lock().expect("lock"),
+        vec![true],
+        "a workspace the claiming host hosts is"
+    );
 }
 
 #[tokio::test]
@@ -327,12 +363,11 @@ async fn a_stranger_claims_twenty_times_a_day() {
         .await
         .unwrap_err();
     assert!(matches!(err, ServiceError::RateLimited { .. }), "{err:?}");
-    let contact = relay(true, false, Arc::default());
+    let tied = relay(true, false, Arc::default());
     for _ in 0..25 {
-        contact
-            .claim_for_peer(PEER.to_string(), claim(PEER))
+        tied.claim_for_peer(PEER.to_string(), claim(PEER))
             .await
-            .expect("contacts are not limited");
+            .expect("claims through a tied host are not limited");
     }
 }
 
@@ -988,13 +1023,21 @@ async fn an_invite_whose_sender_cannot_be_verified_is_a_strangers_request() {
 async fn file_own_invite(
     counts: (i64, i64),
 ) -> (Vec<rim_core::relay::model::DmRequestStatus>, usize) {
-    let filed = Arc::default();
-    let inbox = RelayInbox {
+    file_own_invite_into(RelayInbox {
         pending: counts.0,
         filed_today: counts.1,
         served: None,
         ..RelayInbox::default()
-    };
+    })
+    .await
+}
+
+/// What Bob's relay, holding `inbox`, does with this server's own invite from Alice: the
+/// requests filed and the notices raised.
+async fn file_own_invite_into(
+    inbox: RelayInbox,
+) -> (Vec<rim_core::relay::model::DmRequestStatus>, usize) {
+    let filed = Arc::default();
     let svc = inbox_relay(inbox, Arc::clone(&filed));
     let mut notices = svc.subscribe();
     let workspace_id = Uuid::from_u128(5).to_string();
@@ -2938,7 +2981,8 @@ const DAILY: u32 = 3;
 
 /// What a host knows of Ada's DM requests: how many she filed in the last day, each
 /// recipient's pending requests, who holds her as a contact, who shares a workspace with her
-/// (and how they take DMs from its members), and whether her DM with the recipient exists.
+/// (and how they take DMs from its members), whether her DM with the recipient exists, the
+/// other users holding a principal id, and whether Ada has no profile card.
 #[derive(Default, Clone)]
 struct Inbox {
     filed_today: i64,
@@ -2946,6 +2990,8 @@ struct Inbox {
     contacts: Vec<UserId>,
     coworkers: Vec<(UserId, rim_core::dm_policy::model::MemberDm)>,
     existing_dm: bool,
+    principals: Vec<UserId>,
+    cardless: bool,
 }
 
 /// A host at `now` with a daily limit of `DAILY` requests per sender, where Ada's oldest
@@ -2957,11 +3003,30 @@ fn limits_host(ada: UserId, inbox: Inbox, now: chrono::DateTime<Utc>) -> Default
     let mut host = MockHostRepository::new();
     host.expect_user_kind()
         .returning(|_| Box::pin(async { Ok(Some(UserKind::Local)) }));
-    let accounts = vec![crate::probation_fixtures::account(
+    let mut accounts = vec![crate::probation_fixtures::account(
         ada,
         now - Duration::days(30),
         Some(&TestIdentity::new(70).principal_id()),
     )];
+    for (seed, user) in (71..).zip(&inbox.principals) {
+        accounts.push(crate::probation_fixtures::account(
+            *user,
+            now - Duration::days(30),
+            Some(&TestIdentity::new(seed).principal_id()),
+        ));
+    }
+    let mut keys = MockKeyIdentityRepository::new();
+    let cardless = inbox.cardless;
+    keys.expect_get_profile_card().returning(move |user_id| {
+        let card = (!cardless).then(|| StoredProfileCard {
+            user_id,
+            version: 1,
+            payload: "{}".to_string(),
+            signature: "ed25519:c".to_string(),
+            updated_at: Utc::now(),
+        });
+        Box::pin(async move { Ok(card) })
+    });
     let mut relay = MockRelayRepository::new();
     let contacts = inbox.contacts.clone();
     relay.expect_is_contact().returning(move |user, _| {
@@ -3039,7 +3104,7 @@ fn limits_host(ada: UserId, inbox: Inbox, now: chrono::DateTime<Utc>) -> Default
         HostRepos {
             host_repo: Arc::new(host),
             relay_repo: Arc::new(relay),
-            key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
+            key_identity_repo: Arc::new(keys),
             e2ee_repo: Arc::new(MockE2eeRepository::new()),
             user_repo: Arc::new(crate::probation_fixtures::users(accounts)),
             conversation_repo: Arc::new(conversations),
@@ -3185,6 +3250,58 @@ async fn a_workspace_dm_taken_as_a_request_meets_the_limits_and_groups_there_do_
     host.ensure_may_request(Actor::new(ada), acme, vec![requests, direct], false)
         .await
         .expect("a workspace group files no request");
+}
+
+#[tokio::test]
+async fn a_creator_without_a_profile_card_starts_no_conversation_with_a_local_user() {
+    let (ada, keyed, keyless) = (UserId::new(), UserId::new(), UserId::new());
+    let inbox = Inbox {
+        principals: vec![keyed],
+        cardless: true,
+        ..Inbox::default()
+    };
+    let refused = |result: Result<(), ServiceError>| match result {
+        Err(ServiceError::Validation(message)) => {
+            assert!(message.starts_with("publish a profile card"), "{message}")
+        }
+        other => panic!("expected the card refusal, got {other:?}"),
+    };
+    refused(start_direct(inbox.clone(), ada, vec![keyed], true).await);
+    refused(start_direct(inbox.clone(), ada, vec![keyless, keyed], false).await);
+    let host = limits_host(ada, inbox.clone(), Utc::now());
+    let acme = ServerId::from(Uuid::from_u128(7));
+    refused(
+        host.ensure_may_request(Actor::new(ada), acme, vec![keyed], true)
+            .await,
+    );
+    host.ensure_may_request(Actor::new(ada), acme, vec![keyed, keyless], false)
+        .await
+        .expect("a workspace group files no invite");
+    start_direct(inbox.clone(), ada, vec![keyless], false)
+        .await
+        .expect("no invite is filed for a user without a principal id");
+    start_direct(
+        Inbox {
+            existing_dm: true,
+            ..inbox.clone()
+        },
+        ada,
+        vec![keyed],
+        true,
+    )
+    .await
+    .expect("an existing DM is reopened");
+    start_direct(
+        Inbox {
+            cardless: false,
+            ..inbox
+        },
+        ada,
+        vec![keyed],
+        true,
+    )
+    .await
+    .expect("with a card");
 }
 
 // ── Accepted conversations ───────────────────────────────────────────────────────────────
@@ -3384,6 +3501,25 @@ async fn an_invite_past_the_accepted_cap_for_its_host_is_refused_as_limited() {
     assert_eq!(
         file_invite(holding(MAX_ACCEPTED_PER_HOST), invite).await,
         refused_as("limited")
+    );
+}
+
+#[tokio::test]
+async fn an_own_invite_is_not_held_to_the_accepted_cap_per_host() {
+    use rim_core::relay::model::DmRequestStatus;
+
+    use crate::relay::inbox::MAX_ACCEPTED_PER_HOST;
+
+    assert_eq!(
+        file_own_invite_into(RelayInbox {
+            contact: true,
+            accepted: MAX_ACCEPTED_PER_HOST,
+            served: None,
+            ..RelayInbox::default()
+        })
+        .await,
+        (vec![DmRequestStatus::Accepted], 0),
+        "a contact's DM on this server is delivered, however many Bob holds from it"
     );
 }
 

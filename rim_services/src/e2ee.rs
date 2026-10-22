@@ -23,6 +23,14 @@ pub const MAX_AVAILABLE_KEY_PACKAGES: i64 = 100;
 /// Largest Commit and Welcome, in bytes.
 pub const MAX_COMMIT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_WELCOME_BYTES: usize = 4 * 1024 * 1024;
+/// The size a Commit that adds no device may take whatever its group, and what each device of
+/// the group adds to it, in bytes. Such a Commit carries no key packages, only removals and the
+/// committer's update path, which encrypts a path secret to at most every other device: about
+/// 1.2 KB each in the accepted suite.
+pub const COMMIT_WITHOUT_ADDS_BASE_BYTES: usize = 16 * 1024;
+pub const COMMIT_WITHOUT_ADDS_BYTES_PER_DEVICE: usize = 2 * 1024;
+/// Most bytes of Commits one member stores in one conversation in a day.
+pub const MAX_DAILY_COMMIT_BYTES_PER_MEMBER: i64 = 32 * 1024 * 1024;
 /// Most pending Welcomes per device, and their total size in bytes. A Welcome is pending while
 /// the device has not acknowledged it, it has not expired and the device's user is a member of
 /// its conversation: the Welcomes `myMlsWelcomes` answers.
@@ -59,6 +67,14 @@ impl MlsCommitRequiredReason {
             Self::NoGroup => "noGroup",
         }
     }
+}
+
+/// The largest Commit that adds no device to a group of `devices` devices, in bytes.
+pub fn max_commit_bytes_without_adds(devices: usize) -> usize {
+    devices
+        .saturating_mul(COMMIT_WITHOUT_ADDS_BYTES_PER_DEVICE)
+        .saturating_add(COMMIT_WITHOUT_ADDS_BASE_BYTES)
+        .min(MAX_COMMIT_BYTES)
 }
 
 /// The MLS group id of a conversation's incarnation: ASCII `rim1`, the conversation UUID's 16

@@ -148,8 +148,10 @@ until it is accepted. Items of a conversation the relay has no invite for are re
 when the settings change later.
 
 A conversation accepted as it arrives keeps no card. A recipient holds at most 5,000 accepted
-conversations per host; past them an invite their settings deliver is refused as `limited`, while
-accepting a request is never refused. An accepted conversation's row expires 400 days after the
+conversations per other host; past them an invite their settings deliver is refused as `limited`,
+while accepting a request is never refused. This server's own conversations are not counted, so
+nobody here can fill the cap to silence a user; they are bounded where they are started (a user
+starts at most 50 conversations a day in the direct space, `docs/messaging.md`). An accepted conversation's row expires 400 days after the
 last item delivered for it. The next item of such a conversation is refused `not_subscribed`;
 its host, when it is a RIM server still holding the person as a member, sends the conversation's
 invite again (at most once a day per conversation and person, as this server does for its own
@@ -188,11 +190,15 @@ invites are refused as `limited`, and an item past the held bytes is dropped. A 
 started on this server (by a local user, or through the forward path) that would file a request
 past the pending or daily limit is refused when it is started: `FORBIDDEN` for a full inbox,
 `RATE_LIMITED` with `retryAfterSeconds` for the sender's daily limit (`docs/messaging.md`, "Who
-May Start A DM"). An own invite still refused for a local member (`limited` or `blocked`) is kept
+May Start A DM"). So is one by a creator with a principal id but no profile card with a local
+user who has one (`VALIDATION`): no invite could be filed for it. An own invite still refused for a local member (`limited` or `blocked`) is kept
 as an ignored request that is never listed or counted and expires after 30 days, so its
-conversation stays out of their view and raises no notification. A claim of a local user's key
-packages by a stranger (not a contact, never accepted, sharing no workspace here) gets
-last-resort packages only, at most 20 claims per stranger per day.
+conversation stays out of their view and raises no notification. Another server's claim of a
+local user's key packages names its claimer, a name the relay cannot check, so whom the claimer
+knows does not count: the claim is a stranger's unless the user accepted a conversation that
+server homes or holds an active subscription to a workspace it hosts. A stranger's claim gets
+last-resort packages only, at most 20 claims per claimer per day; a claimer the user blocked is
+refused.
 
 With `RIM_DM_INBOUND=partners` the identity endpoint (`GET /s2s/v1/principals/<id>`) answers
 only the servers `RIM_DM_PARTNERS` lists, and with `none` no server; everyone else gets `404` as

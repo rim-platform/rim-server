@@ -533,6 +533,61 @@ async fn the_unique_index_backs_up_the_lock() {
     );
 }
 
+#[tokio::test]
+async fn commit_bytes_are_summed_per_sender_and_window() {
+    let f = fixture().await;
+    create_group(&f).await;
+    let earlier = Utc::now() - Duration::minutes(1);
+    assert_eq!(
+        f.repo
+            .commit_bytes_since(f.conv.id, f.alice.user.id, earlier)
+            .await
+            .unwrap(),
+        0
+    );
+    f.repo.insert_commit(commit(&f, 1, 1)).await.unwrap();
+    f.repo
+        .insert_commit(NewMlsCommit {
+            message: vec![2; 1000],
+            ..commit(&f, 2, 2)
+        })
+        .await
+        .unwrap();
+    f.repo
+        .insert_commit(NewMlsCommit {
+            sender_user_id: f.bob.user.id,
+            sender_device_key_id: f.bob.device,
+            ..commit(&f, 3, 3)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        f.repo
+            .commit_bytes_since(f.conv.id, f.alice.user.id, earlier)
+            .await
+            .unwrap(),
+        1016
+    );
+    assert_eq!(
+        f.repo
+            .commit_bytes_since(f.conv.id, f.bob.user.id, earlier)
+            .await
+            .unwrap(),
+        16
+    );
+    assert_eq!(
+        f.repo
+            .commit_bytes_since(
+                f.conv.id,
+                f.alice.user.id,
+                Utc::now() + Duration::minutes(1)
+            )
+            .await
+            .unwrap(),
+        0
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_message_racing_a_commit_lands_in_epoch_order() {
     let f = fixture().await;

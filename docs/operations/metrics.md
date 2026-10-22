@@ -222,6 +222,7 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `password_reset_account` | Password reset requests per account; the caller sees success and no email is sent. |
 | `device_link_start`, `device_link_offer`, `device_link_answer`, `device_link_refusal` | Device linking steps. |
 | `mls_claim`, `mls_one_time_claim`, `mls_readd` | MLS key package claims and re-add requests. |
+| `mls_commit`, `mls_commit_bytes` | MLS Commits per user, by count and by size. |
 | `command`, `command_discover` | Command runs per user and command, and command discovery. |
 | `workspace_plugin_change`, `plugin_bundle_upload` | Workspace plugin changes and bundle uploads per user. |
 | `s2s_peer` | Server-to-server requests per peer (`RIM_S2S_PEER_RATE_PER_MIN`). |
@@ -229,6 +230,7 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `relay_forward_device`, `relay_forward_user` | Requests a local user forwards, per device per minute and per user per day. |
 | `host_forward_device` | Forwarded requests run here, per remote device per minute. |
 | `dm_invites` | Invites a local user sends to people on other servers per day. |
+| `direct_space_conversations` | Conversations a user starts in the direct space per day. |
 | `dm_requests` | DM requests filed here by one sender per day, or past the recipient's pending limit. |
 | `stranger_claim` | Key package claims by servers with no tie to the user. |
 | `relay_peer_bytes` | Items a host delivered past the bytes this relay queues from one host per day. |

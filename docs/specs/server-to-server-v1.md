@@ -719,9 +719,11 @@ Alice's relay R_A is the home; Bob's relay is R_B. Groups work the same way.
    (`cipherSuite` optional, the preferred suite when absent; `conversation.host` must be the
    calling peer)
    → `{"keyPackages":[{"deviceId","keyPackage","keyPackageRef","lastResort"}]}`, by today's claim
-   rules. A claimer who is not Bob's contact, was never accepted by him, and shares no workspace R_B
-   holds a subscription for, is a **stranger**: last-resort packages only, 20 claims per claimer
-   principal per day. R_A stores the packages as claimed `mls_key_package` rows of Bob's device rows,
+   rules. R_A names the claimer and R_B cannot check that name, so R_B judges the claim by Bob's
+   tie to R_A, not by whom the claimer is: unless Bob accepted a conversation R_A homes or holds
+   an active subscription to a workspace R_A hosts, the claimer is a **stranger**: last-resort
+   packages only, 20 claims per claimer principal per day. A claimer Bob blocked is refused
+   (`403`). R_A stores the packages as claimed `mls_key_package` rows of Bob's device rows,
    so `submitMlsCommit`'s claim check runs unchanged.
 3. **Invite.** When a remote member is added to a conversation of the direct space (at creation or
    by `addConversationMembers`), R_A emits `DmInvite` on the member's `u:` stream,
@@ -1326,8 +1328,8 @@ null and `origin` carries that origin. A peer's S2S error keeps its meaning (`FO
 | Delegations | ≤ 24 h; 64 per request; 10,000 active per relay per host (a renewal replacing an active one does not count) |
 | Device requests | `seq` window 5 minutes; 120 per device per minute |
 | DM requests | 100 pending per recipient; 20 per sender and 1,000 per delivering host per day; 3 held items and 1 MiB per request; 16 MiB held per recipient (kept invites included), apart from the queue's cap; 30 days |
-| Accepted conversations | 5,000 per recipient and host; 400 days after the last item delivered |
-| Stranger claims | Last-resort packages only; 20 per claimer per day |
+| Accepted conversations | 5,000 per recipient and other host (a relay's own direct space and workspace DMs not counted); 400 days after the last item delivered |
+| Stranger claims | Every claim from a host the user accepted no conversation of and holds no subscription at; last-resort packages only; 20 per claimer per day |
 | Contacts | 1,000 per user |
 | Remote identity | Log ≤ 256 entries; card 128 KiB; cache 24 h, rows kept 30 days (a remote user's while the user exists) |
 | Peer pins | 4 per origin; an unreferenced `active` pin forgotten after 90 idle days, its head kept |

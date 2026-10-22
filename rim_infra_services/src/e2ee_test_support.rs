@@ -737,6 +737,25 @@ impl E2eeRepository for FakeE2ee {
         }))
     }
 
+    async fn commit_bytes_since(
+        &self,
+        conversation_id: ConversationId,
+        sender_user_id: UserId,
+        since: DateTime<Utc>,
+    ) -> RepoResult<i64> {
+        Ok(self
+            .state()
+            .commits
+            .iter()
+            .filter(|c| {
+                c.conversation_id == conversation_id
+                    && c.sender_user_id == Some(sender_user_id)
+                    && c.created_at > since
+            })
+            .map(|c| c.message.len() as i64)
+            .sum())
+    }
+
     async fn insert_welcome(&self, welcome: NewMlsWelcome) -> RepoResult<MlsWelcomeId> {
         let id = MlsWelcomeId::new();
         self.state()

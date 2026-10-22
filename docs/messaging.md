@@ -99,6 +99,17 @@ decide, and each may only tighten the one above it:
   on another server the sender does not know counts against the sender's daily invites
   (`RIM_RELAY_DM_REQUESTS_PER_DAY`, 20): past them it answers `RATE_LIMITED` with
   `retryAfterSeconds`.
+- **Profile card.** An account with a principal id and no profile card starts no conversation in
+  the direct space, and no workspace DM, with a user here who has a principal id:
+  `createConversation` and `addConversationMembers` answer `VALIDATION` ("publish a profile card
+  before starting a conversation with someone here"). The invite that takes such a conversation
+  through the recipient's DM settings, blocks and request limits carries the creator's card. The
+  app publishes the card right after signup and, when that fails, from Settings. Reopening an
+  existing DM is not refused.
+- **Conversations per day.** A user starts at most 50 new conversations a day in the direct
+  space, DMs and groups alike: past them `createConversation` answers `VALIDATION` ("you can start
+  at most 50 new conversations a day; try again in N hours"). Reopening an existing DM is not
+  counted. The count is kept in memory on each node.
 - **Probation.** During `RIM_PROBATION_HOURS` a new account starts no DM with a stranger, in the
   direct space or in a workspace: someone it does not know (above) who is in none of its
   workspaces here, the account without a key included: `VALIDATION` saying when it can

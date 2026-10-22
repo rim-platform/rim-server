@@ -464,6 +464,28 @@ tag `v<version>`, the version every crate in the workspace carries.
   `resolvedKeybinds` leaves out a stored one (`docs/keybind_model.md`, "Workspace Keybinds").
 - The server keeps at most 32 unanswered confirmation challenges per user, dropping the one
   closest to expiry, so pipeline actions that need a confirmation no longer pile them up.
+- `submitMlsCommit` limits what one member can store: a Commit that adds no device is at most
+  16 KiB plus 2 KiB per device of the group, a member sends at most 32 MiB of Commits to one
+  conversation in 24 hours (both `VALIDATION`), and a user submits at most 30 Commits and
+  64 KiB of them a minute, with bursts of 60 and 8 MiB (`RATE_LIMITED`). Before, two accounts
+  could store gigabytes of empty Commits a minute for 90 days and keep a group's epoch moving
+  under its other members (`docs/specs/e2ee-mls-v1.md`, "Limits and audit").
+- Conversations started on this server no longer count toward the 5,000 accepted conversations a
+  recipient holds per host, which bounds what other hosts store; someone here could fill it with
+  groups and have every later DM to the recipient refused and hidden. Instead a user starts at
+  most 50 new conversations a day in the direct space (`VALIDATION`; reopening a DM is not
+  counted).
+- An account with a principal id but no profile card can no longer start a conversation in the
+  direct space, or a workspace DM, with a local user who has a principal id (`VALIDATION`,
+  "publish a profile card before starting a conversation with someone here"). Without a card no
+  invite was filed, so such conversations reached the recipient past their DM settings, blocks
+  and request limits.
+- A key package claim from another server (`POST /s2s/v1/key-packages/claim`) counts as known
+  only when the user accepted a conversation that server homes or holds an active subscription to
+  a workspace it hosts. Before, the claimer the server named was trusted, so any server could
+  name someone the user knows, or a member of the default workspace everyone shares, and drain
+  their one-time key packages past the 20-a-day stranger limit
+  (`docs/specs/server-to-server-v1.md`).
 
 ### Security
 
