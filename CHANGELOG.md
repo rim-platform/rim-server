@@ -432,6 +432,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   `VALIDATION`, while joining an existing emoji and removing a reaction still work. Before, any
   text of up to 32 characters showed as a reaction pill and the reaction groups of a message,
   sent to every member on each toggle, grew without bound.
+- `toggleReaction` removes a reaction the caller holds whatever its text: only adding checks the
+  emoji rules, so reactions stored before them (`:flag-cz:`, plain text) can be taken back.
 - `editEncryptedMessage` counts against the message budget (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`)
   as `editMessage` does, so a member can no longer edit an encrypted message in a loop, each edit
   storing a franking revision and reaching every member; resending an edit already stored is

@@ -337,8 +337,9 @@ It needs write access to the conversation and a message that is not deleted.
   hair, keycaps, regional indicators, tags; digits, `#` and `*` alone are not one) or a custom
   emoji's `:name:`, the name made of letters, digits and underscores. A `:name:` that starts a
   new emoji on the message must name a custom emoji of the workspace while the `custom_emoji`
-  feature is enabled; with the feature off every new `:name:` is refused. Anything else answers
-  `VALIDATION`.
+  feature is enabled; with the feature off every new `:name:` is refused. Adding anything else
+  answers `VALIDATION`. Removing checks only the length: a reaction the caller holds comes off
+  whatever its text, so one stored before these rules stays removable.
 - A message carries at most 20 different emoji, and one user puts at most 10 reactions on one
   message. Adding past either answers `VALIDATION`; joining an emoji the message already has
   (under the per-user cap) and removing a reaction always work. Toggles on one message run one
