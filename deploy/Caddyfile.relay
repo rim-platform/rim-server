@@ -8,7 +8,9 @@
 	# Signed server-to-server bodies pass unchanged: no compression, no rewriting.
 	@rim path /api /api/* /s2s/v1/* /.well-known/rim-server
 	handle @rim {
-		reverse_proxy rim:8080
+		reverse_proxy rim:8080 {
+			header_up -Forwarded
+		}
 	}
 
 	handle {

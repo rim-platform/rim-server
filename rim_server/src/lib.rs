@@ -13,6 +13,7 @@ pub mod config;
 mod edge;
 mod file_handlers;
 pub mod franking_key_cmd;
+mod graphql_body;
 mod graphql_support;
 mod health;
 pub mod invite_cmd;

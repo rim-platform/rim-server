@@ -11,7 +11,7 @@ use crate::graphql_support::{
 use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
 use actix_web::{App, Either, HttpRequest, HttpResponse, HttpServer, guard, web};
-use async_graphql_actix_web::{GraphQLBatchRequest, GraphQLResponse};
+use async_graphql_actix_web::GraphQLResponse;
 use rim_api::AppSchema;
 use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::graphql::index_graphiql;
@@ -238,9 +238,12 @@ async fn graphql_handler(
     handler_cfg: web::Data<HandlerConfig>,
     edge_limits: web::Data<EdgeLimits>,
     req: HttpRequest,
-    gql: GraphQLBatchRequest,
+    payload: web::Payload,
 ) -> Either<GraphQLResponse, HttpResponse> {
-    let batch = gql.into_inner();
+    let batch = match crate::graphql_body::read_batch(&req, payload).await {
+        Ok(batch) => batch,
+        Err(response) => return Either::Right(response),
+    };
     if edge_limits.refuses_batch(&batch) {
         return Either::Right(crate::edge::batch_too_large_response());
     }

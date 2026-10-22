@@ -1,6 +1,6 @@
 //! The edge limits on a real server: the per-address request limit on `/api` routes with
-//! `/healthz` outside it, the GraphQL batch cap, the per-caller mutation budget, and the IP
-//! deny list loaded at boot.
+//! `/healthz` outside it, the GraphQL batch cap and body caps, the per-caller mutation budget,
+//! and the IP deny list loaded at boot.
 //!
 //! Run with:
 //! ```sh
@@ -13,6 +13,7 @@ mod support;
 use reqwest::StatusCode;
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use std::sync::Arc;
 
@@ -90,6 +91,67 @@ async fn an_address_over_its_limit_gets_429_and_a_large_batch_gets_400() {
     assert_eq!(healthz.status(), StatusCode::OK);
 
     node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_graphql_body_past_its_caps_gets_413_and_runs_nothing() {
+    let node = node(|_| {}).await;
+    let http = reqwest::Client::new();
+    let api = format!("{}/api", node.origin);
+    let post = |body: Vec<u8>| {
+        http.post(&api)
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+    };
+
+    // Over 12 MiB, from the declared length alone, before any of the body is read.
+    let authority = node.origin.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(authority)
+        .await
+        .expect("connect");
+    let request = format!(
+        "POST /api HTTP/1.1\r\nhost: {authority}\r\ncontent-type: application/json\r\n\
+         content-length: {}\r\n\r\n",
+        12 * 1024 * 1024 + 1
+    );
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut raw = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        stream.read_to_end(&mut raw),
+    )
+    .await
+    .expect("the server answers and closes")
+    .expect("read");
+    let raw = String::from_utf8_lossy(&raw);
+    assert!(raw.starts_with("HTTP/1.1 413"), "{raw}");
+    assert!(raw.contains(r#""error":"too_large""#), "{raw}");
+
+    let many = format!(
+        r#"{{"query":"{SERVER_INFO}","variables":{{"x":[{}0]}}}}"#,
+        "0,".repeat(300_000)
+    );
+    let long = serde_json::to_vec(&json!({
+        "query": format!("{{ {} }}", "serverInfo { version } ".repeat(10_000)),
+    }))
+    .expect("json");
+    for (what, body) in [
+        ("too many values", many.into_bytes()),
+        ("documents too long", long),
+    ] {
+        let res = post(body).await.expect("request");
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE, "{what}");
+        let body: Value = res.json().await.expect("413 json");
+        assert_eq!(body["error"], "too_large", "{what}");
+    }
+
+    let res = post(serde_json::to_vec(&json!({ "query": SERVER_INFO })).expect("json"))
+        .await
+        .expect("small");
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().await.expect("json");
+    assert!(body["data"]["serverInfo"]["version"].is_string(), "{body}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -234,6 +234,68 @@ async fn declare_oversized_post(to: &Node, path: &str, length: usize) -> (u16, V
     (status, serde_json::from_str(body.trim()).expect("json"))
 }
 
+/// Send `path` an unsigned `POST` whose chunked body starts and never ends, and read the answer
+/// the server gives without waiting for the rest of the body.
+async fn post_unsigned_unending_body(to: &Node, path: &str) -> (u16, Value) {
+    let authority = to.origin.trim_start_matches("http://");
+    let mut stream = TcpStream::connect(authority).await.expect("connect");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nhost: {authority}\r\ncontent-type: application/json\r\n\
+         transfer-encoding: chunked\r\n\r\n10000\r\n{}",
+        "0".repeat(0x8000)
+    );
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 4096];
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let read = stream.read(&mut chunk).await.expect("read");
+            assert!(read > 0, "the server closed without answering");
+            raw.extend_from_slice(&chunk[..read]);
+            let text = String::from_utf8_lossy(&raw).to_string();
+            if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                let length: usize = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().ok())
+                            .flatten()
+                    })
+                    .expect("content-length");
+                if body.len() >= length {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the server answers before the body ends");
+    let text = String::from_utf8_lossy(&raw);
+    let (head, body) = text.split_once("\r\n\r\n").expect("a complete response");
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("status");
+    (status, serde_json::from_str(body.trim()).expect("json"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unsigned_request_is_refused_before_its_body_is_read() {
+    let (first, _) = databases().await;
+    let a = start(&first, |_| {}).await;
+    for path in ["/s2s/v1/forward/api", "/s2s/v1/ping"] {
+        let (status, body) = post_unsigned_unending_body(&a, path).await;
+        assert_eq!(
+            (status, error_code(&body)),
+            (401, "bad_signature"),
+            "{path}"
+        );
+    }
+    a.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discovery_document_is_signed_and_cacheable_from_any_origin() {
     let (first, second) = databases().await;

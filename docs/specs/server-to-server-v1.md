@@ -286,16 +286,19 @@ resolution; `created` is covered already).
 
 In order, stopping at the first failure:
 
-1. Body at most `RIM_S2S_MAX_BODY_BYTES` (8 MiB; 32 MiB on `/forward/`) → `413 too_large`.
+1. A declared `Content-Length` at most `RIM_S2S_MAX_BODY_BYTES` (8 MiB; 32 MiB on
+   `/forward/`) → `413 too_large`.
 2. Exactly the profile's components and parameters; `created ≤ now + 300`, `expires > now`,
    `expires − created ≤ 300` → `401 bad_signature`.
 3. Peer: denied, `blocked` or `forked` → `403`; an unknown id is pinned from `Rim-Origin` first
    (`403 unknown_peer` on failure). The host allow-list applies here ("Configuration").
 4. `keyid`'s seq is the pinned head, or the previous key in its grace period; a higher seq
-   refreshes the pin once. Digest matches; signature verifies (`verify_strict`) → else `401`.
-5. Insert `(peer, nonce, expires_at = created + 600 s)` into `s2s_nonce`; a conflict is
+   refreshes the pin once. The signature verifies (`verify_strict`) → else `401`.
+5. Only now is the body read, up to the same cap → `413 too_large`; its digest matches the signed
+   `Content-Digest` → else `401`.
+6. Insert `(peer, nonce, expires_at = created + 600 s)` into `s2s_nonce`; a conflict is
    `409 replay`. Expired rows are deleted every minute.
-6. Rate limits per peer → `429` with `Retry-After`.
+7. Rate limits per peer → `429` with `Retry-After`.
 
 ### Responses
 
@@ -489,8 +492,9 @@ or the user is a member of this host's direct space and the relay's origin is in
 (`403 not_delegated` otherwise). It runs the normal handler (GraphQL, attachment upload and download,
 avatar upload, stored-file download, plugin bundle download) as that user and device, with no session; CSRF does not apply without cookies. Per-IP limiters key on
 `relay:<serverId>:<principalId>` for forwarded requests. Forwarded GraphQL keeps the host's own
-`/api` limits, whatever the relay's are: a batch over `RIM_API_MAX_BATCH` is answered
-`400 {"error":"batch_too_large"}` and none of it runs, and its mutation fields are charged to a
+`/api` limits, whatever the relay's are: a body past the GraphQL body caps of `/api`
+(`docs/api.md`, "Limits") is answered `413 {"error":"too_large"}`, a batch over
+`RIM_API_MAX_BATCH` is answered `400 {"error":"batch_too_large"}`, and none of either runs, and its mutation fields are charged to a
 `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` budget of the device, so a batch past it answers
 `RATE_LIMITED` with `retryAfterSeconds` and nothing in it runs.
 

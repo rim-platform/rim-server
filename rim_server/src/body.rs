@@ -13,6 +13,14 @@ pub(crate) enum BodyError {
     Read,
 }
 
+/// The body length `req` declares in `Content-Length`, when it declares one that parses.
+pub(crate) fn declared_length(req: &HttpRequest) -> Option<usize> {
+    req.headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+}
+
 /// The whole body of `req`, refused as soon as its declared `Content-Length` or the bytes
 /// received so far exceed `limit`.
 pub(crate) async fn read_bounded(
@@ -20,12 +28,7 @@ pub(crate) async fn read_bounded(
     mut payload: web::Payload,
     limit: usize,
 ) -> Result<Vec<u8>, BodyError> {
-    let declared = req
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<usize>().ok());
-    if declared.is_some_and(|len| len > limit) {
+    if declared_length(req).is_some_and(|len| len > limit) {
         return Err(BodyError::TooLarge);
     }
     let mut body = Vec::new();
