@@ -405,13 +405,16 @@ tag `v<version>`, the version every crate in the workspace carries.
   probation rate for an account in probation) like a sent message, and answers `RATE_LIMITED`
   past it.
 - Display names from `signupWithInvite`, `signupWithKey` and `updateMyProfile` are stored
-  without control and invisible format characters (zero-width spaces, word joiners, soft
-  hyphens, byte order marks, bidirectional overrides and isolates; the zero-width joiner and
-  non-joiner stay for emoji sequences and scripts that need them), with whitespace runs made
-  one space, and are at most 64 characters after that for every path; the signups took up to
-  80 before (`SignupWithKeyInput.displayName`, `signupWithInvite`'s `displayName`).
-  `RIM_RESERVED_NAMES` also refuses a reserved name hidden behind invisible characters or
-  written with lookalike letters from another script (`Аdmin` with a Cyrillic `А`), and a
+  without control, format and other default-ignorable characters (zero-width spaces, word
+  joiners, soft hyphens, byte order marks, bidirectional overrides and isolates, variation
+  selectors, Hangul fillers, tag characters), with whitespace runs made one space, and are at
+  most 64 characters after that for every path; the signups took up to 80 before
+  (`SignupWithKeyInput.displayName`, `signupWithInvite`'s `displayName`). What emoji and
+  scripts need stays: the zero-width joiner and non-joiner, an emoji presentation selector
+  (`❤️`), the tags of the flags of Scotland, England and Wales, and the Mongolian variation
+  selectors and vowel separator (`docs/api.md`). `RIM_RESERVED_NAMES` also refuses a reserved
+  name hidden behind any invisible character, a variation selector or Hangul filler included,
+  or written with lookalike letters from another script (`Аdmin` with a Cyrillic `А`), and a
   remote person whose profile card names one is shown by their username here instead
   (`docs/specs/server-to-server-v1.md`, `docs/specs/key-identity-v1.md`).
 

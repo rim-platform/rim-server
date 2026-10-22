@@ -293,9 +293,9 @@ identity alone: no password, and no email unless an email-bound invite gives one
    log's principal id, the certificate's device id and this server's audience. The challenge is
    consumed. No other account here may hold the principal id (`CONFLICT`). The username follows
    the password signup's rules and must be free (`CONFLICT`); `displayName` follows the display
-   name rules of every signup (control and format characters but the zero-width joiner and
-   non-joiner removed, whitespace collapsed, at most 64 characters, not reserved) and defaults
-   to the username.
+   name rules of every signup (invisible characters removed but those emoji and scripts need,
+   whitespace collapsed, at most 64 characters, not reserved; `docs/api.md`) and defaults to
+   the username.
 3. In one transaction the server creates the user with `password_hash` null, `email` null or
    the email-bound invite's address, and `principal_id` and `identity_key` set, stores the log
    and the device, consumes the token (or joins the server), and creates a session **bound to

@@ -1062,6 +1062,16 @@ mod tests {
             ("\u{2066}RIM\u{2069} Support", fallback.clone()),
             ("\u{410}dmin", fallback.clone()),
             ("\u{FEFF}", fallback.clone()),
+            ("\u{3164}", fallback.clone()),
+            ("Ad\u{FE00}min", fallback.clone()),
+            ("Admin\u{FE0F}", fallback.clone()),
+            ("A\u{034F}dmin", fallback.clone()),
+            ("Ad\u{3164}min", fallback.clone()),
+            (
+                "Ada \u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}",
+                "Ada \u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}".to_string(),
+            ),
+            ("\u{2764}\u{FE0F} Ada", "\u{2764}\u{FE0F} Ada".to_string()),
         ] {
             assert_eq!(
                 card_display_name(card, principal, &reserved),

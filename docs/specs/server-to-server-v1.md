@@ -406,7 +406,7 @@ delegation):
 |---|---|
 | `kind`, `principal_id`, `identity_key` | `remote`; from the verified key log |
 | `username` | `r_` + the first 30 characters after `rimp1_`. From S5-1 on local signups refuse the `r_` prefix, so nobody squats a principal's name; existing local names are left alone |
-| `display_name` | The card's `displayName` without control and format characters but the zero-width joiner and non-joiner, whitespace runs made one space, cut to 64 characters, updated with each newer card; the `username` when nothing visible is left or the name is reserved here (`RIM_RESERVED_NAMES`) |
+| `display_name` | The card's `displayName` cleaned by the display name rules of `docs/api.md` (invisible characters removed but those emoji and scripts need, whitespace runs made one space), cut to 64 characters, updated with each newer card; the `username` when nothing visible is left or the name is reserved here (`RIM_RESERVED_NAMES`) |
 | `password_hash`, `email` | Null (allowed: `principal_id` is set) |
 | `home_relay` | Server id of the relay that most recently presented a valid delegation for the user, else the first relay of their newest card that pins, else the relay that served their identity: one that speaks for them (7.4a) or one the host fetched it from. Null for local users |
 | `home_username`, `home_handle_domain` | The user's username at their home relay and its checked handle domain, set together ("Handles"); null while unknown and for local users |
