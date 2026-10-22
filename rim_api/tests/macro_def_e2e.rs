@@ -352,8 +352,9 @@ async fn create_macro_returns_the_macro_and_lists_it_for_its_author() {
     assert_eq!(f.by_name(&f.ws.bob, "missing").await, Value::Null);
 }
 
-/// `createMacro` refuses a blank or over-long name, no steps, more than twenty steps and a step
-/// that calls another macro, with `VALIDATION`.
+/// `createMacro` refuses a blank or over-long name, no steps, more than twenty steps, a step
+/// that calls another macro or a user command, and a step whose arguments pass 4 KiB, with
+/// `VALIDATION`.
 #[tokio::test]
 async fn create_macro_validates_name_and_steps() {
     let f = setup().await;
@@ -366,6 +367,11 @@ async fn create_macro_validates_name_and_steps() {
             "nested".to_string(),
             json!([{ "commandId": "macro.anything" }]),
         ),
+        (
+            "composed".to_string(),
+            json!([{ "commandId": "user.many_steps" }]),
+        ),
+        ("bulky".to_string(), json!([f.post_step(&"x".repeat(4096))])),
     ];
     for (name, steps) in cases {
         assert_eq!(

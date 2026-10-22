@@ -43,6 +43,11 @@ pub const DEFAULT_CONFIRMATION_TTL_SECS: i64 = 60;
 /// given to this, so no caller can mint a token that outlives the person's decision by more.
 pub const MAX_CONFIRMATION_TTL_SECS: i64 = 300;
 
+/// Unexpired tokens [`InMemoryConfirmationStore`] keeps for one user. Issuing one more drops
+/// that user's token closest to expiry, so a user whose pipelines or scripts collect unanswered
+/// challenges holds a bounded share of the store.
+pub const MAX_PENDING_CONFIRMATIONS_PER_USER: usize = 32;
+
 // ---------------------------------------------------------------------------
 // Public types — wire surface
 // ---------------------------------------------------------------------------
@@ -162,6 +167,24 @@ impl InMemoryConfirmationStore {
         map.retain(|_, claims| claims.expires_at > now);
     }
 
+    /// Drops `actor`'s tokens closest to expiry until fewer than
+    /// [`MAX_PENDING_CONFIRMATIONS_PER_USER`] of theirs remain.
+    fn make_room_for_locked(map: &mut HashMap<String, IssuedClaims>, actor: &Actor) {
+        let mut held: Vec<(DateTime<Utc>, String)> = map
+            .iter()
+            .filter(|(_, claims)| claims.actor.user_id == actor.user_id)
+            .map(|(token, claims)| (claims.expires_at, token.clone()))
+            .collect();
+        if held.len() < MAX_PENDING_CONFIRMATIONS_PER_USER {
+            return;
+        }
+        held.sort();
+        let excess = held.len() + 1 - MAX_PENDING_CONFIRMATIONS_PER_USER;
+        for (_, token) in held.into_iter().take(excess) {
+            map.remove(&token);
+        }
+    }
+
     /// Number of *non-expired* claims currently held. Sweeps lazily before
     /// counting so the result reflects observable state (a freshly-expired
     /// token is reported as gone). Intended for **test introspection** —
@@ -193,6 +216,7 @@ impl ConfirmationStore for InMemoryConfirmationStore {
             Err(poisoned) => poisoned.into_inner(),
         };
         Self::sweep_expired_locked(&mut guard, Utc::now());
+        Self::make_room_for_locked(&mut guard, &claims.0.actor);
         guard.insert(token, claims.0);
     }
 
@@ -981,6 +1005,44 @@ mod tests {
             "TTL should have been clamped to MAX_CONFIRMATION_TTL_SECS; got {} (expected ≤ {})",
             challenge.expires_at,
             max_ceiling,
+        );
+    }
+
+    #[test]
+    fn store_keeps_at_most_the_cap_per_user_and_drops_the_oldest() {
+        let store = InMemoryConfirmationStore::new();
+        let busy = actor();
+        let other = actor();
+        let other_challenge = issue_in_band(&store, &other, "test.cmd", &None, &None);
+        let first = issue_in_band_with_ttl(
+            &store,
+            &busy,
+            "test.cmd",
+            &None,
+            &None,
+            Duration::seconds(30),
+        );
+        for _ in 0..MAX_PENDING_CONFIRMATIONS_PER_USER {
+            issue_in_band(&store, &busy, "test.cmd", &None, &None);
+        }
+
+        assert_eq!(store.len(), MAX_PENDING_CONFIRMATIONS_PER_USER + 1);
+        let first_proof = ConfirmationProof::InBandToken {
+            token: first.token,
+            args_hash: first.args_hash,
+        };
+        assert_eq!(
+            verify_in_band(&store, &first_proof, &busy, "test.cmd", &None, &None),
+            Err(ConfirmationError::UnknownToken),
+            "the token closest to expiry makes room for the newest"
+        );
+        let other_proof = ConfirmationProof::InBandToken {
+            token: other_challenge.token,
+            args_hash: other_challenge.args_hash,
+        };
+        assert!(
+            verify_in_band(&store, &other_proof, &other, "test.cmd", &None, &None).is_ok(),
+            "another user's token is untouched"
         );
     }
 }

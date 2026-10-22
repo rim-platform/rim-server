@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
 use rim_core::keybind::model::{Keybind, KeybindSubject, NewKeybind, UpdateKeybind};
+use rim_core::server::model::WorkspaceId;
+use rim_services::command::dto::CommandDefinitionDto;
 use rim_services::command::request::GetCommandQuery;
 use rim_services::command::service::CommandService;
 use rim_services::keybind::dto::{
@@ -105,6 +107,76 @@ impl DefaultKeybindService {
             }
         }
         Ok(())
+    }
+
+    /// Refuses a workspace keybind that would run `definition` with `preset_args` for every
+    /// member of `workspace_id`: one whose command is `Mutating` or `Restricted`, which a member
+    /// would run with one key press and, short of a dangerous command, no confirmation, or one
+    /// whose preset `server_id` names a workspace other than its own.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the reason.
+    fn ensure_workspace_binding(
+        definition: &CommandDefinitionDto,
+        workspace_id: WorkspaceId,
+        preset_args: Option<&serde_json::Value>,
+    ) -> ServiceResult<()> {
+        if definition.sensitivity.is_mutating() {
+            return Err(ServiceError::Validation(format!(
+                "a workspace keybind cannot bind `{}`: it changes data, and each member would run \
+                 it without a confirmation",
+                definition.id
+            )));
+        }
+        let preset_server_id = preset_args
+            .and_then(serde_json::Value::as_object)
+            .and_then(|args| args.get("server_id"));
+        if let Some(server_id) = preset_server_id {
+            let own_workspace = server_id
+                .as_str()
+                .and_then(|id| uuid::Uuid::parse_str(id.trim()).ok())
+                .is_some_and(|id| id == uuid::Uuid::from(workspace_id));
+            if !own_workspace {
+                return Err(ServiceError::Validation(
+                    "a workspace keybind's preset `server_id` must name its own workspace"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the stored workspace keybind `keybind` of `workspace_id` still meets
+    /// [`Self::ensure_workspace_binding`] for `actor`: a builtin is looked up in `builtins`, any
+    /// other command as `actor` resolves it. A command that resolves to nothing is kept, since
+    /// it names no command the server runs; one whose resolution fails is left out.
+    async fn workspace_binding_admitted(
+        &self,
+        actor: rim_services::Actor,
+        workspace_id: WorkspaceId,
+        keybind: &Keybind,
+        builtins: &std::collections::HashMap<String, CommandDefinitionDto>,
+    ) -> bool {
+        let definition = match builtins.get(&keybind.command_id) {
+            Some(definition) => Some(definition.clone()),
+            None => match self
+                .services
+                .command_service
+                .get_command(GetCommandQuery {
+                    actor,
+                    command_id: keybind.command_id.clone(),
+                })
+                .await
+            {
+                Ok(definition) => definition,
+                Err(_) => return false,
+            },
+        };
+        definition.is_none_or(|definition| {
+            Self::ensure_workspace_binding(&definition, workspace_id, keybind.preset_args.as_ref())
+                .is_ok()
+        })
     }
 
     fn subject_for_request(
@@ -369,10 +441,23 @@ impl DefaultKeybindService {
                 .list_for_subject(KeybindSubject::Workspace(workspace_id))
                 .await?;
             Self::sort_keybinds(&mut workspace_keybinds);
-            for keybind in workspace_keybinds
-                .into_iter()
-                .filter(|keybind| keybind.is_enabled)
-            {
+            workspace_keybinds.retain(|keybind| keybind.is_enabled);
+            let builtins: std::collections::HashMap<String, CommandDefinitionDto> =
+                if workspace_keybinds.is_empty() {
+                    std::collections::HashMap::new()
+                } else {
+                    crate::command::registry::builtin_commands()
+                        .into_iter()
+                        .map(|definition| (definition.id.clone(), definition))
+                        .collect()
+                };
+            for keybind in workspace_keybinds {
+                if !self
+                    .workspace_binding_admitted(query.actor, workspace_id, &keybind, &builtins)
+                    .await
+                {
+                    continue;
+                }
                 effective.insert(
                     (format!("{:?}", keybind.context), keybind.keystroke.clone()),
                     Self::to_dto(keybind),
@@ -383,11 +468,17 @@ impl DefaultKeybindService {
         Ok(effective)
     }
 
+    /// The definition of `command_id` as `actor` resolves it, when it may be bound to a key.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` when it names no command or one that is not keybind-capable; an error from
+    /// resolving it.
     async fn validate_command_bindable(
         &self,
         actor: rim_services::Actor,
         command_id: &str,
-    ) -> ServiceResult<()> {
+    ) -> ServiceResult<CommandDefinitionDto> {
         let command = self
             .services
             .command_service
@@ -397,12 +488,11 @@ impl DefaultKeybindService {
             })
             .await?;
 
-        if command.is_some_and(|command| command.keybind_capable) {
-            Ok(())
-        } else {
-            Err(ServiceError::Validation(format!(
+        match command {
+            Some(command) if command.keybind_capable => Ok(command),
+            _ => Err(ServiceError::Validation(format!(
                 "command `{command_id}` is not keybind-capable"
-            )))
+            ))),
         }
     }
 }
@@ -423,8 +513,12 @@ impl KeybindService for DefaultKeybindService {
     async fn create_keybind(&self, cmd: CreateKeybindCmd) -> ServiceResult<KeybindDto> {
         let subject = Self::subject_for_request(cmd.actor.user_id, cmd.scope, cmd.workspace_id)?;
         self.ensure_scope_access(cmd.actor, subject).await?;
-        self.validate_command_bindable(cmd.actor, &cmd.command_id)
+        let definition = self
+            .validate_command_bindable(cmd.actor, &cmd.command_id)
             .await?;
+        if let KeybindSubject::Workspace(workspace_id) = subject {
+            Self::ensure_workspace_binding(&definition, workspace_id, cmd.preset_args.as_ref())?;
+        }
         Self::validate_keystroke(&cmd.keystroke)?;
         Self::validate_preset_args_size(&cmd.preset_args)?;
 
@@ -487,8 +581,12 @@ impl KeybindService for DefaultKeybindService {
             .ok_or(ServiceError::NotFound)?;
         self.ensure_scope_access(cmd.actor, existing.subject)
             .await?;
-        self.validate_command_bindable(cmd.actor, &cmd.command_id)
+        let definition = self
+            .validate_command_bindable(cmd.actor, &cmd.command_id)
             .await?;
+        if let KeybindSubject::Workspace(workspace_id) = existing.subject {
+            Self::ensure_workspace_binding(&definition, workspace_id, cmd.preset_args.as_ref())?;
+        }
         Self::validate_keystroke(&cmd.keystroke)?;
         Self::validate_preset_args_size(&cmd.preset_args)?;
 
@@ -955,5 +1053,266 @@ mod tests {
         assert_eq!(ctrl_r.source, KeybindSourceDto::Workspace);
         let ctrl_k = resolved.iter().find(|k| k.keystroke == "Ctrl+K").unwrap();
         assert_eq!(ctrl_k.source, KeybindSourceDto::Default);
+    }
+
+    fn stored_keybind(
+        subject: KeybindSubject,
+        keystroke: &str,
+        command_id: &str,
+        preset_args: Option<serde_json::Value>,
+    ) -> Keybind {
+        Keybind {
+            id: rim_core::keybind::model::KeybindId::new(),
+            scope: match subject {
+                KeybindSubject::User(_) => KeybindScope::User,
+                KeybindSubject::Workspace(_) => KeybindScope::Workspace,
+            },
+            subject,
+            keystroke: keystroke.to_string(),
+            command_id: command_id.to_string(),
+            context: KeybindContext::Global,
+            preset_args,
+            is_enabled: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn command_service_returning(definition: CommandDefinitionDto) -> MockCommandService {
+        let mut command_service = MockCommandService::new();
+        command_service.expect_get_command().returning(move |_| {
+            let definition = definition.clone();
+            Box::pin(async move { Ok(Some(definition)) })
+        });
+        command_service
+    }
+
+    fn workspace_create(
+        workspace_id: WorkspaceId,
+        command_id: &str,
+        preset_args: Option<serde_json::Value>,
+    ) -> CreateKeybindCmd {
+        CreateKeybindCmd {
+            actor: actor(),
+            scope: KeybindScopeDto::Workspace,
+            workspace_id: Some(workspace_id),
+            keystroke: "Ctrl+K".to_string(),
+            command_id: command_id.to_string(),
+            context: rim_services::keybind::dto::KeybindContextDto::Global,
+            preset_args,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_workspace_keybind_cannot_bind_a_mutating_command() {
+        let workspace_id = WorkspaceId::new();
+        for sensitivity in [
+            CommandSensitivityDto::Mutating,
+            CommandSensitivityDto::Restricted,
+        ] {
+            let definition = CommandDefinitionDto {
+                sensitivity,
+                ..bindable_command("chat.leave_conversation")
+            };
+            let svc = service(
+                FakeKeybindRepository {
+                    entries: std::sync::Mutex::new(vec![]),
+                    created: std::sync::Mutex::new(None),
+                },
+                command_service_returning(definition),
+            );
+
+            let err = svc
+                .create_keybind(workspace_create(
+                    workspace_id,
+                    "chat.leave_conversation",
+                    None,
+                ))
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m.contains("changes data")),
+                "{err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_workspace_keybind_presets_only_its_own_workspace() {
+        let workspace_id = WorkspaceId::new();
+        let created = stored_keybind(
+            KeybindSubject::Workspace(workspace_id),
+            "Ctrl+K",
+            "chat.search_messages",
+            Some(serde_json::json!({ "server_id": workspace_id.to_string() })),
+        );
+        let svc = service(
+            FakeKeybindRepository {
+                entries: std::sync::Mutex::new(vec![]),
+                created: std::sync::Mutex::new(Some(created)),
+            },
+            command_service_returning(bindable_command("chat.search_messages")),
+        );
+
+        for foreign in [
+            serde_json::json!({ "server_id": WorkspaceId::new().to_string() }),
+            serde_json::json!({ "server_id": 7 }),
+        ] {
+            let err = svc
+                .create_keybind(workspace_create(
+                    workspace_id,
+                    "chat.search_messages",
+                    Some(foreign),
+                ))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m.contains("own workspace")),
+                "{err:?}"
+            );
+        }
+        svc.create_keybind(workspace_create(
+            workspace_id,
+            "chat.search_messages",
+            Some(serde_json::json!({ "server_id": workspace_id.to_string(), "query": "x" })),
+        ))
+        .await
+        .expect("its own workspace");
+    }
+
+    #[tokio::test]
+    async fn a_user_keybind_may_still_bind_a_mutating_command() {
+        let actor = actor();
+        let created = stored_keybind(
+            KeybindSubject::User(actor.user_id),
+            "Ctrl+L",
+            "chat.leave_conversation",
+            None,
+        );
+        let svc = service(
+            FakeKeybindRepository {
+                entries: std::sync::Mutex::new(vec![]),
+                created: std::sync::Mutex::new(Some(created)),
+            },
+            command_service_returning(CommandDefinitionDto {
+                sensitivity: CommandSensitivityDto::Mutating,
+                ..bindable_command("chat.leave_conversation")
+            }),
+        );
+
+        svc.create_keybind(CreateKeybindCmd {
+            actor,
+            scope: KeybindScopeDto::User,
+            workspace_id: None,
+            keystroke: "Ctrl+L".to_string(),
+            command_id: "chat.leave_conversation".to_string(),
+            context: rim_services::keybind::dto::KeybindContextDto::Global,
+            preset_args: Some(serde_json::json!({ "server_id": WorkspaceId::new().to_string() })),
+        })
+        .await
+        .expect("a user keybind");
+    }
+
+    #[tokio::test]
+    async fn updating_a_workspace_keybind_to_a_mutating_command_is_refused() {
+        let workspace_id = WorkspaceId::new();
+        let existing = stored_keybind(
+            KeybindSubject::Workspace(workspace_id),
+            "Ctrl+K",
+            "workspace.toggle_sidebar",
+            None,
+        );
+        let keybind_id = existing.id;
+        let svc = service(
+            FakeKeybindRepository {
+                entries: std::sync::Mutex::new(vec![existing]),
+                created: std::sync::Mutex::new(None),
+            },
+            command_service_returning(CommandDefinitionDto {
+                sensitivity: CommandSensitivityDto::Mutating,
+                ..bindable_command("chat.leave_conversation")
+            }),
+        );
+
+        let err = svc
+            .update_keybind(UpdateKeybindCmd {
+                actor: actor(),
+                keybind_id,
+                keystroke: "Ctrl+K".to_string(),
+                command_id: "chat.leave_conversation".to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+                is_enabled: true,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("changes data")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_leaves_out_stored_workspace_keybinds_that_break_the_rule() {
+        let actor = actor();
+        let workspace_id = WorkspaceId::new();
+        let workspace = KeybindSubject::Workspace(workspace_id);
+        let kept = [
+            stored_keybind(workspace, "Ctrl+1", "workspace.toggle_sidebar", None),
+            stored_keybind(
+                workspace,
+                "Ctrl+2",
+                "chat.search_messages",
+                Some(serde_json::json!({ "server_id": workspace_id.to_string() })),
+            ),
+        ];
+        let dropped = [
+            stored_keybind(workspace, "Ctrl+3", "chat.leave_conversation", None),
+            stored_keybind(
+                workspace,
+                "Ctrl+4",
+                "chat.search_messages",
+                Some(serde_json::json!({ "server_id": WorkspaceId::new().to_string() })),
+            ),
+            stored_keybind(workspace, "Ctrl+5", "user.cleanup", None),
+        ];
+        let mut command_service = MockCommandService::new();
+        command_service.expect_get_command().returning(|query| {
+            assert_eq!(query.command_id, "user.cleanup");
+            Box::pin(async {
+                Ok(Some(CommandDefinitionDto {
+                    sensitivity: CommandSensitivityDto::Mutating,
+                    ..bindable_command("user.cleanup")
+                }))
+            })
+        });
+        let svc = service(
+            FakeKeybindRepository {
+                entries: std::sync::Mutex::new(kept.iter().chain(&dropped).cloned().collect()),
+                created: std::sync::Mutex::new(None),
+            },
+            command_service,
+        );
+
+        let resolved = svc
+            .resolve_keybinds(ResolveKeybindsQuery {
+                actor,
+                workspace_id: Some(workspace_id),
+            })
+            .await
+            .unwrap();
+
+        let workspace_ids: Vec<_> = resolved
+            .iter()
+            .filter(|k| k.source == KeybindSourceDto::Workspace)
+            .map(|k| k.id)
+            .collect();
+        let mut expected: Vec<_> = kept.iter().map(|k| k.id).collect();
+        expected.sort_by_key(|id| id.to_string());
+        let mut workspace_ids = workspace_ids;
+        workspace_ids.sort_by_key(|id| id.to_string());
+        assert_eq!(workspace_ids, expected);
     }
 }

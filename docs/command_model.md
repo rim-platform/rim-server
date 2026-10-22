@@ -220,9 +220,10 @@ Two things compose commands, and only one of them is a command:
 - a **user command** (`createUserCommand`, id `user.<key>`) is a command: it is listed with the
   others, so it shows in the palette and a keybind can name it; its steps run in order, each
   with its own arguments, in the context the user command runs in
-- a **macro** (`createMacro`, `MacroDef`) is a list of up to 20 steps, each a command id with its
-  own arguments; it is not in the command registry, so the palette does not list it and no
-  keybind names it. It runs through `executeMacro` (from Settings or `/macro` in the client),
+- a **macro** (`createMacro`, `MacroDef`) is a list of up to 20 steps, each a builtin command id
+  with its own arguments; a step may not name another macro or a user command, so one run
+  performs at most 20 builtin steps. It is not in the command registry, so the palette does not
+  list it and no keybind names it. It runs through `executeMacro` (from Settings or `/macro` in the client),
   its steps in order, each with its own arguments, in the context of the run. `commands` on the
   `AI` surface and `commandDiscover` offer an `ai_callable` macro to the agent as `macro.<id>`
 
@@ -249,6 +250,10 @@ or with a step naming an unknown or disabled command, or a cycle) and lists the 
 disabled user command does not run: `executeCommand` answers `NOT_FOUND` for it, as for an id
 that names no command.
 
+`createMacro` and `updateMacro` refuse a step naming a user command with a `VALIDATION` error,
+"macro steps must not reference user commands"; `executeMacro` refuses a stored macro with such
+a step the same way, before any of its steps runs.
+
 A macro run asks for one confirmation up front when the macro's own `sensitivity` is
 `Restricted` or when any step needs one under the confirmation gate below, judged with the
 run's initiator: a dangerous step, a `Restricted` one, or a `Mutating` one the agent or a plugin
@@ -256,6 +261,36 @@ started. Without a proof `executeMacro` runs no step and answers `CONFIRMATION_R
 challenge for the macro, and its `message` names the reason: the sensitivity tier, the steps,
 or both. The call made again with that proof runs the steps, and the one confirmation covers
 every step of the run that needs one. A macro with no such step runs without a confirmation.
+
+## Size Limits
+
+Each call and each stored definition has a size limit, so one request costs a bounded amount of
+work, storage and audit log. A request over a limit is refused with a `VALIDATION` error that
+names it, such as "command arguments may be at most 65536 bytes".
+
+| What | Limit |
+|---|---|
+| `executeCommand` `args`, serialized as JSON | 65,536 bytes, room for the longest message `chat.post_message` takes |
+| `executeCommand` `commandId` | 256 bytes; a pipe expression (`isPipe`) 4,096 bytes |
+| User command (`createUserCommand`, `updateUserCommand`) | id 256 bytes, title 128 characters, description 1,000 characters, each step's id 256 bytes and `args` 4,096 bytes |
+| Macro (`createMacro`, `updateMacro`) | description and `nlDescription` 1,000 characters each, up to 10 `intentSamples` of 200 characters, each step's id 256 bytes and `args` 4,096 bytes |
+| Pipeline (`createPipeline`, `updatePipeline`) | description 1,000 characters, up to 5 filter conditions, a `MessageContains` pattern of 256 characters, up to 10 actions, each action's id 256 bytes and `args` 4,096 bytes |
+
+Too large calls are refused before they run, so they write no audit row. The audit log keeps a
+call's redacted arguments when they serialize to 4,096 bytes or less; larger arguments are kept
+as `{"truncated": true, "bytes": <size>, "prefix": <the first 1,024 bytes of the redacted
+JSON>}`.
+
+A pipeline action may not name a user command or a macro: each action runs as its own command
+call with its own budget of 100 builtin steps, and a pipeline fires on events other people cause.
+`createPipeline` and `updatePipeline` refuse such an action with "pipeline actions must not
+reference user commands or macros". A pipeline saved before these limits runs at most its first
+10 actions and skips an action naming a user command or a macro.
+
+The server keeps at most 32 unanswered confirmation challenges per user; issuing one more drops
+that user's challenge closest to expiry, which then answers `CONFIRMATION_STALE`. A pipeline's
+action that needs a confirmation issues a challenge nobody answers, and this keeps such
+challenges from piling up.
 
 ## Command Contract
 
@@ -495,9 +530,12 @@ required capabilities passes the capability gate; a user command needs the role 
 needs. The role a builtin needs is the one the service behind it enforces: the Owner for
 `admin.invite_member`; an Owner or Moderator for `admin.kick`, `admin.ban`, `admin.unban`,
 `admin.timeout`, `admin.set_role`, `chat.set_slow_mode`, `chat.archive_channel` and
-`chat.unarchive_channel`; a member (not a guest) for `chat.create_channel`; a member, or a guest
-in the direct space, for `chat.create_group`, `chat.join_channel` and
-`chat.invite_to_conversation`; any member, guests included, for the rest. The commands the client
+`chat.unarchive_channel`; a member (not a guest) for `chat.create_channel`, `chat.create_group`
+and `chat.invite_to_conversation`; a member, or a guest in the direct space, for
+`chat.join_channel`; any member, guests included, for the rest. In the direct space, where
+everyone is a guest, a group is started and people are invited through `createConversation` and
+`addConversationMembers`, which apply the DM-request checks (the daily cap on requests to
+strangers and the probation of new accounts) that the commands do not. The commands the client
 runs itself (`desktop_local`) need no workspace and are listed to every signed-in caller, with a
 workspace or without. Naming the direct space makes the caller a guest of it, as other reads
 there do. A listed command can still be refused for its arguments, a confirmation it needs, or a

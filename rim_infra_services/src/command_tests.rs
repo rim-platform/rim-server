@@ -4097,15 +4097,16 @@ mod tests {
 
         let ids = palette_ids(&svc, actor, Some(workspace_context(direct))).await;
 
-        for id in [
-            "chat.create_group",
-            "chat.invite_to_conversation",
-            "chat.join_channel",
-            "chat.post_message",
-        ] {
+        for id in ["chat.join_channel", "chat.post_message"] {
             assert!(ids.contains(id), "{id}");
         }
-        for id in ["chat.create_channel", "chat.archive_channel", "admin.kick"] {
+        for id in [
+            "chat.create_channel",
+            "chat.create_group",
+            "chat.invite_to_conversation",
+            "chat.archive_channel",
+            "admin.kick",
+        ] {
             assert!(!ids.contains(id), "{id}");
         }
     }
@@ -4402,5 +4403,145 @@ mod tests {
         .await;
 
         assert_forbidden(result, "admin.kick");
+    }
+
+    #[tokio::test]
+    async fn execute_command_refuses_oversized_calls_before_auditing() {
+        use rim_services::command::bounds::MAX_EXECUTE_ARGS_BYTES;
+
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+        audit_svc.expect_write_entry().never();
+        let svc = service_with_rate_limited_cmd(
+            rate_limited_cmd_def("test.bounded", 100),
+            Some(Arc::new(audit_svc)),
+        );
+
+        let mut oversized_args = palette_cmd(actor, "test.bounded");
+        oversized_args.args =
+            Some(serde_json::json!({ "text": "x".repeat(MAX_EXECUTE_ARGS_BYTES) }));
+        let mut long_pipe =
+            palette_cmd(actor, &format!("test.bounded {}", "key=value ".repeat(500)));
+        long_pipe.is_pipe = true;
+        for (cmd, refusal) in [
+            (
+                oversized_args,
+                "command arguments may be at most 65536 bytes",
+            ),
+            (
+                palette_cmd(actor, &format!("user.{}", "x".repeat(300))),
+                "a command id may be at most 256 bytes",
+            ),
+            (long_pipe, "a pipe expression may be at most 4096 bytes"),
+        ] {
+            let err = svc.execute_command(cmd).await.unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == refusal),
+                "{err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_command_audits_large_args_truncated() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let written: Arc<std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>> =
+            Arc::new(std::sync::Mutex::new(vec![]));
+        let written_clone = written.clone();
+        let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+        audit_svc
+            .expect_write_entry()
+            .times(1)
+            .returning(move |entry| {
+                written_clone.lock().unwrap().push(entry);
+                Box::pin(async { Ok(()) })
+            });
+        let svc = service_with_rate_limited_cmd(
+            rate_limited_cmd_def("test.bounded", 100),
+            Some(Arc::new(audit_svc)),
+        );
+        let args = serde_json::json!({ "text": "x".repeat(10_000) });
+        let size = args.to_string().len();
+        let mut cmd = palette_cmd(actor, "test.bounded");
+        cmd.args = Some(args);
+
+        svc.execute_command(cmd).await.expect("runs");
+
+        let entries = written.lock().unwrap();
+        let kept = &entries[0].args_redacted;
+        assert_eq!(kept["truncated"], serde_json::json!(true), "{kept}");
+        assert_eq!(kept["bytes"], serde_json::json!(size));
+        assert!(kept.to_string().len() <= 4096, "{kept}");
+    }
+
+    #[tokio::test]
+    async fn user_command_text_and_step_args_are_bounded() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let svc = service(
+            MockUserCommandRepository::new(),
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+        let step = |args| UserCommandStepDto {
+            command_id: "chat.post_message".to_string(),
+            args,
+        };
+        for (title, description, args, refusal) in [
+            (
+                "t".repeat(129),
+                String::new(),
+                None,
+                "a user command title may be at most 128 characters",
+            ),
+            (
+                "Title".to_string(),
+                "d".repeat(1001),
+                None,
+                "a user command description may be at most 1000 characters",
+            ),
+            (
+                "Title".to_string(),
+                String::new(),
+                Some(serde_json::json!({ "text": "x".repeat(4096) })),
+                "a user command step's args may be at most 4096 bytes",
+            ),
+        ] {
+            let err = svc
+                .create_user_command(CreateUserCommandCmd {
+                    actor,
+                    command_key: "user.bounded".to_string(),
+                    title,
+                    description,
+                    steps: vec![step(args)],
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == refusal),
+                "{err:?}"
+            );
+        }
+
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_get_by_key_for_user()
+            .returning(move |owner, key| Ok(Some(saved_user_command(owner, key, true))));
+        repo.expect_update_user_command().never();
+        let svc = service(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+        let err = svc
+            .update_user_command(UpdateUserCommandCmd {
+                actor,
+                command_id: "user.bounded".to_string(),
+                title: "t".repeat(129),
+                description: String::new(),
+                steps: vec![step(None)],
+                is_enabled: true,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
     }
 }

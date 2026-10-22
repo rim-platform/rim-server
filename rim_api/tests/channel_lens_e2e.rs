@@ -438,6 +438,40 @@ async fn create_channel_lens_takes_one_to_twenty_conditions() {
 }
 
 #[tokio::test]
+async fn create_channel_lens_bounds_its_condition_values() {
+    let f = setup().await;
+    let authors = |n: usize| json!(vec![f.ws.bob.user_id.to_string(); n]);
+    for value in [
+        one_condition("TEXT_CONTAINS", "CONTAINS", json!("x".repeat(257))),
+        one_condition("AUTHOR_ID", "IN", authors(101)),
+        one_condition("AUTHOR_ID", "IN", json!([["nested"]])),
+        one_condition("TEXT_CONTAINS", "CONTAINS", json!({ "text": "x" })),
+    ] {
+        assert_eq!(
+            f.code(
+                &f.ws.alice,
+                f.create_call(&f.general, "n", value.clone(), None)
+            )
+            .await,
+            "VALIDATION",
+            "{value}"
+        );
+    }
+    f.lens(
+        "at the limits",
+        json!({
+            "conditions": [
+                condition("TEXT_CONTAINS", "CONTAINS", json!("x".repeat(256))),
+                condition("AUTHOR_ID", "IN", authors(100)),
+            ],
+            "logic": "OR",
+        }),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn a_member_owns_at_most_ten_lenses_per_conversation() {
     let f = setup().await;
     for i in 0..10 {

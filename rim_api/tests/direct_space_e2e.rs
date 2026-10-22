@@ -242,16 +242,48 @@ async fn commands_list_what_a_guest_runs_on_first_use() {
         .iter()
         .map(|c| c["id"].as_str().expect("id"))
         .collect();
-    for id in [
-        "chat.post_message",
-        "chat.create_group",
-        "chat.invite_to_conversation",
-        "workspace.open_settings",
-    ] {
+    for id in ["chat.post_message", "workspace.open_settings"] {
         assert!(ids.contains(&id), "{id} missing: {ids:?}");
     }
-    for id in ["chat.create_channel", "chat.archive_channel", "admin.kick"] {
+    for id in [
+        "chat.create_channel",
+        "chat.create_group",
+        "chat.invite_to_conversation",
+        "chat.archive_channel",
+        "admin.kick",
+    ] {
         assert!(!ids.contains(&id), "{id} listed: {ids:?}");
+    }
+    n.joined_as_guest().await;
+}
+
+/// A guest of the direct space starts a group and invites through `createConversation` and
+/// `addConversationMembers`, which apply the DM-request checks; the commands refuse them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn group_commands_are_refused_to_a_direct_space_guest() {
+    let n = Newcomer::new().await;
+    n.ok("query($s: ID!) { commands(commandContext: { workspaceId: $s }) { id } }")
+        .await;
+    let stranger = Uuid::now_v7().to_string();
+    for (command_id, args) in [
+        ("chat.create_group", json!({ "member_ids": [stranger] })),
+        (
+            "chat.invite_to_conversation",
+            json!({ "conversation_id": Uuid::now_v7().to_string(), "user_ids": [stranger] }),
+        ),
+    ] {
+        let body = n
+            .person
+            .post(
+                "mutation($s: ID!, $c: String!, $a: JSON) { executeCommand(input: { \
+                 commandId: $c, args: $a, commandContext: { workspaceId: $s } }) { status } }",
+                json!({ "s": n.direct, "c": command_id, "a": args }),
+            )
+            .await;
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "FORBIDDEN",
+            "{command_id}: {body}"
+        );
     }
     n.joined_as_guest().await;
 }

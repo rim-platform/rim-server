@@ -196,6 +196,20 @@ Decision:
 
 This allows teams to establish shared shortcuts without making workspace-level bindings mandatory.
 
+The workspace's Owner manages its keybinds, and each member runs them as themselves with one key
+press. So a workspace keybind is limited to commands that change nothing:
+
+- `createKeybind` and `updateKeybind` refuse a workspace keybind whose command is `Mutating` or
+  `Restricted`, as the Owner resolves it, with a `VALIDATION` error naming the command. A
+  read-only or navigation command (`Safe` or `Sensitive`) can be bound.
+- They refuse a workspace keybind whose `presetArgs` hold a `server_id` other than the
+  keybind's own workspace.
+- `resolvedKeybinds` leaves out a stored workspace keybind that breaks either rule, judged with
+  the command as the member asking resolves it, so a binding saved before these rules, or naming
+  a user command that changes data for that member, is not offered.
+
+A `user` keybind is the member's own choice and may bind any keybind-capable command.
+
 ## Multiple Bindings
 
 Decision:
@@ -288,7 +302,8 @@ If behavior is complex:
 - users can create their own keybinds for built-in/plugin/user-defined commands
 - dangerous commands still require confirmation by default
 - plugins can suggest defaults, but suggestions require approval
-- workspace keybinds are optional shared/team-managed bindings
+- workspace keybinds are optional shared/team-managed bindings, limited to commands that change
+  nothing and to their own workspace
 - one command may have multiple keybindings in the same context
 - resolved persisted precedence is currently `workspace > user`, while `device_local` remains a
   future client-side layer on top of backend-resolved data

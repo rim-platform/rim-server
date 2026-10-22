@@ -17,6 +17,7 @@ use rim_services::channel_lens::command::{
 };
 use rim_services::channel_lens::dto::ChannelLensDto;
 use rim_services::channel_lens::service::ChannelLensService;
+use rim_services::command::bounds::ensure_chars;
 use rim_services::message::dto::MessageDto;
 use rim_services::{ServiceError, ServiceResult};
 
@@ -29,6 +30,12 @@ const MAX_LENSES_PER_USER_PER_CONVERSATION: u64 = 10;
 
 /// Maximum name length for a lens.
 const MAX_NAME_LENGTH: usize = 100;
+
+/// Characters of a string a lens condition compares against.
+const MAX_CONDITION_STRING_CHARS: usize = 256;
+
+/// Entries of a list a lens condition compares against (`In`).
+const MAX_CONDITION_LIST_ENTRIES: usize = 100;
 
 /// Default message limit when applying a lens.
 const DEFAULT_APPLY_LIMIT: u32 = 50;
@@ -96,7 +103,51 @@ fn validate_filter_spec(spec: &FilterSpec) -> ServiceResult<()> {
             "filter spec must not exceed 20 conditions".into(),
         ));
     }
+    for condition in &spec.conditions {
+        validate_condition_value(&condition.value)?;
+    }
     Ok(())
+}
+
+/// Refuses a condition value that is not a scalar or a list of scalars, a string longer than
+/// [`MAX_CONDITION_STRING_CHARS`] characters, or a list longer than
+/// [`MAX_CONDITION_LIST_ENTRIES`].
+///
+/// # Errors
+///
+/// `Validation` naming the bound.
+fn validate_condition_value(value: &serde_json::Value) -> ServiceResult<()> {
+    match value {
+        serde_json::Value::Array(entries) => {
+            if entries.len() > MAX_CONDITION_LIST_ENTRIES {
+                return Err(ServiceError::Validation(format!(
+                    "a lens condition list may have at most {MAX_CONDITION_LIST_ENTRIES} entries"
+                )));
+            }
+            entries.iter().try_for_each(validate_condition_scalar)
+        }
+        scalar => validate_condition_scalar(scalar),
+    }
+}
+
+/// Refuses a list or an object, or a string longer than [`MAX_CONDITION_STRING_CHARS`]
+/// characters.
+///
+/// # Errors
+///
+/// `Validation` naming the bound.
+fn validate_condition_scalar(value: &serde_json::Value) -> ServiceResult<()> {
+    match value {
+        serde_json::Value::String(text) => {
+            ensure_chars(text, MAX_CONDITION_STRING_CHARS, "a lens condition value")
+        }
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            Err(ServiceError::Validation(
+                "a lens condition value must be a boolean, a string or a list of strings".into(),
+            ))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Check whether a message matches a single filter condition.
@@ -407,5 +458,74 @@ fn to_simple_dto(msg: Message, server_id: rim_core::server::model::ServerId) -> 
         is_deleted: msg.is_deleted,
         sent_at: msg.sent_at,
         encryption: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn spec(value: Value) -> FilterSpec {
+        FilterSpec {
+            conditions: vec![FilterCondition {
+                field: FilterField::AuthorId,
+                op: FilterOp::In,
+                value,
+            }],
+            logic: FilterLogic::And,
+        }
+    }
+
+    #[test]
+    fn condition_values_the_lens_editor_sends_pass() {
+        for value in [
+            json!(true),
+            json!("release notes"),
+            json!("x".repeat(MAX_CONDITION_STRING_CHARS)),
+            json!(vec![
+                uuid::Uuid::now_v7().to_string();
+                MAX_CONDITION_LIST_ENTRIES
+            ]),
+            json!([]),
+        ] {
+            assert!(
+                validate_filter_spec(&spec(value.clone())).is_ok(),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_or_nested_condition_values_are_refused() {
+        for (value, refusal) in [
+            (
+                json!("x".repeat(MAX_CONDITION_STRING_CHARS + 1)),
+                "a lens condition value may be at most 256 characters",
+            ),
+            (
+                json!(vec!["id"; MAX_CONDITION_LIST_ENTRIES + 1]),
+                "a lens condition list may have at most 100 entries",
+            ),
+            (
+                json!(["x".repeat(MAX_CONDITION_STRING_CHARS + 1)]),
+                "a lens condition value may be at most 256 characters",
+            ),
+            (
+                json!([["nested"]]),
+                "a lens condition value must be a boolean, a string or a list of strings",
+            ),
+            (
+                json!({ "text": "x" }),
+                "a lens condition value must be a boolean, a string or a list of strings",
+            ),
+        ] {
+            let err = validate_filter_spec(&spec(value)).unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == refusal),
+                "{err:?}"
+            );
+        }
     }
 }
