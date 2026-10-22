@@ -1587,7 +1587,7 @@ const REACT: &str = "mutation($s: ID!, $c: ID!, $m: ID!, $emoji: String!) { \
 
 /// Message text holds at most 10,000 characters. A reply and an edit need text; a new message
 /// may have none, since its attachments are added after it. An emoji is 1 to 32 characters of
-/// a Unicode emoji or a `:name:` shortcode.
+/// a Unicode emoji or the `:name:` of one of the workspace's custom emoji.
 #[tokio::test]
 async fn message_text_and_emoji_are_bounded() {
     let f = setup().await;
@@ -1617,6 +1617,7 @@ async fn message_text_and_emoji_are_bounded() {
         json!({ "emoji": "x".repeat(33) }),
         json!({ "emoji": "verify at evil.co" }),
         json!({ "emoji": "42" }),
+        json!({ "emoji": ":verify_at_evil_co:" }),
     ];
     let calls: Vec<_> = emojis.into_iter().map(|emoji| with(REACT, emoji)).collect();
     assert_each_refused_as(&f.schema, &f.alice, &calls, "VALIDATION").await;

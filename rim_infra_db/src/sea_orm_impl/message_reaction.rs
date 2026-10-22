@@ -8,7 +8,10 @@ use rim_core::message_reaction::repository::MessageReactionRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, ModelTrait,
+    QueryFilter, Set, Statement,
+};
 
 use crate::DbHandle;
 use crate::error::map_db_err;
@@ -25,6 +28,19 @@ impl SeaOrmMessageReactionRepository {
 
 #[async_trait]
 impl MessageReactionRepository for SeaOrmMessageReactionRepository {
+    async fn lock_message(&self, message_id: MessageId) -> RepoResult<bool> {
+        let row = self
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT id FROM message WHERE id = $1 FOR UPDATE",
+                [Uuid::from(message_id).into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        Ok(row.is_some())
+    }
+
     async fn add_reaction(&self, reaction: NewMessageReaction) -> RepoResult<MessageReaction> {
         let active = message_reaction::ActiveModel {
             id: Set(MessageReactionId::new().into()),

@@ -324,7 +324,8 @@ impl DefaultAppServiceProvider {
                 Some(db.clone()),
                 observers,
             )
-            .with_notification_service(Arc::clone(&notification_service)),
+            .with_notification_service(Arc::clone(&notification_service))
+            .with_feature_gate(Arc::clone(&feature_gate)),
         );
         let notification_preference_service: Arc<dyn NotificationPreferenceService> = Arc::new(
             crate::notification_preference::DefaultNotificationPreferenceService::new(

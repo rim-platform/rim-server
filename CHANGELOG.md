@@ -372,8 +372,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
-- `toggleReaction` accepts only a Unicode emoji or a custom emoji's `:name:`, and a message
-  carries at most 20 different emoji and 10 reactions per user; adding past either answers
+- `toggleReaction` accepts only a Unicode emoji or a custom emoji's `:name:` (a new `:name:`
+  must name one of the workspace's custom emoji, and is refused while `custom_emoji` is
+  disabled), and a message carries at most 20 different emoji and 10 reactions per user; adding past either answers
   `VALIDATION`, while joining an existing emoji and removing a reaction still work. Before, any
   text of up to 32 characters showed as a reaction pill and the reaction groups of a message,
   sent to every member on each toggle, grew without bound.

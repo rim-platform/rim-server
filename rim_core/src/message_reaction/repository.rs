@@ -12,6 +12,10 @@ use crate::user::model::UserId;
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MessageReactionRepository: Send + Sync {
+    /// Lock the message's row until the surrounding transaction ends (`SELECT ... FOR UPDATE`),
+    /// so toggles on one message run one at a time. `false` when the message does not exist.
+    async fn lock_message(&self, message_id: MessageId) -> RepoResult<bool>;
+
     async fn add_reaction(&self, reaction: NewMessageReaction) -> RepoResult<MessageReaction>;
 
     async fn remove_reaction(

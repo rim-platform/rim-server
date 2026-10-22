@@ -20,7 +20,7 @@ use rim_services::auth::dto::RegistrationMode;
 use support::graphql::{
     Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
 };
-use support::roles::Roles;
+use support::roles::{Roles, create_channel};
 use support::{TestCtx, unknown_id};
 
 const CREATE_EMOJI: &str = r#"
@@ -37,6 +37,14 @@ const CUSTOM_EMOJIS: &str = r#"
 query Emojis($serverId: ID!) {
   emojis: customEmojis(serverId: $serverId) { id serverId name imageUrl uploadedBy createdAt }
 }
+"#;
+
+const SEND_MESSAGE: &str = r#"
+mutation Send($input: SendMessageInput!) { msg: sendMessage(input: $input) { id } }
+"#;
+
+const TOGGLE_REACTION: &str = r#"
+mutation React($input: ToggleReactionInput!) { toggleReaction(input: $input) { emoji count } }
 "#;
 
 /// Where the test provider's local storage keeps uploaded files.
@@ -293,4 +301,51 @@ async fn delete_custom_emoji_is_for_the_uploader_and_the_owner() {
     assert_eq!(f.delete_code(&f.ws.bob, id(&bobs)).await, "NOT_FOUND");
     let unknown = unknown_id();
     assert_eq!(f.delete_code(&f.ws.alice, &unknown).await, "NOT_FOUND");
+}
+
+/// A `:name:` reaction works for a custom emoji of the workspace and answers `VALIDATION` for a
+/// name the workspace has no emoji for, and for every name while custom emoji are disabled.
+#[tokio::test]
+async fn a_shortcode_reaction_names_one_of_the_workspace_custom_emoji() {
+    let f = setup().await;
+    f.create(&f.ws.bob, "party_parrot").await;
+    let channel = create_channel(&f.schema, &f.ws.alice, &f.ws.server_id, "lobby", false).await;
+    let sent = exec_ok(
+        &f.schema,
+        f.ws.alice.request(
+            SEND_MESSAGE,
+            json!({ "input": {
+                "serverId": f.ws.server_id, "conversationId": channel, "text": "hello",
+            } }),
+        ),
+    )
+    .await;
+    let message_id = sent["msg"]["id"].as_str().expect("id").to_string();
+    let react = |emoji: &str| {
+        f.ws.alice.request(
+            TOGGLE_REACTION,
+            json!({ "input": {
+                "serverId": f.ws.server_id, "conversationId": channel, "messageId": message_id,
+                "emoji": emoji,
+            } }),
+        )
+    };
+
+    let data = exec_ok(&f.schema, react(":party_parrot:")).await;
+    assert_eq!(
+        data["toggleReaction"],
+        json!([{ "emoji": ":party_parrot:", "count": 1 }])
+    );
+    assert_eq!(
+        exec_err_code(&f.schema, react(":verify_at_evil_co:")).await,
+        "VALIDATION"
+    );
+
+    let disabled = f
+        ._ctx
+        .build_schema_with_disabled(&[rim_core::server_feature::model::ServerFeature::CustomEmoji]);
+    assert_eq!(
+        exec_err_code(&disabled, react(":party:")).await,
+        "VALIDATION"
+    );
 }

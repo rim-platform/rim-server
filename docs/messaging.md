@@ -298,11 +298,14 @@ It needs write access to the conversation and a message that is not deleted.
 - `emoji`, trimmed, is 1 to 32 characters and is either a Unicode emoji (pictographs with the
   components that join, modify or tag them: zero-width joiner, variation selectors, skin tones,
   hair, keycaps, regional indicators, tags; digits, `#` and `*` alone are not one) or a custom
-  emoji's `:name:`, the name made of letters, digits and underscores. Anything else answers
+  emoji's `:name:`, the name made of letters, digits and underscores. A `:name:` that starts a
+  new emoji on the message must name a custom emoji of the workspace while the `custom_emoji`
+  feature is enabled; with the feature off every new `:name:` is refused. Anything else answers
   `VALIDATION`.
 - A message carries at most 20 different emoji, and one user puts at most 10 reactions on one
   message. Adding past either answers `VALIDATION`; joining an emoji the message already has
-  (under the first cap) and removing a reaction always work.
+  (under the per-user cap) and removing a reaction always work. Toggles on one message run one
+  at a time (the message row is locked), so concurrent toggles cannot pass the caps.
 - Every toggle sends `ReactionsUpdated` to the conversation's members with all of the
   message's reaction groups, which the caps bound.
 

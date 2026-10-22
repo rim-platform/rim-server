@@ -7,9 +7,12 @@ use sea_orm::DatabaseConnection;
 
 use rim_core::message::model::{Message, MessageId};
 use rim_core::message_reaction::model::{MessageReaction, NewMessageReaction};
+use rim_core::server::model::ServerId;
+use rim_core::server_feature::model::ServerFeature;
 use rim_infra_db::TransactionScope;
 use rim_infra_db::begin_transaction;
 use rim_services::events::{EventObserver, Observers, ReactionGroupData, WorkspaceEvent};
+use rim_services::feature::service::FeatureGate;
 use rim_services::message_reaction::command::{
     GetMessageReactionsQuery, GetReactionsForMessagesQuery, ToggleReactionCmd,
 };
@@ -100,6 +103,9 @@ pub struct DefaultMessageReactionService {
     /// Tells a message's author about a reaction, best-effort. `None` in unit tests that are not
     /// about notifications; the composition root wires it.
     notification_service: Option<Arc<dyn NotificationService>>,
+    /// Whether custom emoji, and so `:name:` reactions, are enabled. `None` refuses `:name:`
+    /// reactions.
+    features: Option<Arc<dyn FeatureGate>>,
 }
 
 impl DefaultMessageReactionService {
@@ -109,7 +115,54 @@ impl DefaultMessageReactionService {
             db,
             observers,
             notification_service: None,
+            features: None,
         }
+    }
+
+    /// Accept `:name:` reactions while the instance has custom emoji enabled.
+    pub fn with_feature_gate(mut self, features: Arc<dyn FeatureGate>) -> Self {
+        self.features = Some(features);
+        self
+    }
+
+    /// `Validation` unless a new `:name:` reaction names a custom emoji of `server_id` while
+    /// custom emoji are enabled. Unicode emoji always pass.
+    ///
+    /// # Errors
+    /// `Validation` as above; storage errors reading the custom emoji.
+    async fn ensure_shortcode_exists(
+        &self,
+        repos: &ReactionRepos,
+        server_id: ServerId,
+        emoji: &str,
+    ) -> ServiceResult<()> {
+        let Some(name) = emoji
+            .strip_prefix(':')
+            .and_then(|rest| rest.strip_suffix(':'))
+        else {
+            return Ok(());
+        };
+        let enabled = self
+            .features
+            .as_ref()
+            .is_some_and(|gate| gate.state(ServerFeature::CustomEmoji).is_enabled());
+        if !enabled {
+            return Err(ServiceError::Validation(
+                "custom emoji reactions are not available on this server".to_string(),
+            ));
+        }
+        let exists = repos
+            .custom_emoji_repo
+            .list_by_server(server_id)
+            .await?
+            .iter()
+            .any(|custom| custom.name == name);
+        if !exists {
+            return Err(ServiceError::Validation(format!(
+                "this workspace has no custom emoji :{name}:"
+            )));
+        }
+        Ok(())
     }
 
     pub fn with_notification_service(
@@ -244,9 +297,17 @@ impl MessageReactionService for DefaultMessageReactionService {
             )
             .await?;
 
-        // Read, check the caps and add or remove inside one transaction.
+        // Lock the message, read, check the caps and add or remove inside one transaction, so
+        // concurrent toggles cannot pass the caps.
         let (repos, scope) = self.begin_write().await?;
 
+        if !repos
+            .message_reaction_repo
+            .lock_message(cmd.message_id)
+            .await?
+        {
+            return Err(ServiceError::NotFound);
+        }
         let mut all = repos
             .message_reaction_repo
             .get_reactions_for_message(cmd.message_id)
@@ -259,6 +320,10 @@ impl MessageReactionService for DefaultMessageReactionService {
         match existing {
             None => {
                 ensure_room_for_reaction(&all, cmd.actor.user_id, &emoji)?;
+                if !all.iter().any(|r| r.emoji == emoji) {
+                    self.ensure_shortcode_exists(&repos, cmd.server_id, &emoji)
+                        .await?;
+                }
                 let reaction = repos
                     .message_reaction_repo
                     .add_reaction(NewMessageReaction {

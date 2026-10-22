@@ -12,6 +12,8 @@ mod tests {
         ConversationActivityCursor, ConversationCreatedCursor,
     };
     use rim_core::conversation_member::model::ConversationMember;
+    use rim_core::custom_emoji::model::{CustomEmoji, CustomEmojiId};
+    use rim_core::custom_emoji::repository::MockCustomEmojiRepository;
     use rim_core::message::model::{Message, MessageId, NewMessage};
     use rim_core::message::repository::{
         ListMessagesParams, MessageCursor, MessageSearchHit, MessageSearchParams,
@@ -22,6 +24,7 @@ mod tests {
     use rim_core::repository::error::RepoResult;
     use rim_core::repository::pagination::{Page, PageDir};
     use rim_core::server::model::ServerId;
+    use rim_core::server_feature::model::ServerFeature;
     use rim_core::server_member::model::{ServerMember, ServerMemberRole};
     use rim_core::user::model::UserId;
     use rim_services::message_reaction::command::{GetMessageReactionsQuery, ToggleReactionCmd};
@@ -39,6 +42,7 @@ mod tests {
         MessageReactionRepository {}
         #[async_trait]
         impl rim_core::message_reaction::repository::MessageReactionRepository for MessageReactionRepository {
+            async fn lock_message(&self, message_id: MessageId) -> RepoResult<bool>;
             async fn add_reaction(&self, reaction: NewMessageReaction) -> RepoResult<MessageReaction>;
             async fn remove_reaction(
                 &self,
@@ -315,6 +319,13 @@ mod tests {
         }
     }
 
+    /// A reaction repository whose message lock always succeeds.
+    fn locking_reaction_repo() -> MockMessageReactionRepository {
+        let mut repo = MockMessageReactionRepository::new();
+        repo.expect_lock_message().returning(|_| Ok(true));
+        repo
+    }
+
     fn make_repos(
         server_member_repo: MockServerMemberRepository,
         conversation_repo: MockConversationRepository,
@@ -323,6 +334,7 @@ mod tests {
         message_reaction_repo: MockMessageReactionRepository,
     ) -> ReactionRepos {
         ReactionRepos {
+            custom_emoji_repo: Arc::new(MockCustomEmojiRepository::new()),
             server_member_repo: Arc::new(server_member_repo),
             conversation_repo: Arc::new(conversation_repo),
             conversation_member_repo: Arc::new(conversation_member_repo),
@@ -393,7 +405,7 @@ mod tests {
         let (smr, cr, cmr, mr) =
             setup_happy_path_mocks(server_id, conversation_id, message_id, actor_id);
 
-        let mut reaction_repo = MockMessageReactionRepository::new();
+        let mut reaction_repo = locking_reaction_repo();
         reaction_repo
             .expect_get_reactions_for_message()
             .returning(|_mid| Ok(vec![]));
@@ -436,7 +448,7 @@ mod tests {
             setup_happy_path_mocks(server_id, conversation_id, message_id, actor_id);
 
         let existing = reaction(message_id, actor_id, "\u{1f44d}");
-        let mut reaction_repo = MockMessageReactionRepository::new();
+        let mut reaction_repo = locking_reaction_repo();
         reaction_repo
             .expect_get_reactions_for_message()
             .returning(move |_mid| Ok(vec![existing.clone()]));
@@ -660,7 +672,7 @@ mod tests {
         let (smr, cr, cmr, mr) =
             setup_happy_path_mocks(server_id, conversation_id, message_id, actor_id);
 
-        let mut reaction_repo = MockMessageReactionRepository::new();
+        let mut reaction_repo = locking_reaction_repo();
         let r1 = reaction(message_id, actor_id, "\u{1f44d}");
         let r2 = reaction(message_id, other_user, "\u{1f44d}");
         let r3 = reaction(message_id, other_user, "\u{2764}");
@@ -718,7 +730,7 @@ mod tests {
                 .expect_get_by_id()
                 .returning(move |_id| Ok(Some(msg.clone())));
 
-            let mut reaction_repo = MockMessageReactionRepository::new();
+            let mut reaction_repo = locking_reaction_repo();
             let existing = already_reacted.then(|| reaction(message_id, actor_id, "\u{1f44d}"));
             reaction_repo
                 .expect_get_reactions_for_message()
@@ -772,12 +784,31 @@ mod tests {
         existing: Vec<MessageReaction>,
         emoji: &str,
     ) -> Result<Vec<rim_services::message_reaction::dto::ReactionGroupDto>, ServiceError> {
+        toggle_with_custom_emoji(
+            actor_id,
+            existing,
+            emoji,
+            MockCustomEmojiRepository::new(),
+            None,
+        )
+        .await
+    }
+
+    /// A toggle as in [`toggle_with_existing`], with the workspace's custom emoji in `custom`
+    /// and `disabled` features off; `None` wires no feature gate.
+    async fn toggle_with_custom_emoji(
+        actor_id: UserId,
+        existing: Vec<MessageReaction>,
+        emoji: &str,
+        custom: MockCustomEmojiRepository,
+        disabled: Option<&[ServerFeature]>,
+    ) -> Result<Vec<rim_services::message_reaction::dto::ReactionGroupDto>, ServiceError> {
         let server_id = ServerId::new();
         let conversation_id = ConversationId::new();
         let message_id = MessageId::new();
         let (smr, cr, cmr, mr) =
             setup_happy_path_mocks(server_id, conversation_id, message_id, actor_id);
-        let mut reaction_repo = MockMessageReactionRepository::new();
+        let mut reaction_repo = locking_reaction_repo();
         reaction_repo
             .expect_get_reactions_for_message()
             .returning(move |_| Ok(existing.clone()));
@@ -787,11 +818,17 @@ mod tests {
         reaction_repo
             .expect_remove_reaction()
             .returning(|_, _, _| Ok(()));
-        let svc = DefaultMessageReactionService::new(
-            make_repos(smr, cr, cmr, mr, reaction_repo),
-            None,
-            test_observers(),
-        );
+        let repos = ReactionRepos {
+            custom_emoji_repo: Arc::new(custom),
+            ..make_repos(smr, cr, cmr, mr, reaction_repo)
+        };
+        let mut svc = DefaultMessageReactionService::new(repos, None, test_observers());
+        if let Some(disabled) = disabled {
+            svc = svc.with_feature_gate(Arc::new(crate::feature_gate::InstanceFeatureGate::new(
+                disabled,
+                &[],
+            )));
+        }
         svc.toggle_reaction(ToggleReactionCmd {
             actor: Actor::new(actor_id),
             server_id,
@@ -895,5 +932,108 @@ mod tests {
                 "{text}: {err:?}"
             );
         }
+    }
+
+    /// The workspace's custom emoji: one named `party`.
+    fn party_emoji() -> MockCustomEmojiRepository {
+        let mut custom = MockCustomEmojiRepository::new();
+        custom.expect_list_by_server().returning(|server_id| {
+            let emoji = CustomEmoji {
+                id: CustomEmojiId::new(),
+                server_id,
+                name: "party".to_string(),
+                image_url: "emoji/party.png".to_string(),
+                uploaded_by: UserId::new(),
+                created_at: chrono::Utc::now(),
+            };
+            Box::pin(async move { Ok(vec![emoji]) })
+        });
+        custom
+    }
+
+    /// A new `:name:` reaction needs custom emoji enabled and a custom emoji of that name;
+    /// without a feature gate, or with the feature off, every shortcode is refused.
+    #[tokio::test]
+    async fn a_shortcode_reaction_needs_an_enabled_custom_emoji_of_that_name() {
+        let groups =
+            toggle_with_custom_emoji(UserId::new(), vec![], ":party:", party_emoji(), Some(&[]))
+                .await
+                .expect("an existing custom emoji");
+        assert_eq!(groups[0].emoji, ":party:");
+
+        for (emoji, disabled) in [
+            (":verify_at_evil_co:", Some(&[][..])),
+            (":party:", Some(&[ServerFeature::CustomEmoji][..])),
+            (":party:", None),
+        ] {
+            let err =
+                toggle_with_custom_emoji(UserId::new(), vec![], emoji, party_emoji(), disabled)
+                    .await
+                    .unwrap_err();
+            assert!(
+                matches!(err, ServiceError::Validation(_)),
+                "{emoji} {disabled:?}: {err:?}"
+            );
+        }
+    }
+
+    /// Removing an own `:name:` reaction works even with custom emoji off, and Unicode emoji
+    /// never read the custom emoji.
+    #[tokio::test]
+    async fn removing_a_shortcode_and_unicode_reactions_skip_the_custom_emoji_check() {
+        let actor_id = UserId::new();
+        let own = vec![reaction(MessageId::new(), actor_id, ":party:")];
+        let mut never = MockCustomEmojiRepository::new();
+        never.expect_list_by_server().never();
+        let groups = toggle_with_custom_emoji(
+            actor_id,
+            own,
+            ":party:",
+            never,
+            Some(&[ServerFeature::CustomEmoji]),
+        )
+        .await
+        .expect("removes");
+        assert!(groups.is_empty());
+
+        let mut never = MockCustomEmojiRepository::new();
+        never.expect_list_by_server().never();
+        toggle_with_custom_emoji(actor_id, vec![], "\u{1f44d}", never, None)
+            .await
+            .expect("a Unicode emoji");
+    }
+
+    /// The toggle locks the message first; a message gone by then is `NOT_FOUND`.
+    #[tokio::test]
+    async fn the_toggle_locks_the_message_before_reading_its_reactions() {
+        let server_id = ServerId::new();
+        let conversation_id = ConversationId::new();
+        let message_id = MessageId::new();
+        let actor_id = UserId::new();
+        let (smr, cr, cmr, mr) =
+            setup_happy_path_mocks(server_id, conversation_id, message_id, actor_id);
+        let mut reaction_repo = MockMessageReactionRepository::new();
+        reaction_repo
+            .expect_lock_message()
+            .withf(move |id| *id == message_id)
+            .times(1)
+            .returning(|_| Ok(false));
+        reaction_repo.expect_get_reactions_for_message().never();
+        let svc = DefaultMessageReactionService::new(
+            make_repos(smr, cr, cmr, mr, reaction_repo),
+            None,
+            test_observers(),
+        );
+        let err = svc
+            .toggle_reaction(ToggleReactionCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                conversation_id,
+                message_id,
+                emoji: "\u{1f44d}".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound), "{err:?}");
     }
 }
