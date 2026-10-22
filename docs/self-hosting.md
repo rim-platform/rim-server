@@ -432,8 +432,10 @@ absolute http(s) URL stops the server at boot. Changing the terms does not ask e
 accounts to accept again.
 
 `RIM_RESERVED_NAMES` (commented out in `deploy/.env.example`) lists usernames and display names
-that signups and profile edits refuse, ignoring case, so nobody can pose as your maintainers;
-set it once their accounts exist, since it refuses those names to new signups too.
+that signups and profile edits refuse, ignoring case, invisible characters and lookalike letters
+from other scripts (Cyrillic `А` for `A`), so nobody can pose as your maintainers; a person from
+another server whose profile card names one is shown by their username instead. Set it once
+their accounts exist, since it refuses those names to new signups too.
 
 ## Legal duties of an operator
 

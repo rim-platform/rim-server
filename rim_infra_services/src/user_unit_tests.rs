@@ -437,7 +437,16 @@ mod tests {
     async fn update_profile_refuses_a_reserved_display_name_but_its_holders_keep_theirs() {
         let id = UserId::new();
         let svc = reserving_svc(id, "carol");
-        for name in ["Rim", "rim.official", "ｒｉｍ team"] {
+        for name in [
+            "Rim",
+            "rim.official",
+            "ｒｉｍ team",
+            "R\u{200B}im",
+            "R\u{200D}im",
+            "R\u{200C}im Team",
+            "\u{2066}RIM\u{2069} Support",
+            "R\u{456}m Support",
+        ] {
             let err = svc.update_my_profile(rename(id, name)).await.unwrap_err();
             assert!(
                 matches!(&err, ServiceError::Validation(m) if m == crate::reserved_names::RESERVED_NAME_REFUSAL),
@@ -457,5 +466,34 @@ mod tests {
             .await
             .expect("a maintainer's name");
         assert_eq!(dto.display_name.as_deref(), Some("RIM Team"));
+    }
+
+    /// A display name is stored without control and format characters, with its whitespace
+    /// collapsed; one with nothing visible left clears it.
+    #[tokio::test]
+    async fn update_profile_cleans_the_display_name() {
+        let id = UserId::new();
+        let svc = reserving_svc(id, "carol");
+        for (typed, stored) in [
+            ("\u{202E}nimda", Some("nimda")),
+            (
+                "Ada\u{AD} \n  Love\u{2060}lace\u{FEFF}",
+                Some("Ada Lovelace"),
+            ),
+            ("\u{200B} \u{2060}", None),
+            (
+                "Ada \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+                Some("Ada \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"),
+            ),
+            (
+                "\u{645}\u{6CC}\u{200C}\u{62E}\u{648}\u{627}\u{647}\u{645}",
+                Some("\u{645}\u{6CC}\u{200C}\u{62E}\u{648}\u{627}\u{647}\u{645}"),
+            ),
+        ] {
+            let dto = svc.update_my_profile(rename(id, typed)).await.unwrap();
+            assert_eq!(dto.display_name.as_deref(), stored, "{typed:?}");
+        }
+        let padded = format!("{}\u{200B}", "x".repeat(64));
+        assert!(svc.update_my_profile(rename(id, &padded)).await.is_ok());
     }
 }

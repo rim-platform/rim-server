@@ -69,6 +69,7 @@ use crate::relay::{
     origin_of, relays_include_origin,
 };
 use crate::repos::AppRepos;
+use crate::reserved_names::ReservedNames;
 
 /// Name of the direct space.
 pub const DIRECT_SPACE_NAME: &str = "Direct messages";
@@ -130,6 +131,8 @@ pub struct DefaultHostService {
     /// The server's default workspace, which every new account joins and so makes nobody
     /// known to a new account in probation; without one every shared workspace counts.
     default_workspace: Option<Arc<dyn DefaultWorkspaceService>>,
+    /// Names a remote user's card may not give them as a display name here.
+    reserved_names: ReservedNames,
 }
 
 /// Someone a DM request from a new account would reach, as its probation judges them.
@@ -196,6 +199,7 @@ impl DefaultHostService {
             clock: Clock::default(),
             dm_policy: DmOperatorPolicy::default(),
             default_workspace: None,
+            reserved_names: ReservedNames::default(),
         }
     }
 
@@ -206,6 +210,13 @@ impl DefaultHostService {
         default_workspace: Arc<dyn DefaultWorkspaceService>,
     ) -> Self {
         self.default_workspace = Some(default_workspace);
+        self
+    }
+
+    /// Keep `reserved_names` from remote users' display names: a card naming one stores the
+    /// user's username instead.
+    pub fn with_reserved_names(mut self, reserved_names: ReservedNames) -> Self {
+        self.reserved_names = reserved_names;
         self
     }
 
@@ -575,6 +586,7 @@ impl DefaultHostService {
                 key_identity_repo: repos.key_identity_repo.as_ref(),
                 session_repo: repos.session_repo.as_ref(),
                 delegation_repo: repos.delegation_repo.as_ref(),
+                reserved_names: &self.reserved_names,
             },
             verified,
             home_relay.as_deref(),

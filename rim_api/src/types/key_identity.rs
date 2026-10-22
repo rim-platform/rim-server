@@ -182,8 +182,9 @@ pub struct EnrollIdentityKeyInput {
 #[derive(InputObject, Clone, Debug)]
 pub struct SignupWithKeyInput {
     pub username: String,
-    /// Optional display name (1–80 chars when present). Falls back to `username` when absent
-    /// or blank after trim.
+    /// Optional display name, stored without control and invisible format characters and with
+    /// whitespace collapsed; at most 64 characters after that. Falls back to `username` when
+    /// absent or when nothing visible is left.
     pub display_name: Option<String>,
     /// The whole key log, inception first.
     pub key_log: Vec<SignedStatementInput>,

@@ -2382,7 +2382,7 @@ mod tests {
         let (ur, sr, smr, sess_r, ir, cr) = repos();
         let svc = svc_with_registration(ur, sr, smr, sess_r, ir, cr, signup_invite_repo);
 
-        let long_name = "x".repeat(81); // 81 chars — one over the 80-char limit
+        let long_name = "x".repeat(65); // one over the 64-character limit
 
         let err = svc
             .signup_with_instance_invite(SignupWithInstanceInviteCmd {
@@ -2398,7 +2398,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(err, ServiceError::Validation(ref m) if m.contains("display name")),
+            matches!(err, ServiceError::Validation(ref m) if m.contains("display_name")),
             "got: {err:?}"
         );
     }

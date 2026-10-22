@@ -292,8 +292,10 @@ identity alone: no password, and no email unless an email-bound invite gives one
    proof is a `login` statement by that device over a fresh `keyLoginChallenge`, naming this
    log's principal id, the certificate's device id and this server's audience. The challenge is
    consumed. No other account here may hold the principal id (`CONFLICT`). The username follows
-   the password signup's rules and must be free (`CONFLICT`); `displayName` is trimmed, at most
-   80 characters, and defaults to the username.
+   the password signup's rules and must be free (`CONFLICT`); `displayName` follows the display
+   name rules of every signup (control and format characters but the zero-width joiner and
+   non-joiner removed, whitespace collapsed, at most 64 characters, not reserved) and defaults
+   to the username.
 3. In one transaction the server creates the user with `password_hash` null, `email` null or
    the email-bound invite's address, and `principal_id` and `identity_key` set, stores the log
    and the device, consumes the token (or joins the server), and creates a session **bound to

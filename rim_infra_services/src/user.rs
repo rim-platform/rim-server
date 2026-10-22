@@ -13,6 +13,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::UserRepos;
 use crate::clock::Clock;
+use crate::display_name;
 use crate::reserved_names::ReservedNames;
 
 /// Strip control characters (except newline/tab in bio) from a string.
@@ -177,18 +178,11 @@ impl UserService for DefaultUserService {
     }
 
     async fn update_my_profile(&self, cmd: UpdateMyProfileCmd) -> ServiceResult<UserDto> {
-        // Sanitize and validate display_name.
-        let display_name = cmd.display_name.map(|v| {
-            let v = strip_control_chars_single_line(v.trim());
-            if v.is_empty() { None } else { Some(v) }
-        });
-        if let Some(Some(ref dn)) = display_name
-            && dn.chars().count() > 64
-        {
-            return Err(ServiceError::Validation(
-                "display_name must be at most 64 characters".to_string(),
-            ));
-        }
+        // The display name follows the rules every path shares; nothing visible left clears it.
+        let display_name = cmd
+            .display_name
+            .map(|v| display_name::clean_local(&v).map(|v| (!v.is_empty()).then_some(v)))
+            .transpose()?;
         if let Some(Some(ref dn)) = display_name {
             self.check_display_name(cmd.actor.user_id, dn).await?;
         }

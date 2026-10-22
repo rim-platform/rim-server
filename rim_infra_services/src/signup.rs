@@ -27,6 +27,7 @@ use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::display_name;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::reserved_names::ReservedNames;
 use crate::util::{add_workspace_member, ensure_not_banned};
@@ -114,32 +115,25 @@ pub(crate) fn normalize_username(username: &str) -> ServiceResult<String> {
     Ok(normalized)
 }
 
-/// Normalise an optional display name, falling back to `username` when absent or blank after
-/// trim. A non-empty (post-trim) value is capped at 80 characters.
+/// Normalise an optional display name with the display name rules every path shares
+/// ([`display_name::clean_local`]), falling back to `username` when absent or nothing visible
+/// is left.
 ///
 /// # Errors
-/// `Validation("display name length")` when the trimmed value is longer than 80 characters.
+/// `Validation` when the cleaned value is longer than 64 characters.
 ///
 /// # Examples
 /// ```ignore
 /// assert_eq!(normalize_display_name(None, "alice")?, "alice");
-/// assert_eq!(normalize_display_name(Some("   "), "alice")?, "alice");
-/// assert_eq!(normalize_display_name(Some(" Alice Smith "), "alice")?, "Alice Smith");
+/// assert_eq!(normalize_display_name(Some("  \u{200B} "), "alice")?, "alice");
+/// assert_eq!(normalize_display_name(Some(" Alice  Smith "), "alice")?, "Alice Smith");
 /// ```
 pub(crate) fn normalize_display_name(input: Option<&str>, username: &str) -> ServiceResult<String> {
-    match input {
-        None => Ok(username.to_string()),
-        Some(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Ok(username.to_string());
-            }
-            if trimmed.len() > 80 {
-                return Err(ServiceError::Validation("display name length".to_string()));
-            }
-            Ok(trimmed.to_string())
-        }
+    let cleaned = display_name::clean_local(input.unwrap_or_default())?;
+    if cleaned.is_empty() {
+        return Ok(username.to_string());
     }
+    Ok(cleaned)
 }
 
 /// Refuse a signup whose username or resolved display name is reserved on this instance.
@@ -659,20 +653,27 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn normalize_display_name_falls_back_trims_and_caps() {
+    fn normalize_display_name_falls_back_cleans_and_caps() {
         assert_eq!(normalize_display_name(None, "alice").unwrap(), "alice");
+        for blank in ["  ", "\u{200B}\u{FEFF}", "\n\t"] {
+            assert_eq!(
+                normalize_display_name(Some(blank), "alice").unwrap(),
+                "alice",
+                "{blank:?}"
+            );
+        }
         assert_eq!(
-            normalize_display_name(Some("  "), "alice").unwrap(),
-            "alice"
-        );
-        assert_eq!(
-            normalize_display_name(Some(" Alice Smith "), "alice").unwrap(),
+            normalize_display_name(Some(" Alice \n Smith "), "alice").unwrap(),
             "Alice Smith"
         );
-        assert!(normalize_display_name(Some(&"x".repeat(80)), "alice").is_ok());
+        assert_eq!(
+            normalize_display_name(Some("Ad\u{200B}min\u{202E}"), "alice").unwrap(),
+            "Admin"
+        );
+        assert!(normalize_display_name(Some(&"é".repeat(64)), "alice").is_ok());
         assert!(matches!(
-            normalize_display_name(Some(&"x".repeat(81)), "alice"),
-            Err(ServiceError::Validation(_))
+            normalize_display_name(Some(&"x".repeat(65)), "alice"),
+            Err(ServiceError::Validation(m)) if m == display_name::DISPLAY_NAME_TOO_LONG
         ));
     }
 

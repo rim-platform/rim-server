@@ -298,6 +298,7 @@ pub(crate) async fn build_s2s(
         .with_quotas(config.quotas())
         .with_limits(config.instance_limits().map_err(std::io::Error::other)?)
         .with_dm_policy(dm_policy.clone())
+        .with_reserved_names(config.reserved_names().map_err(std::io::Error::other)?)
         .with_delegations(Arc::new(RepoDelegationCheck::new(Arc::clone(
             &repos.delegation_repo,
         ))))

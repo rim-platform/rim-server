@@ -21,6 +21,9 @@ use rim_identity::{
 use rim_services::relay::dto::{IdentityDevice, IdentityDocument, SignedJson};
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::display_name;
+use crate::reserved_names::ReservedNames;
+
 /// Most entries a key log in a document may have.
 pub(crate) const MAX_LOG_ENTRIES: usize = 256;
 /// Most devices a document may list.
@@ -292,6 +295,23 @@ pub(crate) struct IdentityStore<'a> {
     pub session_repo: &'a dyn SessionRepository,
     /// Ends the delegations of a recovered user's devices or a revoked device.
     pub delegation_repo: &'a dyn DelegationRepository,
+    /// Names a card's display name may not take here.
+    pub reserved_names: &'a ReservedNames,
+}
+
+/// The display name stored for a remote user from their card's `card_name`: cleaned like a
+/// local one and cut to the column's width, or their username here (`r_…`) when nothing visible
+/// is left or the name is reserved on this server.
+pub(crate) fn card_display_name(
+    card_name: &str,
+    principal_id: &str,
+    reserved_names: &ReservedNames,
+) -> String {
+    let name = display_name::clean_truncated(card_name);
+    if name.is_empty() || reserved_names.is_reserved(&name) {
+        return remote_username(principal_id);
+    }
+    name
 }
 
 /// What storing a remote identity did.
@@ -331,7 +351,7 @@ pub(crate) async fn store_remote(
     let display_name = verified
         .card
         .as_ref()
-        .map(|(card, _)| card.display_name.clone());
+        .map(|(card, _)| card_display_name(&card.display_name, principal_id, store.reserved_names));
     let new_entries = |from: usize| -> Vec<NewKeyLogEntry> {
         verified.entries[from..]
             .iter()
@@ -796,6 +816,8 @@ mod tests {
         user_sessions: Mutex<Vec<UserId>>,
         device_sessions: Mutex<Vec<DeviceKeyId>>,
         delegations: Mutex<Vec<DeviceKeyId>>,
+        /// The display name each update of the remote user stored.
+        display_names: Mutex<Vec<Option<String>>>,
     }
 
     impl Ended {
@@ -809,6 +831,10 @@ mod tests {
 
         fn delegations(&self) -> Vec<DeviceKeyId> {
             self.delegations.lock().expect("lock").clone()
+        }
+
+        fn display_names(&self) -> Vec<Option<String>> {
+            self.display_names.lock().expect("lock").clone()
         }
     }
 
@@ -826,8 +852,12 @@ mod tests {
         let mut host = MockHostRepository::new();
         host.expect_find_user()
             .returning(move |_| Box::pin(async move { Ok(Some((user_id, UserKind::Remote))) }));
+        let e = Arc::clone(&ended);
         host.expect_update_remote_user()
-            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+            .returning(move |_, display_name, _| {
+                e.display_names.lock().expect("lock").push(display_name);
+                Box::pin(async { Ok(()) })
+            });
         host.expect_set_device_mls_active()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
@@ -900,6 +930,7 @@ mod tests {
                 key_identity_repo: &keys,
                 session_repo: &sessions,
                 delegation_repo: &delegations,
+                reserved_names: &ReservedNames::parse("rim,admin").expect("names"),
             },
             &verified,
             None,
@@ -1016,5 +1047,53 @@ mod tests {
         let name = remote_username("rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0");
         assert_eq!(name, "r_txDLbnipi5i3kCJtJwBOUixzv_MY8O");
         assert_eq!(name.len(), 32);
+    }
+
+    #[test]
+    fn a_card_display_name_is_cleaned_cut_and_never_reserved() {
+        let reserved = ReservedNames::parse("rim,admin,support").expect("names");
+        let principal = "rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0";
+        let fallback = remote_username(principal);
+        for (card, stored) in [
+            ("Ada \u{200B} Lovelace", "Ada Lovelace".to_string()),
+            ("\u{202E}nimda", "nimda".to_string()),
+            (&"x".repeat(80), "x".repeat(64)),
+            ("Ad\u{200B}min", fallback.clone()),
+            ("\u{2066}RIM\u{2069} Support", fallback.clone()),
+            ("\u{410}dmin", fallback.clone()),
+            ("\u{FEFF}", fallback.clone()),
+        ] {
+            assert_eq!(
+                card_display_name(card, principal, &reserved),
+                stored,
+                "{card:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stored_card_takes_its_cleaned_name_or_the_username_when_reserved() {
+        let user_id = UserId::new();
+        let id = TestIdentity::new(1);
+        let inception = id.inception();
+        let state = KeyState::from_inception(&inception).expect("inception");
+        let laptop = id.device_cert(&state, Uuid::from_u128(1), &signing_key(20), "Laptop");
+        for (card_name, stored) in [
+            ("Ali\u{200B}ce", "Alice".to_string()),
+            ("A\u{AD}dmin", remote_username(&state.principal_id)),
+        ] {
+            let mut doc = document(&id, &state);
+            doc.card = Some(signed(&id.profile_card(
+                &state,
+                1,
+                card_name,
+                &["https://relay.example"],
+                &[(Uuid::from_u128(1), &signing_key(20))],
+            )));
+            let rows = vec![row(user_id, Uuid::from_u128(1), &laptop, 0, None)];
+            let (_, ended) =
+                store_held(user_id, std::slice::from_ref(&inception), rows, &doc).await;
+            assert_eq!(ended.display_names(), vec![Some(stored)], "{card_name:?}");
+        }
     }
 }
