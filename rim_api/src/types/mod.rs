@@ -26,6 +26,7 @@ pub(crate) mod moderation;
 pub(crate) mod notification;
 pub(crate) mod pagination;
 pub(crate) mod pipeline;
+pub(crate) mod public_join_link;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
 pub(crate) mod server_info;
@@ -111,6 +112,11 @@ pub use pipeline::{
     CreatePipelineInput, PipelineActionGql, PipelineActionInput, PipelineFilterConditionGql,
     PipelineFilterConditionInput, PipelineFilterGql, PipelineFilterInput, PipelineGql,
     PipelineTriggerGql, PipelineTriggerInput, PipelineTriggerKindGql, UpdatePipelineInput,
+};
+pub use public_join_link::{
+    JoinByPublicLinkOutcomeGql, JoinByPublicLinkPayload, JoinRequest, JoinRequestCursorInput,
+    JoinRequestCursorOutput, JoinRequestPage, JoinRequestStatusGql, PublicJoinLink,
+    PublicJoinLinkMode, PublicJoinLinkPreview, PublicJoinLinkViewer, UpdatePublicJoinLinkInput,
 };
 pub use relay::{
     Contact, ConversationPredecessor, DmRequest, DmRequestStatus, PredecessorInput, RelayInfo,

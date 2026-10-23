@@ -5,6 +5,7 @@ use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::MessageThreadId;
 use rim_core::notification::model::UserNotificationId;
 use rim_core::pipeline::model::PipelineId;
+use rim_core::public_join_link::model::JoinRequestId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
@@ -92,6 +93,33 @@ pub enum WorkspaceEvent {
         workspace_id: ServerId,
         user_id: UserId,
         username: String,
+        /// How they joined, when it was through the workspace's public link: `public_link`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
+    /// A person asked to join the workspace through its public link. Wire shape:
+    /// `{"type":"JoinRequestCreated","workspace_id","request_id","user_id"}`. Reaches the
+    /// workspace's Owner and Moderators, and the person on their direct-space subscription.
+    JoinRequestCreated {
+        workspace_id: ServerId,
+        request_id: JoinRequestId,
+        user_id: UserId,
+        /// Server-side only: the workspace's Owner and Moderators, and the person.
+        #[serde(skip_serializing, default)]
+        member_user_ids: Vec<UserId>,
+    },
+    /// A join request was closed. `outcome` is `accepted`, `declined`, `withdrawn` or
+    /// `cancelled`. Wire shape:
+    /// `{"type":"JoinRequestDecided","workspace_id","request_id","user_id","outcome"}`. Same
+    /// recipients as `JoinRequestCreated`.
+    JoinRequestDecided {
+        workspace_id: ServerId,
+        request_id: JoinRequestId,
+        user_id: UserId,
+        outcome: String,
+        /// Server-side only: the workspace's Owner and Moderators, and the person.
+        #[serde(skip_serializing, default)]
+        member_user_ids: Vec<UserId>,
     },
     /// A member left the workspace because a moderator kicked or banned them.
     /// Wire shape: `{"type":"MemberLeft","workspace_id","user_id"}`. Delivered to every
@@ -453,6 +481,8 @@ impl WorkspaceEvent {
             | Self::MemberProfileUpdated { workspace_id, .. }
             | Self::MemberBanChanged { workspace_id, .. }
             | Self::MemberJoined { workspace_id, .. }
+            | Self::JoinRequestCreated { workspace_id, .. }
+            | Self::JoinRequestDecided { workspace_id, .. }
             | Self::MemberLeft { workspace_id, .. }
             | Self::MemberRoleChanged { workspace_id, .. }
             | Self::MemberAddedToConversation { workspace_id, .. }
@@ -498,6 +528,12 @@ impl WorkspaceEvent {
                 member_user_ids, ..
             }
             | Self::MemberRemovedFromConversation {
+                member_user_ids, ..
+            } => Some(member_user_ids),
+            Self::JoinRequestCreated {
+                member_user_ids, ..
+            }
+            | Self::JoinRequestDecided {
                 member_user_ids, ..
             } => Some(member_user_ids),
             Self::MemberProfileUpdated { .. }
@@ -597,6 +633,17 @@ impl WorkspaceEvent {
             | Self::LinkPreviewReady {
                 conversation_type, ..
             } => Some(conversation_type),
+            _ => None,
+        }
+    }
+
+    /// The person whose direct-space subscription also carries the event: a join request's
+    /// person, who is not a member of the workspace the event is about.
+    pub fn direct_space_recipient(&self) -> Option<UserId> {
+        match self {
+            Self::JoinRequestCreated { user_id, .. } | Self::JoinRequestDecided { user_id, .. } => {
+                Some(*user_id)
+            }
             _ => None,
         }
     }

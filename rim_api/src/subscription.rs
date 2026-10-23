@@ -142,7 +142,13 @@ impl Subscription {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if event.workspace_id() != ws_id {
+                        // A join request's person, not a member of the workspace it is about,
+                        // gets its events on their direct-space subscription.
+                        let for_me_here = in_direct_space
+                            && event
+                                .direct_space_recipient()
+                                .is_some_and(|u| u.to_string() == subscriber_user_id);
+                        if event.workspace_id() != ws_id && !for_me_here {
                             continue;
                         }
                         if let WorkspaceEvent::MemberRoleChanged { user_id, role, .. } = &event

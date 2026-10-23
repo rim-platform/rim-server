@@ -108,6 +108,10 @@ pub struct RIMConfig {
     /// `RIM_FRANKING_KEY_FILE`.
     pub franking_key_file: Option<String>,
 
+    /// Path of the link key file, which public join link tokens are sealed under. Default
+    /// `<RIM_DATA_DIR>/link-key.json`. Controlled by `RIM_LINK_KEY_FILE`.
+    pub link_key_file: Option<String>,
+
     /// Comma-separated server ids allowed on host endpoints; empty allows any relay.
     /// Controlled by `RIM_HOST_ALLOWED_RELAYS`.
     pub host_allowed_relays: Option<String>,
@@ -450,6 +454,7 @@ impl fmt::Debug for RIMConfig {
             .field("role", &self.role)
             .field("server_key_file", &self.server_key_file)
             .field("franking_key_file", &self.franking_key_file)
+            .field("link_key_file", &self.link_key_file)
             .field("host_allowed_relays", &self.host_allowed_relays)
             .field("s2s_denied_peers", &self.s2s_denied_peers)
             .field("dm_policy", &self.dm_policy())
@@ -524,6 +529,7 @@ impl Default for RIMConfig {
             role: None,
             server_key_file: None,
             franking_key_file: None,
+            link_key_file: None,
             host_allowed_relays: None,
             s2s_denied_peers: None,
             dm_inbound: None,
@@ -875,6 +881,16 @@ impl RIMConfig {
             .filter(|p| !p.is_empty())
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(&self.data_dir).join("franking-key.json"))
+    }
+
+    /// The link key file: `RIM_LINK_KEY_FILE`, or `<RIM_DATA_DIR>/link-key.json`.
+    pub fn link_key_file(&self) -> std::path::PathBuf {
+        self.link_key_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(&self.data_dir).join("link-key.json"))
     }
 
     pub fn s2s_allow_http(&self) -> bool {
@@ -1881,6 +1897,26 @@ mod tests {
             }
             .public_origin(),
             "http://localhost:9000"
+        );
+    }
+
+    #[test]
+    fn link_key_file_defaults_to_the_data_dir() {
+        let config = RIMConfig {
+            data_dir: "/var/lib/rim".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.link_key_file(),
+            std::path::PathBuf::from("/var/lib/rim/link-key.json")
+        );
+        let config = RIMConfig {
+            link_key_file: Some(" /secrets/link.json ".to_string()),
+            ..config
+        };
+        assert_eq!(
+            config.link_key_file(),
+            std::path::PathBuf::from("/secrets/link.json")
         );
     }
 

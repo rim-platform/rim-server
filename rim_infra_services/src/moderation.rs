@@ -25,6 +25,7 @@ use rim_core::moderation::model::{
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::notification::repository::NotificationRepository;
 use rim_core::pipeline::repository::PipelineRepository;
+use rim_core::public_join_link::repository::PublicJoinLinkRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
@@ -229,6 +230,8 @@ pub struct ModerationRepos {
     pub macro_repo: Arc<dyn MacroRepository>,
     /// Drops the pipelines a removed member created in the workspace.
     pub pipeline_repo: Arc<dyn PipelineRepository>,
+    /// Cancels a banned person's open join requests.
+    pub public_join_link_repo: Arc<dyn PublicJoinLinkRepository>,
 }
 
 /// The `blobSha256` values (unpadded base64url) of a verified content's `attachments`. The
@@ -798,6 +801,18 @@ impl ModerationService for DefaultModerationService {
                 ban.reason.clone(),
             )
             .await?;
+        }
+        // The ban is stored; a request left open is refused at acceptance by the ban check.
+        if let Err(e) = crate::public_join_link::cancel_requests_on_ban(
+            self.repos.public_join_link_repo.as_ref(),
+            self.repos.server_member_repo.as_ref(),
+            &self.observers,
+            cmd.server_id,
+            cmd.user_id,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, server_id = %cmd.server_id, "join requests not cancelled on ban");
         }
         self.observers.emit(WorkspaceEvent::MemberBanChanged {
             workspace_id: cmd.server_id,

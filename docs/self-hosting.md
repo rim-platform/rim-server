@@ -226,7 +226,7 @@ read in `CHANGELOG.md` first, and the rollback.
 | File | What |
 |---|---|
 | `rim.dump` | `pg_dump -Fc` of the database, checked to read back |
-| `rim-data.tgz` | the `rim_data` volume: server key, franking keys, uploads, the audit files and audit exports |
+| `rim-data.tgz` | the `rim_data` volume: server key, franking keys, the link key (`link-key.json`), uploads, the audit files and audit exports |
 | `env` | `deploy/.env` |
 | `MANIFEST`, `SHA256SUMS` | project, time, server version, checksums |
 

@@ -37,6 +37,8 @@ pub mod pin;
 pub mod pipeline;
 pub mod presence;
 pub mod provider;
+// pub: rim_infra_services implements it, rim_api serves it.
+pub mod public_join_link;
 pub mod read_state;
 pub mod relay;
 pub mod remote_workspace;

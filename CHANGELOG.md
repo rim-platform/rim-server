@@ -23,6 +23,22 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Public join links: a workspace's Owner can turn on one permanent link,
+  `<server>/join/<token>` with a `rim_pjl_` token (off by default), that lets existing accounts
+  of this server join (`DIRECT`) or ask to join (`REQUESTS`) as Member or Guest; it never
+  creates an account. New GraphQL roots `publicJoinLink`, `updatePublicJoinLink`,
+  `reissuePublicJoinLink`, `publicJoinLinkPreview` (no sign-in), `joinByPublicLink`,
+  `joinRequests`, `myJoinRequests`, `acceptJoinRequest`, `declineJoinRequest` and
+  `withdrawJoinRequest`, the types
+  `PublicJoinLink`, `PublicJoinLinkPreview`, `JoinRequest`, `JoinRequestPage` and
+  `JoinByPublicLinkPayload`, and the events `JoinRequestCreated` and `JoinRequestDecided`;
+  `MemberJoined` gains an optional `source` (`public_link`). Every invalid link answers
+  `NOT_FOUND`, and 20 misses from an address in ten minutes answer `RATE_LIMITED` for an hour.
+  The tokens are sealed under the new link key file, `RIM_LINK_KEY_FILE` (default
+  `<RIM_DATA_DIR>/link-key.json`), created at the first start and checked by `/readyz`
+  (`linkKey`); back it up with the rest of the data directory. `docs/messaging.md` ("Public
+  join link and join requests") and `docs/api.md`.
+
 - `POST /api/plugin-bundles/fetch` fetches and validates pinned bundles for browser installs
   without CORS-dependent external requests. Its `plugin_link_fetch` feature is enabled by
   default, independent of workspace plugins; public HTTPS, hash, size and rate checks apply.

@@ -188,6 +188,17 @@ whose log forks is refused until an operator checks it out of band.
   session or user, and caps on workspaces, members, devices, DM requests, invites and message
   size, are each off until the operator sets them. Pending invitations to encrypted
   conversations are capped at 50 per person by default.
+- **Public join links.** A workspace's permanent link is a 128-bit random token behind the
+  prefix `rim_pjl_` (which secret scanners can match), never a name,
+  and admits only accounts that already exist: it is never a signup token, so it opens no way
+  around proof-of-work, the per-address signup limit or an invite-only server. Every invalid
+  link answers `NOT_FOUND` with one message on one path (a lookup by the token's SHA-256), so a
+  guesser learns nothing about which workspaces exist or have a link, and 20 misses from an
+  address in ten minutes cut it off for an hour. The token is stored as its hash plus a copy
+  sealed (XChaCha20-Poly1305, bound to the workspace) under the link key file
+  `<RIM_DATA_DIR>/link-key.json`, which `/readyz` checks; a database dump alone yields no
+  working link. The Owner can issue a new token or turn the link off at any time, and switch to
+  join requests that a moderator decides ([messaging](messaging.md)).
 - **DM policy.** The operator sets floors for DMs from strangers and to other servers, a
   workspace Owner sets one for members, and each person chooses within both. By default a
   stranger's first message is a request the recipient accepts, ignores, blocks or reports.
@@ -213,7 +224,7 @@ Joined from the spec tables and the review brief's summary.
 |---|---|---|---|
 | Compromised device | Read what its cache, archive and MLS state hold; send as that device; on the desktop, read the vault | Revocation, then removal from every group; later epochs use new keys | What it already decrypted; anything else the user's account on that computer reaches |
 | Malicious own server | See metadata; withhold, delay, reorder; refuse Commits; control membership; read and change channels; mark any report verified | Pinned key-log heads; leaf checks; DM and encryption pins; MLS sender checks | Availability; channel confidentiality; metadata privacy; the verdict on reports, which moderators take from the server |
-| Database or key-file thief | Read channels, metadata, ciphertext and session token hashes; with the franking key file, mint receipts | No private key in the database; reports checked against recorded commitments; franking and server key rotation and recovery | Channel text in the dump |
+| Database or key-file thief | Read channels, metadata, ciphertext and session token hashes; with the franking key file, mint receipts; with the link key file, read the public join links | No private key in the database; reports checked against recorded commitments; franking and server key rotation and recovery | Channel text in the dump |
 | Another server | Signed junk within limits; DM requests and last-resort key package claims as a stranger | Self-certifying server ids and pinned keys; signed requests with nonces; the request inbox; peer blocks | What a person's own relay or a workspace's host sees |
 | Network attacker | See TLS metadata | TLS; signed requests and responses between servers; pinned server ids | Broken TLS between an app and its server; a forged certificate for a server not yet pinned |
 | Malicious plugin author | What the granted permissions allow; for a plugin on the computer, anything the user can do | Sandbox and per-plugin policy; the permission prompt; the signed registry; bundle fingerprints | Leaks through channels the sandbox cannot close; a local plugin the user chose to trust |

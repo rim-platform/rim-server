@@ -31,6 +31,7 @@ pub mod notification;
 pub mod notification_preference;
 pub mod password_reset_token;
 pub mod pipeline;
+pub mod public_join_link;
 pub mod relay;
 pub mod relay_abuse;
 pub mod remote_workspace;

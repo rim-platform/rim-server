@@ -590,6 +590,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         franking_keys,
         franking_key_file,
     );
+    let link_key_file = config.link_key_file();
+    let link_key = rim_infra_services::link_key::load_or_create(
+        &link_key_file,
+        repos.public_join_link_repo.as_ref(),
+    )
+    .await
+    .map_err(|e| io_error("link key")(format!("{e:#}")))?;
+    tracing::info!(path = %link_key_file.display(), "link key loaded");
     key_login_audiences.push(s2s.state.identity.current().server_id().to_string());
     tracing::info!(
         audiences = ?key_login_audiences,
@@ -621,6 +629,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             default_workspace: default_workspace.clone(),
             handle_domain: s2s.descriptor_settings.handle_domain.clone(),
             minimum_age: instance_policy.minimum_age,
+            link_key: Some(link_key),
+            link_base: Some(crate::invite_cmd::base_url(config, None)),
         },
         Arc::clone(&feature_gate),
         instance_limits,

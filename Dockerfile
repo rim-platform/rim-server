@@ -73,6 +73,8 @@ USER rim
 #   RIM_SERVER_KEY_FILE   — Server key file (default: $RIM_DATA_DIR/server-key.json); keep the
 #                           data directory on a volume, the key is the server's identity
 #   RIM_FRANKING_KEY_FILE — Franking key file (default: $RIM_DATA_DIR/franking-key.json)
+#   RIM_LINK_KEY_FILE     — Key public join links are sealed under (default:
+#                           $RIM_DATA_DIR/link-key.json)
 #   RIM_PUBLIC_BASE_URL   — https origin; turns server-to-server traffic on. This or
 #                           RIM_KEY_LOGIN_AUDIENCES is required: the server binds 0.0.0.0 and
 #                           refuses to start without an audience for key logins

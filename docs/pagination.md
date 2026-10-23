@@ -66,6 +66,9 @@ If `items` is empty, both cursors are `None`.
 - Workspace invites (`workspaceInvites`):
   - `ORDER BY created_at DESC, id DESC` (newest first)
   - cursor: `(created_at, invite_id)`
+- Open join requests of a workspace (`joinRequests`):
+  - `ORDER BY created_at DESC, id DESC` (newest first)
+  - cursor: `(created_at, request_id)`
 - Pending MLS Welcomes of the session device (`myMlsWelcomes`):
   - `ORDER BY created_at ASC, id ASC` (oldest first), forward only: `after` is exclusive
   - cursor: `(created_at, welcome_id)`, the `createdAt` and `id` of the previous page's last Welcome

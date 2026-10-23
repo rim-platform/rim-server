@@ -500,6 +500,7 @@ pub(crate) fn announce_claim(claimed: Option<Claimed>, owner: UserId, observers:
             workspace_id: claimed.workspace_id,
             user_id: *user_id,
             username: username.clone(),
+            source: None,
         });
     }
     tracing::info!(
@@ -580,6 +581,7 @@ pub(crate) fn announce(
         workspace_id,
         user_id,
         username: username.to_string(),
+        source: None,
     });
     tracing::info!(
         target: "audit",
@@ -1054,7 +1056,7 @@ mod tests {
         let seen = seen.0.lock().unwrap();
         assert!(matches!(
             seen.as_slice(),
-            [WorkspaceEvent::MemberJoined { workspace_id, user_id: u, username }]
+            [WorkspaceEvent::MemberJoined { workspace_id, user_id: u, username, source: None }]
                 if *workspace_id == workspace && *u == user_id && username == "alice"
         ));
     }

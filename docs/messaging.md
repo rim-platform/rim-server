@@ -231,6 +231,108 @@ decide, and each may only tighten the one above it:
   the use. A revoked, expired or used-up invite is `FORBIDDEN` for `joinServerByInvite`; a signup
   gets `INVALID_TOKEN` for a revoked or used-up invite and `EXPIRED_TOKEN` for an expired one.
 
+### Public join link and join requests
+
+A workspace can have one permanent public link, `<server>/join/<token>`, to put on a website, a
+README or a social profile. It lets **existing accounts of this server** join the workspace, or
+ask to join it. It is a different thing from a workspace invite:
+
+| | Workspace invite | Public link |
+|---|---|---|
+| Expiry, uses | at most 30 days, `RIM_LIMIT_INVITE_MAX_USES` | none; it works until turned off or replaced |
+| Creates an account | yes: it stands in for the proof-of-work and the per-address signup limit | never, and no setting changes that |
+| Token shown | once, by `createInvite` | to the Owner at any time (`publicJoinLink`) |
+| Join requests | no | `REQUESTS` mode |
+
+**Why it never creates accounts.** A workspace invite is a signup token: it skips the
+proof-of-work and the per-address signup limit, and on an invite-only server it is what opens
+registration. A permanent, unlimited link posted on a public page would let anyone, scripts
+included, create accounts on the server for free. So the link only admits accounts that already
+exist; someone without one signs up the server's normal way (proof-of-work, an instance invite,
+open registration) and then opens the link again. `signupWithInvite`, `signupWithKey` and
+`acceptInvite` refuse a link token as `INVALID_TOKEN`, as they do any unknown token.
+`joinByPublicLink` is for accounts this server holds.
+
+**The link.** A token `rim_pjl_` followed by 16 random bytes in base64url (22 characters).
+`/join/<token>` carries invite tokens too; the prefix tells the kinds apart (`rim_pjl_` a public
+link, `rim_inv_` a workspace invite, `rim_iinv_` an instance invite) and lets secret scanners
+recognise a link. It adds no guessable structure to the random part. Lookups go by the SHA-256
+of the whole string; a copy of the token is sealed under the server's link key (`RIM_LINK_KEY_FILE`, default
+`<RIM_DATA_DIR>/link-key.json`), so the Owner can read the link again and a database dump alone
+yields no working link. Neither the direct space nor the server's default workspace has a link:
+everyone joins the default workspace anyway.
+
+**The Owner's settings** (only the Owner; `FORBIDDEN` for everyone else, Moderators included;
+`VALIDATION` for the direct space and the server's default workspace):
+
+- `publicJoinLink(serverId)`: `enabled` (off by default), `mode` (`DIRECT` or `REQUESTS`), `role`
+  (`MEMBER`, the default, or `GUEST`), `allowRemote` (default true; stored for accounts of other
+  servers, which do not join through the link yet), `enabledAt`, `issuedAt`, `issuedBy`, the
+  `token` and `url`, `joinsLastDay` and `joinsLastWeek` (joins through the link, directly or by
+  an accepted request) and `openRequests`. A workspace that never had a link answers with
+  `enabled` false and a null token.
+- `updatePublicJoinLink(input)` changes any of `enabled`, `mode`, `role`, `allowRemote`; a role
+  other than `MEMBER` or `GUEST` is `VALIDATION`. Turning the link on the first time issues its
+  token. Turning it off makes every lookup answer `NOT_FOUND`; turning it on again brings the
+  same link back.
+- `reissuePublicJoinLink(serverId)` issues a new token; the old one stops working at once. The
+  settings stay.
+
+**Looking a link up.** `publicJoinLinkPreview(token)` needs no sign-in. A valid, switched-on link
+answers the workspace's `serverId`, `name` and `mode` and, as `viewer`, where the caller stands:
+`SIGNED_OUT`, `NOT_MEMBER`, `MEMBER`, `BANNED` or `REQUEST_OPEN` (with `joinRequestId`). Every
+other token (unknown, switched off, replaced, its workspace deleted) answers `NOT_FOUND` with the
+message "not found", on the same path: a lookup by the token's hash each time. Workspaces have no
+icon, so the preview carries none.
+
+**Misses are rate limited per address.** Each failed lookup or join by an invalid link counts
+against the client address; at 20 within ten minutes, every link lookup and join from that address
+answers `RATE_LIMITED` (with `retryAfterSeconds`) for an hour, valid links included. Successful
+lookups, and refusals of a valid link (banned, full, already a member), do not count. Each miss is
+logged with the address in the normal log, not the audit trail. The counts are in memory, per
+server process.
+
+**Joining.** `joinByPublicLink(token, message)`, signed in. In one transaction it checks that the
+link is valid, the caller is not a member (`CONFLICT`), not banned (`FORBIDDEN`, "you are banned
+from this workspace") and that the workspace has room under `RIM_LIMIT_MEMBERS_PER_WORKSPACE`
+(`VALIDATION`). `RIM_LIMIT_WORKSPACES_PER_USER` counts workspaces a person owns, and a link never
+makes anyone an owner, so it does not refuse a join, as it does not refuse an invite.
+
+- `DIRECT`: the caller joins with the link's role and, as a Member, every public channel, as an
+  invite join does. `MemberJoined` carries `"source": "public_link"`. The answer is
+  `{outcome: JOINED, serverId}`; `message` is ignored.
+- `REQUESTS`: the caller files a join request; the answer is `{outcome: REQUESTED, serverId,
+  joinRequest}`.
+
+**Join requests.**
+
+- One open request per person and workspace (`CONFLICT` for a second); a person holds at most 20
+  open requests across workspaces (`VALIDATION`). The message is trimmed, at most 500 characters
+  (`VALIDATION`); an empty one is null.
+- A request expires 30 days after it was filed. Expiry is read, not scheduled: an open request
+  past `expiresAt` is no longer listed or counted, cannot be accepted, declined or withdrawn
+  (`CONFLICT`), reads as `EXPIRED`, and is marked expired when the person asks again.
+- `joinRequests(serverId, dir, cursor, limit)` lists the open requests for the Owner and the
+  Moderators (`FORBIDDEN` for everyone else), newest first (`createdAt DESC, id DESC`, standard
+  cursors, `limit` 50 by default and at most 100). `myJoinRequests` lists the caller's own open
+  requests.
+- `acceptJoinRequest(serverId, requestId)` (Owner or Moderator) runs the checks of a direct join
+  and adds the person with the link's current role; the request need not be valid through the
+  link any more (it may have been turned off or replaced since). A person who joined another way
+  since asking (an invite, say) is left as they are: the request is closed as accepted, with
+  `JoinRequestDecided` but no second `MemberJoined`, join count or join audit row.
+  `declineJoinRequest` closes it;
+  the person may ask the same workspace again 24 hours after the decline (`VALIDATION` naming the
+  hours left before that). A request of another workspace is `NOT_FOUND`; one no longer open is
+  `CONFLICT`.
+- `withdrawJoinRequest(requestId)`: the person takes their open request back (`NOT_FOUND` for
+  anyone else's); they may ask again at once.
+- A ban cancels the person's open requests in that workspace, and the purge of a deleted account
+  deletes its requests. A banned person cannot file one.
+- `JoinRequest`: `id`, `serverId`, `workspaceName`, `userId`, `user`, `message`, `status` (`OPEN`,
+  `ACCEPTED`, `DECLINED`, `WITHDRAWN`, `CANCELLED`, `EXPIRED`), `createdAt`, `expiresAt`,
+  `decidedAt`, `decidedById`.
+
 ### Guest restrictions (enforced in the services)
 
 - Creating a channel or a group, joining a channel, inviting into a conversation
@@ -329,6 +431,13 @@ shared helper, whether it came from GraphQL or a command: `admin.set_member_role
 flags only, never reasons or message text. An action run as a command also gets the generic
 command-execution row. Refused actions are not audited by the helper.
 
+The public link writes rows with initiator `public_link`: `public_link.enabled`,
+`public_link.disabled`, `public_link.reissued` and `public_link.settings_changed` (the Owner's
+changes, with the mode, role and `allow_remote`), `join_request.accepted` and
+`join_request.declined` (the moderator's decisions, with the request and the person), and
+`workspace.member_joined` with `"source": "public_link"` for every join through the link (the
+joiner's row, with the role and the accepted request's id). Never the token.
+
 ### Realtime events
 
 Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
@@ -343,7 +452,25 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
 
-A subscription that falls behind loses events, possibly these two. Before it delivers another
+Join requests:
+
+- `{"type": "MemberJoined", "workspace_id", "user_id", "username", "source": "public_link"}` —
+  `source` is present only for a join through the public link, directly or by an accepted
+  request.
+- `{"type": "JoinRequestCreated", "workspace_id": "…", "request_id": "…", "user_id": "…"}` — a
+  person filed a request.
+- `{"type": "JoinRequestDecided", "workspace_id": "…", "request_id": "…", "user_id": "…",
+  "outcome": "accepted"}` — `outcome` is `accepted`, `declined`, `withdrawn` or `cancelled`
+  (a ban).
+
+Both reach the workspace's Owner and Moderators on their `workspaceEvents(workspace)`
+subscription, and the person, who is not a member, on their subscription to their server's
+direct space (`workspaceEvents(relayInfo.directSpaceId)`, which a signed-in client keeps open):
+`workspace_id` is still the workspace asked to join. On acceptance the person gets
+`JoinRequestDecided` there and then subscribes to the workspace; `MemberJoined` goes to its
+members as for any join.
+
+A subscription that falls behind loses events, possibly any of these. Before it delivers another
 event it reads the subscriber's membership and role again: it ends when they are no longer a
 member (or the read fails), and otherwise goes on with the visibility of their current role.
 

@@ -137,6 +137,14 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             ..
         } => !is_guest || event_user_id.to_string() == user_id,
 
+        // Join requests: the workspace's Owner and Moderators, and the person.
+        WorkspaceEvent::JoinRequestCreated {
+            member_user_ids, ..
+        }
+        | WorkspaceEvent::JoinRequestDecided {
+            member_user_ids, ..
+        } => member_user_ids.iter().any(|id| id.to_string() == user_id),
+
         // Conversation membership events: only visible to conversation members
         WorkspaceEvent::MemberAddedToConversation {
             member_user_ids, ..
@@ -522,6 +530,52 @@ mod tests {
         assert_eq!(json["display_name"], serde_json::Value::Null);
     }
 
+    // ── Join requests ──
+
+    #[test]
+    fn join_request_events_reach_the_listed_moderators_and_the_person_only() {
+        let (moderator, person, member) = (UserId::new(), UserId::new(), UserId::new());
+        let workspace_id = ServerId::new();
+        let request_id = rim_core::public_join_link::model::JoinRequestId::new();
+        let events = [
+            WorkspaceEvent::JoinRequestCreated {
+                workspace_id,
+                request_id,
+                user_id: person,
+                member_user_ids: vec![moderator, person],
+            },
+            WorkspaceEvent::JoinRequestDecided {
+                workspace_id,
+                request_id,
+                user_id: person,
+                outcome: "declined".to_string(),
+                member_user_ids: vec![moderator, person],
+            },
+        ];
+        for event in &events {
+            assert!(user_can_see_event_as(event, &moderator.to_string(), false));
+            assert!(user_can_see_event_as(event, &person.to_string(), true));
+            assert!(!user_can_see_event_as(event, &member.to_string(), false));
+            assert_eq!(event.direct_space_recipient(), Some(person));
+            let json = serde_json::to_value(event).unwrap();
+            assert!(json.get("member_user_ids").is_none());
+            assert_eq!(json["request_id"], request_id.to_string());
+        }
+        let joined = WorkspaceEvent::MemberJoined {
+            workspace_id,
+            user_id: person,
+            username: "sam".to_string(),
+            source: None,
+        };
+        assert_eq!(joined.direct_space_recipient(), None);
+        assert!(
+            serde_json::to_value(&joined)
+                .unwrap()
+                .get("source")
+                .is_none()
+        );
+    }
+
     // ── Guests and the directory events ──
 
     fn directory_events(workspace_id: ServerId, about: UserId) -> Vec<WorkspaceEvent> {
@@ -530,6 +584,7 @@ mod tests {
                 workspace_id,
                 user_id: about,
                 username: "sam".to_string(),
+                source: None,
             },
             WorkspaceEvent::MemberLeft {
                 workspace_id,

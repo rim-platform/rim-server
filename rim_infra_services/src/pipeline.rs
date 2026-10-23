@@ -1562,6 +1562,7 @@ mod tests {
                 workspace_id: self.server_id,
                 user_id: self.author_id,
                 username: "hello world".to_string(),
+                source: None,
             }
         }
 
@@ -2350,6 +2351,7 @@ mod tests {
             workspace_id: world.server_id,
             user_id,
             username: "newcomer".to_string(),
+            source: None,
         };
         let state = |scope, user_id| WorkspaceEvent::WorkspaceStateChanged {
             workspace_id: world.server_id,

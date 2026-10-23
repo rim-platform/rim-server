@@ -83,6 +83,11 @@ pub struct FederationHooks {
     pub handle_domain: Option<String>,
     /// The minimum age every signup must confirm; `None` when there is none.
     pub minimum_age: Option<u8>,
+    /// The key public join link tokens are sealed under; `None` leaves public links unavailable.
+    pub link_key: Option<crate::link_key::LinkKey>,
+    /// What public join links start with, `<link base>/join/<token>`; `None` gives
+    /// `http://localhost`.
+    pub link_base: Option<String>,
 }
 
 #[derive(Clone)]
@@ -126,6 +131,8 @@ pub struct DefaultAppServiceProvider {
     instance_operator_service: Arc<dyn InstanceOperatorService>,
     dm_policy_service: Arc<dyn rim_services::dm_policy::service::DmPolicyService>,
     default_workspace_service: Arc<dyn DefaultWorkspaceService>,
+    public_join_link_service:
+        Arc<dyn rim_services::public_join_link::service::PublicJoinLinkService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -542,6 +549,25 @@ impl DefaultAppServiceProvider {
                 federation.dm_policy.clone(),
             ));
 
+        let public_join_link_service: Arc<
+            dyn rim_services::public_join_link::service::PublicJoinLinkService,
+        > = Arc::new(
+            crate::public_join_link::DefaultPublicJoinLinkService::new(
+                repos.for_public_join_link(),
+                observers.clone(),
+                federation.link_key.clone(),
+                federation
+                    .link_base
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost".to_string()),
+            )
+            .with_database(db.clone())
+            .with_audit_log_service(Arc::clone(&audit_log_service))
+            .with_direct_space(federation.direct_space_id)
+            .with_default_workspace(Arc::clone(&default_workspace_service))
+            .with_limits(limits),
+        );
+
         Self {
             audit_log_service,
             auth_service,
@@ -582,6 +608,7 @@ impl DefaultAppServiceProvider {
             instance_operator_service,
             dm_policy_service,
             default_workspace_service,
+            public_join_link_service,
         }
     }
 
@@ -731,5 +758,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
 
     fn default_workspace_service(&self) -> Arc<dyn DefaultWorkspaceService> {
         Arc::clone(&self.default_workspace_service)
+    }
+
+    fn public_join_link_service(
+        &self,
+    ) -> Arc<dyn rim_services::public_join_link::service::PublicJoinLinkService> {
+        Arc::clone(&self.public_join_link_service)
     }
 }

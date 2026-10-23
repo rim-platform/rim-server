@@ -185,9 +185,20 @@ async fn the_workspace_step_deletes_sole_workspaces_leaves_the_others_and_revoke
     )
     .await;
 
+    sql(
+        &ctx,
+        &format!(
+            "INSERT INTO workspace_join_request (id, server_id, user_id, expires_at) \
+             VALUES (gen_random_uuid(), '{}', '{}', now() + interval '30 days')",
+            shared.id, alice.id
+        ),
+    )
+    .await;
+
     let step = repo.purge_workspaces(alice.id, Utc::now()).await.unwrap();
 
     assert!(step.counts.contains(&("workspaces_deleted", 1)));
+    assert!(step.counts.contains(&("join_requests", 1)));
     assert!(step.counts.contains(&("workspace_memberships", 1)));
     assert!(step.counts.contains(&("conversation_memberships", 1)));
     assert!(step.counts.contains(&("invites_revoked", 1)));

@@ -145,7 +145,7 @@ Both are unauthenticated, outside the origin check, and sent with `Cache-Control
 - `/healthz` answers 200 `{"status":"ok","version":"<version>"}` whenever the process serves
   requests.
 - `/readyz` answers 200 when every check passes and 503 otherwise, with `status`, `version` and
-  `checks`: `database`, `migrations`, `serverKey` and `frankingKey`, each
+  `checks`: `database`, `migrations`, `serverKey`, `frankingKey` and `linkKey`, each
   `{"status":"ok"}` or `{"status":"fail","reason":"..."}`. A result is reused for one second.
 
 ### Metrics: `/metrics`
@@ -327,7 +327,7 @@ pending, and on every other user), and `cancelAccountDeletion` keeps the account
 whether a deletion was pending. Both mutations need a session and the CSRF header.
 
 When the grace period ends, the hourly purge removes the account's sessions, devices, keys,
-memberships, plaintext messages and files, every avatar file it stored, settings and personal
+memberships and join requests, plaintext messages and files, every avatar file it stored, settings and personal
 automations, and frees its username. The user row stays as a tombstone: `deleted-` and the start of its id as the username,
 "Deleted account" as the display name, no email, password or key. It cannot sign in and is in no
 member list or search result. It stays the author of the account's encrypted messages, which are
@@ -404,6 +404,7 @@ a number above 0, so a private server limits nothing but the batch size.
 | `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
 | `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
+| none (fixed) | Failed public join link lookups and joins (`publicJoinLinkPreview`, `joinByPublicLink` with an invalid link) per client address: 20 within ten minutes cut the address off for an hour. Successful lookups do not count. | `RATE_LIMITED` with `retryAfterSeconds` on every link lookup and join from the address, valid links included |
 
 The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the first
 address in `X-Forwarded-For` (the peer when that header is missing or does not parse).
@@ -421,7 +422,7 @@ naming the cap, such as "this instance allows 5 workspaces per user".
 | Variable | `serverInfo.limits` | Caps |
 |---|---|---|
 | `RIM_LIMIT_WORKSPACES_PER_USER` | `workspacesPerUser` | Workspaces one user owns, created or handed over to them: `transferWorkspaceOwnership` to someone at the cap answers `VALIDATION`. |
-| `RIM_LIMIT_MEMBERS_PER_WORKSPACE` | `membersPerWorkspace` | Members of a workspace, by invite or signup; the direct space has none. |
+| `RIM_LIMIT_MEMBERS_PER_WORKSPACE` | `membersPerWorkspace` | Members of a workspace, by invite, signup or public link (a join request is refused too while the workspace is full); the direct space has none. |
 | `RIM_LIMIT_CHANNELS_PER_WORKSPACE` | `channelsPerWorkspace` | Unarchived channels of a workspace, public and private; a new workspace gets only the default channels the cap allows. Archiving a channel frees its place, and unarchiving one needs room. All channels, archived ones included, are capped at five times this. |
 | `RIM_LIMIT_DEVICES_PER_USER` | `devicesPerUser` | Devices on one account. |
 | `RIM_LIMIT_DM_REQUESTS_PER_DAY` | `dmRequestsPerDay` | DM requests one user sends to strangers per day. |
@@ -519,11 +520,11 @@ on the message.
 |---|---|---|
 | `UNAUTHENTICATED` | No valid session, or a sign-in attempt that failed. | |
 | `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation, a password signup on a server whose signups need a key. | |
-| `NOT_FOUND` | The object does not exist, or is hidden from the caller (`messaging.md` says where). | |
+| `NOT_FOUND` | The object does not exist, or is hidden from the caller (`messaging.md` says where). Every invalid public join link answers it with the same message, "not found". | |
 | `VALIDATION` | The input is malformed or out of range, or the feature does not exist in the direct space; the message says what. | |
 | `CONFLICT` | The change conflicts with the current state; the message says how. | |
 | `EMAIL_TAKEN` | The signup email address is already in use. | |
-| `INVALID_TOKEN` | An invite token is unknown, used up or revoked. | |
+| `INVALID_TOKEN` | An invite token is unknown, used up or revoked. A public join link token is never a signup token and answers this too. | |
 | `EXPIRED_TOKEN` | An invite token has expired. | |
 | `RATE_LIMITED` | Too many attempts, mutations or messages; wait before retrying (see "Limits"). | `retryAfterSeconds` |
 | `TOO_MANY_SUBSCRIPTIONS` | The WebSocket connection holds as many subscriptions as it may. | `limit` |
@@ -690,3 +691,44 @@ message's workspace; `banReason` is visible only to workspace moderators. Other 
 return false/null. `ServerMember.banned` is false for active directory members, with null
 `bannedUntil`; banned users have been removed from that directory. MemberLeft carries an
 optional cause and ban end; the moderator's reason is delivered only to the removed user.
+
+### Public join link and join requests
+
+A workspace's permanent link, `<server>/join/<token>`, lets accounts of this server join it or
+ask to join; it never creates an account. The same `/join/<token>` path carries invite links;
+the token's prefix tells the kinds apart: `rim_pjl_` is a public join link (for
+`publicJoinLinkPreview` and `joinByPublicLink`), `rim_inv_` a workspace invite and `rim_iinv_` an
+instance invite (for `previewInviteToken` and the signup and join-by-invite roots). `docs/messaging.md`, "Public join link and join
+requests", has the rules; this is the surface.
+
+| Root | Who | Answers |
+|---|---|---|
+| `publicJoinLink(serverId): PublicJoinLink!` | the Owner | settings, `token`, `url`, `joinsLastDay`, `joinsLastWeek`, `openRequests` |
+| `updatePublicJoinLink(input: UpdatePublicJoinLinkInput!): PublicJoinLink!` | the Owner | `enabled`, `mode` (`DIRECT`, `REQUESTS`), `role` (`MEMBER`, `GUEST`), `allowRemote`; omitted fields stay |
+| `reissuePublicJoinLink(serverId): PublicJoinLink!` | the Owner | a new token; the old one stops at once |
+| `publicJoinLinkPreview(token): PublicJoinLinkPreview!` | anyone, no sign-in | `serverId`, `name`, `mode`, `viewer` (`SIGNED_OUT`, `NOT_MEMBER`, `MEMBER`, `BANNED`, `REQUEST_OPEN`), `joinRequestId` |
+| `joinByPublicLink(token, message): JoinByPublicLinkPayload!` | signed in | `outcome` (`JOINED`, `REQUESTED`), `serverId`, `joinRequest` |
+| `joinRequests(serverId, dir, cursor, limit): JoinRequestPage!` | Owner, Moderators | open requests, newest first; cursor `JoinRequestCursorInput {createdAt, requestId}` |
+| `myJoinRequests: [JoinRequest!]!` | signed in | the caller's open requests |
+| `acceptJoinRequest(serverId, requestId): JoinRequest!` | Owner, Moderators | the person joins with the link's role |
+| `declineJoinRequest(serverId, requestId): JoinRequest!` | Owner, Moderators | the person may ask again after 24 hours |
+| `withdrawJoinRequest(requestId): JoinRequest!` | the person | |
+
+Refusals:
+
+| Case | Code |
+|---|---|
+| Not the Owner (settings, link, new token); not Owner or Moderator (requests) | `FORBIDDEN` |
+| The direct space or the server's default workspace; a role other than `MEMBER` or `GUEST` | `VALIDATION` |
+| Any invalid link: unknown, switched off, replaced, its workspace deleted | `NOT_FOUND`, message "not found" |
+| 20 failed lookups or joins from the address in ten minutes ("Limits") | `RATE_LIMITED` for an hour |
+| The caller is banned | `FORBIDDEN`, "you are banned from this workspace" |
+| The workspace is at `RIM_LIMIT_MEMBERS_PER_WORKSPACE` | `VALIDATION`, "this instance allows N members per workspace" |
+| Already a member; a request already open; a request no longer open | `CONFLICT` |
+| A message over 500 characters; 20 open requests; declined less than 24 hours ago | `VALIDATION` |
+| A request of another workspace, or someone else's (withdraw) | `NOT_FOUND` |
+
+`RIM_LIMIT_WORKSPACES_PER_USER` counts owned workspaces and does not refuse a join.
+`JoinRequestCreated` and `JoinRequestDecided` reach the workspace's Owner and Moderators and the
+person, who gets them on the direct-space subscription; `MemberJoined` carries
+`"source": "public_link"` for a join through the link.

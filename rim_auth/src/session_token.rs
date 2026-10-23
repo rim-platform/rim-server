@@ -26,6 +26,19 @@ pub fn generate_link_id() -> String {
     random_b64url::<16>("device link id")
 }
 
+/// The prefix of a workspace's public join link token, which tells it apart from an invite token.
+pub const PUBLIC_LINK_TOKEN_PREFIX: &str = "rim_pjl_";
+
+/// Generate a workspace's public join link token: [`PUBLIC_LINK_TOKEN_PREFIX`] and 16 random
+/// bytes, base64url-nopad (22 characters). Only the SHA-256 of the whole string
+/// ([`hash_token`]) is looked up; the server keeps the token sealed for its Owner.
+pub fn generate_public_link_token() -> String {
+    format!(
+        "{PUBLIC_LINK_TOKEN_PREFIX}{}",
+        random_b64url::<16>("public link token")
+    )
+}
+
 /// `N` bytes from the OS random generator, base64url-nopad. `what` names the value in the log
 /// line written before panicking when the entropy source fails.
 fn random_b64url<const N: usize>(what: &str) -> String {
@@ -94,6 +107,15 @@ mod tests {
         let random = token.strip_prefix("rim_test_").expect("prefix");
         assert_eq!(URL_SAFE_NO_PAD.decode(random).map(|b| b.len()), Ok(32));
         assert_ne!(token, generate_token("rim_test_"));
+    }
+
+    #[test]
+    fn public_link_token_is_its_prefix_and_16_random_bytes_of_unpadded_base64url() {
+        let token = generate_public_link_token();
+        let random = token.strip_prefix("rim_pjl_").expect("prefix");
+        assert_eq!(random.len(), 22);
+        assert_eq!(URL_SAFE_NO_PAD.decode(random).map(|b| b.len()), Ok(16));
+        assert_ne!(token, generate_public_link_token());
     }
 
     #[test]

@@ -27,7 +27,8 @@ without the database is a key nobody can prove belongs to this server id. Never 
 to another deployment; two servers with one key are one server to everyone else.
 
 While the server runs, `GET /readyz` answers 503 with the `serverKey` check failed when the key
-file cannot be opened for reading, and `frankingKey` likewise for the franking key file.
+file cannot be opened for reading, `frankingKey` likewise for the franking key file and
+`linkKey` for the link key file.
 
 ## First start
 
@@ -104,6 +105,21 @@ the same file: copy it to each node after a rotation.
 Back the file up with the database. Whoever reads it can make receipts, but a report must also
 match the content commitment stored with the message, so the file alone does not let anyone have
 a forged report verified.
+
+## The link key file
+
+A workspace Owner can read their public join link again because the server keeps its token
+sealed under the **link key** (`docs/messaging.md`, "Public join link and join requests"):
+
+| What | Where |
+|---|---|
+| Link key | `RIM_LINK_KEY_FILE`, default `<RIM_DATA_DIR>/link-key.json` |
+
+The file is `{"v":1,"key":"<base64url, 32 bytes>","createdAt":"…"}`, mode `0600`; the server
+refuses a file the group or others can read. The first start creates it. The server refuses to
+start when the file is missing but public links are stored: restore it from a backup. Back it up
+with the server key; the database without it still answers the links, but no Owner can read
+theirs again until they issue a new one.
 
 ## Key login audiences
 

@@ -17,6 +17,7 @@ mod tests {
     };
     use rim_core::moderation::repository::MockModerationRepository;
     use rim_core::notification::repository::MockNotificationRepository;
+    use rim_core::public_join_link::repository::MockPublicJoinLinkRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::server::model::ServerId;
     use rim_core::server_member::model::{ServerMember, ServerMemberId, ServerMemberRole};
@@ -374,6 +375,11 @@ mod tests {
                     Box::pin(async { Ok(1) })
                 });
 
+            let mut public_join_link_repo = MockPublicJoinLinkRepository::new();
+            public_join_link_repo
+                .expect_cancel_open_requests()
+                .returning(|_, _, _| Box::pin(async { Ok(Vec::new()) }));
+
             DefaultModerationService::new(
                 ModerationRepos {
                     server_member_repo: Arc::new(server_member_repo),
@@ -386,6 +392,7 @@ mod tests {
                     notification_repo: Arc::new(notification_repo),
                     macro_repo: Arc::new(macro_repo),
                     pipeline_repo: Arc::new(pipeline_repo),
+                    public_join_link_repo: Arc::new(public_join_link_repo),
                 },
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
