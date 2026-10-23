@@ -665,5 +665,6 @@ separately. Redirects remain HTTPS and stop after ten; downloads stop at 8 MiB o
 Each account has twenty attempts an hour; four downloads run concurrently, with a five-second
 slot wait. Audit events record the account and original host, without paths, query strings or
 bundle contents. Responses are authenticated attachments with `no-store` and `nosniff`.
-An older server returns 404, the disabled feature returns FEATURE_DISABLED, invalid pins or
+An older server may return 400/404 or treat the path as a workspace upload; clients explain
+that an update is needed. The disabled feature returns FEATURE_DISABLED, invalid pins or
 bundles return 422, and exhausted attempt budgets return 429.

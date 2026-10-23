@@ -187,6 +187,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn downloads_verify_the_pin_after_reading_a_successful_response() {
+        let bundle = br#"{"format":"rim-plugin-bundle","v":1,"files":[{"path":"rim-plugin.json","text":"{}"}]}"#;
+        let pin = Sha256::digest(bundle)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        for matches in [true, false] {
+            let server = crate::outbound::fixture::serve(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                    bundle.len()
+                ),
+                bundle.to_vec(),
+                Duration::ZERO,
+                Duration::ZERO,
+            )
+            .await;
+            let client = Client::builder().no_proxy().build().unwrap();
+            let result = download(
+                &client,
+                Url::parse(&format!("http://{}/", server.addr)).unwrap(),
+                if matches { &pin } else { "bad-pin" },
+            )
+            .await;
+            if matches {
+                assert_eq!(result.unwrap(), bundle);
+            } else {
+                assert!(
+                    matches!(result, Err(ServiceError::Validation(reason)) if reason == "bundle SHA-256 mismatch")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn downloads_check_the_body_cap_and_timeout() {
         let server = crate::outbound::fixture::serve(
             format!(
