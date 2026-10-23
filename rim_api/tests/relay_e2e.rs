@@ -1845,7 +1845,7 @@ async fn a_reported_request_is_listed_and_a_blocked_principal_is_signed_out_and_
     assert!(resolved.contains("resolved"), "{resolved}");
     assert_eq!(
         operator(&second, "abuse-reports", &["list", "--open"]).await,
-        ""
+        "no abuse reports\n"
     );
 
     // The operator blocks Bob: his session ends and he cannot sign in again.
