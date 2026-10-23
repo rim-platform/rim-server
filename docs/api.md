@@ -655,3 +655,13 @@ cd ../rim-ui && npm run codegen
 Enum values appear in `SCREAMING_SNAKE` and fields in `camelCase`. The models in `messaging.md`,
 `search.md`, `message-change-feed.md`, `command_model.md` and the specs in `specs/` explain what
 the fields mean.
+
+### Profile picture refresh
+
+Avatar uploads use `avatars/<user id>/avatar-<16 lowercase SHA-256 hex>.<ext>`, so changing
+image bytes changes the URL. Authenticated downloads of these names use
+`Cache-Control: private, max-age=31536000, immutable`; unversioned avatar names require
+revalidation. `updateMyProfile` accepts both name forms only for the caller's own directory.
+Replacement deletes the old avatar file. `MemberProfileUpdated` identifies a changed profile
+in each workspace; the direct space sends the account's own change to its other sessions.
+Clients refetch the directory and, for their own user id, `me` when the event arrives.

@@ -332,7 +332,7 @@ impl DefaultAppServiceProvider {
             crate::message_reaction::DefaultMessageReactionService::new(
                 repos.for_reaction(),
                 Some(db.clone()),
-                observers,
+                observers.clone(),
             )
             .with_notification_service(Arc::clone(&notification_service))
             .with_feature_gate(Arc::clone(&feature_gate)),
@@ -385,7 +385,12 @@ impl DefaultAppServiceProvider {
                 .with_limits(limits)
                 .with_reserved_names(federation.reserved_names.clone())
                 .with_handle_domain(federation.handle_domain.clone())
-                .with_storage(Arc::clone(&storage_service)),
+                .with_storage(Arc::clone(&storage_service))
+                .with_profile_events(
+                    Arc::clone(&repos.server_repo),
+                    observers.clone(),
+                    federation.direct_space_id,
+                ),
         );
         let workspace_state_service: Arc<dyn WorkspaceStateService> = Arc::new(
             crate::workspace_state::DefaultWorkspaceStateService::new(

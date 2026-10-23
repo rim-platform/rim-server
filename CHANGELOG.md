@@ -426,6 +426,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Profile picture uploads use content-addressed URLs with private immutable caching. Successful
+  profile updates emit `MemberProfileUpdated` so other sessions refresh without a restart.
+
 - An instance operator handling a report of an unencrypted message in the direct space now sees
   that one message's text, author and send time, and may delete it with `deleteMessage`, without
   a verified report and without seeing the rest of the conversation. Before, only franked

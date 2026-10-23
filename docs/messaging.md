@@ -540,3 +540,12 @@ Cursor pagination uses overfetch (`limit + 1`) so `next` and `prev` reflect actu
 - A thread reply's permalink is
   `/workspaces/{server}/conversations/{conversation}/threads/{thread}/messages/{message}`.
 - The email digest links each message by its permalink.
+
+### Profile changes
+
+`MemberProfileUpdated {workspace_id, user_id}` announces a successful local profile update.
+It carries no profile fields. Workspace members refetch their member directory; guests see
+only their own event. In the local direct space the account's own sessions receive it and
+refetch `me`. A client showing the changed account's own profile invalidates `me` too. It
+uses the directory stream rules (`w` for members and the subject's `u:` stream for guests).
+Profiles published by another server are unchanged by this event.

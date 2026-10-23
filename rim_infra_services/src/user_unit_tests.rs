@@ -34,6 +34,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn successful_profile_changes_notify_workspaces_and_the_users_direct_space() {
+        use rim_core::server::model::{Server, ServerId};
+        use rim_core::server::repository::MockServerRepository;
+        use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
+        #[derive(Default)]
+        struct Seen(std::sync::Mutex<Vec<WorkspaceEvent>>);
+        impl Broadcaster for Seen {
+            fn broadcast(&self, event: WorkspaceEvent) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        let id = UserId::new();
+        let workspace = ServerId::new();
+        let direct = ServerId::new();
+        let mut users = MockUserRepository::new();
+        users
+            .expect_update_profile()
+            .returning(move |_, _| Ok(user(id)));
+        let mut servers = MockServerRepository::new();
+        servers.expect_get_servers_for_user().returning(move |_| {
+            Ok(vec![Server {
+                id: workspace,
+                name: "Workspace".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }])
+        });
+        let seen = Arc::new(Seen::default());
+        let service = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(users),
+        })
+        .with_profile_events(
+            Arc::new(servers),
+            Observers::new(seen.clone()),
+            Some(direct),
+        );
+        service
+            .update_my_profile(UpdateMyProfileCmd {
+                actor: Actor::new(id),
+                display_name: None,
+                avatar_url: None,
+                status_text: Some("ready".to_string()),
+                bio: None,
+            })
+            .await
+            .unwrap();
+        let events = seen.0.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        for workspace_id in [workspace, direct] {
+            assert!(events.iter().any(|event| matches!(event, WorkspaceEvent::MemberProfileUpdated { workspace_id: sid, user_id } if *sid == workspace_id && *user_id == id)));
+        }
+    }
+
+    #[tokio::test]
     async fn get_me_returns_not_found_when_missing() {
         let actor_id = UserId::new();
         let mut user_repo = MockUserRepository::new();

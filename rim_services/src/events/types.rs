@@ -78,6 +78,11 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing, default)]
         is_private: bool,
     },
+    /// A profile changed; clients refetch the member directory and their own profile.
+    MemberProfileUpdated {
+        workspace_id: ServerId,
+        user_id: UserId,
+    },
     MemberJoined {
         workspace_id: ServerId,
         user_id: UserId,
@@ -433,6 +438,7 @@ impl WorkspaceEvent {
             | Self::MessagePinned { workspace_id, .. }
             | Self::MessageUnpinned { workspace_id, .. }
             | Self::ThreadCreated { workspace_id, .. }
+            | Self::MemberProfileUpdated { workspace_id, .. }
             | Self::MemberJoined { workspace_id, .. }
             | Self::MemberLeft { workspace_id, .. }
             | Self::MemberRoleChanged { workspace_id, .. }
@@ -481,7 +487,8 @@ impl WorkspaceEvent {
             | Self::MemberRemovedFromConversation {
                 member_user_ids, ..
             } => Some(member_user_ids),
-            Self::MemberJoined { .. }
+            Self::MemberProfileUpdated { .. }
+            | Self::MemberJoined { .. }
             | Self::MemberLeft { .. }
             | Self::MemberRoleChanged { .. } => None,
             Self::ConversationUpdated {

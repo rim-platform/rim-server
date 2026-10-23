@@ -40,6 +40,11 @@ pub struct DefaultUserService {
     handle_domain: Option<String>,
     /// Where avatar files are stored; without it a profile change deletes no file.
     storage: Option<Arc<dyn StorageService>>,
+    profile_events: Option<(
+        Arc<dyn rim_core::server::repository::ServerRepository>,
+        rim_services::events::Observers,
+    )>,
+    direct_space_id: Option<rim_core::server::model::ServerId>,
 }
 
 impl DefaultUserService {
@@ -51,7 +56,20 @@ impl DefaultUserService {
             reserved_names: ReservedNames::default(),
             handle_domain: None,
             storage: None,
+            profile_events: None,
+            direct_space_id: None,
         }
+    }
+
+    pub fn with_profile_events(
+        mut self,
+        servers: Arc<dyn rim_core::server::repository::ServerRepository>,
+        observers: rim_services::events::Observers,
+        direct_space_id: Option<rim_core::server::model::ServerId>,
+    ) -> Self {
+        self.profile_events = Some((servers, observers));
+        self.direct_space_id = direct_space_id;
+        self
     }
 
     /// Delete the user's unused avatar files from `storage` when a profile change clears or
@@ -229,6 +247,18 @@ impl UserService for DefaultUserService {
             None => None,
         };
 
+        let mut workspaces = match &self.profile_events {
+            Some((servers, _)) => servers
+                .get_servers_for_user(user_id)
+                .await?
+                .into_iter()
+                .map(|server| server.id)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        if let Some(direct) = self.direct_space_id {
+            workspaces.push(direct);
+        }
         let user = self
             .repos
             .user_repo
@@ -251,6 +281,15 @@ impl UserService for DefaultUserService {
             tracing::warn!(user_id = %user_id, error = %e, "could not delete unused avatar files");
         }
 
+        if let Some((_, observers)) = &self.profile_events {
+            use rim_services::events::EventObserver;
+            for workspace_id in workspaces {
+                observers.emit(rim_services::events::WorkspaceEvent::MemberProfileUpdated {
+                    workspace_id,
+                    user_id,
+                });
+            }
+        }
         Ok(self.convert_to_dto(user))
     }
 }
