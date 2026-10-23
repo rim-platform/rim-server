@@ -49,6 +49,7 @@ migration = { path = "../migration" }
 async-trait = "0.1.89"
 
 [dev-dependencies]
+tempfile = "3"
 rim_services = { path = "../rim_services", features = ["mocks"] }
 rim_core = { path = "../rim_core", features = ["mocks"] }
 async-trait = "0.1.89"

@@ -426,6 +426,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Operator commands flush audit files before exiting, keep diagnostics on stderr at warning
+  level by default (`RUST_LOG` overrides it), and describe empty principal and report lists.
+  Unknown commands print usage and exit with status 2 instead of starting another server.
+
 - An instance operator handling a report of an unencrypted message in the direct space now sees
   that one message's text, author and send time, and may delete it with `deleteMessage`, without
   a verified report and without seeing the rest of the conversation. Before, only franked
