@@ -430,6 +430,12 @@ tag `v<version>`, the version every crate in the workspace carries.
   user alone receives the moderator's reason. Workspace message authors expose `User.banned`,
   `bannedUntil` and moderator-only `banReason`. An unban restores a local account to the current
   default workspace; `joinDefaultWorkspace` lets older accounts and expired bans rejoin it.
+- Update the cryptographic helper `ctutils` to 0.4.5 to fix constant-time comparison
+  advisory RUSTSEC-2026-0385.
+
+- Operator commands flush audit files before exiting, keep diagnostics on stderr at warning
+  level by default (`RUST_LOG` overrides it), and describe empty principal and report lists.
+  Unknown commands print usage and exit with status 2 instead of starting another server.
 
 - An instance operator handling a report of an unencrypted message in the direct space now sees
   that one message's text, author and send time, and may delete it with `deleteMessage`, without
