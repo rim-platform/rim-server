@@ -66,6 +66,55 @@ async fn read_body(
     Ok((bytes, sha256))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FetchBundleRequest {
+    url: String,
+    sha256: String,
+}
+
+/// POST /api/plugin-bundles/fetch: an authenticated, pinned and validated HTTPS bundle.
+pub async fn handle_plugin_bundle_fetch(
+    req: HttpRequest,
+    body: web::Json<FetchBundleRequest>,
+    service: web::Data<Arc<dyn PluginBundleService>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
+) -> HttpResponse {
+    if let Err(response) =
+        require_feature(features.get_ref().as_ref(), ServerFeature::PluginLinkFetch)
+    {
+        return response;
+    }
+    let user_id = match require_auth(&req).await {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_csrf(&req) {
+        return response;
+    }
+    match service
+        .fetch(
+            rim_services::workspace_plugin::command::FetchPluginBundleCmd {
+                actor: Actor::new(user_id),
+                url: body.url.clone(),
+                sha256: body.sha256.clone(),
+            },
+        )
+        .await
+    {
+        Ok(bytes) => HttpResponse::Ok()
+            .content_type(PLUGIN_BUNDLE_MEDIA_TYPE)
+            .insert_header((header::CACHE_CONTROL, "no-store"))
+            .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+            .insert_header((header::CONTENT_DISPOSITION, "attachment"))
+            .body(bytes),
+        Err(ServiceError::Validation(reason)) => {
+            HttpResponse::UnprocessableEntity().json(serde_json::json!({"error": reason}))
+        }
+        Err(error) => map_service_error_to_response(error),
+    }
+}
+
 /// POST /api/plugin-bundles/{server_id}
 pub async fn handle_plugin_bundle_upload(
     req: HttpRequest,
@@ -237,6 +286,11 @@ mod tests {
             actix_test::init_service(
                 App::new()
                     .service(
+                        web::resource("/api/plugin-bundles/fetch")
+                            .app_data(web::JsonConfig::default().limit(8192))
+                            .route(web::post().to(handle_plugin_bundle_fetch)),
+                    )
+                    .service(
                         web::resource("/api/plugin-bundles/{server_id}")
                             .route(web::post().to(handle_plugin_bundle_upload)),
                     )
@@ -282,6 +336,83 @@ mod tests {
             size: BUNDLE.len() as u64,
             created,
         }
+    }
+
+    fn fetch_request() -> actix_test::TestRequest {
+        actix_test::TestRequest::post().uri("/api/plugin-bundles/fetch")
+            .set_json(serde_json::json!({"url": "https://plugins.example/plugin.rimbundle", "sha256": sha256_hex(BUNDLE)}))
+    }
+
+    #[actix_web::test]
+    async fn link_fetch_needs_a_session_and_csrf_and_uses_its_own_feature_gate() {
+        let id = UserId::new();
+        let mut service = MockPluginBundleService::new();
+        service
+            .expect_fetch()
+            .times(1)
+            .withf(move |cmd| cmd.actor.user_id == id && cmd.sha256 == sha256_hex(BUNDLE))
+            .returning(|_| Box::pin(async { Ok(BUNDLE.to_vec()) }));
+        let gate = rim_infra_services::feature_gate::InstanceFeatureGate::new(
+            &[ServerFeature::WorkspacePlugins],
+            &[],
+        );
+        let app = test_app!(authenticator(id), service, gate);
+        assert_eq!(
+            actix_test::call_service(&app, fetch_request().to_request())
+                .await
+                .status(),
+            401
+        );
+        assert_eq!(
+            actix_test::call_service(&app, signed_in(fetch_request(), false).to_request())
+                .await
+                .status(),
+            403
+        );
+        let response =
+            actix_test::call_service(&app, signed_in(fetch_request(), true).to_request()).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(actix_test::read_body(response).await, BUNDLE);
+    }
+
+    #[actix_web::test]
+    async fn link_fetch_feature_can_be_disabled_independently() {
+        let gate = rim_infra_services::feature_gate::InstanceFeatureGate::new(
+            &[ServerFeature::PluginLinkFetch],
+            &[],
+        );
+        let app = test_app!(
+            authenticator(UserId::new()),
+            MockPluginBundleService::new(),
+            gate
+        );
+        let response =
+            actix_test::call_service(&app, signed_in(fetch_request(), true).to_request()).await;
+        assert_eq!(response.status(), 403);
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(body["feature"], "plugin_link_fetch");
+    }
+
+    #[actix_web::test]
+    async fn link_fetch_returns_validation_errors_without_bundle_bytes() {
+        let mut service = MockPluginBundleService::new();
+        service.expect_fetch().returning(|_| {
+            Box::pin(async {
+                Err(ServiceError::Validation(
+                    "bundle SHA-256 mismatch".to_string(),
+                ))
+            })
+        });
+        let app = test_app!(authenticator(UserId::new()), service);
+        let response =
+            actix_test::call_service(&app, signed_in(fetch_request(), true).to_request()).await;
+        assert_eq!(response.status(), 422);
+        let body: serde_json::Value = actix_test::read_body_json(response).await;
+        assert_eq!(body["error"], "bundle SHA-256 mismatch");
     }
 
     #[actix_web::test]
