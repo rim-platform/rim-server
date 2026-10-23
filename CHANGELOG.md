@@ -23,6 +23,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `POST /api/plugin-bundles/fetch` fetches and validates pinned bundles for browser installs
+  without CORS-dependent external requests. Its `plugin_link_fetch` feature is enabled by
+  default, independent of workspace plugins; public HTTPS, hash, size and rate checks apply.
+
 - Handles, `@<username>:<domain>`: GraphQL `User.handle` gives a local account its username at
   this server's handle domain and a person from another server their username at their home
   server and its handle domain, never the internal `r_…` name; null while unknown and for
@@ -430,6 +434,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   user alone receives the moderator's reason. Workspace message authors expose `User.banned`,
   `bannedUntil` and moderator-only `banReason`. An unban restores a local account to the current
   default workspace; `joinDefaultWorkspace` lets older accounts and expired bans rejoin it.
+- Profile picture uploads use content-addressed URLs with private immutable caching. Successful
+  profile updates emit `MemberProfileUpdated` so other sessions refresh without a restart.
 - Refuse signups at the account cap before validating terms, credentials or invite inputs, while retaining the transactional admission check.
 - Update the cryptographic helper `ctutils` to 0.4.5 to fix constant-time comparison
   advisory RUSTSEC-2026-0385.

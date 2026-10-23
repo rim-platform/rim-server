@@ -8,13 +8,14 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
-use rim_core::user::avatar::{AvatarFormat, avatar_key, file_url};
+use rim_core::user::avatar::{AvatarFormat, file_url, hashed_avatar_key, is_hashed_avatar_key};
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::feature::service::FeatureGate;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::moderation::command::AuthorizeReportAttachmentQuery;
 use rim_services::moderation::service::ModerationService;
 use rim_services::storage::service::StorageService;
+use sha2::{Digest, Sha256};
 
 use crate::graphql_support::{extract_auth, validate_csrf_header};
 
@@ -385,6 +386,14 @@ pub(crate) async fn file_download_as(
 
     HttpResponse::Ok()
         .content_type(content_type)
+        .insert_header((
+            header::CACHE_CONTROL,
+            if is_hashed_avatar_key(file_path) {
+                "private, max-age=31536000, immutable"
+            } else {
+                "private, max-age=0, must-revalidate"
+            },
+        ))
         .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .insert_header((
             "Content-Disposition",
@@ -597,9 +606,8 @@ pub(crate) async fn avatar_upload_as(
             .json(serde_json::json!({"error": "avatar content does not match its type"}));
     }
 
-    // The key comes from the vetted type, never the client filename, so each user has at most
-    // one avatar file per accepted type.
-    let storage_key = avatar_key(user_id, format);
+    // Both the type and the content, rather than the client filename, determine the key.
+    let storage_key = hashed_avatar_key(user_id, format, &Sha256::digest(&upload.data).into());
     let stored = match storage_service
         .upload_file(&storage_key, &upload.data, format.mime())
         .await
@@ -673,7 +681,9 @@ mod tests {
         async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
             match key {
                 "uploads/blob" => Ok(BLOB.to_vec()),
-                "avatars/u/avatar.png" => Ok(AVATAR.to_vec()),
+                "avatars/u/avatar.png" | "avatars/u/avatar-0123456789abcdef.png" => {
+                    Ok(AVATAR.to_vec())
+                }
                 "broken" => Err(StorageError::Unsupported("disk gone".to_string())),
                 _ => Err(StorageError::NotFound(key.to_string())),
             }
@@ -1352,7 +1362,7 @@ mod tests {
     async fn avatar_upload_stores_under_the_callers_key_by_type() {
         let mut deps = Deps::new();
         let user_id = deps.user_id;
-        let key = format!("avatars/{user_id}/avatar.jpeg");
+        let key = hashed_avatar_key(user_id, AvatarFormat::Jpeg, &Sha256::digest(JPEG).into());
         let expected = key.clone();
         deps.storage
             .expect_upload_file()
@@ -1388,6 +1398,71 @@ mod tests {
                 200,
                 json!({ "path": key, "size_bytes": JPEG.len(), "url": format!("/api/files/{key}") })
             )
+        );
+    }
+
+    #[actix_web::test]
+    async fn replacing_an_avatar_changes_its_url_and_deletes_the_previous_key() {
+        let mut deps = Deps::new();
+        let files = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            Vec<u8>,
+        >::new()));
+        let stored = files.clone();
+        deps.storage
+            .expect_upload_file()
+            .returning(move |key, data, _| {
+                stored
+                    .lock()
+                    .unwrap()
+                    .insert(key.to_string(), data.to_vec());
+                let file = StoredFile {
+                    key: key.to_string(),
+                    size_bytes: data.len() as u64,
+                };
+                Box::pin(async move { Ok(file) })
+            });
+        let stored = files.clone();
+        deps.storage
+            .expect_delete_avatar_files()
+            .returning(move |_, keep| {
+                stored
+                    .lock()
+                    .unwrap()
+                    .retain(|key, _| Some(key) == keep.as_ref());
+                Box::pin(async { Ok(Vec::new()) })
+            });
+        let app = app!(deps);
+        let mut urls = Vec::new();
+        for data in [PNG, b"\x89PNG\r\n\x1a\nchanged".as_slice()] {
+            let (status, body) = status_and_body!(
+                &app,
+                post(
+                    "/api/files/avatar",
+                    &[Part::File("me.png", "image/png", data)]
+                )
+            );
+            assert_eq!(status, 200);
+            urls.push(body["url"].as_str().unwrap().to_string());
+        }
+        assert_ne!(urls[0], urls[1]);
+        let files = files.lock().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files.contains_key(urls[1].strip_prefix("/api/files/").unwrap()));
+    }
+
+    #[actix_web::test]
+    async fn hashed_avatar_downloads_are_private_and_immutable() {
+        let app = app!(Deps::new());
+        let resp = actix_test::call_service(
+            &app,
+            get("/api/files/avatars/u/avatar-0123456789abcdef.png", true).to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "private, max-age=31536000, immutable"
         );
     }
 

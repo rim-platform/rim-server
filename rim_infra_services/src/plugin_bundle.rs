@@ -53,6 +53,7 @@ pub struct DefaultPluginBundleService {
     upload_rate_limiter: RegistrationRateLimiter,
     /// The relay's direct space, which has no plugins.
     direct_space_id: Option<ServerId>,
+    fetcher: crate::plugin_bundle_fetch::BundleFetcher,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +158,7 @@ impl DefaultPluginBundleService {
             storage,
             upload_rate_limiter: RegistrationRateLimiter::new(3600, 20),
             direct_space_id: None,
+            fetcher: crate::plugin_bundle_fetch::BundleFetcher::new(),
         }
     }
 
@@ -253,6 +255,13 @@ impl DefaultPluginBundleService {
 
 #[async_trait]
 impl PluginBundleService for DefaultPluginBundleService {
+    async fn fetch(
+        &self,
+        cmd: rim_services::workspace_plugin::command::FetchPluginBundleCmd,
+    ) -> ServiceResult<Vec<u8>> {
+        self.fetcher.fetch(cmd).await
+    }
+
     #[instrument(name = "plugin_bundle.upload", skip_all, fields(actor_id = %cmd.actor.user_id))]
     async fn upload(&self, cmd: UploadPluginBundleCmd) -> ServiceResult<UploadedPluginBundleDto> {
         let actor_id = cmd.actor.user_id;

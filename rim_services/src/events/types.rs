@@ -78,6 +78,11 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing, default)]
         is_private: bool,
     },
+    /// A profile changed; clients refetch the member directory and their own profile.
+    MemberProfileUpdated {
+        workspace_id: ServerId,
+        user_id: UserId,
+    },
     /// A workspace ban changed; clients refetch author status without receiving its reason.
     MemberBanChanged {
         workspace_id: ServerId,
@@ -445,6 +450,7 @@ impl WorkspaceEvent {
             | Self::MessagePinned { workspace_id, .. }
             | Self::MessageUnpinned { workspace_id, .. }
             | Self::ThreadCreated { workspace_id, .. }
+            | Self::MemberProfileUpdated { workspace_id, .. }
             | Self::MemberBanChanged { workspace_id, .. }
             | Self::MemberJoined { workspace_id, .. }
             | Self::MemberLeft { workspace_id, .. }
@@ -494,7 +500,8 @@ impl WorkspaceEvent {
             | Self::MemberRemovedFromConversation {
                 member_user_ids, ..
             } => Some(member_user_ids),
-            Self::MemberBanChanged { .. }
+            Self::MemberProfileUpdated { .. }
+            | Self::MemberBanChanged { .. }
             | Self::MemberJoined { .. }
             | Self::MemberLeft { .. }
             | Self::MemberRoleChanged { .. } => None,

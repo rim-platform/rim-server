@@ -85,7 +85,8 @@ pub(crate) fn route(event: &WorkspaceEvent, event_json: &Value) -> Route {
         | WorkspaceEvent::UserMentioned { .. }
         | WorkspaceEvent::ReadStateUpdated { .. }
         | WorkspaceEvent::MlsWelcomeAvailable { .. } => Route::User,
-        WorkspaceEvent::MemberBanChanged { .. }
+        WorkspaceEvent::MemberProfileUpdated { .. }
+        | WorkspaceEvent::MemberBanChanged { .. }
         | WorkspaceEvent::MemberJoined { .. }
         | WorkspaceEvent::MemberLeft { .. }
         | WorkspaceEvent::MemberRoleChanged { .. } => Route::Directory,

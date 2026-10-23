@@ -32,6 +32,7 @@ use rim_server::config::RIMConfig;
 use rim_services::relay::service::RelayService;
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
+use sha2::Digest;
 use uuid::Uuid;
 
 use support::mls::content;
@@ -859,7 +860,11 @@ async fn avatars_upload_and_download_through_the_forward_path() {
     let bob_on_a = user_id(&a, &bob.principal()).await;
     assert_eq!(
         uploaded.body["path"],
-        json!(format!("avatars/{bob_on_a}/avatar.png"))
+        json!(rim_core::user::avatar::hashed_avatar_key(
+            bob_on_a,
+            rim_core::user::avatar::AvatarFormat::Png,
+            &sha2::Sha256::digest(png).into()
+        ))
     );
 
     // Bob makes it his avatar at Alice's server, with a status; Alice's server stores both.
@@ -923,7 +928,7 @@ async fn avatars_upload_and_download_through_the_forward_path() {
     assert_eq!(
         row.try_get::<Option<String>>("", "avatar_url")
             .expect("avatar"),
-        Some(avatar_url),
+        Some(avatar_url.clone()),
         "a refused mutation changes nothing"
     );
     assert_eq!(
@@ -973,14 +978,7 @@ async fn avatars_upload_and_download_through_the_forward_path() {
     assert!(downloaded.host_signed);
     assert_eq!(downloaded.bytes, alice_png);
     let (own, _) = bob
-        .forward(
-            &a,
-            "GET",
-            &format!("/api/files/avatars/{bob_on_a}/avatar.png"),
-            Vec::new(),
-            None,
-            None,
-        )
+        .forward(&a, "GET", &avatar_url, Vec::new(), None, None)
         .await;
     assert_eq!(own.bytes, png);
 
@@ -1000,20 +998,18 @@ async fn avatars_upload_and_download_through_the_forward_path() {
     assert_eq!(as_gif.status, 200, "{}", as_gif.body);
     assert_eq!(
         as_gif.body["path"],
-        json!(format!("avatars/{bob_on_a}/avatar.gif"))
+        json!(rim_core::user::avatar::hashed_avatar_key(
+            bob_on_a,
+            rim_core::user::avatar::AvatarFormat::Gif,
+            &sha2::Sha256::digest(gif).into()
+        ))
     );
-    for (ext, status) in [("png", 404), ("gif", 200)] {
-        let (got, _) = bob
-            .forward(
-                &a,
-                "GET",
-                &format!("/api/files/avatars/{bob_on_a}/avatar.{ext}"),
-                Vec::new(),
-                None,
-                None,
-            )
-            .await;
-        assert_eq!(got.status, status, "{ext}");
+    for (path, status) in [
+        (avatar_url.as_str(), 404),
+        (as_gif.body["url"].as_str().expect("GIF url"), 200),
+    ] {
+        let (got, _) = bob.forward(&a, "GET", path, Vec::new(), None, None).await;
+        assert_eq!(got.status, status, "{path}");
     }
     let (mismatched, _) = bob
         .forward_typed(

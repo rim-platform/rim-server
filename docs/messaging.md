@@ -553,6 +553,17 @@ Cursor pagination uses overfetch (`limit + 1`) so `next` and `prev` reflect actu
   `/workspaces/{server}/conversations/{conversation}/threads/{thread}/messages/{message}`.
 - The email digest links each message by its permalink.
 
+### Profile changes
+
+`MemberProfileUpdated {workspace_id, user_id}` announces a successful local profile update.
+It carries no profile fields. Workspace members refetch their member directory; guests see
+only their own event. In the local direct space the account's own sessions receive it and
+refetch `me`. A client showing the changed account's own profile invalidates `me` too. It
+uses the directory stream rules (`w` for members and the subject's `u:` stream for guests).
+Profiles published by another server are unchanged by this event.
+
+### Ban changes
+
 `MemberBanChanged {workspace_id, user_id}` follows every successful ban and unban, including
 pre-emptive bans. It carries no reason. It follows directory visibility and stream rules;
 clients refetch workspace message-author ban status. Ban expiry is evaluated from `until`
