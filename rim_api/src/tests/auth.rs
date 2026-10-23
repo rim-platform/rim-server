@@ -235,6 +235,9 @@ async fn signup_passes_the_accepted_terms_to_the_service() {
         (String::new(), None),
     ] {
         let mut auth = MockAuthService::new();
+        auth.expect_check_registration_capacity()
+            .times(1)
+            .returning(|| Box::pin(async { Ok(()) }));
         auth.expect_signup_with_instance_invite()
             .withf(move |cmd| cmd.terms_accepted_url.as_deref() == sent)
             .times(1)

@@ -316,3 +316,49 @@ async fn a_full_relay_says_so_and_refuses_a_proof_of_work_signup() {
     );
     node.stop().await;
 }
+
+#[tokio::test]
+async fn a_full_instance_refuses_invalid_signup_inputs_before_validation() {
+    let ctx = TestCtx::new().await;
+    ctx.create_user("cap_existing").await;
+    for mode in [RegistrationMode::Open, RegistrationMode::InviteOnly] {
+        let schema = ctx
+            .build_with_limits_in(
+                InstanceLimits {
+                    accounts: Some(1),
+                    ..Default::default()
+                },
+                mode,
+            )
+            .0;
+        for tokens in [
+            json!({}),
+            json!({"instanceInviteToken":"unknown"}),
+            json!({"instanceInviteToken":"unknown", "workspaceInviteToken":"unknown"}),
+        ] {
+            let mut input = json!({"username":"!", "email":"invalid", "password":"",
+                "acceptedTermsUrl":"https://wrong.example/terms"});
+            input
+                .as_object_mut()
+                .expect("input")
+                .extend(tokens.as_object().expect("tokens").clone());
+            let (code, _) = exec_err(
+                &schema,
+                anonymous_request(SIGNUP_WITH_INVITE, json!({"input":input})),
+            )
+            .await;
+            assert_eq!(code, "REGISTRATION_FULL");
+            let identity = TestIdentity::with_version(91, StatementVersion::V2);
+            let mut input = signup_input(&schema, "!", &identity, 92, tokens).await;
+            input["keyLog"] = json!([]);
+            input["acceptedTermsUrl"] = json!("https://wrong.example/terms");
+            let (code, _) = exec_err(
+                &schema,
+                anonymous_request(SIGNUP_WITH_KEY, json!({"input":input})),
+            )
+            .await;
+            assert_eq!(code, "REGISTRATION_FULL");
+        }
+    }
+    assert_eq!(local_accounts(&ctx).await, 1);
+}
