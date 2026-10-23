@@ -188,7 +188,8 @@ whose log forks is refused until an operator checks it out of band.
   session or user, and caps on workspaces, members, devices, DM requests, invites and message
   size, are each off until the operator sets them. Pending invitations to encrypted
   conversations are capped at 50 per person by default.
-- **Public join links.** A workspace's permanent link is a 128-bit random token, never a name,
+- **Public join links.** A workspace's permanent link is a 128-bit random token behind the
+  prefix `rim_pjl_` (which secret scanners can match), never a name,
   and admits only accounts that already exist: it is never a signup token, so it opens no way
   around proof-of-work, the per-address signup limit or an invite-only server. Every invalid
   link answers `NOT_FOUND` with one message on one path (a lookup by the token's SHA-256), so a

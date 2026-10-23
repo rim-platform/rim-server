@@ -667,7 +667,8 @@ mod tests {
         assert!(before.allow_remote);
 
         let token = world.link_on(&svc, PublicLinkMode::Direct).await;
-        assert_eq!(token.len(), 22);
+        assert!(token.starts_with("rim_pjl_"), "{token}");
+        assert_eq!(token.len(), "rim_pjl_".len() + 22);
         let again = svc
             .public_join_link(world.owner, world.workspace)
             .await
@@ -809,7 +810,7 @@ mod tests {
         .await
         .unwrap();
         for token in [
-            "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            "rim_pjl_AAAAAAAAAAAAAAAAAAAAAA".to_string(),
             replaced,
             off,
             String::new(),

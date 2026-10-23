@@ -54,7 +54,8 @@ pub struct PublicJoinLink {
     /// When the current token was issued; null while the workspace never had a link.
     pub issued_at: Option<chrono::DateTime<chrono::Utc>>,
     pub issued_by_id: Option<async_graphql::ID>,
-    /// The token; null while the workspace never had a link.
+    /// The token, `rim_pjl_` and 22 base64url characters; null while the workspace never had a
+    /// link.
     pub token: Option<String>,
     /// `<server>/join/<token>`; null while the workspace never had a link.
     pub url: Option<String>,

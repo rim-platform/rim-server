@@ -695,7 +695,10 @@ optional cause and ban end; the moderator's reason is delivered only to the remo
 ### Public join link and join requests
 
 A workspace's permanent link, `<server>/join/<token>`, lets accounts of this server join it or
-ask to join; it never creates an account. `docs/messaging.md`, "Public join link and join
+ask to join; it never creates an account. The same `/join/<token>` path carries invite links;
+the token's prefix tells the kinds apart: `rim_pjl_` is a public join link (for
+`publicJoinLinkPreview` and `joinByPublicLink`), `rim_inv_` a workspace invite and `rim_iinv_` an
+instance invite (for `previewInviteToken` and the signup and join-by-invite roots). `docs/messaging.md`, "Public join link and join
 requests", has the rules; this is the surface.
 
 | Root | Who | Answers |

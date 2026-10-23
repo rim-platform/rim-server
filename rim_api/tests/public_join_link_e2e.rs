@@ -251,6 +251,7 @@ async fn only_the_owner_reads_or_changes_the_link() {
 async fn the_owner_turns_the_link_on_and_reads_the_same_link_again() {
     let f = setup().await;
     let token = f.link_on("DIRECT").await;
+    assert!(token.starts_with("rim_pjl_"), "{token}");
     let data = exec_ok(&f.schema, f.ws.alice.request(LINK, f.server())).await;
     let link = &data["link"];
     assert_eq!(link["enabled"], true);
@@ -364,7 +365,7 @@ async fn every_invalid_link_gets_the_same_answer() {
 
     let mut answers = Vec::new();
     for token in [
-        "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+        "rim_pjl_AAAAAAAAAAAAAAAAAAAAAA".to_string(),
         replaced,
         switched_off,
         deleted,

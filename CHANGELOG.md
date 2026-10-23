@@ -24,11 +24,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 ### Added
 
 - Public join links: a workspace's Owner can turn on one permanent link,
-  `<server>/join/<token>` (off by default), that lets existing accounts of this server join
-  (`DIRECT`) or ask to join (`REQUESTS`) as Member or Guest; it never creates an account. New
-  GraphQL roots `publicJoinLink`, `updatePublicJoinLink`, `reissuePublicJoinLink`,
-  `publicJoinLinkPreview` (no sign-in), `joinByPublicLink`, `joinRequests`, `myJoinRequests`,
-  `acceptJoinRequest`, `declineJoinRequest` and `withdrawJoinRequest`, the types
+  `<server>/join/<token>` with a `rim_pjl_` token (off by default), that lets existing accounts
+  of this server join (`DIRECT`) or ask to join (`REQUESTS`) as Member or Guest; it never
+  creates an account. New GraphQL roots `publicJoinLink`, `updatePublicJoinLink`,
+  `reissuePublicJoinLink`, `publicJoinLinkPreview` (no sign-in), `joinByPublicLink`,
+  `joinRequests`, `myJoinRequests`, `acceptJoinRequest`, `declineJoinRequest` and
+  `withdrawJoinRequest`, the types
   `PublicJoinLink`, `PublicJoinLinkPreview`, `JoinRequest`, `JoinRequestPage` and
   `JoinByPublicLinkPayload`, and the events `JoinRequestCreated` and `JoinRequestDecided`;
   `MemberJoined` gains an optional `source` (`public_link`). Every invalid link answers

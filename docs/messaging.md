@@ -253,9 +253,11 @@ open registration) and then opens the link again. `signupWithInvite`, `signupWit
 `acceptInvite` refuse a link token as `INVALID_TOKEN`, as they do any unknown token.
 `joinByPublicLink` is for accounts this server holds.
 
-**The link.** A token of 16 random bytes, base64url (22 characters, no `rim_inv_` prefix, so a
-client tells it from an invite token on the same `/join/<token>` path). Lookups go by its SHA-256
-hash; a copy of the token is sealed under the server's link key (`RIM_LINK_KEY_FILE`, default
+**The link.** A token `rim_pjl_` followed by 16 random bytes in base64url (22 characters).
+`/join/<token>` carries invite tokens too; the prefix tells the kinds apart (`rim_pjl_` a public
+link, `rim_inv_` a workspace invite, `rim_iinv_` an instance invite) and lets secret scanners
+recognise a link. It adds no guessable structure to the random part. Lookups go by the SHA-256
+of the whole string; a copy of the token is sealed under the server's link key (`RIM_LINK_KEY_FILE`, default
 `<RIM_DATA_DIR>/link-key.json`), so the Owner can read the link again and a database dump alone
 yields no working link. Neither the direct space nor the server's default workspace has a link:
 everyone joins the default workspace anyway.
