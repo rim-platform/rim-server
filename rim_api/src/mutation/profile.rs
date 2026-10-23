@@ -29,7 +29,7 @@ impl ProfileMutations {
     ///   display name comes from their profile card.
     /// - `VALIDATION` — `displayName` > 64 chars, `statusText` > 256 chars,
     ///   `bio` > 2000 chars, or `avatarUrl` neither empty nor the URL of one of the caller's own
-    ///   uploaded avatars (`/api/files/avatars/<caller id>/avatar.<png|jpeg|gif|webp>`, as
+    ///   uploaded avatars (`/api/files/avatars/<caller id>/avatar-<content hash>.<ext>`, as
     ///   `POST /api/files/avatar` answers it).
     /// - `NOT_FOUND` — caller's user row missing (should not happen in practice).
     /// - `INTERNAL` — repository failure.

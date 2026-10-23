@@ -122,7 +122,8 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
         // Workspace-level events: visible to all workspace members
         WorkspaceEvent::PresenceChanged { .. } => true,
         // Directory events: everyone but guests, who only learn about themselves.
-        WorkspaceEvent::MemberJoined {
+        WorkspaceEvent::MemberProfileUpdated { user_id: event_user_id, .. }
+        | WorkspaceEvent::MemberJoined {
             user_id: event_user_id,
             ..
         }

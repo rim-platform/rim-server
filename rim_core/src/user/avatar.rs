@@ -68,19 +68,65 @@ pub fn avatar_key(user_id: UserId, format: AvatarFormat) -> String {
     format!("{}/avatar.{}", avatar_dir(user_id), format.extension())
 }
 
+/// The content-addressed avatar key, using the first eight bytes of its SHA-256 digest.
+pub fn hashed_avatar_key(user_id: UserId, format: AvatarFormat, digest: &[u8; 32]) -> String {
+    let hash: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!(
+        "{}/avatar-{hash}.{}",
+        avatar_dir(user_id),
+        format.extension()
+    )
+}
+
+fn hashed_filename(name: &str) -> bool {
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let Some(hash) = stem.strip_prefix("avatar-") else {
+        return false;
+    };
+    hash.len() == 16
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && AvatarFormat::ALL
+            .iter()
+            .any(|format| format.extension() == extension)
+}
+
+/// Whether `key` names a content-addressed avatar with no nested path segments.
+pub fn is_hashed_avatar_key(key: &str) -> bool {
+    let Some(rest) = key.strip_prefix("avatars/") else {
+        return false;
+    };
+    let Some((user, filename)) = rest.split_once('/') else {
+        return false;
+    };
+    !user.is_empty() && hashed_filename(filename)
+}
+
 /// The URL that serves the file stored under `key`.
 pub fn file_url(key: &str) -> String {
     format!("{FILES_URL_PREFIX}{key}")
 }
 
 /// The storage key `avatar_url` names when it is the URL of one of `user_id`'s own avatar files
-/// (`/api/files/avatars/<user_id>/avatar.<png|jpeg|gif|webp>`); `None` for any other URL.
+/// (`avatar.<ext>` or `avatar-<16 lowercase hex>.<ext>`); `None` for any other URL.
 pub fn own_avatar_key(user_id: UserId, avatar_url: &str) -> Option<String> {
     let key = avatar_url.strip_prefix(FILES_URL_PREFIX)?;
-    AvatarFormat::ALL
-        .into_iter()
-        .map(|format| avatar_key(user_id, format))
-        .find(|own| own == key)
+    let filename = key.strip_prefix(&format!("{}/", avatar_dir(user_id)))?;
+    if hashed_filename(filename)
+        || AvatarFormat::ALL
+            .into_iter()
+            .any(|format| filename == format!("avatar.{}", format.extension()))
+    {
+        Some(key.to_string())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +195,25 @@ mod tests {
             file_url("avatars/u/avatar.png"),
             "/api/files/avatars/u/avatar.png"
         );
+    }
+
+    #[test]
+    fn content_addressed_keys_validate_only_for_their_owner() {
+        let user = UserId::new();
+        let key = hashed_avatar_key(user, AvatarFormat::Png, &[0xab; 32]);
+        assert_eq!(key, format!("avatars/{user}/avatar-abababababababab.png"));
+        assert!(is_hashed_avatar_key(&key));
+        assert_eq!(own_avatar_key(user, &file_url(&key)), Some(key.clone()));
+        assert!(own_avatar_key(UserId::new(), &file_url(&key)).is_none());
+        for key in [
+            key.replace("abababababababab", "ABABABABABABABAB"),
+            key.replace("abababababababab", "abcd"),
+            key.replace(".png", ".svg"),
+            format!("{key}/extra"),
+        ] {
+            assert!(!is_hashed_avatar_key(&key), "{key}");
+            assert!(own_avatar_key(user, &file_url(&key)).is_none(), "{key}");
+        }
     }
 
     #[test]
