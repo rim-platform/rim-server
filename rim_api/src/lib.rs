@@ -69,6 +69,10 @@ pub fn build_schema(
     use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
     use async_graphql::dataloader::DataLoader;
 
+    let author_ban_loader = DataLoader::new(
+        crate::loaders::AuthorBanLoader::new(service_provider.moderation_service()),
+        tokio::spawn,
+    );
     let user_loader = DataLoader::new(
         UserLoader::new(service_provider.user_service()),
         tokio::spawn,
@@ -136,6 +140,7 @@ pub fn build_schema(
         .data(presence_manager)
         .data(typing_tracker)
         .data(observers)
+        .data(author_ban_loader)
         .data(user_loader)
         .data(reaction_loader)
         .data(mention_loader)

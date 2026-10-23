@@ -1,12 +1,15 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use async_graphql::dataloader::DataLoader;
 use async_graphql::parser::types::Field;
 use async_graphql::{
     ContextSelectionSet, Enum, OutputType, Positioned, ServerResult, SimpleObject, Value, registry,
 };
 use rim_core::server_feature::model::ServerFeature;
 use rim_services::feature::service::FeatureGate;
+
+use crate::loaders::{AuthorBanKey, AuthorBanLoader};
 
 /// A stored profile picture's URL as the instance shows it: the URL while the `avatars` feature
 /// is enabled, null while it is not. The schema declares it as a nullable `String`.
@@ -160,12 +163,21 @@ impl User {
             return Ok(None);
         };
         let actor = crate::auth_context::require_actor(ctx)?;
-        let service =
-            ctx.data::<Arc<dyn rim_services::moderation::service::ModerationService>>()?;
         let user_id = crate::ids::parse_uuid_id(&self.id)?;
         self.ban_status
             .get_or_try_init(|| async {
-                service
+                if let Some(loader) = ctx.data_opt::<DataLoader<AuthorBanLoader>>() {
+                    return loader
+                        .load_one(AuthorBanKey {
+                            actor_id: actor,
+                            workspace_id: workspace,
+                            user_id,
+                        })
+                        .await
+                        .map(|ban| ban.flatten())
+                        .map_err(|error| (*error).clone());
+                }
+                ctx.data::<Arc<dyn rim_services::moderation::service::ModerationService>>()?
                     .member_ban(rim_services::Actor::new(actor), workspace, user_id)
                     .await
                     .map_err(crate::errors::map_service_error)

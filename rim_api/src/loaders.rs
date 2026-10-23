@@ -248,3 +248,96 @@ impl Loader<MessageId> for LinkPreviewLoader {
         }
     }
 }
+
+/// A workspace author's ban as seen by one viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct AuthorBanKey {
+    pub workspace_id: rim_core::server::model::ServerId,
+    pub user_id: UserId,
+    pub actor_id: UserId,
+}
+
+pub(crate) struct AuthorBanLoader {
+    service: Arc<dyn rim_services::moderation::service::ModerationService>,
+}
+
+impl AuthorBanLoader {
+    pub(crate) fn new(
+        service: Arc<dyn rim_services::moderation::service::ModerationService>,
+    ) -> Self {
+        Self { service }
+    }
+}
+
+impl Loader<AuthorBanKey> for AuthorBanLoader {
+    type Value = Option<rim_services::moderation::dto::ServerBanDto>;
+    type Error = Arc<async_graphql::Error>;
+
+    fn load(
+        &self,
+        keys: &[AuthorBanKey],
+    ) -> impl Future<Output = Result<HashMap<AuthorBanKey, Self::Value>, Self::Error>> + Send {
+        let keys = keys.to_vec();
+        let service = self.service.clone();
+        async move {
+            let entries = try_join_all(keys.into_iter().map(|key| {
+                let service = service.clone();
+                async move {
+                    let ban = service
+                        .member_ban(Actor::new(key.actor_id), key.workspace_id, key.user_id)
+                        .await
+                        .map_err(loader_error)?;
+                    Ok::<_, Self::Error>((key, ban))
+                }
+            }))
+            .await?;
+            Ok(entries.into_iter().collect())
+        }
+    }
+}
+
+#[cfg(test)]
+mod author_ban_tests {
+    use super::*;
+    use async_graphql::dataloader::DataLoader;
+    use rim_core::server::model::ServerId;
+    use rim_services::moderation::service::MockModerationService;
+
+    #[tokio::test]
+    async fn duplicate_author_lookups_are_deduplicated_but_viewers_stay_separate() {
+        let workspace_id = ServerId::new();
+        let user_id = UserId::new();
+        let moderator = UserId::new();
+        let member = UserId::new();
+        let mut service = MockModerationService::new();
+        service
+            .expect_member_ban()
+            .times(2)
+            .returning(move |actor, server_id, user_id| {
+                Box::pin(async move {
+                    Ok(Some(rim_services::moderation::dto::ServerBanDto {
+                        server_id,
+                        user_id,
+                        reason: (actor.user_id == moderator).then(|| "private reason".to_string()),
+                        banned_by: None,
+                        created_at: chrono::Utc::now(),
+                        expires_at: None,
+                    }))
+                })
+            });
+        let loader = DataLoader::new(AuthorBanLoader::new(Arc::new(service)), tokio::spawn);
+        let lookups = (0..10).map(|index| {
+            let key = AuthorBanKey {
+                workspace_id,
+                user_id,
+                actor_id: if index % 2 == 0 { moderator } else { member },
+            };
+            let loader = &loader;
+            async move {
+                let ban = loader.load_one(key).await.unwrap().unwrap().unwrap();
+                assert_eq!(ban.reason.is_some(), key.actor_id == moderator);
+            }
+        });
+        futures_util::future::join_all(lookups).await;
+    }
+}

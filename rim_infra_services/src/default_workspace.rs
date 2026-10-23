@@ -655,11 +655,21 @@ impl DefaultWorkspaceService for DefaultDefaultWorkspaceService {
         let workspace = self.current().await?.ok_or(ServiceError::NotFound)?;
         crate::util::ensure_not_banned(repos.moderation_repo.as_ref(), workspace, user_id).await?;
         let joined = join(repos, &self.setting, user_id).await?;
+        if joined.is_none()
+            && !repos
+                .server_member_repo
+                .is_member(workspace, user_id)
+                .await?
+        {
+            crate::util::ensure_not_banned(repos.moderation_repo.as_ref(), workspace, user_id)
+                .await?;
+            return Err(ServiceError::NotFound);
+        }
         if let Some(scope) = scope {
             scope.commit().await.map_err(ServiceError::internal)?;
         }
         announce(joined, user_id, &user.username, &self.observers);
-        Ok(joined)
+        Ok(Some(workspace))
     }
 }
 
