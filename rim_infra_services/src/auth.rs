@@ -923,6 +923,7 @@ impl AuthService for DefaultAuthService {
 
     #[instrument(name = "auth.accept_invite", skip_all, fields(username = %cmd.username))]
     async fn accept_invite(&self, cmd: AcceptInviteCmd) -> ServiceResult<AcceptInviteResultDto> {
+        self.check_registration_capacity().await?;
         self.ensure_password_signup_allowed("workspace_invite")?;
         let AcceptInviteCmd {
             invite_token,
@@ -1144,6 +1145,7 @@ impl AuthService for DefaultAuthService {
         &self,
         cmd: SignupWithInstanceInviteCmd,
     ) -> ServiceResult<SignupResultDto> {
+        self.check_registration_capacity().await?;
         self.ensure_password_signup_allowed("instance_invite")?;
         let SignupWithInstanceInviteCmd {
             instance_invite_token: raw_token,
@@ -1253,6 +1255,7 @@ impl AuthService for DefaultAuthService {
 
     #[instrument(name = "auth.signup_open", skip_all, fields(username = %cmd.username))]
     async fn signup_open(&self, cmd: SignupOpenCmd) -> ServiceResult<SignupResultDto> {
+        self.check_registration_capacity().await?;
         self.ensure_password_signup_allowed("open")?;
         let SignupOpenCmd {
             username: typed_username,
@@ -1456,6 +1459,10 @@ impl AuthService for DefaultAuthService {
         }
 
         Err(ServiceError::InvalidToken)
+    }
+
+    async fn check_registration_capacity(&self) -> ServiceResult<()> {
+        self.account_cap.check(self.repos.user_repo.as_ref()).await
     }
 
     async fn registration_full(&self) -> ServiceResult<bool> {

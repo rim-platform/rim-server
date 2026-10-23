@@ -1047,6 +1047,9 @@ impl KeyAuthService for DefaultKeyAuthService {
 
     #[instrument(name = "key_auth.signup_with_key", skip_all, fields(username = %cmd.username))]
     async fn signup_with_key(&self, cmd: SignupWithKeyCmd) -> ServiceResult<SignupResultDto> {
+        self.account_cap
+            .check(self.repos.user_repo.as_ref())
+            .await?;
         let terms_accepted_url =
             accepted_terms(self.terms_url.as_deref(), cmd.terms_accepted_url.as_deref())?;
         let confirmed_age = confirmed_minimum_age(self.minimum_age, cmd.confirmed_minimum_age)?;

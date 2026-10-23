@@ -120,6 +120,9 @@ impl InviteMutations {
     ) -> Result<SignupWithInvitePayloadGql> {
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
         let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
+        auth.check_registration_capacity()
+            .await
+            .map_err(map_service_error)?;
         let token = registration_token(
             mode,
             input.instance_invite_token,

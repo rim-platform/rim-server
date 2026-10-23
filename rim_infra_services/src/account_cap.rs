@@ -35,10 +35,21 @@ impl AccountCap {
     /// `RegistrationFull` when the instance holds as many local accounts as the cap allows;
     /// storage errors propagate.
     pub(crate) async fn admit(&self, user_repo: &dyn UserRepository) -> ServiceResult<()> {
+        if self.cap.is_none() {
+            return Ok(());
+        }
+        user_repo.lock_account_creation().await?;
+        self.check(user_repo).await
+    }
+
+    /// Count accounts afresh before signup input is validated, without taking a lock.
+    ///
+    /// # Errors
+    /// `RegistrationFull` at the cap; storage errors propagate.
+    pub(crate) async fn check(&self, user_repo: &dyn UserRepository) -> ServiceResult<()> {
         let Some(cap) = self.cap else {
             return Ok(());
         };
-        user_repo.lock_account_creation().await?;
         let accounts = user_repo.count_local_accounts(u64::from(cap)).await?;
         if accounts >= u64::from(cap) {
             self.remember(true);
@@ -118,6 +129,7 @@ mod tests {
     async fn no_cap_admits_everyone_without_counting_and_is_never_full() {
         let repo = MockUserRepository::new();
         let cap = AccountCap::new(None);
+        assert!(cap.check(&repo).await.is_ok());
         assert!(cap.admit(&repo).await.is_ok());
         assert!(!cap.is_full(&repo).await.expect("full"));
     }
@@ -160,6 +172,27 @@ mod tests {
             .times(1)
             .returning(|_| Ok(1));
         assert!(!cap.is_full(&repo).await.expect("full"), "clones share it");
+    }
+
+    #[tokio::test]
+    async fn prevalidation_counts_afresh_even_when_discovery_cached_room() {
+        let cap = AccountCap::new(Some(2));
+        let mut repo = MockUserRepository::new();
+        let mut sequence = Sequence::new();
+        repo.expect_count_local_accounts()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(1));
+        repo.expect_count_local_accounts()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(2));
+        assert!(!cap.is_full(&repo).await.expect("cached room"));
+        assert!(matches!(
+            cap.check(&repo).await,
+            Err(ServiceError::RegistrationFull)
+        ));
+        assert!(cap.is_full(&repo).await.expect("full"));
     }
 
     #[tokio::test]
