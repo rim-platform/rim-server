@@ -86,6 +86,7 @@ relay still answers.
 | Server key | `/data/server-key.json` in volume `rim-relay_rim_data` | with every dump |
 | Server recovery key | offline only, "The server recovery key" | its own copies |
 | Franking keys | `/data/franking-key.json` | with every dump |
+| Link key | `/data/link-key.json`, which public join link tokens are sealed under | with every dump |
 | Workspace content: channels, their messages, members | the database | nightly backup, "Backups" |
 | Uploads (avatars, attachments in channels) | `/data/uploads` in volume `rim-relay_rim_data` | with every dump |
 | Audit files | `/data/audit.<YYYY-MM-DD>.log`, one per day, and every audit event on stdout too (`docs/operations/audit-retention.md`) | with every dump |
@@ -174,6 +175,15 @@ rim-relay franking-key rotate
 
 Rotate when `/data` may have leaked. Losing the file loses the ability to verify reports of
 messages sent before: back it up with everything else in `/data`.
+
+### The link key file
+
+`/data/link-key.json` holds the key the workspaces' public join links are sealed under, so an
+Owner can read their link again. The first start creates it; `/readyz` reports `linkKey` failed
+when it cannot be read, and the server refuses to start when it is missing while links are
+stored: restore it from the backup. Without it the links still work, but no Owner can read
+theirs again, and a new token is the only way to get one. Back it up with everything else in
+`/data`.
 
 ## The default workspace
 
