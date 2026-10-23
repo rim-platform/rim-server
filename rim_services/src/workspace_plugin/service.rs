@@ -53,6 +53,15 @@ pub trait WorkspacePluginService: Send + Sync {
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait PluginBundleService: Send + Sync {
+    /// Fetch an HTTPS bundle from public addresses, verify its pin and structure, then return it.
+    ///
+    /// # Errors
+    /// Validation failures, rate limits, timeouts and unavailable upstreams.
+    async fn fetch(
+        &self,
+        cmd: crate::workspace_plugin::command::FetchPluginBundleCmd,
+    ) -> ServiceResult<Vec<u8>>;
+
     /// Check and store a bundle, then delete, best effort, the workspace's bundles no entry
     /// names that are over a day old. Storing a hash the workspace has is not an error.
     ///

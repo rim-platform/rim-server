@@ -570,3 +570,10 @@ Signature:
 ```
 ed25519:FRHxrYnev03jlVo484kL4PLh7GMArjEE4q1wiBNMSx7rD8CAis8YIivjSccshXkEdvYEw-wAIjzQgzDRj6kGCg
 ```
+
+### Fetching an external pinned bundle
+
+Browser clients fetch external registry bundles through `POST /api/plugin-bundles/fetch`
+with `{url, sha256}` and session/CSRF protection, then verify the pin locally. This route is
+independent of workspace hosting and needs `plugin_link_fetch`; it never registers or stores
+an entry. The checks and transport limits are the same as for a pasted link in web-plugins-v1.

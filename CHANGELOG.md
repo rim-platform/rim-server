@@ -23,6 +23,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `POST /api/plugin-bundles/fetch` fetches and validates pinned bundles for browser installs
+  without CORS-dependent external requests. Its `plugin_link_fetch` feature is enabled by
+  default, independent of workspace plugins; public HTTPS, hash, size and rate checks apply.
+
 - Handles, `@<username>:<domain>`: GraphQL `User.handle` gives a local account its username at
   this server's handle domain and a person from another server their username at their home
   server and its handle domain, never the internal `r_…` name; null while unknown and for

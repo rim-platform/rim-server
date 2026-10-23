@@ -655,3 +655,12 @@ cd ../rim-ui && npm run codegen
 Enum values appear in `SCREAMING_SNAKE` and fields in `camelCase`. The models in `messaging.md`,
 `search.md`, `message-change-feed.md`, `command_model.md` and the specs in `specs/` explain what
 the fields mean.
+
+### Pinned plugin link fetch
+
+`POST /api/plugin-bundles/fetch` takes JSON `{url, sha256}`, at most 8 KiB, with a session and
+CSRF token. It returns a validated, hash-pinned bundle as an attachment, at most 8 MiB. The
+`plugin_link_fetch` feature is enabled by default, independent of `workspace_plugins`. Only
+public HTTPS targets are accepted, with at most ten safe redirects and a 120-second timeout.
+Twenty attempts per account per hour are allowed, with four concurrent downloads per server.
+Failures use the normal feature/auth/rate responses; invalid pins or bundles return 422.

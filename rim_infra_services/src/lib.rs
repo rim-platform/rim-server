@@ -73,6 +73,7 @@ pub(crate) mod password_reset;
 pub(crate) mod pin;
 pub(crate) mod pipeline;
 pub(crate) mod plugin_bundle;
+pub(crate) mod plugin_bundle_fetch;
 pub mod presence;
 pub(crate) mod provider;
 pub mod quota;

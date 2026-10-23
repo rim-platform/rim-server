@@ -10,7 +10,9 @@ use crate::graphql_support::{
     extract_auth, internal_graphql_error_response,
 };
 use crate::health::{ReadinessCache, SystemProbe};
-use crate::plugin_bundle_handlers::{handle_plugin_bundle_download, handle_plugin_bundle_upload};
+use crate::plugin_bundle_handlers::{
+    handle_plugin_bundle_download, handle_plugin_bundle_fetch, handle_plugin_bundle_upload,
+};
 use actix_web::{App, Either, HttpRequest, HttpResponse, HttpServer, guard, web};
 use async_graphql_actix_web::GraphQLResponse;
 use rim_api::AppSchema;
@@ -159,6 +161,11 @@ pub async fn serve(
             )
             .service(
                 web::resource("/api/files/{path:.*}").route(web::get().to(handle_file_download)),
+            )
+            .service(
+                web::resource("/api/plugin-bundles/fetch")
+                    .app_data(web::JsonConfig::default().limit(8192))
+                    .route(web::post().to(handle_plugin_bundle_fetch)),
             )
             .service(
                 web::resource("/api/plugin-bundles/{server_id}")

@@ -256,3 +256,12 @@ Report privately through GitHub's vulnerability reporting, never in a public iss
 or chat room. [`SECURITY.md`](../SECURITY.md) says what to include, which repository a problem
 belongs to, and when to expect an answer. A report that matches a gap listed in the review brief
 is still welcome, especially with an attack the brief does not describe.
+
+### Plugin link downloads
+
+Authenticated browser installs use the server's `plugin_link_fetch` endpoint. The fetcher
+requires a SHA-256 pin and public HTTPS targets, validates every redirect and DNS result,
+disables proxies and referrers, and enforces size, time, concurrency and account rate limits.
+It verifies both the hash and bundle structure before returning an attachment with `no-store`
+and `nosniff`. Audit records include the account and original hostname, without URL paths,
+query strings or bundle contents. This route stores no workspace bundle.

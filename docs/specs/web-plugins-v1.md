@@ -650,3 +650,21 @@ The bundle file is `{"format":"rim-plugin-bundle","v":1,"files":[{"path":"main.m
 the JSON string of `main.mjs` + `},{"path":"rim-plugin.json","text":` + the JSON string of the
 manifest + `}]}`, where a JSON string escapes only `"`, `\` and control characters (`\n` for a line
 feed), as `JSON.stringify` does. `workspace-plugins-v1.md`, appendix A, signs this bundle.
+
+### Browser installation from a pinned link
+
+For an external bundle, the web app posts `{url, sha256}` to
+`POST /api/plugin-bundles/fetch` on its configured RIM server, with the session cookie and
+CSRF token. The server checks the lowercase SHA-256 pin and bundle structure before returning
+bytes. The browser checks the pin again. This route needs `plugin_link_fetch`, enabled by
+default and independent of `workspace_plugins`; it stores no bundle in a workspace.
+
+Only HTTPS URLs without credentials or fragments are accepted. Every connection uses a
+public-address resolver, with no proxy, including redirect targets. IP literals are checked
+separately. Redirects remain HTTPS and stop after ten; downloads stop at 8 MiB or 120 seconds.
+Each account has twenty attempts an hour; four downloads run concurrently, with a five-second
+slot wait. Audit events record the account and original host, without paths, query strings or
+bundle contents. Responses are authenticated attachments with `no-store` and `nosniff`.
+An older server may return 400/404 or treat the path as a workspace upload; clients explain
+that an update is needed. The disabled feature returns FEATURE_DISABLED, invalid pins or
+bundles return 422, and exhausted attempt budgets return 429.

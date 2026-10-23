@@ -58,3 +58,11 @@ pub struct DownloadPluginBundleQuery {
     pub server_id: ServerId,
     pub sha256: String,
 }
+
+/// Fetch a pinned web bundle without storing it in any workspace.
+#[derive(Debug, Clone)]
+pub struct FetchPluginBundleCmd {
+    pub actor: Actor,
+    pub url: String,
+    pub sha256: String,
+}
