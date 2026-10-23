@@ -114,6 +114,7 @@ pub async fn serve(
         db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
         franking_key_file: config.franking_key_file(),
+        link_key_file: config.link_key_file(),
     })));
     let s2s_runtime = runtime.s2s;
     let s2s_state = s2s_runtime.state.clone();

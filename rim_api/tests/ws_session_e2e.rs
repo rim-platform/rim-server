@@ -368,3 +368,85 @@ async fn an_operator_blocking_an_account_in_the_app_closes_its_websocket() {
     expect_session_ended(&mut socket).await;
     w.node.stop().await;
 }
+
+const LINK_ON: &str = "mutation($w: ID!) { updatePublicJoinLink(input: { serverId: $w, \
+     enabled: true, mode: REQUESTS }) { token } }";
+const ASK: &str = "mutation($t: String!) { joinByPublicLink(token: $t) { joinRequest { id } } }";
+const DECLINE: &str = "mutation($w: ID!, $r: ID!) { declineJoinRequest(serverId: $w, \
+     requestId: $r) { status } }";
+
+/// The next `workspaceEvents` event under subscription `id`, parsed, skipping other messages.
+async fn next_event(socket: &mut Socket, id: &str) -> Value {
+    loop {
+        let message = socket.receive().await;
+        if message["id"] == id && message["type"] == "next" {
+            let text = message["payload"]["data"]["workspaceEvents"]
+                .as_str()
+                .expect("event text");
+            return serde_json::from_str(text).expect("event json");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_join_requests_person_hears_of_it_on_the_direct_space_and_the_owner_on_the_workspace() {
+    let world = world(|_| {}).await;
+    let person = SeaOrmUserRepository::new(world.node.db.clone().into())
+        .create_user(NewUser {
+            username: "pat".to_string(),
+            password: Some("$argon2id$v=invalid$test_only".to_string()),
+            email: Some("pat@test.example.com".to_string()),
+            display_name: None,
+            key_identity: None,
+        })
+        .await
+        .expect("user");
+    let ada = world.sign_in().await;
+    let pat = world.sign_in_as(person.id).await;
+    let direct = world
+        .post(&pat, "{ relayInfo { directSpaceId } }", json!({}))
+        .await["relayInfo"]["directSpaceId"]
+        .as_str()
+        .expect("direct space")
+        .to_string();
+    let token = world
+        .post(&ada, LINK_ON, json!({ "w": world.workspace }))
+        .await["updatePublicJoinLink"]["token"]
+        .as_str()
+        .expect("token")
+        .to_string();
+
+    let mut ada_socket = world.open(&ada).await.expect("ada socket");
+    ada_socket
+        .subscribe("w", WORKSPACE_EVENTS, json!({ "w": world.workspace }))
+        .await;
+    let mut pat_socket = world.open(&pat).await.expect("pat socket");
+    pat_socket
+        .subscribe("d", WORKSPACE_EVENTS, json!({ "w": direct }))
+        .await;
+    // The subscriptions start once the server has answered a request after them.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let request =
+        world.post(&pat, ASK, json!({ "t": token })).await["joinByPublicLink"]["joinRequest"]["id"]
+            .as_str()
+            .expect("request id")
+            .to_string();
+    for (socket, id) in [(&mut ada_socket, "w"), (&mut pat_socket, "d")] {
+        let event = next_event(socket, id).await;
+        assert_eq!(event["type"], "JoinRequestCreated");
+        assert_eq!(event["workspace_id"], world.workspace.as_str());
+        assert_eq!(event["request_id"], request.as_str());
+        assert_eq!(event["user_id"], person.id.to_string());
+        assert!(event.get("member_user_ids").is_none());
+    }
+
+    world
+        .post(&ada, DECLINE, json!({ "w": world.workspace, "r": request }))
+        .await;
+    let event = next_event(&mut pat_socket, "d").await;
+    assert_eq!(event["type"], "JoinRequestDecided");
+    assert_eq!(event["outcome"], "declined");
+    assert_eq!(event["workspace_id"], world.workspace.as_str());
+    world.node.stop().await;
+}

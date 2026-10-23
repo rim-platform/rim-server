@@ -28,6 +28,7 @@ use rim_core::notification::repository::NotificationRepository;
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
 use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::pipeline::repository::PipelineRepository;
+use rim_core::public_join_link::repository::PublicJoinLinkRepository;
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository, SubscriptionRepository};
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::repository::ServerMemberRepository;
@@ -78,6 +79,7 @@ pub struct AppRepos {
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
     pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
     pub default_workspace_repo: Arc<dyn DefaultWorkspaceRepository>,
+    pub public_join_link_repo: Arc<dyn PublicJoinLinkRepository>,
 }
 
 #[derive(Clone)]
@@ -327,6 +329,19 @@ impl AppRepos {
             notification_repo: Arc::clone(&self.notification_repo),
             macro_repo: Arc::clone(&self.macro_repo),
             pipeline_repo: Arc::clone(&self.pipeline_repo),
+            public_join_link_repo: Arc::clone(&self.public_join_link_repo),
+        }
+    }
+
+    pub fn for_public_join_link(&self) -> crate::public_join_link::PublicJoinLinkRepos {
+        crate::public_join_link::PublicJoinLinkRepos {
+            link_repo: Arc::clone(&self.public_join_link_repo),
+            server_repo: Arc::clone(&self.server_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            moderation_repo: Arc::clone(&self.moderation_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 
@@ -741,6 +756,9 @@ impl AppRepos {
                 sea_orm_impl::default_workspace::SeaOrmDefaultWorkspaceRepository::new(
                     handle.clone(),
                 ),
+            ),
+            public_join_link_repo: Arc::new(
+                sea_orm_impl::public_join_link::SeaOrmPublicJoinLinkRepository::new(handle.clone()),
             ),
         }
     }

@@ -524,9 +524,9 @@ fn workspace_invite_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
         "userCommands: [UserCommand!]! workspaceInvites(serverId: ID!, dir: PageDir, cursor: \
-         WorkspaceInviteCursorInput, limit: Int): WorkspaceInvitePage! }",
+         WorkspaceInviteCursorInput, limit: Int): WorkspaceInvitePage! publicJoinLink(",
         "setMyWorkspaceDmSetting(workspaceId: ID!, members: DmMembers!): MyDmSettings! \
-         revokeInvite(inviteId: ID!): WorkspaceInvite! }",
+         revokeInvite(inviteId: ID!): WorkspaceInvite! updatePublicJoinLink(",
         "type WorkspaceInvite { id: ID! serverId: ID! role: ServerMemberRoleGql! useCount: Int! \
          maxUses: Int! expiresAt: DateTime createdAt: DateTime! createdById: ID! revokedAt: \
          DateTime state: WorkspaceInviteState! createdBy: User }",
@@ -535,6 +535,48 @@ fn workspace_invite_sdl_matches_the_contract() {
         "type WorkspaceInviteCursorOutput { createdAt: DateTime! inviteId: ID! }",
         "type WorkspaceInvitePage { items: [WorkspaceInvite!]! next: \
          WorkspaceInviteCursorOutput prev: WorkspaceInviteCursorOutput pageInfo: PageInfo! }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
+/// The public join link and join request roots, appended after the invite roots, and their
+/// types; the preview and the request carry no token.
+#[test]
+fn public_join_link_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "WorkspaceInvitePage! publicJoinLink(serverId: ID!): PublicJoinLink! \
+         publicJoinLinkPreview(token: String!): PublicJoinLinkPreview! joinRequests(serverId: \
+         ID!, dir: PageDir, cursor: JoinRequestCursorInput, limit: Int): JoinRequestPage! \
+         myJoinRequests: [JoinRequest!]! }",
+        "revokeInvite(inviteId: ID!): WorkspaceInvite! updatePublicJoinLink(input: \
+         UpdatePublicJoinLinkInput!): PublicJoinLink! reissuePublicJoinLink(serverId: ID!): \
+         PublicJoinLink! joinByPublicLink(token: String!, message: String): \
+         JoinByPublicLinkPayload! withdrawJoinRequest(requestId: ID!): JoinRequest! \
+         acceptJoinRequest(serverId: ID!, requestId: ID!): JoinRequest! \
+         declineJoinRequest(serverId: ID!, requestId: ID!): JoinRequest! }",
+        "type PublicJoinLink { serverId: ID! enabled: Boolean! mode: PublicJoinLinkMode! role: \
+         ServerMemberRoleGql! allowRemote: Boolean! enabledAt: DateTime issuedAt: DateTime \
+         issuedById: ID token: String url: String joinsLastDay: Int! joinsLastWeek: Int! \
+         openRequests: Int! issuedBy: User }",
+        "type PublicJoinLinkPreview { serverId: ID! name: String! mode: PublicJoinLinkMode! \
+         viewer: PublicJoinLinkViewer! joinRequestId: ID }",
+        "type JoinRequest { id: ID! serverId: ID! workspaceName: String! userId: ID! message: \
+         String status: JoinRequestStatus! createdAt: DateTime! expiresAt: DateTime! decidedAt: \
+         DateTime decidedById: ID user: User }",
+        "type JoinRequestPage { items: [JoinRequest!]! next: JoinRequestCursorOutput prev: \
+         JoinRequestCursorOutput pageInfo: PageInfo! }",
+        "type JoinByPublicLinkPayload { outcome: JoinByPublicLinkOutcome! serverId: ID! \
+         joinRequest: JoinRequest }",
+        "input UpdatePublicJoinLinkInput { serverId: ID! enabled: Boolean mode: \
+         PublicJoinLinkMode role: ServerMemberRoleGql allowRemote: Boolean }",
+        "enum PublicJoinLinkMode { DIRECT REQUESTS }",
+        "enum PublicJoinLinkViewer { SIGNED_OUT NOT_MEMBER MEMBER BANNED REQUEST_OPEN }",
+        "enum JoinRequestStatus { OPEN ACCEPTED DECLINED WITHDRAWN CANCELLED EXPIRED }",
+        "enum JoinByPublicLinkOutcome { JOINED REQUESTED }",
+        "input JoinRequestCursorInput { createdAt: DateTime! requestId: ID! }",
+        "type JoinRequestCursorOutput { createdAt: DateTime! requestId: ID! }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }

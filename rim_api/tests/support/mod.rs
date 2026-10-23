@@ -98,6 +98,14 @@ pub const FRANKING_KEY: [u8; 32] = [
     0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
 ];
 
+/// The test provider's link key, which public join link tokens are sealed under.
+#[allow(dead_code)]
+pub const LINK_KEY: [u8; 32] = [0x42; 32];
+
+/// What the test provider's public join links start with.
+#[allow(dead_code)]
+pub const LINK_BASE: &str = "https://rim.example.test";
+
 /// Connect to the test database, or **panic loudly**. Only reachable under the
 /// crate's db-test feature (all test files are `#![cfg(feature = "…")]`-gated),
 /// so a panic here means the feature was enabled without a usable test DB —
@@ -696,6 +704,13 @@ fn test_provider(
 
     let db: DbHandle = conn.clone().into();
     let raw_db = conn.clone();
+    let mut hooks = hooks;
+    if hooks.link_key.is_none() {
+        hooks.link_key = Some(rim_infra_services::link_key::LinkKey::new(LINK_KEY));
+    }
+    if hooks.link_base.is_none() {
+        hooks.link_base = Some(LINK_BASE.to_string());
+    }
 
     // Wire up all repos.
     let repos = AppRepos {
@@ -811,6 +826,11 @@ fn test_provider(
         ),
         pipeline_repo: Arc::new(
             rim_infra_db::sea_orm_impl::pipeline::SeaOrmPipelineRepository::new(db.clone()),
+        ),
+        public_join_link_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::public_join_link::SeaOrmPublicJoinLinkRepository::new(
+                db.clone(),
+            ),
         ),
         capability_registry_repo: Arc::new(
             rim_infra_db::sea_orm_impl::capability_registry::SeaOrmCapabilityRegistryRepository::new(db.clone()),

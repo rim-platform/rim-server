@@ -84,7 +84,9 @@ pub(crate) fn route(event: &WorkspaceEvent, event_json: &Value) -> Route {
         WorkspaceEvent::NotificationDue { .. }
         | WorkspaceEvent::UserMentioned { .. }
         | WorkspaceEvent::ReadStateUpdated { .. }
-        | WorkspaceEvent::MlsWelcomeAvailable { .. } => Route::User,
+        | WorkspaceEvent::MlsWelcomeAvailable { .. }
+        | WorkspaceEvent::JoinRequestCreated { .. }
+        | WorkspaceEvent::JoinRequestDecided { .. } => Route::User,
         WorkspaceEvent::MemberProfileUpdated { .. }
         | WorkspaceEvent::MemberBanChanged { .. }
         | WorkspaceEvent::MemberJoined { .. }
@@ -1417,6 +1419,7 @@ mod tests {
             workspace_id: ServerId::new(),
             user_id: guest.user_id,
             username: "g".to_string(),
+            source: None,
         };
         let plans = planned(&event, &[guest.clone(), regular.clone()]);
         assert_eq!(plans.len(), 2);
@@ -1427,6 +1430,7 @@ mod tests {
             workspace_id: ServerId::new(),
             user_id: UserId::new(),
             username: "x".to_string(),
+            source: None,
         };
         let plans = planned(&other, &[guest]);
         assert!(plans.is_empty(), "a guest learns nothing about others");

@@ -1130,6 +1130,7 @@ impl AuthService for DefaultAuthService {
                 workspace_id: inv.server_id,
                 user_id: actor.user_id,
                 username: user.username.clone(),
+                source: None,
             });
         }
 

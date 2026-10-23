@@ -2876,7 +2876,7 @@ mod tests {
         let events = events.0.lock().unwrap();
         assert!(matches!(
             events.as_slice(),
-            [WorkspaceEvent::MemberJoined { workspace_id, user_id, username }]
+            [WorkspaceEvent::MemberJoined { workspace_id, user_id, username, source: None }]
                 if *workspace_id == server_id && *user_id == res.user_id && username == "ada"
         ));
     }

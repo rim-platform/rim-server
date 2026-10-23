@@ -143,6 +143,7 @@ async fn workspace_events_filter_as_guest_after_lag_when_subscriber_was_demoted(
         workspace_id: server_id,
         user_id: UserId::new(),
         username: "other".to_string(),
+        source: None,
     });
     broadcaster.broadcast(state_changed(server_id, 1));
 
@@ -171,6 +172,7 @@ async fn workspace_events_continue_after_lag_when_subscriber_is_still_member() {
         workspace_id: server_id,
         user_id: other,
         username: "other".to_string(),
+        source: None,
     });
     broadcaster.broadcast(state_changed(server_id, 2));
 

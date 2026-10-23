@@ -325,6 +325,14 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                     ),
                     ("bans", "DELETE FROM server_ban WHERE user_id = $1"),
                     (
+                        "join_requests",
+                        "DELETE FROM workspace_join_request WHERE user_id = $1",
+                    ),
+                    (
+                        "public_link_joins",
+                        "DELETE FROM workspace_public_link_join WHERE user_id = $1",
+                    ),
+                    (
                         "timeouts",
                         "DELETE FROM server_member_timeout WHERE user_id = $1",
                     ),

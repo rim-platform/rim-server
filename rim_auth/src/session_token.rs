@@ -26,6 +26,13 @@ pub fn generate_link_id() -> String {
     random_b64url::<16>("device link id")
 }
 
+/// Generate a workspace's public join link token: 16 random bytes, base64url-nopad (22
+/// characters), no prefix. Only its SHA-256 ([`hash_token`]) is looked up; the server keeps it
+/// sealed for its Owner.
+pub fn generate_public_link_token() -> String {
+    random_b64url::<16>("public link token")
+}
+
 /// `N` bytes from the OS random generator, base64url-nopad. `what` names the value in the log
 /// line written before panicking when the entropy source fails.
 fn random_b64url<const N: usize>(what: &str) -> String {

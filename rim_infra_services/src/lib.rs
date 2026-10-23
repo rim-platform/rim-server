@@ -50,6 +50,8 @@ pub(crate) mod key_auth;
 pub(crate) mod keybind;
 /// Public for `rim_server`, whose S2S routes rate-limit each peer with it.
 pub mod keyed_rate_limiter;
+// pub: rim_server loads the key file at boot and hands the key to the provider.
+pub mod link_key;
 pub(crate) mod link_preview;
 pub(crate) mod login_sources;
 pub mod macro_def;
@@ -76,6 +78,7 @@ pub(crate) mod plugin_bundle;
 pub(crate) mod plugin_bundle_fetch;
 pub mod presence;
 pub(crate) mod provider;
+pub(crate) mod public_join_link;
 pub mod quota;
 pub(crate) mod read_state;
 pub mod registration_rate_limiter;
@@ -119,6 +122,9 @@ mod message_reaction_unit_tests;
 
 #[cfg(test)]
 mod auth_unit_tests;
+
+#[cfg(test)]
+mod public_join_link_unit_tests;
 
 #[cfg(test)]
 mod conversation_unit_tests;

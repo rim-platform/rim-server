@@ -13,6 +13,12 @@ impl Clock {
         (self.0)()
     }
 
+    /// A clock that reads whatever `now` answers.
+    #[cfg(test)]
+    pub(crate) fn from_fn(now: impl Fn() -> DateTime<Utc> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(now))
+    }
+
     /// A clock that always reads `at`.
     #[cfg(test)]
     pub(crate) fn fixed(at: DateTime<Utc>) -> Self {

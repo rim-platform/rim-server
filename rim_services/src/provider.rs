@@ -82,4 +82,8 @@ pub trait AppServiceProvider: Send + Sync {
     fn default_workspace_service(
         &self,
     ) -> Arc<dyn crate::default_workspace::DefaultWorkspaceService>;
+    /// Workspaces' public join links and the join requests filed through them.
+    fn public_join_link_service(
+        &self,
+    ) -> Arc<dyn crate::public_join_link::service::PublicJoinLinkService>;
 }

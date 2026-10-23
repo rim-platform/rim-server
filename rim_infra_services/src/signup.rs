@@ -342,6 +342,7 @@ pub(crate) fn announce_claimed(
                 workspace_id: invite.server_id,
                 user_id,
                 username: username.to_string(),
+                source: None,
             });
             tracing::info!(
                 target: "audit",
@@ -936,7 +937,7 @@ pub(crate) mod tests {
         let seen = seen.0.lock().unwrap();
         assert!(matches!(
             seen.as_slice(),
-            [WorkspaceEvent::MemberJoined { workspace_id, user_id: u, username }]
+            [WorkspaceEvent::MemberJoined { workspace_id, user_id: u, username, source: None }]
                 if *workspace_id == server_id && *u == user_id && username == "alice"
         ));
     }

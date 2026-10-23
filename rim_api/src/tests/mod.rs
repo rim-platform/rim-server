@@ -589,6 +589,13 @@ impl AppServiceProvider for TestAppServiceProvider {
             .returning(|| Box::pin(async { Ok(None) }));
         Arc::new(service)
     }
+
+    fn public_join_link_service(
+        &self,
+    ) -> Arc<dyn rim_services::public_join_link::service::PublicJoinLinkService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::public_join_link::service::MockPublicJoinLinkService::new())
+    }
 }
 
 /// `request` on an instance where `disabled` are switched off: request data takes precedence

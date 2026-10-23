@@ -368,7 +368,7 @@ fn announcing_the_claim_deletes_the_link_and_tells_of_the_added_members() {
     assert!(!file.exists());
     assert!(matches!(
         seen.0.lock().unwrap().as_slice(),
-        [WorkspaceEvent::MemberJoined { workspace_id, user_id, username }]
+        [WorkspaceEvent::MemberJoined { workspace_id, user_id, username, source: None }]
             if *workspace_id == workspace && *user_id == other && username == "earlier"
     ));
     std::fs::remove_dir_all(dir).expect("clean up");
