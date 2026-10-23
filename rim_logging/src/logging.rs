@@ -4,11 +4,11 @@ use std::path::PathBuf;
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::Registry;
 use tracing_subscriber::filter::filter_fn;
-use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::time::UtcTime;
+use tracing_subscriber::fmt::{MakeWriter, writer::BoxMakeWriter};
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
@@ -31,8 +31,8 @@ const AUDIT_LOG_PATH_ENV: &str = "RIM_AUDIT_LOG_PATH";
 /// Held-alive token returned by [`init_logging`]. The audit appender uses
 /// `tracing_appender::non_blocking`, which spawns a background flusher and
 /// returns a `WorkerGuard`. **The guard must outlive every `info!` emit on
-/// the audit target** — dropping it shuts the worker down and pending
-/// audit lines are lost. `main.rs` binds the return for the whole program.
+/// the audit target** — dropping it flushes pending audit lines and shuts the worker down.
+/// `main.rs` binds the return for the whole program.
 ///
 /// Wrapped (rather than returning `WorkerGuard` directly) so further guards can be added
 /// without breaking callers.
@@ -48,22 +48,43 @@ pub struct LoggingHandle {
 /// When the audit directory cannot be created or read, or a global subscriber is installed
 /// already.
 pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 'static>> {
+    init(false)
+}
+
+/// Install command logging: diagnostics on stderr, audit events on stdout and in the file.
+/// `RUST_LOG` overrides the default warning level for diagnostics.
+///
+/// # Errors
+/// When the audit directory is unavailable or a global subscriber is already installed.
+pub fn init_cli_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 'static>> {
+    init(true)
+}
+
+fn init(command: bool) -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 'static>> {
     dotenv().ok();
 
-    // ── General sink: JSON to stdout, env-filter (default INFO).
-    // Captures EVERY event including audit ones — operators get audit
-    // visibility in the unified log too. The audit-only file sink below
-    // is additive, not a redirect.
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // Commands send diagnostics to stderr; audit events have their own stdout layer.
+    // Server logs include audit events in the general stdout stream.
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(if command { "warn" } else { "info" }));
+    let writer = if command {
+        BoxMakeWriter::new(std::io::stderr)
+    } else {
+        BoxMakeWriter::new(std::io::stdout)
+    };
     let general_layer = tracing_subscriber::fmt::layer()
         .json()
+        .with_writer(writer)
         .with_timer(UtcTime::rfc_3339())
         .with_target(true)
         .with_thread_ids(true)
         .with_thread_names(true)
         .with_current_span(true)
         .with_span_list(true)
-        .with_filter(env_filter);
+        .with_filter(env_filter)
+        .with_filter(filter_fn(move |metadata| {
+            !command || metadata.target() != AUDIT_TARGET
+        }));
 
     // ── Audit sink: JSON to one file per UTC day, filtered to `target: "audit"` events only.
     // The server deletes the files past their retention; the appender itself keeps every file.
@@ -82,6 +103,7 @@ pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 
     // `try_init` also installs the `log` bridge, so `log::info!` lines reach tracing; a second
     // bridge would make it fail and leave the audit writer unowned.
     tracing_subscriber::registry()
+        .with(command.then(|| audit_layer(std::io::stdout)))
         .with(audit_layer(audit_writer))
         .with(general_layer)
         .try_init()?;
@@ -92,8 +114,9 @@ pub fn init_logging() -> Result<LoggingHandle, Box<dyn StdError + Send + Sync + 
 }
 
 /// JSON layer that writes only events whose target is [`AUDIT_TARGET`] to `writer`.
-fn audit_layer<W>(writer: W) -> impl Layer<Registry>
+fn audit_layer<W, S>(writer: W) -> impl Layer<S>
 where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
     tracing_subscriber::fmt::layer()

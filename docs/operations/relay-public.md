@@ -366,6 +366,10 @@ with it.
 
 ## Monitoring
 
+Operator commands print diagnostics on stderr at warning level by default; `RUST_LOG`
+overrides that level. Their audit events still go to stdout and the daily audit file, flushed
+before the command exits. Unknown commands print usage and exit with status 2.
+
 Logs are JSON on stdout (`dc logs rim`); audit events (`"target":"audit"`) also go to the
 daily files `/data/audit.<YYYY-MM-DD>.log`, kept 90 days. The database answers what logs do not.
 Alert thresholds are **FILL** until a month of normal traffic shows the baseline.
