@@ -175,6 +175,10 @@ impl KeyIdentityMutations {
     ) -> Result<SignupWithInvitePayloadGql> {
         let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
         let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
+        let auth = ctx.data::<std::sync::Arc<dyn rim_services::auth::service::AuthService>>()?;
+        auth.check_registration_capacity()
+            .await
+            .map_err(map_service_error)?;
         let (token, proof_of_work) = key_signup_credential(
             mode,
             input.instance_invite_token,

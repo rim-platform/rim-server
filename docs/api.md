@@ -432,7 +432,7 @@ naming the cap, such as "this instance allows 5 workspaces per user".
 | `RIM_LIMIT_INVITE_MAX_USES` | `inviteMaxUses` | The uses one invite may have. |
 | `RIM_LIMIT_MESSAGE_BYTES` | `messageBytes` | A message's text in UTF-8 bytes, at most 65536. An encrypted message's ciphertext may exceed it by 4096 bytes of framing. |
 | `RIM_LIMIT_PENDING_INVITES_PER_USER` | `pendingInvitesPerUser` | Pending invitations to encrypted conversations one user holds. Unlike the others it defaults to 50; 0 turns it off. Inviting someone who holds that many refuses the whole create or add. |
-| `RIM_LIMIT_ACCOUNTS` | `accounts` | Local accounts the instance holds, those waiting out their deletion grace period included; people from other servers held here and purged accounts do not count. At the cap every signup, `signupWithInvite` and `signupWithKey` alike and whatever token or proof-of-work it carries, answers `REGISTRATION_FULL` instead of `VALIDATION`, and `serverInfo.registrationFull` is true. |
+| `RIM_LIMIT_ACCOUNTS` | `accounts` | Local accounts the instance holds, those waiting out their deletion grace period included; people from other servers held here and purged accounts do not count. At the cap every signup, `signupWithInvite` and `signupWithKey` alike and whatever token or proof-of-work it carries, answers `REGISTRATION_FULL` before validating terms, credentials or the combination of tokens. GraphQL input coercion still runs before resolvers. When full, `serverInfo.registrationFull` is true. |
 
 The server's default workspace, which every account joins, has caps of its own that no
 setting changes: a group there is started with at most 50 people per call and a plaintext one

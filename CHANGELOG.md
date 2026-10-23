@@ -426,6 +426,7 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Refuse signups at the account cap before validating terms, credentials or invite inputs, while retaining the transactional admission check.
 - Update the cryptographic helper `ctutils` to 0.4.5 to fix constant-time comparison
   advisory RUSTSEC-2026-0385.
 
