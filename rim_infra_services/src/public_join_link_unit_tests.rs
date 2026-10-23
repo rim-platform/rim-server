@@ -1209,6 +1209,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepting_the_request_of_someone_who_joined_since_closes_it_without_a_join() {
+        let world = World::new();
+        let svc = world.service();
+        let token = world.link_on(&svc, PublicLinkMode::Requests).await;
+        let alice = outsider();
+        let request = svc
+            .join(alice, token, None, IP.to_string())
+            .await
+            .unwrap()
+            .join_request
+            .unwrap();
+        world.add(world.workspace, alice.user_id, ServerMemberRole::Member);
+
+        let accepted = svc
+            .accept_join_request(world.moderator, world.workspace, request.id)
+            .await
+            .unwrap();
+        assert_eq!(accepted.status, JoinRequestStatus::Accepted);
+        assert_eq!(world.role_of(alice.user_id), Some(ServerMemberRole::Member));
+        assert!(world.events().iter().any(|e| matches!(
+            e,
+            WorkspaceEvent::JoinRequestDecided { user_id, outcome, .. }
+                if *user_id == alice.user_id && outcome == "accepted"
+        )));
+        assert!(
+            !world
+                .events()
+                .iter()
+                .any(|e| matches!(e, WorkspaceEvent::MemberJoined { .. }))
+        );
+        assert!(
+            !world
+                .audit_ids()
+                .contains(&"workspace.member_joined".to_string())
+        );
+        let stats = svc
+            .public_join_link(world.owner, world.workspace)
+            .await
+            .unwrap();
+        assert_eq!(stats.open_requests, 0);
+        assert_eq!(stats.joins_last_day, 0);
+    }
+
+    #[tokio::test]
     async fn accepting_runs_the_join_checks() {
         let mut world = World::new();
         world.limits.members_per_workspace = Some(4);

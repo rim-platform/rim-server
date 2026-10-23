@@ -318,7 +318,10 @@ makes anyone an owner, so it does not refuse a join, as it does not refuse an in
   requests.
 - `acceptJoinRequest(serverId, requestId)` (Owner or Moderator) runs the checks of a direct join
   and adds the person with the link's current role; the request need not be valid through the
-  link any more (it may have been turned off or replaced since). `declineJoinRequest` closes it;
+  link any more (it may have been turned off or replaced since). A person who joined another way
+  since asking (an invite, say) is left as they are: the request is closed as accepted, with
+  `JoinRequestDecided` but no second `MemberJoined`, join count or join audit row.
+  `declineJoinRequest` closes it;
   the person may ask the same workspace again 24 hours after the decline (`VALIDATION` naming the
   hours left before that). A request of another workspace is `NOT_FOUND`; one no longer open is
   `CONFLICT`.

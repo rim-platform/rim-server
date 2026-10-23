@@ -93,8 +93,9 @@ impl PublicJoinLinkMutations {
     }
 
     /// Accept an open join request: the person joins with the link's current role and the
-    /// public channels, as a direct join does. Owner and Moderators only (`FORBIDDEN`); a
-    /// request of another workspace is `NOT_FOUND`, one no longer open or of a member is
+    /// public channels, as a direct join does; a person who has joined another way since is
+    /// left as they are and the request is closed as accepted. Owner and Moderators only
+    /// (`FORBIDDEN`); a request of another workspace is `NOT_FOUND`, one no longer open is
     /// `CONFLICT`, a ban `FORBIDDEN`, a full workspace `VALIDATION`.
     async fn accept_join_request(
         &self,

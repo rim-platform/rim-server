@@ -960,6 +960,34 @@ impl PublicJoinLinkService for DefaultPublicJoinLinkService {
         let now = self.clock.now();
         let (scope, repos) = self.transaction().await?;
         let request = Self::open_request_of(&repos, server_id, request_id, now).await?;
+        // A person who joined another way since asking has nothing left to accept: the
+        // request is closed as accepted, without a second join.
+        if repos
+            .server_member_repo
+            .is_member(server_id, request.user_id)
+            .await?
+        {
+            let closed = repos
+                .link_repo
+                .close_request(
+                    request.id,
+                    JoinRequestStatus::Accepted,
+                    Some(actor.user_id),
+                    now,
+                )
+                .await?
+                .ok_or_else(no_longer_open)?;
+            Self::commit(scope).await?;
+            announce_decided(
+                self.repos.server_member_repo.as_ref(),
+                &self.observers,
+                &closed,
+                JoinRequestStatus::Accepted,
+            )
+            .await;
+            let name = self.workspace_name(server_id).await?;
+            return Ok(JoinRequestDto::from_request(closed, name, now));
+        }
         let role = repos
             .link_repo
             .link(server_id)
