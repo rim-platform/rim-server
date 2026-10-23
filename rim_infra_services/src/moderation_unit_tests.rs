@@ -505,6 +505,22 @@ mod tests {
             .await
             .expect("ban");
         assert_eq!(ban.reason.as_deref(), Some("spam"));
+        let removed = fx
+            .events()
+            .into_iter()
+            .find(|event| matches!(event, WorkspaceEvent::MemberLeft { .. }))
+            .unwrap();
+        assert_eq!(
+            removed.json_for_user(&member.to_string()).unwrap()["reason"],
+            "spam"
+        );
+        assert!(
+            removed
+                .json_for_user(&moderator.to_string())
+                .unwrap()
+                .get("reason")
+                .is_none()
+        );
         assert_eq!(fx.audited(), [audit_ids::BAN]);
         let entry = fx.audit.0.lock().expect("lock")[0].clone();
         assert!(entry.dangerous);
@@ -524,6 +540,91 @@ mod tests {
                 ("pipelines", member, fx.server_id),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn members_see_ban_status_but_only_moderators_see_the_reason() {
+        let [moderator, member, banned] = users();
+        let fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        let mut repo = MockModerationRepository::new();
+        repo.expect_get_active_ban().returning(move |sid, uid, _| {
+            Box::pin(async move {
+                Ok(Some(rim_core::moderation::model::ServerBan {
+                    server_id: sid,
+                    user_id: uid,
+                    reason: Some("private".to_string()),
+                    banned_by: Some(moderator),
+                    created_at: Utc::now(),
+                    expires_at: None,
+                }))
+            })
+        });
+        let service = fx.service(repo);
+        let status = service
+            .member_ban(Actor::new(member), fx.server_id, banned)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(status.reason.is_none());
+        assert!(status.expires_at.is_none());
+        assert_eq!(
+            service
+                .member_ban(Actor::new(moderator), fx.server_id, banned)
+                .await
+                .unwrap()
+                .unwrap()
+                .reason
+                .as_deref(),
+            Some("private")
+        );
+        assert!(
+            service
+                .member_ban(Actor::new(UserId::new()), fx.server_id, banned)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn unban_restores_only_the_current_default_workspace() {
+        for is_default in [true, false] {
+            let [moderator, target] = users();
+            let fx = Fx::new(&[(moderator, Moderator)]);
+            let workspace = fx.server_id;
+            let mut repo = MockModerationRepository::new();
+            repo.expect_delete_ban()
+                .returning(|_, _| Box::pin(async { Ok(true) }));
+            let mut default = rim_services::default_workspace::MockDefaultWorkspaceService::new();
+            default.expect_current().returning(move || {
+                Box::pin(async move {
+                    Ok(Some(if is_default {
+                        workspace
+                    } else {
+                        ServerId::new()
+                    }))
+                })
+            });
+            default
+                .expect_join()
+                .times(usize::from(is_default))
+                .withf(move |uid| *uid == target)
+                .returning(move |_| Box::pin(async move { Ok(Some(workspace)) }));
+            let service = fx.service(repo).with_default_workspace(Arc::new(default));
+            assert!(
+                service
+                    .unban(UnbanMemberCmd {
+                        actor: Actor::new(moderator),
+                        server_id: workspace,
+                        user_id: target
+                    })
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                fx.audit.0.lock().unwrap()[0].args_redacted["restored_default_workspace"],
+                is_default
+            );
+        }
     }
 
     #[tokio::test]

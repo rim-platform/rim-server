@@ -85,7 +85,8 @@ pub(crate) fn route(event: &WorkspaceEvent, event_json: &Value) -> Route {
         | WorkspaceEvent::UserMentioned { .. }
         | WorkspaceEvent::ReadStateUpdated { .. }
         | WorkspaceEvent::MlsWelcomeAvailable { .. } => Route::User,
-        WorkspaceEvent::MemberJoined { .. }
+        WorkspaceEvent::MemberBanChanged { .. }
+        | WorkspaceEvent::MemberJoined { .. }
         | WorkspaceEvent::MemberLeft { .. }
         | WorkspaceEvent::MemberRoleChanged { .. } => Route::Directory,
         WorkspaceEvent::TypingStarted { .. } | WorkspaceEvent::PresenceChanged { .. } => {
@@ -157,7 +158,7 @@ pub(crate) fn plan(
             .collect(),
         Route::Directory => {
             let (guests, members): (Vec<_>, Vec<_>) =
-                visible.into_iter().partition(|m| m.role.is_guest());
+                visible.into_iter().partition(|m| m.role.is_guest() || matches!(event, WorkspaceEvent::MemberLeft { user_id, .. } if *user_id == m.user_id));
             let mut planned = together("w".to_string(), members);
             planned.extend(guests.into_iter().map(|m| Planned {
                 stream: user_stream(&m),
@@ -666,8 +667,20 @@ impl HostEventWriter {
         }
         let text = event_json.to_string();
         for planned in plans {
+            let private_text = if planned.stream.starts_with("u:") && planned.recipients.len() == 1
+            {
+                Some(
+                    event
+                        .json_for_user(&planned.recipients[0].user_id.to_string())
+                        .map_err(ServiceError::internal)?
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            let text = private_text.as_deref().unwrap_or(&text);
             rows += self
-                .append(workspace_id, &planned, &text, delegated.as_ref())
+                .append(workspace_id, &planned, text, delegated.as_ref())
                 .await?;
         }
         if rows > 0 {
@@ -1440,6 +1453,35 @@ mod tests {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].stream, "w");
         assert_eq!(plans[0].recipients, vec![regular]);
+    }
+
+    #[test]
+    fn removed_members_get_a_private_stream_for_their_reason() {
+        let removed = member(ServerMemberRole::Member);
+        let other = member(ServerMemberRole::Member);
+        let event = WorkspaceEvent::MemberLeft {
+            workspace_id: ServerId::new(),
+            user_id: removed.user_id,
+            cause: Some("ban".to_string()),
+            until: None,
+            reason: Some("private".to_string()),
+        };
+        let plans = planned(&event, &[removed.clone(), other.clone()]);
+        assert!(
+            plans.iter().any(|plan| plan.stream == user_stream(&removed)
+                && plan.recipients == vec![removed.clone()])
+        );
+        assert!(
+            plans
+                .iter()
+                .any(|plan| plan.stream == "w" && plan.recipients == vec![other.clone()])
+        );
+        assert!(
+            serde_json::to_value(&event)
+                .unwrap()
+                .get("reason")
+                .is_none()
+        );
     }
 
     #[test]

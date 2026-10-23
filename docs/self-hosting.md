@@ -562,13 +562,16 @@ dc exec -T postgres psql -U rim -d rim -c "SELECT id, name FROM server WHERE kin
 ```
 
 A value that is not a workspace id, a workspace that does not exist on this server, and the
-direct space each stop the server at boot. Accounts that existed before are not added; invite
-them. A workspace deleted while the server runs stops the joins until the setting changes, and
+direct space each stop the server at boot. Accounts that existed before may join through `joinDefaultWorkspace`. A workspace deleted
+while the server runs stops the joins until the setting changes, and
 the next start refuses its id.
 
 ### Either way
 
-An account already in the workspace, or banned from it, is left as it is. In the default
+An account already in the workspace, or banned from it, is left as it is at signup.
+An unban restores a local account to the current default workspace as Member with its public
+channels. After a temporary ban expires, `joinDefaultWorkspace` lets the account rejoin. A
+kicked account can also use this route; use a ban when rejoining must remain blocked. In the default
 workspace only the Owner and Moderators create channels, add people to channels and change
 their topics, and only their `@channel` and `@here` notify everyone. A group there is started
 like a DM with each of its members, following their DM settings and the request inbox, with at

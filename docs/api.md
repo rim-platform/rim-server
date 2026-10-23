@@ -655,3 +655,19 @@ cd ../rim-ui && npm run codegen
 Enum values appear in `SCREAMING_SNAKE` and fields in `camelCase`. The models in `messaging.md`,
 `search.md`, `message-change-feed.md`, `command_model.md` and the specs in `specs/` explain what
 the fields mean.
+
+### Rejoining the default workspace and removal notices
+
+`joinDefaultWorkspace: ID!` requires a signed-in local account and returns the current default
+workspace id. It preserves an existing role, or joins as Member with public channels. It
+returns `NOT_FOUND` if no default is available, and `FORBIDDEN` for remote accounts or an
+active ban ("you are banned from this workspace"). Older accounts and accounts whose ban
+expired may use it without an invite. Unbanning a local account in the current default
+workspace restores that membership automatically; other workspaces still require an invite.
+Private conversations and deleted automations are never restored.
+
+On a message's `author`, `User.banned` and `bannedUntil` describe the active ban in that
+message's workspace; `banReason` is visible only to workspace moderators. Other User contexts
+return false/null. `ServerMember.banned` is false for active directory members, with null
+`bannedUntil`; banned users have been removed from that directory. MemberLeft carries an
+optional cause and ban end; the moderator's reason is delivered only to the removed user.

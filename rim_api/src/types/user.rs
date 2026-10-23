@@ -43,7 +43,12 @@ impl OutputType for AvatarUrl {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
 pub struct User {
+    #[graphql(skip)]
+    pub(crate) ban_workspace_id: Option<rim_core::server::model::ServerId>,
+    #[graphql(skip)]
+    ban_status: Arc<tokio::sync::OnceCell<Option<rim_services::moderation::dto::ServerBanDto>>>,
     pub id: async_graphql::ID,
     pub username: String,
     pub display_name: Option<String>,
@@ -77,6 +82,8 @@ pub struct User {
 impl From<rim_services::user::dto::UserDto> for User {
     fn from(value: rim_services::user::dto::UserDto) -> Self {
         Self {
+            ban_workspace_id: None,
+            ban_status: Arc::new(tokio::sync::OnceCell::new()),
             id: async_graphql::ID(value.id.to_string()),
             username: value.username,
             display_name: value.display_name,
@@ -135,5 +142,59 @@ impl From<rim_services::presence::UserPresence> for UserPresenceGql {
             status: value.status.into(),
             last_seen_at: value.last_seen_at,
         }
+    }
+}
+
+impl User {
+    pub(crate) fn in_workspace(mut self, workspace: rim_core::server::model::ServerId) -> Self {
+        self.ban_workspace_id = Some(workspace);
+        self.ban_status = Arc::new(tokio::sync::OnceCell::new());
+        self
+    }
+
+    async fn ban(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<rim_services::moderation::dto::ServerBanDto>> {
+        let Some(workspace) = self.ban_workspace_id else {
+            return Ok(None);
+        };
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let service =
+            ctx.data::<Arc<dyn rim_services::moderation::service::ModerationService>>()?;
+        let user_id = crate::ids::parse_uuid_id(&self.id)?;
+        self.ban_status
+            .get_or_try_init(|| async {
+                service
+                    .member_ban(rim_services::Actor::new(actor), workspace, user_id)
+                    .await
+                    .map_err(crate::errors::map_service_error)
+            })
+            .await
+            .cloned()
+    }
+}
+
+#[async_graphql::ComplexObject]
+impl User {
+    /// Whether this message's author is banned in its workspace; false outside message authors.
+    async fn banned(&self, ctx: &async_graphql::Context<'_>) -> async_graphql::Result<bool> {
+        Ok(self.ban(ctx).await?.is_some())
+    }
+
+    /// End of the active workspace ban; null for a permanent ban or no ban.
+    async fn banned_until(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<chrono::DateTime<chrono::Utc>>> {
+        Ok(self.ban(ctx).await?.and_then(|ban| ban.expires_at))
+    }
+
+    /// The active ban's reason, readable only by workspace moderators.
+    async fn ban_reason(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<String>> {
+        Ok(self.ban(ctx).await?.and_then(|ban| ban.reason))
     }
 }

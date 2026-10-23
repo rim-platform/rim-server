@@ -236,7 +236,9 @@ impl DefaultAppServiceProvider {
             crate::default_workspace::DefaultDefaultWorkspaceService::new(
                 federation.default_workspace.clone(),
                 Arc::clone(&repos.default_workspace_repo),
-            ),
+            )
+            .with_join(repos.for_auth().signup_repos(), observers.clone())
+            .with_database(db.clone()),
         );
         let default_workspace_rules = crate::default_workspace_rules::DefaultWorkspaceRules::new(
             Arc::clone(&default_workspace_service),
@@ -309,7 +311,9 @@ impl DefaultAppServiceProvider {
                 observers.clone(),
             )
             .with_audit_log_service(Arc::clone(&audit_log_service))
-            .with_direct_space(federation.direct_space_id),
+            .with_direct_space(federation.direct_space_id)
+            .with_default_workspace(Arc::clone(&default_workspace_service))
+            .with_database(db.clone()),
         );
         let message_attachment_service: Arc<dyn MessageAttachmentService> = Arc::new(
             crate::message_attachment::DefaultMessageAttachmentService::new(

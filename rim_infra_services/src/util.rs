@@ -178,7 +178,9 @@ pub async fn ensure_not_banned(
         .await?
         .is_some()
     {
-        return Err(ServiceError::PermissionDenied);
+        return Err(ServiceError::Forbidden(
+            "you are banned from this workspace".to_string(),
+        ));
     }
     Ok(())
 }
@@ -1376,7 +1378,7 @@ mod tests {
         let server_id = ServerId::new();
         assert!(matches!(
             ensure_not_banned(&repo, server_id, banned).await,
-            Err(ServiceError::PermissionDenied)
+            Err(ServiceError::Forbidden(_))
         ));
         assert!(
             ensure_not_banned(&repo, server_id, UserId::new())

@@ -256,22 +256,39 @@ pub(crate) fn content_blob_hashes(content: &[u8]) -> Vec<Vec<u8>> {
 
 pub struct DefaultModerationService {
     repos: ModerationRepos,
+    db: Option<sea_orm::DatabaseConnection>,
     observers: Observers,
     /// `None` in unit tests; the composition root always wires it.
     audit_log_service: Option<Arc<dyn AuditLogService>>,
     /// The relay's direct space, whose reports the instance operators handle. `None` where no
     /// direct space is wired.
     direct_space_id: Option<ServerId>,
+    default_workspace: Option<Arc<dyn rim_services::default_workspace::DefaultWorkspaceService>>,
 }
 
 impl DefaultModerationService {
     pub fn new(repos: ModerationRepos, observers: Observers) -> Self {
         Self {
             repos,
+            db: None,
             observers,
             audit_log_service: None,
             direct_space_id: None,
+            default_workspace: None,
         }
+    }
+
+    pub fn with_database(mut self, db: sea_orm::DatabaseConnection) -> Self {
+        self.db = Some(db);
+        self
+    }
+
+    pub fn with_default_workspace(
+        mut self,
+        service: Arc<dyn rim_services::default_workspace::DefaultWorkspaceService>,
+    ) -> Self {
+        self.default_workspace = Some(service);
+        self
     }
 
     /// Let the instance operators list, view and resolve the reports of the direct space.
@@ -376,6 +393,9 @@ impl DefaultModerationService {
         &self,
         server_id: ServerId,
         user_id: UserId,
+        cause: &str,
+        until: Option<DateTime<Utc>>,
+        reason: Option<String>,
     ) -> ServiceResult<()> {
         self.repos
             .server_member_repo
@@ -430,6 +450,9 @@ impl DefaultModerationService {
         self.observers.emit(WorkspaceEvent::MemberLeft {
             workspace_id: server_id,
             user_id,
+            cause: Some(cause.to_string()),
+            until,
+            reason,
         });
         // The user's devices are now waiting to be removed from encrypted groups.
         let encrypted: Vec<_> = self
@@ -718,7 +741,7 @@ impl ModerationService for DefaultModerationService {
         if target.is_none() {
             return Err(ServiceError::NotFound);
         }
-        self.remove_from_workspace(cmd.server_id, cmd.user_id)
+        self.remove_from_workspace(cmd.server_id, cmd.user_id, "kick", None, reason.clone())
             .await?;
         info!(server_id = %cmd.server_id, user_id = %cmd.user_id, "kicked member");
 
@@ -767,9 +790,19 @@ impl ModerationService for DefaultModerationService {
             })
             .await?;
         if target.is_some() {
-            self.remove_from_workspace(cmd.server_id, cmd.user_id)
-                .await?;
+            self.remove_from_workspace(
+                cmd.server_id,
+                cmd.user_id,
+                "ban",
+                ban.expires_at,
+                ban.reason.clone(),
+            )
+            .await?;
         }
+        self.observers.emit(WorkspaceEvent::MemberBanChanged {
+            workspace_id: cmd.server_id,
+            user_id: cmd.user_id,
+        });
         info!(server_id = %cmd.server_id, user_id = %cmd.user_id, "banned user");
 
         self.audit(ModerationAuditEntry {
@@ -792,23 +825,102 @@ impl ModerationService for DefaultModerationService {
     async fn unban(&self, cmd: UnbanMemberCmd) -> ServiceResult<bool> {
         self.actor_moderator(cmd.server_id, cmd.actor.user_id)
             .await?;
-        let existed = self
-            .repos
+        let scope = match &self.db {
+            Some(db) => Some(
+                rim_infra_db::begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            ),
+            None => None,
+        };
+        let transaction_repos = scope
+            .as_ref()
+            .map(|scope| crate::repos::AppRepos::with_handle(&scope.handle()));
+        let repos = transaction_repos
+            .as_ref()
+            .map(|repos| repos.for_moderation())
+            .unwrap_or_else(|| self.repos.clone());
+        let existed = repos
             .moderation_repo
             .delete_ban(cmd.server_id, cmd.user_id)
             .await?;
+        let mut restored = false;
+        let mut joined_user = None;
+        if existed
+            && let Some(default) = &self.default_workspace
+            && default.current().await? == Some(cmd.server_id)
+            && let Some(user) = repos.user_repo.get_by_id(cmd.user_id).await?
+            && matches!(user.handle, rim_core::user::model::UserHandle::Local)
+        {
+            if let Some(transaction_repos) = &transaction_repos {
+                restored = crate::default_workspace::join(
+                    &transaction_repos.for_auth().signup_repos(),
+                    &crate::default_workspace::DefaultWorkspace::Fixed(cmd.server_id),
+                    cmd.user_id,
+                )
+                .await?
+                .is_some();
+                if restored {
+                    joined_user = Some(user);
+                }
+            } else {
+                restored = default.join(cmd.user_id).await?.is_some();
+            }
+        }
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        if let Some(user) = joined_user {
+            crate::default_workspace::announce(
+                Some(cmd.server_id),
+                cmd.user_id,
+                &user.username,
+                &self.observers,
+            );
+        }
         if existed {
+            self.observers.emit(WorkspaceEvent::MemberBanChanged {
+                workspace_id: cmd.server_id,
+                user_id: cmd.user_id,
+            });
             self.audit(ModerationAuditEntry {
                 actor: cmd.actor.user_id,
                 server_id: cmd.server_id,
                 command_id: audit_ids::UNBAN,
-                args: serde_json::json!({ "user_id": cmd.user_id.to_string() }),
+                args: serde_json::json!({ "user_id": cmd.user_id.to_string(), "restored_default_workspace": restored }),
                 dangerous: false,
                 typed_verb: TypedVerb::Write,
-            })
-            .await;
+            }).await;
         }
         Ok(existed)
+    }
+
+    async fn member_ban(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> ServiceResult<Option<ServerBanDto>> {
+        if self.direct_space_id == Some(server_id) {
+            return Ok(None);
+        }
+        let member = self
+            .repos
+            .server_member_repo
+            .get_member(server_id, actor.user_id)
+            .await?
+            .ok_or(ServiceError::PermissionDenied)?;
+        let mut ban = self
+            .repos
+            .moderation_repo
+            .get_active_ban(server_id, user_id, Utc::now())
+            .await?;
+        if !member.member_role.is_moderator()
+            && let Some(ban) = &mut ban
+        {
+            ban.reason = None;
+        }
+        Ok(ban.map(Into::into))
     }
 
     async fn list_bans(&self, query: ListBansQuery) -> ServiceResult<Vec<ServerBanDto>> {

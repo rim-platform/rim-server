@@ -940,6 +940,10 @@ delegation there.
 ends the presenting relay's delegations for them → `{"cancelled":<n>}`.
 Leaving, a kick or a ban ends the user's delegations for the workspace after `MemberLeft` is sent;
 the departed member gets that `MemberLeft` on their `u:` stream, being no member of `w` any more.
+`MemberLeft` may carry `cause` (`kick`, `ban`, `workspace_deleted`, `account_deleted`) and,
+for a temporary ban, `until`. A kick or ban's optional `reason` is private: it appears only
+on the removed member's `u:` stream and never on `w` or another member's stream. Clients may
+keep the reason visible until dismissed.
 `join`, `join/challenge`, `subscriptions` and `subscriptions/cancel` are workspace host endpoints: a
 server running only `relay` answers `503 role_disabled`. `presence` and `revocations` are served by
 every role (a relay is the home of DMs). A relay delivers items of a workspace a user holds an
@@ -1579,3 +1583,7 @@ A.1 to A.8 reproduces byte for byte in `rim_s2s`'s tests; A.8's nonce also signs
 
 **Without `RIM_PUBLIC_BASE_URL`** the descriptor's `graphql` and `websocket` endpoints use
 `http://localhost:<RIM_SERVER_PORT>`; `s2s` is null.
+
+`MemberBanChanged {workspace_id, user_id}` is a directory event carrying no ban reason. It
+follows a ban or unban, allowing clients to refresh message-author status without the user
+having to rejoin; its visibility and `w`/`u:` streams match `MemberRoleChanged`.

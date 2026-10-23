@@ -185,9 +185,9 @@ fn user_sdl_ends_with_the_probation_end_the_pending_deletion_the_operator_role_a
     assert!(
         sdl.contains(
             "principalId: String probationEndsAt: DateTime deletionScheduledFor: DateTime \
-             instanceOperator: Boolean! handle: String }"
+             instanceOperator: Boolean! handle: String banned: Boolean! bannedUntil: DateTime banReason: String }"
         ),
-        "User must end with probationEndsAt, deletionScheduledFor, instanceOperator, then handle"
+        "User keeps profile fields followed by workspace ban status"
     );
 }
 

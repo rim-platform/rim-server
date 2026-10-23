@@ -258,6 +258,15 @@ themselves (`VALIDATION`). Otherwise `FORBIDDEN`.
   `expiresAt`, or `expiresAt` in the future) accepting an invite, joining by invite and being
   added by the owner fail with `FORBIDDEN`; the refused join consumes no invite use.
   `unbanMember` deletes the ban; `serverBans` lists active bans (Owner/Moderator).
+  In the current default workspace, an unban also restores a local account as Member with
+  public channels, in the same transaction; it does not restore private channels, workspace
+  DMs, macros or pipelines. In other workspaces a new invite is needed. After a temporary
+  ban expires, or for an older account, `joinDefaultWorkspace` lets a signed-in local account
+  rejoin the default workspace without an invite; an active ban returns `FORBIDDEN` with
+  "you are banned from this workspace". Already joined accounts keep their role.
+  Message authors expose `banned` and `bannedUntil` in that message's workspace to its
+  members. `banReason` is null unless the viewer moderates that workspace. Expired and lifted
+  bans report false with null end and reason.
 - `timeoutMember(until, reason)`: `until` must be in the future and at most 30 days ahead. While
   it lasts, every write fails with `TIMED_OUT` (extension `until`, RFC 3339): sending, replying,
   editing, forwarding, reactions, pins, topic, attachments (REST upload: 403 with `until`),
@@ -326,7 +335,10 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
 
 - `{"type": "MemberLeft", "workspace_id": "…", "user_id": "…"}` — a member was kicked or banned.
   Delivered to the workspace (guests: only about themselves), including the removed user, whose
-  subscription then ends.
+  subscription then ends. Optional `cause` is `kick`, `ban`, `workspace_deleted` or
+  `account_deleted`; a temporary ban includes `until` (RFC 3339). For a kick or ban, only the
+  removed user's own delivery includes the moderator's optional `reason`. Other members
+  receive no reason. The removed member may keep this explanation until they dismiss it.
 - `{"type": "MemberRoleChanged", "workspace_id": "…", "user_id": "…", "role": "member"}` — `role`
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
@@ -540,3 +552,8 @@ Cursor pagination uses overfetch (`limit + 1`) so `next` and `prev` reflect actu
 - A thread reply's permalink is
   `/workspaces/{server}/conversations/{conversation}/threads/{thread}/messages/{message}`.
 - The email digest links each message by its permalink.
+
+`MemberBanChanged {workspace_id, user_id}` follows every successful ban and unban, including
+pre-emptive bans. It carries no reason. It follows directory visibility and stream rules;
+clients refetch workspace message-author ban status. Ban expiry is evaluated from `until`
+and the next query, without a scheduled event.

@@ -426,6 +426,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Removal events distinguish kicks, bans, workspace deletion and account deletion; the removed
+  user alone receives the moderator's reason. Workspace message authors expose `User.banned`,
+  `bannedUntil` and moderator-only `banReason`. An unban restores a local account to the current
+  default workspace; `joinDefaultWorkspace` lets older accounts and expired bans rejoin it.
+
 - An instance operator handling a report of an unencrypted message in the direct space now sees
   that one message's text, author and send time, and may delete it with `deleteMessage`, without
   a verified report and without seeing the rest of the conversation. Before, only franked

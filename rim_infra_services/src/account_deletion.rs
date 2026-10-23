@@ -167,6 +167,9 @@ impl DefaultAccountDeletionService {
             self.observers.emit(WorkspaceEvent::MemberLeft {
                 workspace_id: *workspace_id,
                 user_id,
+                cause: Some("account_deleted".to_string()),
+                until: None,
+                reason: None,
             });
         }
         for left in done.left_conversations {

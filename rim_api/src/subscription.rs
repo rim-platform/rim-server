@@ -156,7 +156,7 @@ impl Subscription {
                                 if user_id.to_string() == subscriber_user_id
                         );
                         if user_can_see_event_as(&event, &subscriber_user_id, is_guest)
-                            && let Ok(json) = serde_json::to_string(&event) {
+                            && let Ok(json) = event.json_for_user(&subscriber_user_id).map(|value| value.to_string()) {
                                 let through_inbox = in_direct_space
                                     || event.conversation_type().is_none_or(|t| {
                                         t == rim_core::conversation::model::ConversationType::Direct.as_str()

@@ -628,3 +628,10 @@ The command model does not define:
   capability.
 - Dangerous local commands should show a confirmation dialog by default, with an option to disable
   it later.
+
+### Default-workspace unbans
+
+`admin.unban` restores a local account to the current default workspace as Member with public
+channels, atomically with lifting the ban. The audit action records
+`restored_default_workspace`; reasons remain flags rather than free text. Other workspaces
+still need a fresh invite after unban.

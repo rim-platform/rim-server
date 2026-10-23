@@ -17,4 +17,12 @@ pub trait DefaultWorkspaceService: Send + Sync {
     /// # Errors
     /// Storage errors reading the claimed workspace.
     async fn current(&self) -> ServiceResult<Option<ServerId>>;
+
+    /// Join a local account to the current default workspace's public channels as Member.
+    /// Already joined accounts are unchanged; active bans are refused.
+    ///
+    /// # Errors
+    /// A ban, a non-local account, or a storage failure.
+    async fn join(&self, user_id: rim_core::user::model::UserId)
+    -> ServiceResult<Option<ServerId>>;
 }

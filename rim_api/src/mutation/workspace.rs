@@ -17,6 +17,21 @@ pub(crate) struct WorkspaceMutations;
 
 #[Object]
 impl WorkspaceMutations {
+    /// Join the current default workspace as Member with its public channels. Active bans
+    /// are refused; existing membership is unchanged.
+    async fn join_default_workspace(&self, ctx: &Context<'_>) -> Result<ID> {
+        let actor = require_actor(ctx)?;
+        let service = ctx
+            .data::<std::sync::Arc<dyn rim_services::default_workspace::DefaultWorkspaceService>>(
+            )?;
+        let workspace = service
+            .join(actor)
+            .await
+            .map_err(map_service_error)?
+            .ok_or_else(|| map_service_error(rim_services::ServiceError::NotFound))?;
+        Ok(ID(workspace.to_string()))
+    }
+
     async fn create_server(&self, ctx: &Context<'_>, input: CreateServerInput) -> Result<Server> {
         let actor = require_actor(ctx)?;
         crate::federation::ensure_may_create_workspace(ctx)?;

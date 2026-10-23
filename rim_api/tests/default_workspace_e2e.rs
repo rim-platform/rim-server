@@ -320,3 +320,42 @@ async fn the_default_workspace_notifies_plain_messages_only_to_members_who_chose
     expected.sort();
     assert_eq!(notified(&ctx, mention).await, expected);
 }
+
+#[tokio::test]
+async fn older_accounts_self_join_and_an_unban_restores_only_public_channels() {
+    let ctx = TestCtx::new().await;
+    let initial = ctx.build_schema(RegistrationMode::Open).await;
+    let ws = workspace(&ctx, &initial).await;
+    let schema = ctx.build_schema_with_default_workspace(
+        ws.id.parse::<uuid::Uuid>().unwrap().into(),
+        RegistrationMode::Open,
+    );
+    let user = ctx.create_user("dw-older").await;
+    let caller = ctx.caller(&user).await;
+    let join = "mutation { joinDefaultWorkspace }";
+    let joined = exec_ok(&schema, caller.request(join, json!({}))).await;
+    assert_eq!(joined["joinDefaultWorkspace"], ws.id);
+    let ban = "mutation($server: ID!, $user: ID!) { banMember(serverId: $server, userId: $user) { userId } }";
+    let vars = json!({"server": ws.id, "user": user.id.to_string()});
+    exec_ok(&schema, ws.owner.request(ban, vars.clone())).await;
+    let refused = schema.execute(caller.request(join, json!({}))).await;
+    assert!(!refused.errors.is_empty());
+    let unban =
+        "mutation($server: ID!, $user: ID!) { unbanMember(serverId: $server, userId: $user) }";
+    exec_ok(&schema, ws.owner.request(unban, vars)).await;
+    let joined = exec_ok(&schema, caller.request(join, json!({}))).await;
+    assert_eq!(joined["joinDefaultWorkspace"], ws.id);
+    let channels = exec_ok(
+        &schema,
+        caller.request(JOINED_CHANNELS, json!({"serverId":ws.id})),
+    )
+    .await;
+    let ids: Vec<_> = channels["channels"]["items"]
+        .as_array()
+        .expect("channels")
+        .iter()
+        .map(|channel| channel["id"].as_str().expect("id"))
+        .collect();
+    assert!(ids.contains(&ws.general.as_str()));
+    assert!(!ids.contains(&ws.staff.as_str()));
+}
