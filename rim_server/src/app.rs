@@ -657,6 +657,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         service_provider.e2ee_service(),
         service_provider.audit_log_service(),
     );
+    s2s.workspace_host
+        .set_public_link(service_provider.public_join_link_service());
 
     let typing_tracker = Arc::new(rim_infra_services::typing::TypingTracker::new());
 

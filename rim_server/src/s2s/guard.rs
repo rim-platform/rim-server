@@ -448,12 +448,7 @@ async fn dispatch(
         Endpoint::Forward => crate::s2s::forward::run(state, req, verified).await,
         Endpoint::JoinChallenge => {
             match body_as::<JoinChallengeRequest>(&verified.body, "join challenge request") {
-                Ok(request) => answer(
-                    state
-                        .workspace_host
-                        .join_challenge(peer, request.invite_token)
-                        .await,
-                ),
+                Ok(request) => answer(state.workspace_host.join_challenge(peer, request).await),
                 Err(reply) => reply,
             }
         }

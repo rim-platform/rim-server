@@ -38,6 +38,18 @@ tag `v<version>`, the version every crate in the workspace carries.
   `<RIM_DATA_DIR>/link-key.json`), created at the first start and checked by `/readyz`
   (`linkKey`); back it up with the rest of the data directory. `docs/messaging.md` ("Public
   join link and join requests") and `docs/api.md`.
+- Accounts of other servers join through a workspace's public link, or ask to join, through
+  their own server, unless the Owner turns `allowRemote` off (`FORBIDDEN`); a blocked peer is
+  refused as for every request. `remoteJoinChallenge` gains the argument `publicLinkToken`,
+  `RemoteJoinChallenge` the fields `workspaceName` and `publicLinkMode`,
+  `JoinRemoteWorkspaceInput` the fields `publicLinkToken` and `message`, and `RemoteJoinResult`
+  the fields `outcome`, `joinRequestId` and `joinRequestExpiresAt`. A request from another
+  server is filed and decided like a local one, and the decision reaches the person's server as
+  a `JoinRequestDecided` host event. On the server-to-server path, `POST /s2s/v1/join/challenge`
+  and `POST /s2s/v1/join` take `publicLinkToken` (and `message`), and a join answers
+  `joinRequest` when a request was filed. Misses a relay makes count against its server id.
+  `docs/specs/server-to-server-v1.md` ("Joining"), `docs/messaging.md`, `docs/relay.md` and
+  `docs/api.md`.
 
 - `POST /api/plugin-bundles/fetch` fetches and validates pinned bundles for browser installs
   without CORS-dependent external requests. Its `plugin_link_fetch` feature is enabled by

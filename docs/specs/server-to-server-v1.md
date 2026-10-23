@@ -903,6 +903,55 @@ relayStream                  ◄─── POST /s2s/v1/deliver         (events)
 
 A current member (an earlier join, or an existing local account on H) sends `inviteToken: null`.
 
+**Through a public link.** A workspace's public link (`docs/messaging.md`, "Public join link and
+join requests") takes the place of the invite on the same path. The link,
+`https://<H's web domain>/join/rim_pjl_…`, names H by origin only; the app pins H with
+`remoteServer(origin)`, which answers H's server id.
+
+- The token travels in its own field, `publicLinkToken`, never in `inviteToken`:
+  `POST /s2s/v1/join/challenge {"publicLinkToken"}` and `POST /s2s/v1/join {…, "inviteToken":
+  null, "publicLinkToken", "message"}`, `message` being the optional note to the moderators. A
+  request naming both is `400 bad_request`. Both bodies refuse unknown fields, so a host without
+  links refuses a link token (`400`) instead of reading it as an invite, and H never has to tell
+  the kinds apart by content. Rejected: one `inviteToken` field told apart by the `rim_pjl_`
+  prefix (a client or relay that does not know links would send a link where an invite is
+  expected, and an old host would answer it as an unknown invite).
+- H checks the link with the code of `publicJoinLinkPreview` and `joinByPublicLink`: every
+  invalid link (unknown, switched off, replaced, its workspace gone) is `404 not_found` with the
+  same message; misses count against the presenting relay's server id (`s2s:<serverId>`), 20 in
+  ten minutes answering `429 rate_limited` for an hour. The relay's address is shared by all its
+  people, while its server id is what the request's signature proves and what an operator
+  blocks. A valid link whose `allowRemote` is off is `403 forbidden` ("this workspace's public
+  link does not admit accounts from other servers") and is not a miss. A blocked or denied relay
+  gets `403 peer_not_allowed` before any of this, as for every request.
+- The challenge answers `workspaceId` (the link's workspace), `workspaceName` and `linkMode`
+  (`direct` or `requests`), the preview the app shows before the person chooses "Join" or "Ask
+  to join". The link is checked, not used.
+- At the join H checks the link again before it consumes the challenge: its workspace must be
+  the delegation's (`400 bad_request` otherwise). After storing the person it runs the checks of
+  `joinByPublicLink` in one transaction: not a member, not banned, room under
+  `RIM_LIMIT_MEMBERS_PER_WORKSPACE`. A current member is joined again as with an invite, and
+  their delegation accepted. A local account of H presented by a relay is `400 bad_request`: it
+  uses the link at H directly.
+- `direct`: the person joins with the link's role and public channels, with `MemberJoined`
+  `"source": "public_link"`, the link's join count and the audit row; H accepts the delegation
+  and answers as for an invite.
+- `requests`: H files a join request for the person, with the limits, message, expiry and
+  decline wait of a local one, and records the presenting relay on it. It accepts no delegation
+  (the person is not a member) and answers
+  `{"workspaceId","userId","role","streamHeads":{},"joinRequest":{"id","expiresAt"}}`, `role`
+  being the role the link gives. R records the request (`relay_join_request`) until `expiresAt`
+  and records no subscription.
+- The decision. Accepting adds the person as an invite join does. `JoinRequestDecided`
+  (`accepted`, `declined`, or `cancelled` by a ban) goes on the person's `u:` stream to the
+  relay recorded on the request, the one outbox recipient a workspace has without a delegation.
+  R queues an item naming no conversation for a recipient without a subscription only when it
+  is a `JoinRequestDecided` on their own `u:` stream for a workspace where it holds their
+  recorded request (`not_subscribed` otherwise), then forgets the request. The app, told
+  `accepted`, joins as a current member (`inviteToken: null`, no link) with a fresh challenge and
+  delegation, and R subscribes. The person cannot withdraw the request through R; it expires
+  after 30 days. `myJoinRequests` on R lists only requests filed at R.
+
 ### Delegation
 
 ```json
@@ -1238,6 +1287,13 @@ ALTER TABLE "user" ADD COLUMN home_username text, ADD COLUMN home_handle_domain 
 CREATE INDEX idx_user_home_handle ON "user" (home_handle_domain, home_username)
     WHERE home_username IS NOT NULL;
 ALTER TABLE peer_server ADD COLUMN handle_domain text;   -- the checked handleDomain
+-- add_remote_join_requests ("Through a public link")
+ALTER TABLE workspace_join_request ADD COLUMN relay_server_id text NULL;  -- host: the filing relay
+CREATE TABLE relay_join_request (user_id uuid NOT NULL REFERENCES "user" ON DELETE CASCADE,
+    host_server_id text NOT NULL, workspace_id uuid NOT NULL, request_id uuid NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL,
+    PRIMARY KEY (user_id, host_server_id, workspace_id));          -- relay: requests filed elsewhere
+CREATE INDEX idx_relay_join_request_expires ON relay_join_request (expires_at);
 ```
 
 A per-minute cleanup (like the key challenge cleanup) deletes expired nonces, `device_request_seen`
@@ -1271,8 +1327,10 @@ type RemoteSubscription { hostServerId: String!  workspaceId: ID!  status: Strin
 enum RevocationFanoutStatus { PENDING  ACKED  GAVE_UP }
 type RevocationFanout { hostServerId: String!  status: RevocationFanoutStatus!  ack: SignedStatement
                         attempts: Int! }
-type RemoteJoinChallenge { challengeId: ID!  nonce: String!  expiresAt: DateTime!  workspaceId: ID }
-type RemoteJoinResult { hostServerId: String!  workspaceId: ID!  userId: ID!  role: String! }
+type RemoteJoinChallenge { challengeId: ID!  nonce: String!  expiresAt: DateTime!  workspaceId: ID
+                           workspaceName: String  publicLinkMode: PublicJoinLinkMode }   # link only
+type RemoteJoinResult { hostServerId: String!  workspaceId: ID!  userId: ID!  role: String!
+                        outcome: JoinByPublicLinkOutcome!  joinRequestId: ID  joinRequestExpiresAt: DateTime }
 type StreamHead { stream: String!  seq: String! }                                    # host; decimal
 type ConversationPredecessor { hostServerId: String!  conversationId: ID! }
 type Conversation { predecessor: ConversationPredecessor }                            # additive field
@@ -1283,7 +1341,8 @@ input CreateConversationInput { remoteMembers: [RemoteMemberInput!]  predecessor
 input SignupWithKeyInput { proofOfWork: String }   # additive field (S5-6)
 enum RegistrationModeGql { POW }                    # additive value (S5-6)
 input JoinRemoteWorkspaceInput { hostServerId: String!  hostOrigin: String!  inviteToken: String
-                                 proof: SignedStatementInput!  delegation: SignedStatementInput! }
+                                 proof: SignedStatementInput!  delegation: SignedStatementInput!
+                                 publicLinkToken: String  message: String }      # the last two additive
 
 type Query {
   relayInfo: RelayInfo!
@@ -1305,7 +1364,8 @@ type Mutation {
   unblockPrincipal(principalId: String!): Boolean!
   reportDmRequest(id: ID!, reason: String!): Boolean!
   ackRelayItems(upTo: ID!): Boolean!
-  remoteJoinChallenge(hostServerId: String!, hostOrigin: String!, inviteToken: String): RemoteJoinChallenge!
+  remoteJoinChallenge(hostServerId: String!, hostOrigin: String!, inviteToken: String,
+                      publicLinkToken: String): RemoteJoinChallenge!
   joinRemoteWorkspace(input: JoinRemoteWorkspaceInput!): RemoteJoinResult!
   renewDelegations(delegations: [SignedStatementInput!]!): [RemoteSubscription!]!
   leaveRelay: Boolean!
@@ -1360,7 +1420,7 @@ queue bytes, S2S responses by status, signature failures by reason.
 |---|---|---|
 | Hostile relay | Read plaintext channel events and DM metadata it queues; drop, delay, reorder; refuse to forward; see which spaces its users use and when | Forge a write (no device key); forge or alter host events or responses (pinned host key); replay (`seq`, nonces); use a delegation for another workspace, host or relay; hide a revocation past 24 hours once the app reaches the host directly; read DMs (MLS) |
 | Hostile host | What a server can for its own spaces today, plus remote members' principals, devices and activity there | Sign as a device; use a delegation at another host; read DMs homed elsewhere; see a remote member's IP outside a direct connection |
-| Hostile peer | Send signed junk up to its limits; claim last-resort packages and send DM requests as a stranger, under any name the relay cannot check, up to 1,000 a day per relay | Impersonate another server (self-certifying id); replay; push events for spaces it does not host (envelopes name their host; relays accept only subscribed spaces); change another principal's devices, device activity or relays at a host (it does not speak for them, 7.4a); file an invite in the name of someone whose card does not list it, or with a card their key did not sign, so it borrows no contact's or workspace member's standing; pass an allow-list |
+| Hostile peer | Send signed junk up to its limits; present people with accounts it made for free through a workspace's public link, up to the workspace's member cap, unless the Owner turns `allowRemote` off or the operator blocks it; claim last-resort packages and send DM requests as a stranger, under any name the relay cannot check, up to 1,000 a day per relay | Impersonate another server (self-certifying id); replay; push events for spaces it does not host (envelopes name their host; relays accept only subscribed spaces, and a join decision only for a request the user filed there); change another principal's devices, device activity or relays at a host (it does not speak for them, 7.4a); file an invite in the name of someone whose card does not list it, or with a card their key did not sign, so it borrows no contact's or workspace member's standing; pass an allow-list |
 | Stolen server key | Sign as that server until recovery: receive delegated events as a relay, sign false events to its own members as a host | Sign as users; extend delegations; outlive a `signer: recovery` rotation (peers drop the old key at once, delegations naming it die) |
 | Stolen device | Whatever that device can do, through any relay or directly | Act after a host applies the revocation |
 | Network attacker | See TLS metadata between servers | Alter bodies (digest, signature), replay, substitute a server at a pinned id |

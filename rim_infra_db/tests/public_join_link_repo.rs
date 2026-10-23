@@ -42,6 +42,7 @@ fn new_request(server_id: ServerId, user_id: UserId, at: chrono::DateTime<Utc>) 
         message: Some("hello".to_string()),
         created_at: at,
         expires_at: at + Duration::days(30),
+        relay_server_id: None,
     }
 }
 

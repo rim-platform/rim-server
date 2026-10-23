@@ -7,7 +7,7 @@ use rim_core::server::model::ServerId;
 
 use crate::public_join_link::dto::{
     JoinByPublicLinkResultDto, JoinRequestDto, JoinRequestPageCursor, PublicJoinLinkDto,
-    PublicJoinLinkPatch, PublicJoinLinkPreviewDto,
+    PublicJoinLinkPatch, PublicJoinLinkPreviewDto, RemoteLinkDto,
 };
 use crate::{Actor, ServiceResult};
 
@@ -22,8 +22,9 @@ pub struct ListJoinRequestsQuery {
     pub limit: u32,
 }
 
-/// A workspace's public join link, which lets accounts of this server join or ask to join, and
-/// the join requests filed through it. The link never creates an account.
+/// A workspace's public join link, which lets accounts of this server, and people of other
+/// servers presented by their relay, join or ask to join, and the join requests filed through
+/// it. The link never creates an account.
 ///
 /// Every invalid link (unknown, switched off, replaced, its workspace gone) answers `NotFound`
 /// on the same path; an address that makes too many such lookups gets `RateLimited` for every
@@ -89,6 +90,35 @@ pub trait PublicJoinLinkService: Send + Sync {
         token: String,
         message: Option<String>,
         remote_ip: String,
+    ) -> ServiceResult<JoinByPublicLinkResultDto>;
+
+    /// The link `token` names, for a person of another server whose relay `peer_server_id`
+    /// asks: the checks of [`Self::preview`], with misses counted against the relay, and the
+    /// link must admit accounts from other servers.
+    ///
+    /// # Errors
+    /// `NotFound` for every invalid link, `RateLimited` while the relay is cut off, `Forbidden`
+    /// when the link does not admit accounts from other servers.
+    async fn remote_link(
+        &self,
+        peer_server_id: String,
+        token: String,
+    ) -> ServiceResult<RemoteLinkDto>;
+
+    /// [`Self::join`] for a person of another server, held here as a remote user, whom the
+    /// relay `peer_server_id` presents for the workspace `workspace_id`. Misses count against
+    /// the relay; a filed request records the relay, which its decision is delivered to.
+    ///
+    /// # Errors
+    /// Those of [`Self::join`] and [`Self::remote_link`]; `Validation` when the link is for
+    /// another workspace.
+    async fn join_remote(
+        &self,
+        actor: Actor,
+        peer_server_id: String,
+        token: String,
+        workspace_id: ServerId,
+        message: Option<String>,
     ) -> ServiceResult<JoinByPublicLinkResultDto>;
 
     /// The actor's open join requests, newest first.

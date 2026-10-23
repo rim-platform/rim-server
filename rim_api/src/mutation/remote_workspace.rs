@@ -1,6 +1,6 @@
 use async_graphql::*;
 use rim_services::Actor;
-use rim_services::remote_workspace::dto::RemoteJoinInput;
+use rim_services::remote_workspace::dto::{JoinChallengeRequest, RemoteJoinInput};
 
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
@@ -17,25 +17,36 @@ pub(crate) struct RemoteWorkspaceMutations;
 #[Object]
 impl RemoteWorkspaceMutations {
     /// Pin the host at `hostOrigin` as `hostServerId` and fetch a login challenge from it for a
-    /// join, with the workspace `inviteToken` names (the invite is not used).
+    /// join, with the workspace `inviteToken` names (the invite is not used), or the workspace,
+    /// its name and the link's mode `publicLinkToken` names. At most one of the two.
     async fn remote_join_challenge(
         &self,
         ctx: &Context<'_>,
         host_server_id: String,
         host_origin: String,
         invite_token: Option<String>,
+        public_link_token: Option<String>,
     ) -> Result<RemoteJoinChallenge> {
         let actor = require_actor(ctx)?;
         Ok(relay(ctx)?
             .workspace_relay
-            .remote_join_challenge(Actor::new(actor), host_server_id, host_origin, invite_token)
+            .remote_join_challenge(
+                Actor::new(actor),
+                host_server_id,
+                host_origin,
+                JoinChallengeRequest {
+                    invite_token,
+                    public_link_token,
+                },
+            )
             .await
             .map_err(map_service_error)?
             .into())
     }
 
     /// Join a workspace on another host: the relay presents the caller's identity, proof and
-    /// delegation, and records the subscription.
+    /// delegation, and records the subscription. Through a public link that takes join
+    /// requests, the host files a request instead (`outcome: REQUESTED`).
     async fn join_remote_workspace(
         &self,
         ctx: &Context<'_>,
@@ -50,6 +61,8 @@ impl RemoteWorkspaceMutations {
                     host_server_id: input.host_server_id,
                     host_origin: input.host_origin,
                     invite_token: input.invite_token,
+                    public_link_token: input.public_link_token,
+                    message: input.message,
                     proof: signed_json(input.proof),
                     delegation: signed_json(input.delegation),
                 },

@@ -616,6 +616,93 @@ impl SubscriptionRepository for SeaOrmSubscriptionRepository {
             .await
     }
 
+    async fn record_join_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+        request_id: Uuid,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<()> {
+        self.sql()
+            .execute(
+                "INSERT INTO relay_join_request (user_id, host_server_id, workspace_id, \
+                     request_id, created_at, expires_at) \
+                 VALUES ($1, $2, $3, $4, now(), $5) \
+                 ON CONFLICT (user_id, host_server_id, workspace_id) DO UPDATE SET \
+                   request_id = EXCLUDED.request_id, created_at = now(), \
+                   expires_at = EXCLUDED.expires_at",
+                vec![
+                    uuid(user_id),
+                    host_server_id.into(),
+                    uuid(workspace_id),
+                    uuid(request_id),
+                    time(expires_at),
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn has_join_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool> {
+        Ok(self
+            .sql()
+            .one::<FlagRow>(
+                "SELECT EXISTS (SELECT 1 FROM relay_join_request \
+                   WHERE user_id = $1 AND host_server_id = $2 AND workspace_id = $3 \
+                     AND expires_at > $4) AS flag",
+                vec![
+                    uuid(user_id),
+                    host_server_id.into(),
+                    uuid(workspace_id),
+                    time(now),
+                ],
+            )
+            .await?
+            .is_some_and(|r| r.flag))
+    }
+
+    async fn delete_join_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+    ) -> RepoResult<bool> {
+        Ok(self
+            .sql()
+            .execute(
+                "DELETE FROM relay_join_request \
+                 WHERE user_id = $1 AND host_server_id = $2 AND workspace_id = $3",
+                vec![uuid(user_id), host_server_id.into(), uuid(workspace_id)],
+            )
+            .await?
+            > 0)
+    }
+
+    async fn delete_join_requests(&self, user_id: UserId) -> RepoResult<u64> {
+        self.sql()
+            .execute(
+                "DELETE FROM relay_join_request WHERE user_id = $1",
+                vec![uuid(user_id)],
+            )
+            .await
+    }
+
+    async fn delete_expired_join_requests(&self, now: DateTime<Utc>) -> RepoResult<u64> {
+        self.sql()
+            .execute(
+                "DELETE FROM relay_join_request WHERE expires_at <= $1",
+                vec![time(now)],
+            )
+            .await
+    }
+
     async fn insert_fanouts(
         &self,
         device_key_id: DeviceKeyId,

@@ -284,8 +284,9 @@ impl PublicJoinLinkRepository for SeaOrmPublicJoinLinkRepository {
         // transaction.
         let sql = format!(
             "INSERT INTO workspace_join_request \
-                 (id, server_id, user_id, message, status, created_at, expires_at) \
-             VALUES ($1, $2, $3, $4, 'open', $5, $6) \
+                 (id, server_id, user_id, message, status, created_at, expires_at, \
+                  relay_server_id) \
+             VALUES ($1, $2, $3, $4, 'open', $5, $6, $7) \
              ON CONFLICT (server_id, user_id) WHERE status = 'open' DO NOTHING \
              RETURNING {REQUEST_COLUMNS}"
         );
@@ -298,6 +299,7 @@ impl PublicJoinLinkRepository for SeaOrmPublicJoinLinkRepository {
                 request.message.into(),
                 utc(request.created_at),
                 utc(request.expires_at),
+                request.relay_server_id.into(),
             ],
         )
         .await?

@@ -283,6 +283,40 @@ pub trait SubscriptionRepository: Send + Sync {
     /// Mark active subscriptions past their expiry as lapsed. Returns how many.
     async fn lapse_expired(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 
+    /// Record a join request a user filed at a host's workspace, until `expires_at`; a request
+    /// for the same workspace replaces it.
+    async fn record_join_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+        request_id: Uuid,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<()>;
+
+    /// Whether a user holds a recorded join request at a host's workspace that has not expired.
+    async fn has_join_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool>;
+
+    /// Forget a user's join request at a host's workspace. Returns whether one was recorded.
+    async fn delete_join_request(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+    ) -> RepoResult<bool>;
+
+    /// Forget every join request of a user. Returns how many.
+    async fn delete_join_requests(&self, user_id: UserId) -> RepoResult<u64>;
+
+    /// Forget join requests past their expiry. Returns how many.
+    async fn delete_expired_join_requests(&self, now: DateTime<Utc>) -> RepoResult<u64>;
+
     /// Start sending a device's revocation to `hosts`, first at `next_attempt_at`; a host it is
     /// on its way to already keeps its row. Returns how many rows were added.
     async fn insert_fanouts(

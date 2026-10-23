@@ -234,8 +234,9 @@ decide, and each may only tighten the one above it:
 ### Public join link and join requests
 
 A workspace can have one permanent public link, `<server>/join/<token>`, to put on a website, a
-README or a social profile. It lets **existing accounts of this server** join the workspace, or
-ask to join it. It is a different thing from a workspace invite:
+README or a social profile. It lets **existing accounts** join the workspace, or ask to join it:
+accounts of this server, and, unless the Owner turns that off, accounts of other servers through
+their own server. It is a different thing from a workspace invite:
 
 | | Workspace invite | Public link |
 |---|---|---|
@@ -251,7 +252,9 @@ included, create accounts on the server for free. So the link only admits accoun
 exist; someone without one signs up the server's normal way (proof-of-work, an instance invite,
 open registration) and then opens the link again. `signupWithInvite`, `signupWithKey` and
 `acceptInvite` refuse a link token as `INVALID_TOKEN`, as they do any unknown token.
-`joinByPublicLink` is for accounts this server holds.
+`joinByPublicLink` is for accounts this server holds; an account of another server joins through
+its own server, which presents it here (below), and nothing about that creates an account
+either: the host holds the person as a remote user, as for any member from elsewhere.
 
 **The link.** A token `rim_pjl_` followed by 16 random bytes in base64url (22 characters).
 `/join/<token>` carries invite tokens too; the prefix tells the kinds apart (`rim_pjl_` a public
@@ -266,8 +269,8 @@ everyone joins the default workspace anyway.
 `VALIDATION` for the direct space and the server's default workspace):
 
 - `publicJoinLink(serverId)`: `enabled` (off by default), `mode` (`DIRECT` or `REQUESTS`), `role`
-  (`MEMBER`, the default, or `GUEST`), `allowRemote` (default true; stored for accounts of other
-  servers, which do not join through the link yet), `enabledAt`, `issuedAt`, `issuedBy`, the
+  (`MEMBER`, the default, or `GUEST`), `allowRemote` (whether accounts of other servers may join
+  or ask to join through the link; on by default), `enabledAt`, `issuedAt`, `issuedBy`, the
   `token` and `url`, `joinsLastDay` and `joinsLastWeek` (joins through the link, directly or by
   an accepted request) and `openRequests`. A workspace that never had a link answers with
   `enabled` false and a null token.
@@ -303,6 +306,40 @@ makes anyone an owner, so it does not refuse a join, as it does not refuse an in
   `{outcome: JOINED, serverId}`; `message` is ignored.
 - `REQUESTS`: the caller files a join request; the answer is `{outcome: REQUESTED, serverId,
   joinRequest}`.
+
+**Accounts from other servers.** Someone whose account is on another server pastes the link into
+their own app ("Add workspace"), which reads this server from the URL and joins through the
+remote-join path of `docs/specs/server-to-server-v1.md` ("Joining"): their server, the relay,
+asks this one for a join challenge with the link token (`remoteJoinChallenge(…,
+publicLinkToken)`), the app signs a login proof and a delegation, and `joinRemoteWorkspace` with
+`publicLinkToken` presents them. This server runs the same checks as `joinByPublicLink` through
+the same code, and the same modes, with these differences:
+
+- `allowRemote` off answers `FORBIDDEN` ("this workspace's public link does not admit accounts
+  from other servers"), at the challenge and at the join; it is a refusal of a valid link and
+  does not count as a miss. Accounts of this server still join.
+- Misses count against the relay's server id rather than an IP address: the relay's signature
+  proves its id, and its address is shared by all its users. The 20 misses in ten minutes cut
+  that relay off from link lookups here for an hour; client addresses are not affected.
+- A server the operator blocked (`rim-server peer block <serverId>`, `docs/relay.md`, "Blocking a
+  peer") gets `403 peer_not_allowed` for every request, the challenge included, before the link
+  is looked up: its people do not join through any link here, whatever `allowRemote` says.
+- `DIRECT`: the person joins with the link's role and public channels, with `MemberJoined`
+  `"source": "public_link"`, the join count and the audit row, and their relay subscribes as
+  for any remote join.
+- `REQUESTS`: a join request is filed for the person as for a local one (the same message,
+  limits, expiry, decline wait, ban cancellation), recording the relay that filed it. The
+  moderators see it in `joinRequests`; its `user` is the person as held here (a remote user,
+  `r_…`). Accepting adds them with the link's role, as an invite join does. The decision
+  (`JoinRequestDecided` with `accepted`, `declined` or `cancelled`) travels to that relay as a host
+  event on the person's `u:` stream; their app, told `accepted`, completes the join as a current
+  member (`joinRemoteWorkspace` without a token) to subscribe. The person cannot withdraw the
+  request from their own server; it expires after 30 days.
+- `myJoinRequests` lists the requests filed on the server answering it, so a person's requests
+  at other servers are not in their own server's list; their app knows them from the
+  `REQUESTED` answer and learns the decision from the relay item.
+- An account of this server presented by a relay elsewhere is refused (`VALIDATION`): it joins
+  through the link here directly.
 
 **Join requests.**
 

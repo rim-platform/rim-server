@@ -1,11 +1,13 @@
 //! Workspaces' public join links and the join requests filed through them.
 //!
 //! [`DefaultPublicJoinLinkService`] lets a workspace's Owner turn a permanent link on and off,
-//! issue a new token and choose what it does; lets anyone with the link see the workspace and an
-//! account of this server join or ask to join; and lets the Owner and Moderators accept or
-//! decline the requests. The link never creates an account. Every invalid link answers
-//! `NotFound` on one path, a lookup by the token's hash, and [`LinkMissLimiter`] cuts off an
-//! address that makes too many such lookups.
+//! issue a new token and choose what it does; lets anyone with the link see the workspace, an
+//! account of this server join or ask to join, and a person of another server do the same
+//! through their relay unless the Owner turned that off; and lets the Owner and Moderators
+//! accept or decline the requests. The link never creates an account. Every invalid link
+//! answers `NotFound` on one path, a lookup by the token's hash, and [`LinkMissLimiter`] cuts
+//! off an address that makes too many such lookups: a client's IP address, or for a relay's
+//! requests the relay's server id.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -41,7 +43,7 @@ use rim_services::public_join_link::dto::{
     JoinByPublicLinkResultDto, JoinRequestDto, JoinRequestPageCursor, LINK_MISS_BLOCK_SECS,
     LINK_MISS_LIMIT, LINK_MISS_WINDOW_SECS, MAX_JOIN_REQUEST_MESSAGE_CHARS,
     MAX_OPEN_JOIN_REQUESTS_PER_USER, PUBLIC_LINK_SOURCE, PublicJoinLinkDto, PublicJoinLinkPatch,
-    PublicJoinLinkPreviewDto, PublicLinkViewer,
+    PublicJoinLinkPreviewDto, PublicLinkViewer, RemoteLinkDto,
 };
 use rim_services::public_join_link::service::{ListJoinRequestsQuery, PublicJoinLinkService};
 use rim_services::{Actor, ServiceError, ServiceResult};
@@ -70,6 +72,23 @@ pub(crate) mod audit_ids {
 
 /// Most addresses [`LinkMissLimiter`] keeps; the oldest goes first beyond that.
 const MAX_MISS_BUCKETS: usize = 100_000;
+
+/// The [`LinkMissLimiter`] address of the link lookups a relay makes for its users: its server
+/// id, which its signature proves, in a namespace no IP address shares.
+fn peer_address(peer_server_id: &str) -> String {
+    format!("s2s:{peer_server_id}")
+}
+
+/// `Forbidden` when `link` does not admit accounts from other servers.
+fn ensure_admits_remote(link: &PublicJoinLink) -> ServiceResult<()> {
+    if link.allow_remote {
+        Ok(())
+    } else {
+        Err(ServiceError::Forbidden(
+            "this workspace's public link does not admit accounts from other servers".to_string(),
+        ))
+    }
+}
 
 /// The repositories the link service reads and writes.
 #[derive(Clone)]
@@ -448,7 +467,7 @@ impl DefaultPublicJoinLinkService {
     }
 
     /// The switched-on link `token` names and its workspace, looked up by the token's hash
-    /// whatever the token is. A miss is logged and counted against `remote_ip`.
+    /// whatever the token is. A miss is logged and counted against `address`.
     ///
     /// # Errors
     /// `NotFound` for every invalid link.
@@ -456,7 +475,7 @@ impl DefaultPublicJoinLinkService {
         &self,
         repos: &PublicJoinLinkRepos,
         token: &str,
-        remote_ip: &str,
+        address: &str,
     ) -> ServiceResult<(PublicJoinLink, Server)> {
         let token_hash = rim_auth::session_token::hash_token(token);
         let link = repos.link_repo.link_by_token_hash(&token_hash).await?;
@@ -469,8 +488,8 @@ impl DefaultPublicJoinLinkService {
             None => None,
         };
         found.ok_or_else(|| {
-            self.misses.record(remote_ip, self.clock.now());
-            info!(remote_ip, "public join link lookup missed");
+            self.misses.record(address, self.clock.now());
+            info!(address, "public join link lookup missed");
             ServiceError::NotFound
         })
     }
@@ -585,13 +604,15 @@ impl DefaultPublicJoinLinkService {
         info!(user_id = %user_id, server_id = %server_id, "user joined a workspace through its public link");
     }
 
-    /// File a join request for `actor` with `repos`, after the checks a join would run.
+    /// File a join request for `actor` with `repos`, after the checks a join would run;
+    /// `relay_server_id` is the relay filing it for a person of another server.
     async fn file_request(
         &self,
         repos: &PublicJoinLinkRepos,
         server_id: ServerId,
         actor: UserId,
         message: Option<String>,
+        relay_server_id: Option<String>,
         now: DateTime<Utc>,
     ) -> ServiceResult<JoinRequest> {
         ensure_not_member(repos, server_id, actor).await?;
@@ -640,9 +661,104 @@ impl DefaultPublicJoinLinkService {
                 message,
                 created_at: now,
                 expires_at: now + Duration::days(JOIN_REQUEST_DAYS),
+                relay_server_id,
             })
             .await?)
     }
+
+    /// Join through the link `token` names, or file a join request with `message` when it
+    /// takes requests. Misses count against `address`; `remote` is set for a person of
+    /// another server, whose relay presents them for a workspace.
+    ///
+    /// # Errors
+    /// Those of [`PublicJoinLinkService::join`]; for `remote`, `Forbidden` when the link does
+    /// not admit accounts from other servers and `Validation` when it is for another
+    /// workspace.
+    async fn join_through(
+        &self,
+        actor: Actor,
+        token: &str,
+        message: Option<String>,
+        address: &str,
+        remote: Option<RemoteJoin>,
+    ) -> ServiceResult<JoinByPublicLinkResultDto> {
+        let now = self.clock.now();
+        self.misses.check(address, now)?;
+        let (scope, repos) = self.transaction().await?;
+        let (link, server) = self.valid_link(&repos, token, address).await?;
+        let relay_server_id = match remote {
+            Some(remote) => {
+                ensure_admits_remote(&link)?;
+                if link.server_id != remote.workspace_id {
+                    return Err(ServiceError::Validation(
+                        "the public link is for another workspace than the delegation".to_string(),
+                    ));
+                }
+                Some(remote.relay_server_id)
+            }
+            None => None,
+        };
+        match link.mode {
+            PublicLinkMode::Direct => {
+                self.admit(&repos, server.id, actor.user_id, link.role, now)
+                    .await?;
+                Self::commit(scope).await?;
+                self.announce_joined(server.id, actor.user_id, link.role, None)
+                    .await;
+                Ok(JoinByPublicLinkResultDto {
+                    outcome: JoinByPublicLinkOutcome::Joined,
+                    server_id: server.id,
+                    join_request: None,
+                })
+            }
+            PublicLinkMode::Requests => {
+                let message = normalize_message(message)?;
+                let request = self
+                    .file_request(
+                        &repos,
+                        server.id,
+                        actor.user_id,
+                        message,
+                        relay_server_id,
+                        now,
+                    )
+                    .await?;
+                Self::commit(scope).await?;
+                match request_audience(
+                    self.repos.server_member_repo.as_ref(),
+                    server.id,
+                    actor.user_id,
+                )
+                .await
+                {
+                    Ok(member_user_ids) => {
+                        self.observers.emit(WorkspaceEvent::JoinRequestCreated {
+                            workspace_id: server.id,
+                            request_id: request.id,
+                            user_id: actor.user_id,
+                            member_user_ids,
+                        })
+                    }
+                    Err(e) => {
+                        warn!(error = %e, request_id = %request.id, "join request not announced")
+                    }
+                }
+                info!(user_id = %actor.user_id, server_id = %server.id, "join request filed");
+                Ok(JoinByPublicLinkResultDto {
+                    outcome: JoinByPublicLinkOutcome::Requested,
+                    server_id: server.id,
+                    join_request: Some(JoinRequestDto::from_request(request, server.name, now)),
+                })
+            }
+        }
+    }
+}
+
+/// A join through a link for a person of another server: the relay presenting them and the
+/// workspace their delegation names.
+struct RemoteJoin {
+    relay_server_id: String,
+    workspace_id: ServerId,
 }
 
 /// `Conflict` when `user_id` is already a member of the workspace.
@@ -820,56 +936,47 @@ impl PublicJoinLinkService for DefaultPublicJoinLinkService {
         message: Option<String>,
         remote_ip: String,
     ) -> ServiceResult<JoinByPublicLinkResultDto> {
-        let now = self.clock.now();
-        self.misses.check(&remote_ip, now)?;
-        let (scope, repos) = self.transaction().await?;
-        let (link, server) = self.valid_link(&repos, &token, &remote_ip).await?;
-        match link.mode {
-            PublicLinkMode::Direct => {
-                self.admit(&repos, server.id, actor.user_id, link.role, now)
-                    .await?;
-                Self::commit(scope).await?;
-                self.announce_joined(server.id, actor.user_id, link.role, None)
-                    .await;
-                Ok(JoinByPublicLinkResultDto {
-                    outcome: JoinByPublicLinkOutcome::Joined,
-                    server_id: server.id,
-                    join_request: None,
-                })
-            }
-            PublicLinkMode::Requests => {
-                let message = normalize_message(message)?;
-                let request = self
-                    .file_request(&repos, server.id, actor.user_id, message, now)
-                    .await?;
-                Self::commit(scope).await?;
-                match request_audience(
-                    self.repos.server_member_repo.as_ref(),
-                    server.id,
-                    actor.user_id,
-                )
-                .await
-                {
-                    Ok(member_user_ids) => {
-                        self.observers.emit(WorkspaceEvent::JoinRequestCreated {
-                            workspace_id: server.id,
-                            request_id: request.id,
-                            user_id: actor.user_id,
-                            member_user_ids,
-                        })
-                    }
-                    Err(e) => {
-                        warn!(error = %e, request_id = %request.id, "join request not announced")
-                    }
-                }
-                info!(user_id = %actor.user_id, server_id = %server.id, "join request filed");
-                Ok(JoinByPublicLinkResultDto {
-                    outcome: JoinByPublicLinkOutcome::Requested,
-                    server_id: server.id,
-                    join_request: Some(JoinRequestDto::from_request(request, server.name, now)),
-                })
-            }
-        }
+        self.join_through(actor, &token, message, &remote_ip, None)
+            .await
+    }
+
+    async fn remote_link(
+        &self,
+        peer_server_id: String,
+        token: String,
+    ) -> ServiceResult<RemoteLinkDto> {
+        let address = peer_address(&peer_server_id);
+        self.misses.check(&address, self.clock.now())?;
+        let (link, server) = self.valid_link(&self.repos, &token, &address).await?;
+        ensure_admits_remote(&link)?;
+        Ok(RemoteLinkDto {
+            server_id: server.id,
+            name: server.name,
+            mode: link.mode,
+            role: link.role,
+        })
+    }
+
+    async fn join_remote(
+        &self,
+        actor: Actor,
+        peer_server_id: String,
+        token: String,
+        workspace_id: ServerId,
+        message: Option<String>,
+    ) -> ServiceResult<JoinByPublicLinkResultDto> {
+        let address = peer_address(&peer_server_id);
+        self.join_through(
+            actor,
+            &token,
+            message,
+            &address,
+            Some(RemoteJoin {
+                relay_server_id: peer_server_id,
+                workspace_id,
+            }),
+        )
+        .await
     }
 
     async fn my_join_requests(&self, actor: Actor) -> ServiceResult<Vec<JoinRequestDto>> {

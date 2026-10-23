@@ -2,7 +2,8 @@
 
 //! Delegations, relay subscriptions and revocation fan-outs against a real database: one
 //! delegation per workspace, device and relay with the longer one kept, what counts as active,
-//! ending them, cascades, subscriptions and fan-outs, and the migration's refusing `down`.
+//! ending them, cascades, subscriptions and fan-outs, join requests a relay's users filed at
+//! other hosts and the relay a host's join request names, and the migration's refusing `down`.
 
 mod support;
 
@@ -473,6 +474,111 @@ async fn a_subscription_stays_active_while_any_device_keeps_it() {
     assert_eq!(repo.end_subscriptions(user).await.unwrap(), 1);
     assert_eq!(repo.end_subscriptions(user).await.unwrap(), 0);
     assert!(repo.subscribed_hosts(user, now).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_join_request_filed_elsewhere_is_recorded_until_it_expires_or_is_forgotten() {
+    let ctx = support::TestCtx::new().await;
+    let user = ctx.create_key_only_user("alice", "rimp1_alice").await.id;
+    let workspace = Uuid::now_v7();
+    let repo = SeaOrmSubscriptionRepository::new(ctx.db.clone());
+    let now = Utc::now();
+    let expires = now + Duration::days(30);
+
+    assert!(
+        !repo
+            .has_join_request(user, RELAY, workspace, now)
+            .await
+            .unwrap()
+    );
+    repo.record_join_request(user, RELAY, workspace, Uuid::now_v7(), expires)
+        .await
+        .unwrap();
+    // Asking again replaces the row.
+    repo.record_join_request(user, RELAY, workspace, Uuid::now_v7(), expires)
+        .await
+        .unwrap();
+    assert_eq!(
+        count(&ctx.db, "SELECT count(*) AS n FROM relay_join_request").await,
+        1
+    );
+    assert!(
+        repo.has_join_request(user, RELAY, workspace, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .has_join_request(user, OTHER_RELAY, workspace, now)
+            .await
+            .unwrap(),
+        "a request is the host's it was filed at"
+    );
+    assert!(
+        !repo
+            .has_join_request(user, RELAY, workspace, expires)
+            .await
+            .unwrap(),
+        "an expired request is no request"
+    );
+    assert!(
+        repo.delete_join_request(user, RELAY, workspace)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .delete_join_request(user, RELAY, workspace)
+            .await
+            .unwrap()
+    );
+
+    repo.record_join_request(user, RELAY, workspace, Uuid::now_v7(), now)
+        .await
+        .unwrap();
+    repo.record_join_request(user, OTHER_RELAY, workspace, Uuid::now_v7(), expires)
+        .await
+        .unwrap();
+    assert_eq!(repo.delete_expired_join_requests(now).await.unwrap(), 1);
+    assert_eq!(repo.delete_join_requests(user).await.unwrap(), 1);
+    assert_eq!(
+        count(&ctx.db, "SELECT count(*) AS n FROM relay_join_request").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_hosts_join_request_names_the_relay_that_filed_it() {
+    use rim_core::public_join_link::model::NewJoinRequest;
+    use rim_core::public_join_link::repository::PublicJoinLinkRepository;
+    use rim_infra_db::sea_orm_impl::public_join_link::SeaOrmPublicJoinLinkRepository;
+
+    let ctx = support::TestCtx::new().await;
+    let workspace = ctx.create_server("Hosted").await.id;
+    let local = ctx.create_user("local").await.id;
+    let remote = remote_user(&ctx.db, "rita").await;
+    let links = SeaOrmPublicJoinLinkRepository::new(ctx.db.clone());
+    let now = Utc::now();
+    let file = |user_id: UserId, relay: Option<&str>| NewJoinRequest {
+        server_id: workspace,
+        user_id,
+        message: None,
+        created_at: now,
+        expires_at: now + Duration::days(30),
+        relay_server_id: relay.map(str::to_string),
+    };
+    let theirs = links
+        .create_request(file(remote, Some(RELAY)))
+        .await
+        .unwrap();
+    let ours = links.create_request(file(local, None)).await.unwrap();
+
+    let host = SeaOrmHostRepository::new(ctx.db.clone());
+    assert_eq!(
+        host.join_request_relay(theirs.id).await.unwrap(),
+        Some((RELAY.to_string(), "rimp1_rita".to_string()))
+    );
+    assert_eq!(host.join_request_relay(ours.id).await.unwrap(), None);
 }
 
 #[tokio::test]

@@ -257,6 +257,8 @@ struct ReadEnvelope {
     user_id: Option<Uuid>,
     /// The event removes `user_id` from its conversation (`MemberRemovedFromConversation`).
     removes_member: bool,
+    /// The event decides a join request (`JoinRequestDecided`).
+    join_decided: bool,
 }
 
 /// The request inbox's decision for one recipient of an item.
@@ -521,6 +523,7 @@ fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadE
             .and_then(|v| Uuid::parse_str(v).ok());
         let event_type = event.event.get("type").and_then(|v| v.as_str());
         let removes_member = event_type == Some("MemberRemovedFromConversation");
+        let join_decided = event_type == Some("JoinRequestDecided");
         let invite = (event_type == Some("DmInvite")).then(|| Invite {
             from_principal_id: event
                 .event
@@ -544,6 +547,7 @@ fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadE
             host_origin: None,
             user_id,
             removes_member,
+            join_decided,
         })
     }
 }
@@ -650,6 +654,13 @@ impl DefaultRelayService {
             self.queued_per_peer
                 .add(peer_server_id, now, u64::try_from(size).unwrap_or(0));
         }
+        // A delivered decision closes the user's request at that host.
+        if read.join_decided && !read.local {
+            repos
+                .subscription_repo
+                .delete_join_request(user_id, peer_server_id, read.workspace_id)
+                .await?;
+        }
         notices.push(RelayNotice::Items { user_id });
         Ok(None)
     }
@@ -671,10 +682,19 @@ impl DefaultRelayService {
         // `u:` stream only.
         let direct_stream = read.conversation_id.is_none()
             && (read.stream == "e" || read.stream.strip_prefix("u:") == Some(principal_id));
+        let own_stream = read.stream.strip_prefix("u:") == Some(principal_id);
         let mut facts = InboxFacts {
             is_invite: read.invite.is_some(),
             conversation_scoped: read.conversation_id.is_some(),
             direct_stream,
+            join_decided: read.join_decided
+                && own_stream
+                && !read.local
+                && read.conversation_id.is_none()
+                && repos
+                    .subscription_repo
+                    .has_join_request(user_id, peer_server_id, read.workspace_id, now)
+                    .await?,
             accepted_at_host: direct_stream
                 && !read.local
                 && repos
