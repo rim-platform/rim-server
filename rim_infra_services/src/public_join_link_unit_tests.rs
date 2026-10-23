@@ -53,6 +53,8 @@ mod tests {
         joins: Vec<(ServerId, UserId, DateTime<Utc>)>,
         members: Vec<ServerMember>,
         bans: Vec<(ServerId, UserId)>,
+        /// The relay each request was filed by, for people of other servers.
+        relays: HashMap<JoinRequestId, String>,
     }
 
     type Shared = Arc<Mutex<State>>;
@@ -137,6 +139,9 @@ mod tests {
                 decided_at: None,
                 decided_by: None,
             };
+            if let Some(relay) = new.relay_server_id {
+                state.relays.insert(request.id, relay);
+            }
             state.requests.push(request.clone());
             Ok(request)
         }
@@ -917,6 +922,214 @@ mod tests {
         assert!(svc.preview(None, token, IP.to_string()).await.is_ok());
     }
 
+    // ── People of other servers ─────────────────────────────────────────
+
+    const RELAY: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
+    const OTHER_RELAY: &str = "rims1_OFPDNXTV1splCcKcgz1vWYj6Mg-lbUollHQwXTkYEBw";
+
+    #[tokio::test]
+    async fn a_relay_sees_a_link_that_admits_other_servers_and_its_misses_count_against_it() {
+        let world = World::new();
+        let svc = world.service();
+        let token = world.link_on(&svc, PublicLinkMode::Requests).await;
+        let link = svc
+            .remote_link(RELAY.to_string(), token.clone())
+            .await
+            .unwrap();
+        assert_eq!(link.server_id, world.workspace);
+        assert_eq!(link.name, "Lobby");
+        assert_eq!(link.mode, PublicLinkMode::Requests);
+        assert_eq!(link.role, ServerMemberRole::Member);
+
+        for i in 0..20 {
+            assert!(
+                matches!(
+                    svc.remote_link(RELAY.to_string(), format!("wrong-{i}"))
+                        .await,
+                    Err(ServiceError::NotFound)
+                ),
+                "miss {i}"
+            );
+        }
+        assert!(matches!(
+            svc.remote_link(RELAY.to_string(), token.clone()).await,
+            Err(ServiceError::RateLimited { .. })
+        ));
+        assert!(matches!(
+            svc.join_remote(
+                outsider(),
+                RELAY.to_string(),
+                token.clone(),
+                world.workspace,
+                None
+            )
+            .await,
+            Err(ServiceError::RateLimited { .. })
+        ));
+        assert!(
+            svc.remote_link(OTHER_RELAY.to_string(), token.clone())
+                .await
+                .is_ok(),
+            "another relay is not affected"
+        );
+        assert!(
+            svc.preview(None, token, IP.to_string()).await.is_ok(),
+            "nor are client addresses"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_link_closed_to_other_servers_refuses_them_without_counting_a_miss() {
+        let world = World::new();
+        let svc = world.service();
+        let token = world.link_on(&svc, PublicLinkMode::Direct).await;
+        svc.update_public_join_link(
+            world.owner,
+            world.workspace,
+            PublicJoinLinkPatch {
+                allow_remote: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        for _ in 0..25 {
+            assert!(matches!(
+                svc.remote_link(RELAY.to_string(), token.clone()).await,
+                Err(ServiceError::Forbidden(m)) if m.contains("accounts from other servers")
+            ));
+        }
+        let rita = outsider();
+        assert!(matches!(
+            svc.join_remote(
+                rita,
+                RELAY.to_string(),
+                token.clone(),
+                world.workspace,
+                None
+            )
+            .await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        assert_eq!(world.role_of(rita.user_id), None);
+        // This server's accounts still join.
+        svc.join(outsider(), token, None, IP.to_string())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_person_of_another_server_joins_directly_through_the_link() {
+        let world = World::new();
+        let svc = world.service();
+        let token = world.link_on(&svc, PublicLinkMode::Direct).await;
+        let rita = outsider();
+        assert!(matches!(
+            svc.join_remote(rita, RELAY.to_string(), token.clone(), ServerId::new(), None)
+                .await,
+            Err(ServiceError::Validation(m)) if m.contains("another workspace")
+        ));
+        let joined = svc
+            .join_remote(
+                rita,
+                RELAY.to_string(),
+                token.clone(),
+                world.workspace,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(joined.outcome, JoinByPublicLinkOutcome::Joined);
+        assert_eq!(world.role_of(rita.user_id), Some(ServerMemberRole::Member));
+        assert!(world.events().iter().any(|e| matches!(
+            e,
+            WorkspaceEvent::MemberJoined { user_id, source: Some(source), .. }
+                if *user_id == rita.user_id && source == "public_link"
+        )));
+        assert!(
+            world
+                .audit_ids()
+                .contains(&"workspace.member_joined".to_string())
+        );
+        assert_eq!(
+            svc.public_join_link(world.owner, world.workspace)
+                .await
+                .unwrap()
+                .joins_last_day,
+            1
+        );
+        assert!(matches!(
+            svc.join_remote(rita, RELAY.to_string(), token, world.workspace, None)
+                .await,
+            Err(ServiceError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_request_from_another_server_names_the_relay_and_reaches_the_moderators() {
+        let world = World::new();
+        let svc = world.service();
+        let token = world.link_on(&svc, PublicLinkMode::Requests).await;
+        let rita = outsider();
+        let filed = svc
+            .join_remote(
+                rita,
+                RELAY.to_string(),
+                token.clone(),
+                world.workspace,
+                Some("  hi from elsewhere ".to_string()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(filed.outcome, JoinByPublicLinkOutcome::Requested);
+        let request = filed.join_request.expect("the filed request");
+        assert_eq!(request.message.as_deref(), Some("hi from elsewhere"));
+        assert_eq!(
+            lock(&world.state)
+                .relays
+                .get(&request.id)
+                .map(String::as_str),
+            Some(RELAY)
+        );
+        assert_eq!(world.role_of(rita.user_id), None);
+        assert!(world.events().iter().any(|e| matches!(
+            e,
+            WorkspaceEvent::JoinRequestCreated { user_id, .. } if *user_id == rita.user_id
+        )));
+        let listed = svc
+            .list_join_requests(ListJoinRequestsQuery {
+                actor: world.moderator,
+                server_id: world.workspace,
+                dir: PageDir::After,
+                cursor: None,
+                limit: 50,
+            })
+            .await
+            .unwrap();
+        assert_eq!(listed.items.len(), 1);
+        assert!(matches!(
+            svc.join_remote(rita, RELAY.to_string(), token, world.workspace, None)
+                .await,
+            Err(ServiceError::Conflict(m)) if m.contains("already asked")
+        ));
+
+        svc.accept_join_request(world.moderator, world.workspace, request.id)
+            .await
+            .unwrap();
+        assert_eq!(world.role_of(rita.user_id), Some(ServerMemberRole::Member));
+    }
+
+    #[tokio::test]
+    async fn a_local_request_names_no_relay() {
+        let world = World::new();
+        let svc = world.service();
+        let token = world.link_on(&svc, PublicLinkMode::Requests).await;
+        svc.join(outsider(), token, None, IP.to_string())
+            .await
+            .unwrap();
+        assert!(lock(&world.state).relays.is_empty());
+    }
+
     // ── Joining directly ────────────────────────────────────────────────
 
     #[tokio::test]
@@ -1109,6 +1322,7 @@ mod tests {
                     message: None,
                     created_at: now,
                     expires_at: now + Duration::days(30),
+                    relay_server_id: None,
                 })
                 .await
                 .unwrap();

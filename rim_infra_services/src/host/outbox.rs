@@ -1,9 +1,10 @@
 //! Host events for relays: the writer turns each workspace event into signed envelopes on the
 //! streams its remote recipients see and appends one outbox row per relay (for a workspace,
-//! each relay holding an active delegation of a recipient; for the direct space, the relays a
-//! recipient's card lists, those the operator's outbound DM setting admits); it files what local
-//! members get through the request inbox: invites and held events of the direct space and of
-//! workspace DMs. The sender delivers each relay's rows in order with backoff, and asks the
+//! each relay holding an active delegation of a recipient, and for the decision on a join
+//! request of a person of another server, the relay that filed it; for the direct space, the
+//! relays a recipient's card lists, those the operator's outbound DM setting admits); it files
+//! what local members get through the request inbox: invites and held events of the direct
+//! space and of workspace DMs. The sender delivers each relay's rows in order with backoff, and asks the
 //! writer to send a conversation's invite again to a member whose relay no longer holds it. A
 //! relay's rows stop being queued while its backlog is at the per-relay caps, or while it is
 //! dead: every delivery to it has failed for the configured period.
@@ -703,7 +704,9 @@ impl HostEventWriter {
     }
 
     /// The members of a workspace whose relays hold an active delegation, and those relays by
-    /// user. A member who just left still gets their `MemberLeft`, on their own stream.
+    /// user. A member who just left still gets their `MemberLeft`, on their own stream, and a
+    /// person of another server who asked to join gets the decision through the relay that
+    /// filed the request.
     async fn delegated(
         &self,
         workspace_id: ServerId,
@@ -734,6 +737,24 @@ impl HostEventWriter {
                 .await?
                 .and_then(|u| u.principal_id)
         {
+            members.push(RemoteMember {
+                user_id: *user_id,
+                principal_id,
+                role: rim_core::server_member::model::ServerMemberRole::Guest,
+                home_relay: None,
+                card_payload: None,
+            });
+        }
+        if let WorkspaceEvent::JoinRequestDecided {
+            request_id,
+            user_id,
+            ..
+        } = event
+            && !relays.contains_key(user_id)
+            && let Some((relay, principal_id)) =
+                self.repos.host_repo.join_request_relay(*request_id).await?
+        {
+            relays.insert(*user_id, vec![relay]);
             members.push(RemoteMember {
                 user_id: *user_id,
                 principal_id,

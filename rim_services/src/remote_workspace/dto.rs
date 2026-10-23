@@ -14,19 +14,29 @@ pub struct JoinChallengeDto {
     pub challenge_id: Uuid,
     pub nonce: String,
     pub expires_at: DateTime<Utc>,
-    /// The workspace the invite names, for the delegation the device signs next; null when the
-    /// request named no invite.
+    /// The workspace the invite or public link names, for the delegation the device signs
+    /// next; null when the request named neither.
     #[serde(default)]
     pub workspace_id: Option<Uuid>,
+    /// The workspace's name, with a public link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_name: Option<String>,
+    /// What the public link does, `direct` or `requests`; null without a link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_mode: Option<String>,
 }
 
-/// `POST /s2s/v1/join/challenge` body.
+/// `POST /s2s/v1/join/challenge` body. At most one of the two tokens.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JoinChallengeRequest {
     /// The invite the person is joining with; it is looked up, not used.
     #[serde(default)]
     pub invite_token: Option<String>,
+    /// The workspace's public link token (`rim_pjl_…`) the person is joining with; it is
+    /// checked, not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_link_token: Option<String>,
 }
 
 /// A device of the person joining: its certificate and any revocation.
@@ -42,8 +52,14 @@ pub struct JoinDevice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JoinRequest {
-    /// The workspace invite; `None` for a current member.
+    /// The workspace invite; `None` for a current member or a join through a public link.
     pub invite_token: Option<String>,
+    /// The workspace's public link token, instead of an invite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_link_token: Option<String>,
+    /// The person's note to the moderators, when the public link takes join requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     pub key_log: Vec<SignedJson>,
     pub devices: Vec<JoinDevice>,
     #[serde(default)]
@@ -64,8 +80,22 @@ pub struct JoinAnswer {
     pub user_id: Uuid,
     /// The member's role, as `server_member` spells it.
     pub role: String,
-    /// The current `seq` of each stream the member sees (`w` and their `u:` stream).
+    /// The current `seq` of each stream the member sees (`w` and their `u:` stream); empty
+    /// when a join request was filed instead.
     pub stream_heads: BTreeMap<String, i64>,
+    /// The join request filed for the person when the public link takes requests: they are
+    /// not a member yet, and `role` is the role the link gives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_request: Option<FiledJoinRequest>,
+}
+
+/// A join request a host filed for a person a relay presented.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiledJoinRequest {
+    pub id: Uuid,
+    /// When it expires unless the moderators decide it first.
+    pub expires_at: DateTime<Utc>,
 }
 
 /// `POST /s2s/v1/subscriptions` body.
@@ -170,11 +200,15 @@ pub struct RemoteJoinInput {
     pub host_server_id: String,
     pub host_origin: String,
     pub invite_token: Option<String>,
+    /// A public link token, instead of an invite.
+    pub public_link_token: Option<String>,
+    /// A note to the moderators, when the public link takes join requests.
+    pub message: Option<String>,
     pub proof: SignedJson,
     pub delegation: SignedJson,
 }
 
-/// A workspace joined on another host.
+/// A workspace joined on another host, or a join request filed there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteJoinResultDto {
     pub host_server_id: String,
@@ -182,6 +216,8 @@ pub struct RemoteJoinResultDto {
     /// The member's user id at the host.
     pub user_id: Uuid,
     pub role: String,
+    /// The join request the host filed instead of a join; `None` once joined.
+    pub join_request: Option<FiledJoinRequest>,
 }
 
 /// A relay's subscription to a workspace on another host, or a delegation the host refused.

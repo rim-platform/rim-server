@@ -7,6 +7,7 @@ use rim_core::host::model::{
 };
 use rim_core::host::repository::HostRepository;
 use rim_core::key_identity::model::DeviceKeyId;
+use rim_core::public_join_link::model::JoinRequestId;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
@@ -65,6 +66,12 @@ struct TextRow {
 #[derive(FromQueryResult)]
 struct OptTextRow {
     value: Option<String>,
+}
+
+#[derive(FromQueryResult)]
+struct RequestRelayRow {
+    relay: String,
+    principal: String,
 }
 
 #[derive(FromQueryResult)]
@@ -300,6 +307,22 @@ impl HostRepository for SeaOrmHostRepository {
             )
             .await?
             .and_then(|r| r.value))
+    }
+
+    async fn join_request_relay(
+        &self,
+        request_id: JoinRequestId,
+    ) -> RepoResult<Option<(String, String)>> {
+        Ok(self
+            .one::<RequestRelayRow>(
+                r#"SELECT r.relay_server_id AS relay, u.principal_id AS principal
+                   FROM workspace_join_request r JOIN "user" u ON u.id = r.user_id
+                   WHERE r.id = $1 AND r.relay_server_id IS NOT NULL
+                     AND u.principal_id IS NOT NULL"#,
+                vec![uuid(request_id)],
+            )
+            .await?
+            .map(|r| (r.relay, r.principal)))
     }
 
     async fn set_home_handle(&self, user_id: UserId, handle: Option<HomeHandle>) -> RepoResult<()> {

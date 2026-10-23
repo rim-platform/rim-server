@@ -1,6 +1,7 @@
 //! The host's rules for delegations a relay presents: the relay and host it names, the relay
 //! key, expiry, the device, membership and bans, the per-relay limit, and the lifetime the host
-//! grants; and the join challenge, bound to the relay that asked for it.
+//! grants; and the join challenge, bound to the relay that asked for it, and naming a public
+//! link's workspace.
 
 use std::sync::{Arc, Mutex};
 
@@ -33,6 +34,7 @@ use rim_s2s::{
 };
 use rim_services::ServiceError;
 use rim_services::relay::dto::SignedJson;
+use rim_services::remote_workspace::dto::JoinChallengeRequest;
 use rim_services::remote_workspace::service::WorkspaceHostService;
 use rim_services::s2s::service::{MockPeerService, MockS2sClient};
 use uuid::Uuid;
@@ -356,7 +358,7 @@ fn refused(reason: &str) -> (String, Option<String>) {
 async fn a_join_challenge_is_bound_to_the_relay_that_asked() {
     let s = setup(Facts::default());
     s.host
-        .join_challenge(s.relay_id.clone(), None)
+        .join_challenge(s.relay_id.clone(), JoinChallengeRequest::default())
         .await
         .expect("challenge");
     assert_eq!(
@@ -364,6 +366,71 @@ async fn a_join_challenge_is_bound_to_the_relay_that_asked() {
         vec![KeyChallengePurpose::Join {
             relay_server_id: s.relay_id.clone()
         }]
+    );
+}
+
+#[tokio::test]
+async fn a_join_challenge_for_a_public_link_names_its_workspace_and_mode() {
+    use rim_core::public_join_link::model::PublicLinkMode;
+    use rim_services::public_join_link::dto::RemoteLinkDto;
+    use rim_services::public_join_link::service::MockPublicJoinLinkService;
+
+    let s = setup(Facts::default());
+    let workspace = s.workspace;
+    let relay = s.relay_id.clone();
+    let mut links = MockPublicJoinLinkService::new();
+    links
+        .expect_remote_link()
+        .withf(move |peer, token| *peer == relay && token == "rim_pjl_good")
+        .returning(move |_, _| {
+            Box::pin(async move {
+                Ok(RemoteLinkDto {
+                    server_id: workspace,
+                    name: "Lobby".to_string(),
+                    mode: PublicLinkMode::Requests,
+                    role: ServerMemberRole::Member,
+                })
+            })
+        });
+    links
+        .expect_remote_link()
+        .returning(|_, _| Box::pin(async { Err(ServiceError::NotFound) }));
+    s.host.set_public_link(Arc::new(links));
+
+    let link = |token: &str| JoinChallengeRequest {
+        invite_token: None,
+        public_link_token: Some(token.to_string()),
+    };
+    let challenge = s
+        .host
+        .join_challenge(s.relay_id.clone(), link("rim_pjl_good"))
+        .await
+        .expect("challenge");
+    assert_eq!(challenge.workspace_id, Some(workspace.into()));
+    assert_eq!(challenge.workspace_name.as_deref(), Some("Lobby"));
+    assert_eq!(challenge.link_mode.as_deref(), Some("requests"));
+    assert!(matches!(
+        s.host
+            .join_challenge(s.relay_id.clone(), link("rim_pjl_wrong"))
+            .await,
+        Err(ServiceError::NotFound)
+    ));
+    assert!(matches!(
+        s.host
+            .join_challenge(
+                s.relay_id.clone(),
+                JoinChallengeRequest {
+                    invite_token: Some("an-invite".to_string()),
+                    public_link_token: Some("rim_pjl_good".to_string()),
+                },
+            )
+            .await,
+        Err(ServiceError::Validation(_))
+    ));
+    assert_eq!(
+        s.challenges.lock().expect("lock").len(),
+        1,
+        "only the valid link got a challenge"
     );
 }
 

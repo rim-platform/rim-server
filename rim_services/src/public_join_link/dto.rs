@@ -89,6 +89,17 @@ pub struct PublicJoinLinkPreviewDto {
     pub join_request_id: Option<JoinRequestId>,
 }
 
+/// What a valid, switched-on link that admits accounts from other servers shows a relay
+/// presenting a person of another server: the workspace and what joining does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteLinkDto {
+    pub server_id: ServerId,
+    pub name: String,
+    pub mode: PublicLinkMode,
+    /// The role a person joining through the link gets.
+    pub role: ServerMemberRole,
+}
+
 /// What a join through a link did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinByPublicLinkOutcome {

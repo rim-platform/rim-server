@@ -406,16 +406,22 @@ space").
   reconcile through the host (its change feed and `streamHeads(serverId, streams)` through the
   forward path).
 - `leaveRelay` cancels the caller's subscriptions at every host, then deletes their queue,
-  requests, contacts and blocks on this relay.
+  DM requests, the join requests they filed at other hosts, contacts and blocks on this relay.
 
 ### Joining a workspace on another host
 
 1. Read the invite link `rim-invite:1:<hostServerId>:<hostKeyHash>:<inviteToken>:<hostOrigin>`
-   and pin the host with `remoteServer(origin)`.
-2. `remoteJoinChallenge(hostServerId, hostOrigin, inviteToken)` returns
-   `{ challengeId nonce expiresAt workspaceId }`: `workspaceId` is the workspace the invite names
-   (the invite is looked up, not used), null without one. Sign a `login` statement over the
-   challenge with `audience` = the host's server id.
+   and pin the host with `remoteServer(origin)`. A workspace's public link,
+   `https://<host>/join/rim_pjl_…`, names the host by its origin only: `remoteServer(origin)`
+   answers its server id, which the app pins.
+2. `remoteJoinChallenge(hostServerId, hostOrigin, inviteToken, publicLinkToken)`, with at most
+   one of the two tokens, returns `{ challengeId nonce expiresAt workspaceId workspaceName
+   publicLinkMode }`: `workspaceId` is the workspace the invite or link names (looked up, not
+   used), null without either; `workspaceName` and `publicLinkMode` (`DIRECT` or `REQUESTS`) are
+   set for a link, so the app can show "Join" or "Ask to join". Every invalid link answers
+   `NOT_FOUND`; a link that does not admit accounts of other servers, and a host that blocked
+   this relay, answer `FORBIDDEN`. Sign a `login` statement over the challenge with `audience` =
+   the host's server id.
 3. Sign a delegation with the device key over `rim.delegation.v1\0 || payload`:
 
    ```json
@@ -426,10 +432,19 @@ space").
 
    `expiresAt` is at most 24 hours after `issuedAt`. `relayInfo` names the relay; its key hash is
    in the relay's discovery document.
-4. `joinRemoteWorkspace(input: { hostServerId, hostOrigin, inviteToken, proof, delegation })`
-   returns `{ hostServerId workspaceId userId role }`; `inviteToken` is null for a current member.
-   The workspace is then used through `/api/remote/<hostServerId>/api`, and its events arrive on
-   `relayStream`.
+4. `joinRemoteWorkspace(input: { hostServerId, hostOrigin, inviteToken, publicLinkToken,
+   message, proof, delegation })` returns `{ hostServerId workspaceId userId role outcome
+   joinRequestId joinRequestExpiresAt }`; both tokens are null for a current member, and
+   `message` is the note to the moderators of a link that takes join requests. With `outcome:
+   JOINED` the workspace is then used through `/api/remote/<hostServerId>/api`, and its events
+   arrive on `relayStream`.
+5. With `outcome: REQUESTED` the host filed a join request and the person is not a member yet:
+   no subscription exists, and `role` is the role the link gives. The relay records the request
+   until it expires and queues the decision, a `JoinRequestDecided` item on the person's `u:`
+   stream with `outcome` `accepted`, `declined` or `cancelled`, then forgets the request. On
+   `accepted`, sign a fresh challenge and delegation and send `joinRemoteWorkspace` with no token,
+   as a current member. `myJoinRequests` on the relay does not list requests filed at other
+   hosts.
 
 ### Keeping delegations fresh
 

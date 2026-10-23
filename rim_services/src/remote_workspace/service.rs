@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use crate::relay::dto::SignedJson;
 use crate::remote_workspace::dto::{
-    CancelEntry, JoinAnswer, JoinChallengeDto, JoinRequest, PresenceUpdate, RemoteJoinInput,
-    RemoteJoinResultDto, RemoteSubscriptionDto, RemoteWorkspaceCleanup, RevocationFanoutDto,
-    SubscriptionResult,
+    CancelEntry, JoinAnswer, JoinChallengeDto, JoinChallengeRequest, JoinRequest, PresenceUpdate,
+    RemoteJoinInput, RemoteJoinResultDto, RemoteSubscriptionDto, RemoteWorkspaceCleanup,
+    RevocationFanoutDto, SubscriptionResult,
 };
 use crate::{Actor, ServiceResult};
 
@@ -20,23 +20,30 @@ use crate::{Actor, ServiceResult};
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait WorkspaceHostService: Send + Sync {
     /// A single-use login challenge for a person joining through `peer_server_id`, with the
-    /// workspace `invite_token` names when one is given. The invite is checked as a preview
-    /// checks it and is not used.
+    /// workspace the request's invite or public link names when it names one. The invite is
+    /// checked as a preview checks it and is not used; the link as a link preview checks it,
+    /// with the workspace's name and the link's mode.
     ///
     /// # Errors
-    /// `NotFound` for an unknown invite; `Forbidden` for one that is revoked, used up or expired.
+    /// `Validation` for both an invite and a link; `NotFound` for an unknown invite and for
+    /// every invalid link; `Forbidden` for an invite that is revoked, used up or expired, and
+    /// for a link that does not admit accounts from other servers; `RateLimited` while the
+    /// relay is cut off from link lookups.
     async fn join_challenge(
         &self,
         peer_server_id: String,
-        invite_token: Option<String>,
+        request: JoinChallengeRequest,
     ) -> ServiceResult<JoinChallengeDto>;
 
-    /// Admit a person a relay presents: verify their identity and proof, join them by invite
-    /// (or as a current member), store them, and accept the delegation.
+    /// Admit a person a relay presents: verify their identity and proof, join them by invite,
+    /// through a public link (or as a current member), store them, and accept the delegation.
+    /// A public link that takes requests files a join request instead and accepts no
+    /// delegation.
     ///
     /// # Errors
     /// `Validation` for an identity, proof or delegation that does not verify; the refusals of
-    /// `joinServerByInvite` for the invite; `Forbidden` for a delegation naming another relay.
+    /// `joinServerByInvite` for the invite and those of a join through a public link for the
+    /// link; `Forbidden` for a delegation naming another relay.
     async fn join(&self, peer_server_id: String, request: JoinRequest)
     -> ServiceResult<JoinAnswer>;
 
@@ -89,17 +96,19 @@ pub trait WorkspaceHostService: Send + Sync {
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait WorkspaceRelayService: Send + Sync {
-    /// Pin the host and fetch a join challenge from it, with the workspace the invite names.
+    /// Pin the host and fetch a join challenge from it, with the workspace the invite or public
+    /// link names.
     async fn remote_join_challenge(
         &self,
         actor: Actor,
         host_server_id: String,
         host_origin: String,
-        invite_token: Option<String>,
+        request: JoinChallengeRequest,
     ) -> ServiceResult<JoinChallengeDto>;
 
     /// Present the caller to a host with their proof and delegation, and record the
-    /// subscription.
+    /// subscription; or, when the host filed a join request instead, record the request so its
+    /// decision reaches the caller.
     async fn join_remote_workspace(
         &self,
         actor: Actor,
@@ -125,8 +134,8 @@ pub trait WorkspaceRelayService: Send + Sync {
         device_id: Uuid,
     ) -> ServiceResult<Vec<RevocationFanoutDto>>;
 
-    /// Cancel the caller's subscriptions at every host, then delete their queue, requests,
-    /// contacts and blocks here.
+    /// Cancel the caller's subscriptions at every host, then delete their queue, DM requests,
+    /// the join requests they filed at other hosts, contacts and blocks here.
     async fn leave_relay(&self, actor: Actor) -> ServiceResult<bool>;
 
     /// A local user's device opened its relay stream.
@@ -138,7 +147,8 @@ pub trait WorkspaceRelayService: Send + Sync {
     /// Send every revocation due for an attempt. Returns how many attempts were made.
     async fn send_due_revocations(&self) -> ServiceResult<u64>;
 
-    /// Mark subscriptions past their expiry as lapsed.
+    /// Mark subscriptions past their expiry as lapsed, and forget join requests filed at other
+    /// hosts past theirs.
     async fn cleanup(&self) -> ServiceResult<RemoteWorkspaceCleanup>;
 }
 

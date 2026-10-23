@@ -606,6 +606,10 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                         "subscriptions",
                         "DELETE FROM relay_subscription WHERE user_id = $1",
                     ),
+                    (
+                        "remote_join_requests",
+                        "DELETE FROM relay_join_request WHERE user_id = $1",
+                    ),
                 ],
                 &[uuid(user_id)],
             )

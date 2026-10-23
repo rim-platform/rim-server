@@ -1,5 +1,5 @@
-//! The host side: joins through a relay, delegations and subscriptions, presence relays report,
-//! and revocations relays and apps bring.
+//! The host side: joins through a relay, by invite or through a public link, delegations and
+//! subscriptions, presence relays report, and revocations relays and apps bring.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -35,10 +35,12 @@ use rim_services::command::verb::TypedVerb;
 use rim_services::e2ee::service::E2eeService;
 use rim_services::host::service::{DelegationCheck, HostService};
 use rim_services::presence::PresenceService;
+use rim_services::public_join_link::dto::RemoteLinkDto;
+use rim_services::public_join_link::service::PublicJoinLinkService;
 use rim_services::relay::dto::{IdentityDevice, IdentityDocument, SignedJson};
 use rim_services::remote_workspace::dto::{
-    CancelEntry, JoinAnswer, JoinChallengeDto, JoinRequest, PresenceUpdate, RemoteWorkspaceCleanup,
-    SubscriptionResult,
+    CancelEntry, FiledJoinRequest, JoinAnswer, JoinChallengeDto, JoinChallengeRequest, JoinRequest,
+    PresenceUpdate, RemoteWorkspaceCleanup, SubscriptionResult,
 };
 use rim_services::remote_workspace::service::WorkspaceHostService;
 use rim_services::s2s::service::PeerService;
@@ -81,6 +83,7 @@ struct Later {
     e2ee: OnceLock<Arc<dyn E2eeService>>,
     audit: OnceLock<Arc<dyn AuditLogService>>,
     session_revocations: OnceLock<Arc<dyn SessionRevocations>>,
+    public_link: OnceLock<Arc<dyn PublicJoinLinkService>>,
 }
 
 pub struct DefaultWorkspaceHost {
@@ -119,6 +122,11 @@ impl DelegationCheck for RepoDelegationCheck {
             .device_delegated(device_key_id, relay_server_id, Utc::now())
             .await?)
     }
+}
+
+/// `Validation` for a join naming both an invite and a public link.
+fn both_tokens() -> ServiceError {
+    ServiceError::Validation("name an invite or a public link, not both".to_string())
 }
 
 fn statement(s: &SignedJson) -> SignedStatement {
@@ -182,6 +190,28 @@ impl DefaultWorkspaceHost {
     /// connections close.
     pub fn set_session_revocations(&self, revocations: Arc<dyn SessionRevocations>) {
         let _ = self.later.session_revocations.set(revocations);
+    }
+
+    /// Wire the public link service that joins through a workspace's public link go through.
+    pub fn set_public_link(&self, public_link: Arc<dyn PublicJoinLinkService>) {
+        let _ = self.later.public_link.set(public_link);
+    }
+
+    /// The public link service; an internal error before it is wired.
+    fn public_link(&self) -> ServiceResult<&Arc<dyn PublicJoinLinkService>> {
+        self.later.public_link.get().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("public link joins are not wired"))
+        })
+    }
+
+    /// The link `token` names, checked for a person `peer_server_id` presents.
+    ///
+    /// # Errors
+    /// Those of [`PublicJoinLinkService::remote_link`].
+    async fn remote_link(&self, peer_server_id: &str, token: &str) -> ServiceResult<RemoteLinkDto> {
+        self.public_link()?
+            .remote_link(peer_server_id.to_string(), token.to_string())
+            .await
     }
 
     fn own_id(&self) -> String {
@@ -412,6 +442,51 @@ impl DefaultWorkspaceHost {
         Ok(stored)
     }
 
+    /// Join a remote user to `workspace_id` through the public link `token`, or file their join
+    /// request. Returns the filed request; `None` once they are a member, already being one
+    /// included.
+    ///
+    /// # Errors
+    /// Those of [`PublicJoinLinkService::join_remote`], but `Conflict` for a current member.
+    async fn join_by_link(
+        &self,
+        peer_server_id: &str,
+        user_id: UserId,
+        workspace_id: ServerId,
+        token: &str,
+        message: Option<String>,
+    ) -> ServiceResult<Option<FiledJoinRequest>> {
+        let joined = self
+            .public_link()?
+            .join_remote(
+                Actor::new(user_id),
+                peer_server_id.to_string(),
+                token.to_string(),
+                workspace_id,
+                message,
+            )
+            .await;
+        match joined {
+            Ok(result) => Ok(result.join_request.map(|r| FiledJoinRequest {
+                id: r.id.into(),
+                expires_at: r.expires_at,
+            })),
+            Err(ServiceError::Conflict(reason)) => {
+                if self
+                    .repos
+                    .server_member_repo
+                    .is_member(workspace_id, user_id)
+                    .await?
+                {
+                    Ok(None)
+                } else {
+                    Err(ServiceError::Conflict(reason))
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Verify a revocation against the stored key log: under any identity key since the
     /// device's certificate, or the device's own key.
     async fn verify_revocation(
@@ -462,11 +537,18 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
     async fn join_challenge(
         &self,
         peer_server_id: String,
-        invite_token: Option<String>,
+        request: JoinChallengeRequest,
     ) -> ServiceResult<JoinChallengeDto> {
         tracing::debug!(peer_server_id = %peer_server_id, "issuing a join challenge");
         let now = Utc::now();
-        let workspace_id = match invite_token {
+        if request.invite_token.is_some() && request.public_link_token.is_some() {
+            return Err(both_tokens());
+        }
+        let link = match &request.public_link_token {
+            Some(token) => Some(self.remote_link(&peer_server_id, token).await?),
+            None => None,
+        };
+        let workspace_id = match request.invite_token {
             Some(token) => {
                 let invite = self
                     .repos
@@ -486,7 +568,7 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
                 }
                 Some(invite.server_id.into())
             }
-            None => None,
+            None => link.as_ref().map(|l| l.server_id.into()),
         };
         if let Err(e) = self.repos.key_challenge_repo.delete_expired(now).await {
             warn!(error = %e, "could not delete expired key challenges");
@@ -507,6 +589,8 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
             nonce: challenge.nonce,
             expires_at: challenge.expires_at,
             workspace_id,
+            workspace_name: link.as_ref().map(|l| l.name.clone()),
+            link_mode: link.as_ref().map(|l| l.mode.as_str().to_string()),
         })
     }
 
@@ -533,7 +617,8 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
             ));
         }
 
-        // Everything that needs no storage first: the identity, the proof and the invite.
+        // Everything that needs no storage first: the identity, the proof, and the invite or
+        // public link.
         let document = self.join_document(&fields.principal_id, &request).await?;
         let verified =
             crate::relay::identity::verify_identity(&document).map_err(ServiceError::Validation)?;
@@ -559,6 +644,21 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
                 "the proof names another server as its audience".to_string(),
             ));
         }
+        if request.invite_token.is_some() && request.public_link_token.is_some() {
+            return Err(both_tokens());
+        }
+        let link = match &request.public_link_token {
+            Some(token) => {
+                let link = self.remote_link(&peer_server_id, token).await?;
+                if link.server_id != workspace_id {
+                    return Err(ServiceError::Validation(
+                        "the public link is for another workspace than the delegation".to_string(),
+                    ));
+                }
+                Some(link)
+            }
+            None => None,
+        };
         if let Some(token) = &request.invite_token {
             let invite = self
                 .repos
@@ -628,8 +728,8 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
                 .map_err(crate::util::statement_refused)?;
         }
 
-        match &request.invite_token {
-            Some(token) => {
+        match (&request.invite_token, &request.public_link_token) {
+            (Some(token), _) => {
                 let auth = self.later.auth.get().ok_or_else(|| {
                     ServiceError::internal(anyhow::anyhow!("joins are not wired"))
                 })?;
@@ -644,7 +744,37 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
                     Err(e) => return Err(e),
                 }
             }
-            None => {
+            (None, Some(token)) => {
+                if kind == UserKind::Local {
+                    return Err(ServiceError::Validation(
+                        "an account of this server joins through the public link here, not \
+                         through a relay"
+                            .to_string(),
+                    ));
+                }
+                if let Some(filed) = self
+                    .join_by_link(
+                        &peer_server_id,
+                        user_id,
+                        workspace_id,
+                        token,
+                        request.message.clone(),
+                    )
+                    .await?
+                {
+                    info!(user_id = %user_id, workspace_id = %workspace_id, "filed a join request for a person of another server");
+                    return Ok(JoinAnswer {
+                        workspace_id: workspace_id.into(),
+                        user_id: user_id.into(),
+                        role: link
+                            .map(|l| l.role.as_str().to_string())
+                            .unwrap_or_default(),
+                        stream_heads: BTreeMap::new(),
+                        join_request: Some(filed),
+                    });
+                }
+            }
+            (None, None) => {
                 crate::util::ensure_not_banned(
                     self.repos.moderation_repo.as_ref(),
                     workspace_id,
@@ -697,6 +827,7 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
             serde_json::json!({
                 "relay_server_id": peer_server_id,
                 "invite": request.invite_token.is_some(),
+                "public_link": request.public_link_token.is_some(),
             }),
         )
         .await;
@@ -705,6 +836,7 @@ impl WorkspaceHostService for DefaultWorkspaceHost {
             user_id: user_id.into(),
             role: member.member_role.as_str().to_string(),
             stream_heads,
+            join_request: None,
         })
     }
 

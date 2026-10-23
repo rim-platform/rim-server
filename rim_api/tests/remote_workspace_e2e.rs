@@ -5,7 +5,10 @@
 //! device revocation acknowledged through the relay and brought directly to a host the relay
 //! cannot reach; a recovery at the relay applied by the host, ending the old devices' direct
 //! sessions and delegations there; the direct sign-in of a remote member with its day-long
-//! session; join and login challenges kept apart; `leaveRelay`; and the SDL.
+//! session; join and login challenges kept apart; `leaveRelay`; joins through a workspace's
+//! public link: directly, refused when the link does not admit other servers or the relay is
+//! blocked, the same answer for every invalid link, and join requests accepted and declined
+//! with the decision reaching the person's relay; and the SDL.
 //!
 //! Run with:
 //! ```sh
@@ -100,6 +103,35 @@ mutation Apply($r: SignedStatementInput!) { applyRemoteRevocation(revocation: $r
 const ROTATE: &str = r#"
 mutation Rotate($input: RotateIdentityKeyInput!) { rotateIdentityKey(input: $input) { keySeq } }"#;
 const LEAVE: &str = "mutation { leaveRelay }";
+const LINK_UPDATE: &str = r#"
+mutation Update($input: UpdatePublicJoinLinkInput!) {
+  link: updatePublicJoinLink(input: $input) { enabled mode allowRemote token }
+}"#;
+const LINK_REISSUE: &str = r#"
+mutation Reissue($s: ID!) { link: reissuePublicJoinLink(serverId: $s) { token } }"#;
+const LINK_CHALLENGE: &str = r#"
+mutation Challenge($h: String!, $o: String!, $t: String) {
+  remoteJoinChallenge(hostServerId: $h, hostOrigin: $o, publicLinkToken: $t) {
+    challengeId nonce expiresAt workspaceId workspaceName publicLinkMode
+  }
+}"#;
+const LINK_JOIN: &str = r#"
+mutation Join($input: JoinRemoteWorkspaceInput!) {
+  joinRemoteWorkspace(input: $input) {
+    hostServerId workspaceId userId role outcome joinRequestId joinRequestExpiresAt
+  }
+}"#;
+const JOIN_REQUESTS: &str = r#"
+query Requests($s: ID!) {
+  joinRequests(serverId: $s) { items { id userId message user { id username } } }
+}"#;
+const ACCEPT_REQUEST: &str = r#"
+mutation Accept($s: ID!, $r: ID!) { acceptJoinRequest(serverId: $s, requestId: $r) { status } }"#;
+const DECLINE_REQUEST: &str = r#"
+mutation Decline($s: ID!, $r: ID!) { declineJoinRequest(serverId: $s, requestId: $r) { status } }"#;
+const MY_JOIN_REQUESTS: &str = "query { myJoinRequests { id } }";
+const MEMBERS: &str = r#"
+query Members($s: ID!) { serverMembers(serverId: $s) { userId memberRole } }"#;
 const ITEMS: &str = r#"
 query Items($after: ID) {
   relayItems(after: $after, limit: 500) {
@@ -520,6 +552,78 @@ impl Person {
         )
         .await["joinRemoteWorkspace"]
             .clone()
+    }
+
+    /// The whole answer to a `remoteJoinChallenge` for the public link `token` on `host`.
+    async fn link_challenge(&self, host: &Node, token: &str) -> Value {
+        self.post_to(
+            &self.origin,
+            LINK_CHALLENGE,
+            json!({ "h": host.id(), "o": host.origin, "t": token }),
+        )
+        .await
+    }
+
+    /// Join `host`'s workspace through its public link `token` via this person's relay
+    /// `relay`, the workspace taken from the challenge; the whole answer to the join.
+    async fn join_by_link(
+        &self,
+        host: &Node,
+        relay: &Node,
+        token: &str,
+        message: Option<&str>,
+    ) -> Value {
+        let challenge = self.link_challenge(host, token).await;
+        assert!(challenge.get("errors").is_none(), "challenge: {challenge}");
+        self.join_over_link_challenge(
+            host,
+            relay,
+            token,
+            message,
+            &challenge["data"]["remoteJoinChallenge"],
+        )
+        .await
+    }
+
+    /// `joinRemoteWorkspace` through the public link `token` over a challenge fetched before;
+    /// the whole answer.
+    async fn join_over_link_challenge(
+        &self,
+        host: &Node,
+        relay: &Node,
+        token: &str,
+        message: Option<&str>,
+        challenge: &Value,
+    ) -> Value {
+        let workspace = challenge["workspaceId"]
+            .as_str()
+            .expect("the link's workspace");
+        let proof = device_login(
+            &self.device_key,
+            &self.state,
+            self.device_id,
+            challenge["challengeId"]
+                .as_str()
+                .expect("id")
+                .parse()
+                .expect("uuid"),
+            challenge["nonce"].as_str().expect("nonce"),
+            &host.id(),
+        );
+        let delegation = self.delegation(host, relay, workspace, 12);
+        self.post_to(
+            &self.origin,
+            LINK_JOIN,
+            json!({ "input": {
+                "hostServerId": host.id(),
+                "hostOrigin": host.origin,
+                "publicLinkToken": token,
+                "message": message,
+                "proof": statement(&proof),
+                "delegation": statement(&delegation),
+            } }),
+        )
+        .await
     }
 
     /// Send a device-signed request through the relay to `host`; checks the host response.
@@ -1466,7 +1570,7 @@ async fn a_join_proof_does_not_sign_in_at_the_host_nor_a_login_proof_join() {
         .workspace_host
         .join_challenge(
             "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c".to_string(),
-            None,
+            Default::default(),
         )
         .await
         .expect("join challenge");
@@ -1543,6 +1647,332 @@ async fn leaving_the_relay_cancels_its_subscriptions_at_every_host() {
     r.stop().await;
 }
 
+/// `owner`'s workspace on `host` with its public link switched on in `mode`; the workspace and
+/// the link's token.
+async fn linked_workspace(host: &Node, owner: &Person, mode: &str) -> (String, String) {
+    let (ws, _, _) = workspace(host, owner).await;
+    let token = owner
+        .ok(
+            LINK_UPDATE,
+            json!({ "input": { "serverId": ws, "enabled": true, "mode": mode } }),
+        )
+        .await["link"]["token"]
+        .as_str()
+        .expect("token")
+        .to_string();
+    (ws, token)
+}
+
+/// The code and message of the first error of a GraphQL answer.
+fn first_error(body: &Value) -> (String, String) {
+    let error = &body["errors"][0];
+    (
+        error["extensions"]["code"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected an error: {body}"))
+            .to_string(),
+        error["message"].as_str().unwrap_or_default().to_string(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_person_joins_directly_through_a_public_link_the_owner_controls() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let rita = sign_up(&r, "rita", 2).await;
+    let (ws, token) = linked_workspace(&h, &hannah, "DIRECT").await;
+
+    // An unknown token, a replaced one and a switched-off one get the same answer.
+    let unknown = first_error(
+        &rita
+            .link_challenge(&h, "rim_pjl_AAAAAAAAAAAAAAAAAAAAAA")
+            .await,
+    );
+    assert_eq!(unknown.0, "NOT_FOUND");
+    let old = token.clone();
+    let token = hannah.ok(LINK_REISSUE, json!({ "s": ws })).await["link"]["token"]
+        .as_str()
+        .expect("token")
+        .to_string();
+    assert_eq!(first_error(&rita.link_challenge(&h, &old).await), unknown);
+    hannah
+        .ok(
+            LINK_UPDATE,
+            json!({ "input": { "serverId": ws, "enabled": false } }),
+        )
+        .await;
+    assert_eq!(first_error(&rita.link_challenge(&h, &token).await), unknown);
+    hannah
+        .ok(
+            LINK_UPDATE,
+            json!({ "input": { "serverId": ws, "enabled": true } }),
+        )
+        .await;
+
+    // Closed to other servers, the link refuses Rita with a reason.
+    hannah
+        .ok(
+            LINK_UPDATE,
+            json!({ "input": { "serverId": ws, "allowRemote": false } }),
+        )
+        .await;
+    let (code, message) = first_error(&rita.link_challenge(&h, &token).await);
+    assert_eq!(code, "FORBIDDEN");
+    assert!(message.contains("accounts from other servers"), "{message}");
+    hannah
+        .ok(
+            LINK_UPDATE,
+            json!({ "input": { "serverId": ws, "allowRemote": true } }),
+        )
+        .await;
+
+    let challenge = rita.link_challenge(&h, &token).await["data"]["remoteJoinChallenge"].clone();
+    assert_eq!(challenge["workspaceId"], json!(ws));
+    assert_eq!(challenge["workspaceName"], "Hosted");
+    assert_eq!(challenge["publicLinkMode"], "DIRECT");
+    let joined = rita.join_by_link(&h, &r, &token, None).await;
+    assert!(joined.get("errors").is_none(), "join: {joined}");
+    let joined = &joined["data"]["joinRemoteWorkspace"];
+    assert_eq!(joined["outcome"], "JOINED");
+    assert_eq!(joined["workspaceId"], json!(ws));
+    assert_eq!(joined["role"], "member");
+    assert!(joined["joinRequestId"].is_null());
+    let rita_on_h = user_id(&h, &rita.principal()).await;
+    assert_eq!(active_delegations(&h, &rita.principal()).await, 1);
+    let subscriptions = rita.ok(SUBSCRIPTIONS, json!({})).await["remoteSubscriptions"].clone();
+    assert_eq!(subscriptions[0]["status"], "active");
+    let members = hannah.ok(MEMBERS, json!({ "s": ws })).await["serverMembers"].clone();
+    assert!(
+        members
+            .as_array()
+            .expect("members")
+            .iter()
+            .any(|m| m["userId"] == json!(rita_on_h.to_string()) && m["memberRole"] == "MEMBER")
+    );
+    assert_eq!(
+        scalar(
+            &h,
+            "SELECT count(*) AS n FROM workspace_public_link_join WHERE user_id = $1",
+            vec![Uuid::from(rita_on_h).into()],
+        )
+        .await,
+        1,
+        "the join counts for the link"
+    );
+    assert_eq!(
+        scalar(
+            &h,
+            "SELECT count(*) AS n FROM command_audit_log WHERE command_id = 'workspace.member_joined' \
+             AND actor_user_id = $1 AND args_redacted->>'source' = 'public_link'",
+            vec![Uuid::from(rita_on_h).into()],
+        )
+        .await,
+        1,
+        "the join is audited with its source"
+    );
+    // Joining through the link again as a member renews the delegation.
+    let again = rita.join_by_link(&h, &r, &token, None).await;
+    assert_eq!(
+        again["data"]["joinRemoteWorkspace"]["outcome"], "JOINED",
+        "{again}"
+    );
+
+    h.stop().await;
+    r.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blocked_relay_cannot_join_through_a_public_link() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let rita = sign_up(&r, "rita", 2).await;
+    let (_, token) = linked_workspace(&h, &hannah, "DIRECT").await;
+    // A first challenge pins each server at the other.
+    let first = rita.link_challenge(&h, &token).await;
+    assert!(first.get("errors").is_none(), "{first}");
+    let challenge = first["data"]["remoteJoinChallenge"].clone();
+
+    h.s2s
+        .state
+        .peers
+        .set_blocked(&r.id(), true)
+        .await
+        .expect("block");
+    assert_eq!(
+        first_error(&rita.link_challenge(&h, &token).await),
+        (
+            "FORBIDDEN".to_string(),
+            "this server does not accept requests from that server".to_string()
+        ),
+        "refused as every request of a blocked peer"
+    );
+    assert_eq!(
+        first_error(
+            &rita
+                .join_over_link_challenge(&h, &r, &token, None, &challenge)
+                .await
+        )
+        .0,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        scalar(
+            &h,
+            "SELECT count(*) AS n FROM server_member m JOIN \"user\" u ON u.id = m.user_id \
+             WHERE u.principal_id = $1",
+            vec![rita.principal().into()],
+        )
+        .await,
+        0
+    );
+
+    h.stop().await;
+    r.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_join_request_is_decided_and_the_decision_reaches_the_persons_relay() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let rita = sign_up(&r, "rita", 2).await;
+    let rob = sign_up(&r, "rob", 3).await;
+    let (ws, token) = linked_workspace(&h, &hannah, "REQUESTS").await;
+
+    let challenge = rita.link_challenge(&h, &token).await["data"]["remoteJoinChallenge"].clone();
+    assert_eq!(challenge["publicLinkMode"], "REQUESTS");
+    let asked = rita.join_by_link(&h, &r, &token, Some("hi from r")).await;
+    assert!(asked.get("errors").is_none(), "ask: {asked}");
+    let asked = &asked["data"]["joinRemoteWorkspace"];
+    assert_eq!(asked["outcome"], "REQUESTED");
+    assert_eq!(asked["role"], "member", "the role the link gives");
+    let request_id = asked["joinRequestId"]
+        .as_str()
+        .expect("request id")
+        .to_string();
+    assert!(asked["joinRequestExpiresAt"].is_string());
+    let rita_on_h = user_id(&h, &rita.principal()).await;
+    assert_eq!(active_delegations(&h, &rita.principal()).await, 0);
+    assert!(
+        rita.ok(SUBSCRIPTIONS, json!({})).await["remoteSubscriptions"]
+            .as_array()
+            .expect("subscriptions")
+            .is_empty(),
+        "no subscription before the request is accepted"
+    );
+    assert_eq!(
+        scalar(
+            &h,
+            "SELECT count(*) AS n FROM workspace_join_request WHERE id = $1 AND relay_server_id = $2",
+            vec![request_id.parse::<Uuid>().expect("uuid").into(), r.id().into()],
+        )
+        .await,
+        1,
+        "the host's request names the relay that filed it"
+    );
+    let relay_rows =
+        || async { scalar(&r, "SELECT count(*) AS n FROM relay_join_request", vec![]).await };
+    assert_eq!(relay_rows().await, 1);
+    assert!(
+        rita.ok(MY_JOIN_REQUESTS, json!({})).await["myJoinRequests"]
+            .as_array()
+            .expect("mine")
+            .is_empty(),
+        "myJoinRequests lists the requests filed on this server only"
+    );
+    // Asking twice is a conflict.
+    assert_eq!(
+        first_error(&rita.join_by_link(&h, &r, &token, None).await).0,
+        "CONFLICT"
+    );
+
+    // The moderators see Rita's request, with her user.
+    let requests =
+        hannah.ok(JOIN_REQUESTS, json!({ "s": ws })).await["joinRequests"]["items"].clone();
+    let listed = requests
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|i| i["id"] == json!(request_id))
+        .expect("Rita's request")
+        .clone();
+    assert_eq!(listed["userId"], json!(rita_on_h.to_string()));
+    assert_eq!(listed["message"], "hi from r");
+    assert_eq!(listed["user"]["id"], json!(rita_on_h.to_string()));
+    assert!(
+        listed["user"]["username"]
+            .as_str()
+            .is_some_and(|u| u.starts_with("r_")),
+        "{listed}"
+    );
+
+    // Accepted: the decision reaches Rita through her relay, and she completes the join.
+    assert_eq!(
+        hannah
+            .ok(ACCEPT_REQUEST, json!({ "s": ws, "r": request_id }))
+            .await["acceptJoinRequest"]["status"],
+        "ACCEPTED"
+    );
+    let decided = rita
+        .item_of(&h, "JoinRequestDecided", |i| {
+            i.event["request_id"] == json!(request_id)
+        })
+        .await;
+    assert_eq!(decided.stream, format!("u:{}", rita.principal()));
+    assert_eq!(decided.workspace_id, ws);
+    assert_eq!(decided.event["outcome"], "accepted");
+    eventually("the relay to forget the decided request", || async {
+        (relay_rows().await == 0).then_some(())
+    })
+    .await;
+    assert_eq!(
+        rita.join(&h, &r, &ws, None).await["role"],
+        "member",
+        "an accepted person joins as a current member"
+    );
+    assert_eq!(active_delegations(&h, &rita.principal()).await, 1);
+
+    // Declined: the decision reaches Rob, who stays out.
+    let asked = rob.join_by_link(&h, &r, &token, None).await;
+    let rob_request = asked["data"]["joinRemoteWorkspace"]["joinRequestId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("rob's request: {asked}"))
+        .to_string();
+    assert_eq!(
+        hannah
+            .ok(DECLINE_REQUEST, json!({ "s": ws, "r": rob_request }))
+            .await["declineJoinRequest"]["status"],
+        "DECLINED"
+    );
+    let declined = rob
+        .item_of(&h, "JoinRequestDecided", |i| {
+            i.event["request_id"] == json!(rob_request)
+        })
+        .await;
+    assert_eq!(declined.event["outcome"], "declined");
+    assert_eq!(declined.stream, format!("u:{}", rob.principal()));
+    assert_eq!(active_delegations(&h, &rob.principal()).await, 0);
+    let rob_on_h = user_id(&h, &rob.principal()).await;
+    let members = hannah.ok(MEMBERS, json!({ "s": ws })).await["serverMembers"].clone();
+    assert!(
+        !members
+            .as_array()
+            .expect("members")
+            .iter()
+            .any(|m| m["userId"] == json!(rob_on_h.to_string()))
+    );
+    assert!(
+        !rob.items(&h)
+            .await
+            .iter()
+            .any(|i| i.event["type"] == "JoinRequestDecided"
+                && i.event["request_id"] == json!(request_id)),
+        "Rob does not get Rita's decision"
+    );
+
+    h.stop().await;
+    r.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sdl_names_every_remote_workspace_type_and_field() {
     let (first, _) = databases_with(RESET).await;
@@ -1565,7 +1995,13 @@ async fn the_sdl_names_every_remote_workspace_type_and_field() {
         "input JoinRemoteWorkspaceInput",
         "remoteSubscriptions: [RemoteSubscription!]!",
         "deviceRevocationStatus(deviceId: ID!): [RevocationFanout!]!",
-        "remoteJoinChallenge(hostServerId: String!, hostOrigin: String!, inviteToken: String): RemoteJoinChallenge!",
+        "remoteJoinChallenge(hostServerId: String!, hostOrigin: String!, inviteToken: String, publicLinkToken: String): RemoteJoinChallenge!",
+        "workspaceName: String",
+        "publicLinkMode: PublicJoinLinkMode",
+        "outcome: JoinByPublicLinkOutcome!",
+        "joinRequestId: ID",
+        "joinRequestExpiresAt: DateTime",
+        "publicLinkToken: String",
         "joinRemoteWorkspace(input: JoinRemoteWorkspaceInput!): RemoteJoinResult!",
         "renewDelegations(delegations: [SignedStatementInput!]!): [RemoteSubscription!]!",
         "applyRemoteRevocation(revocation: SignedStatementInput!): SignedStatement!",

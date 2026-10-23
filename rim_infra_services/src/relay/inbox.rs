@@ -69,6 +69,9 @@ pub(crate) struct InboxFacts {
     /// The recipient holds an accepted request for a conversation the delivering host homes,
     /// so takes part in its direct space.
     pub accepted_at_host: bool,
+    /// The item decides a join request the recipient filed at the item's workspace on the
+    /// delivering host, on their own `u:` stream, and the request is recorded here.
+    pub join_decided: bool,
     /// Bytes the delivering host may still have queued here today.
     pub peer_bytes_left: i64,
     /// The recipient blocked the invite's sender.
@@ -150,7 +153,9 @@ fn place(facts: &InboxFacts) -> Filing {
             }
         }
         None if !facts.is_invite => {
-            if !facts.conversation_scoped && facts.direct_stream && facts.accepted_at_host {
+            if !facts.conversation_scoped
+                && (facts.join_decided || facts.direct_stream && facts.accepted_at_host)
+            {
                 Filing::Deliver
             } else {
                 Filing::Refuse("not_subscribed")
@@ -191,6 +196,7 @@ mod tests {
             conversation_scoped: true,
             direct_stream: false,
             accepted_at_host: false,
+            join_decided: false,
             peer_bytes_left: i64::MAX,
             blocked: false,
             policy: DmPolicy::Request,
@@ -478,6 +484,30 @@ mod tests {
             file(&unscoped(true, false)),
             Filing::Refuse("not_subscribed"),
             "no accepted conversation at the host"
+        );
+    }
+
+    #[test]
+    fn a_join_decision_flows_while_its_request_is_recorded() {
+        let decided = InboxFacts {
+            join_decided: true,
+            ..unscoped(false, false)
+        };
+        assert_eq!(file(&decided), Filing::Deliver);
+        assert_eq!(
+            file(&InboxFacts {
+                peer_bytes_left: 0,
+                ..decided.clone()
+            }),
+            Filing::PeerLimited
+        );
+        assert_eq!(
+            file(&InboxFacts {
+                conversation_scoped: true,
+                ..decided
+            }),
+            Filing::Refuse("not_subscribed"),
+            "a join decision names no conversation"
         );
     }
 

@@ -404,7 +404,7 @@ a number above 0, so a private server limits nothing but the batch size.
 | `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
 | `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
-| none (fixed) | Failed public join link lookups and joins (`publicJoinLinkPreview`, `joinByPublicLink` with an invalid link) per client address: 20 within ten minutes cut the address off for an hour. Successful lookups do not count. | `RATE_LIMITED` with `retryAfterSeconds` on every link lookup and join from the address, valid links included |
+| none (fixed) | Failed public join link lookups and joins (`publicJoinLinkPreview`, `joinByPublicLink` with an invalid link) per client address, and those a relay makes for its users (`remoteJoinChallenge`, `joinRemoteWorkspace` with a link) per relay server id: 20 within ten minutes cut the address or relay off for an hour. Successful lookups do not count. | `RATE_LIMITED` with `retryAfterSeconds` on every link lookup and join from the address or relay, valid links included |
 
 The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the first
 address in `X-Forwarded-For` (the peer when that header is missing or does not parse).
@@ -695,7 +695,8 @@ optional cause and ban end; the moderator's reason is delivered only to the remo
 ### Public join link and join requests
 
 A workspace's permanent link, `<server>/join/<token>`, lets accounts of this server join it or
-ask to join; it never creates an account. The same `/join/<token>` path carries invite links;
+ask to join, and accounts of other servers too through their own server unless `allowRemote` is
+off; it never creates an account. The same `/join/<token>` path carries invite links;
 the token's prefix tells the kinds apart: `rim_pjl_` is a public join link (for
 `publicJoinLinkPreview` and `joinByPublicLink`), `rim_inv_` a workspace invite and `rim_iinv_` an
 instance invite (for `previewInviteToken` and the signup and join-by-invite roots). `docs/messaging.md`, "Public join link and join
@@ -732,3 +733,22 @@ Refusals:
 `JoinRequestCreated` and `JoinRequestDecided` reach the workspace's Owner and Moderators and the
 person, who gets them on the direct-space subscription; `MemberJoined` carries
 `"source": "public_link"` for a join through the link.
+
+**From another server.** An account of another server uses the link through its own server, the
+relay: `remoteJoinChallenge(hostServerId, hostOrigin, inviteToken, publicLinkToken)` and
+`joinRemoteWorkspace(input)` with `publicLinkToken` and an optional `message`
+(`docs/relay.md`, "Joining a workspace on another host"). The challenge answers the link's
+`workspaceId`, `workspaceName` and `publicLinkMode`; the join answers `outcome` (`JOINED`, or
+`REQUESTED` with `joinRequestId` and `joinRequestExpiresAt`). The host's checks and refusals are
+the ones above, plus:
+
+| Case | Code |
+|---|---|
+| The link's `allowRemote` is off | `FORBIDDEN`, "this workspace's public link does not admit accounts from other servers" |
+| The host's operator blocked the relay | `FORBIDDEN`, "this server does not accept requests from that server" |
+| 20 invalid links from one relay in ten minutes | `RATE_LIMITED` for an hour, counted per relay server id |
+| Both an invite and a link token | `VALIDATION` |
+| An account of the host presented by a relay elsewhere | `VALIDATION`: it joins through the link at the host |
+
+The decision on a remote person's request reaches them as a `JoinRequestDecided` relay item;
+`myJoinRequests` lists only the requests filed on the server answering it.

@@ -1,4 +1,5 @@
-//! The relay side: joining local users to workspaces elsewhere, renewing their delegations,
+//! The relay side: joining local users to workspaces elsewhere, by invite or through a public
+//! link, and recording the join requests a link files for them; renewing their delegations,
 //! reporting their presence and sending their device revocations to every host holding them.
 
 use std::collections::BTreeMap;
@@ -451,12 +452,11 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
         actor: Actor,
         host_server_id: String,
         host_origin: String,
-        invite_token: Option<String>,
+        request: JoinChallengeRequest,
     ) -> ServiceResult<JoinChallengeDto> {
         self.principal(actor.user_id).await?;
         self.pin_host(&host_server_id, &host_origin).await?;
-        let body = serde_json::to_vec(&JoinChallengeRequest { invite_token })
-            .map_err(ServiceError::internal)?;
+        let body = serde_json::to_vec(&request).map_err(ServiceError::internal)?;
         let response = self.post(&host_server_id, "/join/challenge", body).await?;
         if response.status != 200 {
             return Err(peer_refusal(&host_server_id, &response));
@@ -490,6 +490,8 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
             .await?;
         let body = serde_json::to_vec(&JoinRequest {
             invite_token: input.invite_token.clone(),
+            public_link_token: input.public_link_token.clone(),
+            message: input.message.clone(),
             key_log: document.key_log,
             devices: document
                 .devices
@@ -514,6 +516,28 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
             serde_json::from_slice(&response.body).map_err(|_| upstream(&host))?;
         if answer.workspace_id != delegation.workspace_id {
             return Err(upstream(&host));
+        }
+        if let Some(filed) = answer.join_request {
+            // Not a member yet: the decision comes as a host event, which this relay queues
+            // for the caller while the request is recorded.
+            self.repos
+                .subscription_repo
+                .record_join_request(
+                    actor.user_id,
+                    &host,
+                    answer.workspace_id,
+                    filed.id,
+                    filed.expires_at,
+                )
+                .await?;
+            info!(peer_server_id = %host, workspace_id = %answer.workspace_id, "asked to join a workspace on another host");
+            return Ok(RemoteJoinResultDto {
+                host_server_id: host,
+                workspace_id: answer.workspace_id,
+                user_id: answer.user_id,
+                role: answer.role,
+                join_request: Some(filed),
+            });
         }
         let now = Utc::now();
         self.repos
@@ -541,6 +565,7 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
             workspace_id: answer.workspace_id,
             user_id: answer.user_id,
             role: answer.role,
+            join_request: None,
         })
     }
 
@@ -707,6 +732,10 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
                 .end_subscriptions(actor.user_id)
                 .await?;
         }
+        self.repos
+            .subscription_repo
+            .delete_join_requests(actor.user_id)
+            .await?;
         self.relay.leave_relay(actor).await
     }
 
@@ -747,13 +776,18 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
     }
 
     async fn cleanup(&self) -> ServiceResult<RemoteWorkspaceCleanup> {
+        let now = Utc::now();
+        let expired = self
+            .repos
+            .subscription_repo
+            .delete_expired_join_requests(now)
+            .await?;
+        if expired > 0 {
+            info!(expired, "forgot expired join requests filed at other hosts");
+        }
         Ok(RemoteWorkspaceCleanup {
             ended_delegations: 0,
-            lapsed_subscriptions: self
-                .repos
-                .subscription_repo
-                .lapse_expired(Utc::now())
-                .await?,
+            lapsed_subscriptions: self.repos.subscription_repo.lapse_expired(now).await?,
         })
     }
 }

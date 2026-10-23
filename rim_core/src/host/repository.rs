@@ -9,6 +9,7 @@ use crate::host::model::{
     OutboxStats, PeerDelivery, RemoteMember, SeqDecision, UserKind,
 };
 use crate::key_identity::model::DeviceKeyId;
+use crate::public_join_link::model::JoinRequestId;
 use crate::repository::error::RepoResult;
 use crate::server::model::ServerId;
 use crate::user::model::UserId;
@@ -57,6 +58,13 @@ pub trait HostRepository: Send + Sync {
     ) -> RepoResult<()>;
 
     async fn home_relay(&self, user_id: UserId) -> RepoResult<Option<String>>;
+
+    /// The relay that filed a workspace join request for a person of another server, and the
+    /// person's principal id; `None` for a request this server's account filed, or none.
+    async fn join_request_relay(
+        &self,
+        request_id: JoinRequestId,
+    ) -> RepoResult<Option<(String, String)>>;
 
     /// Set or clear a remote user's handle at their home relay.
     async fn set_home_handle(&self, user_id: UserId, handle: Option<HomeHandle>) -> RepoResult<()>;

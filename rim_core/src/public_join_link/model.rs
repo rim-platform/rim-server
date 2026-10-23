@@ -140,6 +140,9 @@ pub struct NewJoinRequest {
     pub message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    /// The server id of the relay filing the request for a person of another server; `None`
+    /// for this server's accounts.
+    pub relay_server_id: Option<String>,
 }
 
 #[cfg(test)]
