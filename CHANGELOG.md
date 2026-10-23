@@ -426,6 +426,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Update the cryptographic helper `ctutils` to 0.4.5 to fix constant-time comparison
+  advisory RUSTSEC-2026-0385.
+
 - Operator commands flush audit files before exiting, keep diagnostics on stderr at warning
   level by default (`RUST_LOG` overrides it), and describe empty principal and report lists.
   Unknown commands print usage and exit with status 2 instead of starting another server.
