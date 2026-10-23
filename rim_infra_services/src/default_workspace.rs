@@ -18,9 +18,9 @@ use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_core::user::model::UserId;
-use rim_services::ServiceResult;
 use rim_services::default_workspace::DefaultWorkspaceService;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
+use rim_services::{ServiceError, ServiceResult};
 
 use crate::instance_invite::{InviteTerms, MAX_TTL_DAYS, issue};
 use crate::secret_file::write_secret;
@@ -594,11 +594,30 @@ pub(crate) fn announce(
 pub struct DefaultDefaultWorkspaceService {
     setting: DefaultWorkspace,
     repo: Arc<dyn DefaultWorkspaceRepository>,
+    join_repos: Option<SignupRepos>,
+    db: Option<sea_orm::DatabaseConnection>,
+    observers: Observers,
 }
 
 impl DefaultDefaultWorkspaceService {
     pub fn new(setting: DefaultWorkspace, repo: Arc<dyn DefaultWorkspaceRepository>) -> Self {
-        Self { setting, repo }
+        Self {
+            setting,
+            repo,
+            join_repos: None,
+            db: None,
+            observers: Observers::new(Arc::new(rim_services::events::NoopBroadcaster)),
+        }
+    }
+    pub fn with_database(mut self, db: sea_orm::DatabaseConnection) -> Self {
+        self.db = Some(db);
+        self
+    }
+
+    pub fn with_join(mut self, repos: SignupRepos, observers: Observers) -> Self {
+        self.join_repos = Some(repos);
+        self.observers = observers;
+        self
     }
 }
 
@@ -606,6 +625,51 @@ impl DefaultDefaultWorkspaceService {
 impl DefaultWorkspaceService for DefaultDefaultWorkspaceService {
     async fn current(&self) -> ServiceResult<Option<ServerId>> {
         current(self.repo.as_ref(), &self.setting).await
+    }
+    async fn join(&self, user_id: UserId) -> ServiceResult<Option<ServerId>> {
+        let scope = match &self.db {
+            Some(db) => Some(
+                rim_infra_db::begin_transaction(db)
+                    .await
+                    .map_err(ServiceError::internal)?,
+            ),
+            None => None,
+        };
+        let transaction_repos = scope.as_ref().map(|scope| {
+            crate::repos::AppRepos::with_handle(&scope.handle())
+                .for_auth()
+                .signup_repos()
+        });
+        let repos = transaction_repos
+            .as_ref()
+            .or(self.join_repos.as_ref())
+            .ok_or(ServiceError::Unavailable)?;
+        let user = repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if !matches!(user.handle, rim_core::user::model::UserHandle::Local) {
+            return Err(ServiceError::PermissionDenied);
+        }
+        let workspace = self.current().await?.ok_or(ServiceError::NotFound)?;
+        crate::util::ensure_not_banned(repos.moderation_repo.as_ref(), workspace, user_id).await?;
+        let joined = join(repos, &self.setting, user_id).await?;
+        if joined.is_none()
+            && !repos
+                .server_member_repo
+                .is_member(workspace, user_id)
+                .await?
+        {
+            crate::util::ensure_not_banned(repos.moderation_repo.as_ref(), workspace, user_id)
+                .await?;
+            return Err(ServiceError::NotFound);
+        }
+        if let Some(scope) = scope {
+            scope.commit().await.map_err(ServiceError::internal)?;
+        }
+        announce(joined, user_id, &user.username, &self.observers);
+        Ok(Some(workspace))
     }
 }
 
@@ -736,6 +800,55 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.starts_with("could not look workspace"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn self_join_refuses_remote_accounts_and_active_bans() {
+        for remote in [true, false] {
+            let workspace = ServerId::new();
+            let id = UserId::new();
+            let mut moderation = MockModerationRepository::new();
+            moderation
+                .expect_get_active_ban()
+                .times(usize::from(!remote))
+                .returning(move |_, _, _| {
+                    Box::pin(async move {
+                        Ok(Some(ServerBan {
+                            server_id: workspace,
+                            user_id: id,
+                            reason: None,
+                            banned_by: None,
+                            created_at: Utc::now(),
+                            expires_at: None,
+                        }))
+                    })
+                });
+            let mut r = repos(
+                servers_with(workspace),
+                members(false, 0),
+                moderation,
+                MockConversationRepository::new(),
+                MockConversationMemberRepository::new(),
+            );
+            let mut account = crate::probation_fixtures::account(id, Utc::now(), None);
+            if remote {
+                account.handle = rim_core::user::model::UserHandle::Unknown;
+            }
+            r.user_repo = Arc::new(crate::probation_fixtures::users(vec![account]));
+            let service = DefaultDefaultWorkspaceService::new(
+                DefaultWorkspace::Fixed(workspace),
+                Arc::clone(&r.default_workspace_repo),
+            )
+            .with_join(
+                r,
+                Observers::new(Arc::new(rim_services::events::NoopBroadcaster)),
+            );
+            let result = DefaultWorkspaceService::join(&service, id).await;
+            assert!(matches!(
+                result,
+                Err(ServiceError::PermissionDenied) | Err(ServiceError::Forbidden(_))
+            ));
+        }
     }
 
     /// The account becomes a Member and joins the public channels it is not in yet.

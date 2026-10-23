@@ -123,6 +123,7 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
         WorkspaceEvent::PresenceChanged { .. } => true,
         // Directory events: everyone but guests, who only learn about themselves.
         WorkspaceEvent::MemberProfileUpdated { user_id: event_user_id, .. }
+        | WorkspaceEvent::MemberBanChanged { user_id: event_user_id, .. }
         | WorkspaceEvent::MemberJoined {
             user_id: event_user_id,
             ..
@@ -533,6 +534,9 @@ mod tests {
             WorkspaceEvent::MemberLeft {
                 workspace_id,
                 user_id: about,
+                cause: None,
+                until: None,
+                reason: None,
             },
             WorkspaceEvent::MemberRoleChanged {
                 workspace_id,

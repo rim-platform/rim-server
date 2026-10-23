@@ -83,6 +83,11 @@ pub enum WorkspaceEvent {
         workspace_id: ServerId,
         user_id: UserId,
     },
+    /// A workspace ban changed; clients refetch author status without receiving its reason.
+    MemberBanChanged {
+        workspace_id: ServerId,
+        user_id: UserId,
+    },
     MemberJoined {
         workspace_id: ServerId,
         user_id: UserId,
@@ -94,6 +99,13 @@ pub enum WorkspaceEvent {
     MemberLeft {
         workspace_id: ServerId,
         user_id: UserId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        /// Private to the removed user's own delivery.
+        #[serde(default, skip_serializing)]
+        reason: Option<String>,
     },
     /// A member's role changed. `role` is the snake_case role name (`owner`,
     /// `moderator`, `member`, `guest`). Wire shape:
@@ -439,6 +451,7 @@ impl WorkspaceEvent {
             | Self::MessageUnpinned { workspace_id, .. }
             | Self::ThreadCreated { workspace_id, .. }
             | Self::MemberProfileUpdated { workspace_id, .. }
+            | Self::MemberBanChanged { workspace_id, .. }
             | Self::MemberJoined { workspace_id, .. }
             | Self::MemberLeft { workspace_id, .. }
             | Self::MemberRoleChanged { workspace_id, .. }
@@ -488,6 +501,7 @@ impl WorkspaceEvent {
                 member_user_ids, ..
             } => Some(member_user_ids),
             Self::MemberProfileUpdated { .. }
+            | Self::MemberBanChanged { .. }
             | Self::MemberJoined { .. }
             | Self::MemberLeft { .. }
             | Self::MemberRoleChanged { .. } => None,
@@ -594,5 +608,63 @@ impl WorkspaceEvent {
             self,
             Self::PipelineFired { .. } | Self::PipelineSuspended { .. }
         )
+    }
+}
+
+impl WorkspaceEvent {
+    /// The event's wire form for one subscriber, with removal reasons private to their subject.
+    ///
+    /// # Errors
+    /// When an event cannot be serialized.
+    pub fn json_for_user(&self, user_id: &str) -> Result<serde_json::Value, serde_json::Error> {
+        let mut value = serde_json::to_value(self)?;
+        if let Self::MemberLeft {
+            user_id: removed,
+            reason: Some(reason),
+            ..
+        } = self
+            && removed.to_string() == user_id
+        {
+            value["reason"] = serde_json::Value::String(reason.clone());
+        }
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::*;
+
+    #[test]
+    fn removal_reasons_are_serialized_only_for_the_removed_user() {
+        let removed = UserId::new();
+        let event = WorkspaceEvent::MemberLeft {
+            workspace_id: ServerId::new(),
+            user_id: removed,
+            cause: Some("ban".to_string()),
+            until: None,
+            reason: Some("private explanation".to_string()),
+        };
+        assert!(
+            serde_json::to_value(&event)
+                .unwrap()
+                .get("reason")
+                .is_none()
+        );
+        let own = event.json_for_user(&removed.to_string()).unwrap();
+        assert_eq!(own["reason"], "private explanation");
+        assert_eq!(own["cause"], "ban");
+        assert!(
+            event
+                .json_for_user(&UserId::new().to_string())
+                .unwrap()
+                .get("reason")
+                .is_none()
+        );
+        let received: WorkspaceEvent = serde_json::from_value(own).unwrap();
+        assert_eq!(
+            received.json_for_user(&removed.to_string()).unwrap()["reason"],
+            "private explanation"
+        );
     }
 }

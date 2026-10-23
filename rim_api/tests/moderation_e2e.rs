@@ -329,6 +329,63 @@ fn error_extension(res: &async_graphql::Response, key: &str) -> Option<async_gra
 }
 
 #[tokio::test]
+async fn message_author_ban_status_is_public_and_reason_is_moderator_only() {
+    use sea_orm::ConnectionTrait;
+    let f = setup().await;
+    exec_ok(&f.schema, f.send_request(&f.bob, "before ban")).await;
+    let query = MESSAGES_QUERY.replace(
+        "items { id }",
+        "items { id authorId author { banned bannedUntil banReason } }",
+    );
+    let vars = json!({ "serverId": f.server_id, "conversationId": f.channel_id });
+    exec_ok(&f.schema, f.mona.request(BAN, f.member_vars(&f.bob))).await;
+    let status = exec_ok(&f.schema, f.carol.request(&query, vars.clone())).await;
+    let author = &status["page"]["items"][0]["author"];
+    assert_eq!(author["banned"], true);
+    assert!(author["bannedUntil"].is_null());
+    assert!(author["banReason"].is_null());
+    let status = exec_ok(&f.schema, f.mona.request(&query, vars.clone())).await;
+    assert_eq!(status["page"]["items"][0]["author"]["banReason"], "spam");
+    exec_ok(&f.schema, f.mona.request(UNBAN, f.member_vars(&f.bob))).await;
+    let status = exec_ok(&f.schema, f.carol.request(&query, vars.clone())).await;
+    assert_eq!(status["page"]["items"][0]["author"]["banned"], false);
+    exec_ok(&f.schema, f.mona.request(BAN, f.member_vars(&f.bob))).await;
+    f.ctx.conn.execute_unprepared(&format!("UPDATE server_ban SET expires_at = now() - interval '1 second' WHERE server_id = '{}' AND user_id = '{}'", f.server_id, f.bob.user_id)).await.unwrap();
+    let status = exec_ok(&f.schema, f.carol.request(&query, vars)).await;
+    assert_eq!(status["page"]["items"][0]["author"]["banned"], false);
+}
+
+#[tokio::test]
+async fn author_ban_status_is_scoped_to_each_workspace_in_one_query() {
+    use rim_core::user::repository::UserRepository;
+    use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
+    let f = setup().await;
+    let users = SeaOrmUserRepository::new(f.ctx.db.clone());
+    let bob = users.get_by_id(f.bob.user_id).await.unwrap().unwrap();
+    let alice = users.get_by_id(f.alice.user_id).await.unwrap().unwrap();
+    let other = f.ctx.create_server("other workspace").await;
+    f.ctx.add_owner(&other, &alice).await;
+    f.ctx
+        .add_member(&other, &bob, ServerMemberRole::Member)
+        .await;
+    let channel =
+        create_channel(&f.schema, &f.alice, &other.id.to_string(), "general", false).await;
+    exec_ok(&f.schema, f.bob.request(SEND_MESSAGE, json!({"input": {"serverId":other.id.to_string(), "conversationId":channel, "text":"another workspace"}}))).await;
+    exec_ok(&f.schema, f.send_request(&f.bob, "first workspace")).await;
+    exec_ok(&f.schema, f.mona.request(BAN, f.member_vars(&f.bob))).await;
+    let query = format!(
+        r#"query {{
+        first: messages(serverId:"{}", conversationId:"{}", dir:AFTER, limit:10, includeDeleted:false) {{ items {{ author {{ banned bannedUntil }} }} }}
+        second: messages(serverId:"{}", conversationId:"{}", dir:AFTER, limit:10, includeDeleted:false) {{ items {{ author {{ banned bannedUntil }} }} }}
+    }}"#,
+        f.server_id, f.channel_id, other.id, channel
+    );
+    let result = exec_ok(&f.schema, f.alice.request(&query, json!({}))).await;
+    assert_eq!(result["first"]["items"][0]["author"]["banned"], true);
+    assert_eq!(result["second"]["items"][0]["author"]["banned"], false);
+}
+
+#[tokio::test]
 async fn kicked_member_may_rejoin_but_banned_member_may_not() {
     let f = setup().await;
 

@@ -13,7 +13,7 @@ use crate::server::model::ServerId;
 use crate::user::model::UserId;
 
 /// Cursor for [`ModerationRepository::list_reports`]: the standard `(created_at, id)` tuple,
-/// oldest first.
+/// newest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageReportCursor {
     pub created_at: DateTime<Utc>,

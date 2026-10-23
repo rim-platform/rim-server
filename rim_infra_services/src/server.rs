@@ -419,6 +419,9 @@ impl ServerService for DefaultServerService {
             self.observers.emit(WorkspaceEvent::MemberLeft {
                 workspace_id: cmd.server_id,
                 user_id: member.user_id,
+                cause: Some("workspace_deleted".to_string()),
+                until: None,
+                reason: None,
             });
         }
         info!(

@@ -28,7 +28,11 @@ pub struct SearchResultMessage {
 impl SearchResultMessage {
     #[graphql(complexity = 5)]
     async fn author(&self, ctx: &Context<'_>) -> Result<Option<User>> {
-        ctx.load_user(&self.author_id).await
+        let workspace = crate::ids::parse_uuid_id(&self.server_id)?;
+        Ok(ctx
+            .load_user(&self.author_id)
+            .await?
+            .map(|author| author.in_workspace(workspace)))
     }
 }
 
@@ -160,7 +164,11 @@ impl Message {
 
     #[graphql(complexity = 5)]
     async fn author(&self, ctx: &Context<'_>) -> Result<Option<User>> {
-        ctx.load_user(&self.author_id).await
+        let workspace = crate::ids::parse_uuid_id(&self.server_id)?;
+        Ok(ctx
+            .load_user(&self.author_id)
+            .await?
+            .map(|author| author.in_workspace(workspace)))
     }
 
     #[graphql(complexity = "child_complexity * 10")]

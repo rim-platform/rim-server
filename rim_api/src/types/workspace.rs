@@ -160,11 +160,17 @@ pub struct ServerMember {
     pub timeout_until: Option<chrono::DateTime<chrono::Utc>>,
     /// The member's key identity (`rimp1_…`), once enrolled; null for a password-only account.
     pub principal_id: Option<String>,
+    /// Whether this member is banned in this workspace.
+    pub banned: bool,
+    /// End of the active ban; null for a permanent ban or no ban.
+    pub banned_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
     fn from(value: rim_services::server_member::dto::ServerMemberDto) -> Self {
         Self {
+            banned: false,
+            banned_until: None,
             server_id: async_graphql::ID(value.server_id.to_string()),
             user_id: async_graphql::ID(value.user_id.to_string()),
             username: value.username,

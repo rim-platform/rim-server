@@ -105,6 +105,9 @@ async fn workspace_events_end_after_lag_when_subscriber_was_removed() {
     broadcaster.broadcast(WorkspaceEvent::MemberLeft {
         workspace_id: server_id,
         user_id: actor,
+        cause: None,
+        until: None,
+        reason: None,
     });
     for version in 0..3 {
         broadcaster.broadcast(state_changed(server_id, version));

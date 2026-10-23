@@ -674,3 +674,19 @@ CSRF token. It returns a validated, hash-pinned bundle as an attachment, at most
 public HTTPS targets are accepted, with at most ten safe redirects and a 120-second timeout.
 Twenty attempts per account per hour are allowed, with four concurrent downloads per server.
 Failures use the normal feature/auth/rate responses; invalid pins or bundles return 422.
+
+### Rejoining the default workspace and removal notices
+
+`joinDefaultWorkspace: ID!` requires a signed-in local account and returns the current default
+workspace id. It preserves an existing role, or joins as Member with public channels. It
+returns `NOT_FOUND` if no default is available, and `FORBIDDEN` for remote accounts or an
+active ban ("you are banned from this workspace"). Older accounts and accounts whose ban
+expired may use it without an invite. Unbanning a local account in the current default
+workspace restores that membership automatically; other workspaces still require an invite.
+Private conversations and deleted automations are never restored.
+
+On a message's `author`, `User.banned` and `bannedUntil` describe the active ban in that
+message's workspace; `banReason` is visible only to workspace moderators. Other User contexts
+return false/null. `ServerMember.banned` is false for active directory members, with null
+`bannedUntil`; banned users have been removed from that directory. MemberLeft carries an
+optional cause and ban end; the moderator's reason is delivered only to the removed user.

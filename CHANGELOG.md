@@ -430,6 +430,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Removal events distinguish kicks, bans, workspace deletion and account deletion; the removed
+  user alone receives the moderator's reason. Workspace message authors expose `User.banned`,
+  `bannedUntil` and moderator-only `banReason`. An unban restores a local account to the current
+  default workspace; `joinDefaultWorkspace` lets older accounts and expired bans rejoin it.
 - Profile picture uploads use content-addressed URLs with private immutable caching. Successful
   profile updates emit `MemberProfileUpdated` so other sessions refresh without a restart.
 - Refuse signups at the account cap before validating terms, credentials or invite inputs, while retaining the transactional admission check.

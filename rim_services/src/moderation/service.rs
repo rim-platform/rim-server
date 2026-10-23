@@ -37,6 +37,14 @@ pub trait ModerationService: Send + Sync {
     /// Returns whether a ban existed.
     async fn unban(&self, cmd: UnbanMemberCmd) -> ServiceResult<bool>;
 
+    /// A user's active ban, visible to workspace members; its reason only to moderators.
+    async fn member_ban(
+        &self,
+        actor: crate::Actor,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> ServiceResult<Option<ServerBanDto>>;
+
     async fn list_bans(&self, query: ListBansQuery) -> ServiceResult<Vec<ServerBanDto>>;
 
     async fn timeout(&self, cmd: TimeoutMemberCmd) -> ServiceResult<MemberTimeoutDto>;
