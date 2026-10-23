@@ -116,7 +116,10 @@ async fn ban_blocks_rejoin_until_lifted() {
     };
 
     let err = join().await.unwrap_err();
-    assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+    assert!(
+        matches!(&err, ServiceError::Forbidden(message) if message == "you are banned from this workspace"),
+        "{err:?}"
+    );
     assert!(!members.is_member(server.id, bob.id).await.expect("lookup"));
     assert_eq!(
         invites
