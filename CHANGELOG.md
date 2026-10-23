@@ -426,6 +426,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Refuse signups at the account cap before validating terms, credentials or invite inputs, while retaining the transactional admission check.
+
 - An instance operator handling a report of an unencrypted message in the direct space now sees
   that one message's text, author and send time, and may delete it with `deleteMessage`, without
   a verified report and without seeing the rest of the conversation. Before, only franked

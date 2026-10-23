@@ -141,6 +141,12 @@ pub trait AuthService: Send + Sync {
     /// # Errors
     /// Propagates storage errors.
     async fn registration_full(&self) -> ServiceResult<bool>;
+
+    /// Count local accounts before validating signup inputs, without reserving a place.
+    ///
+    /// # Errors
+    /// `RegistrationFull` at the account cap; storage errors propagate.
+    async fn check_registration_capacity(&self) -> ServiceResult<()>;
 }
 
 #[async_trait]
