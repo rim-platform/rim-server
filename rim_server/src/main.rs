@@ -1,4 +1,6 @@
-use rim_logging::{LoggingHandle, init_logging};
+use std::process::ExitCode;
+
+use rim_logging::{LoggingHandle, init_cli_logging, init_logging};
 use rim_server::server::start_server;
 use rim_server::{
     abuse_cmd, account_cmd, audit_cmd, config, franking_key_cmd, invite_cmd, ip_cmd, operator_cmd,
@@ -7,52 +9,74 @@ use rim_server::{
 
 /// Starts logging and returns the handle that keeps the audit file writer alive. Without
 /// logging the audit trail would be lost, so a failure ends the process.
-fn initialize() -> LoggingHandle {
-    let handle = match init_logging() {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("fatal: could not start logging: {e}");
-            std::process::exit(1);
-        }
+fn initialize(command: bool) -> Result<LoggingHandle, ExitCode> {
+    let logging = if command {
+        init_cli_logging()
+    } else {
+        init_logging()
     };
-    tracing::info!(
-        version = config::VERSION,
-        "Starting rim-server {}",
-        config::VERSION
+    let handle = logging.map_err(|e| {
+        eprintln!("fatal: could not start logging: {e}");
+        ExitCode::FAILURE
+    })?;
+    if !command {
+        tracing::info!(
+            version = config::VERSION,
+            "Starting rim-server {}",
+            config::VERSION
+        );
+    }
+    Ok(handle)
+}
+
+fn usage() {
+    eprintln!(
+        "Usage: rim_server [server-key|peer|franking-key|principal|abuse-reports|invite|audit|ip|account|operator] [arguments]"
     );
-    handle
 }
 
 #[actix_web::main]
-async fn main() {
+async fn main() -> ExitCode {
     // Answered before logging starts, so the output is the version line alone.
     if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
         println!("{}", config::version_line());
-        return;
+        return ExitCode::SUCCESS;
     }
 
-    // Bind the logging handle for the entire lifetime of `main` — must
-    // outlive every `tracing::info!(target: "audit", …)` emit and
-    // remain alive until after any error is printed so the final log
-    // lines are flushed before the process exits.
-    let _logging_handle = initialize();
-
     let mut args = std::env::args().skip(1);
-    if let Some(subcmd) = args.next() {
-        let exit_code = match subcmd.as_str() {
-            "server-key" | "peer" => Some(server_key_cmd::run(&subcmd, args).await),
-            "franking-key" => Some(franking_key_cmd::run(args)),
-            "principal" | "abuse-reports" => Some(abuse_cmd::run(&subcmd, args).await),
-            "invite" => Some(invite_cmd::run(args).await),
-            "audit" => Some(audit_cmd::run(args).await),
-            "ip" => Some(ip_cmd::run(args).await),
-            "account" => Some(account_cmd::run(args).await),
-            "operator" => Some(operator_cmd::run(args).await),
-            _ => None,
-        };
-        if let Some(code) = exit_code {
-            std::process::exit(code);
+    let subcommand = args.next();
+    if let Some(subcmd) = subcommand.as_deref() {
+        match subcmd {
+            "--help" | "-h" => {
+                usage();
+                return ExitCode::SUCCESS;
+            }
+            "server-key" | "peer" | "franking-key" | "principal" | "abuse-reports" | "invite"
+            | "audit" | "ip" | "account" | "operator" => {}
+            _ => {
+                eprintln!("error: unknown command '{subcmd}'");
+                usage();
+                return ExitCode::from(2);
+            }
         }
+    }
+    let _logging_handle = match initialize(subcommand.is_some()) {
+        Ok(handle) => handle,
+        Err(code) => return code,
+    };
+    if let Some(subcmd) = subcommand {
+        let code = match subcmd.as_str() {
+            "server-key" | "peer" => server_key_cmd::run(&subcmd, args).await,
+            "franking-key" => franking_key_cmd::run(args),
+            "principal" | "abuse-reports" => abuse_cmd::run(&subcmd, args).await,
+            "invite" => invite_cmd::run(args).await,
+            "audit" => audit_cmd::run(args).await,
+            "ip" => ip_cmd::run(args).await,
+            "account" => account_cmd::run(args).await,
+            "operator" => operator_cmd::run(args).await,
+            _ => 2,
+        };
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
 
     let config = match config::load_config() {
@@ -60,13 +84,14 @@ async fn main() {
         Err(e) => {
             tracing::error!(target: "audit", error = %e, "fatal: failed to load configuration");
             eprintln!("fatal: failed to load configuration: {e}");
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
     };
 
     if let Err(e) = start_server(&config).await {
         tracing::error!(target: "audit", error = %e, "fatal: server exited with error");
         eprintln!("fatal: server exited with error: {e}");
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
 }

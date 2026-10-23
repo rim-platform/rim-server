@@ -440,11 +440,14 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
             describe_record(&mut out, &record);
         }
         Command::ListBlocks => {
-            for block in service
+            let blocks = service
                 .principal_blocks(CLI)
                 .await
-                .map_err(|e| e.to_string())?
-            {
+                .map_err(|e| e.to_string())?;
+            if blocks.is_empty() {
+                let _ = writeln!(out, "no principal blocks");
+            }
+            for block in blocks {
                 let _ = writeln!(
                     out,
                     "{}  {}  {}",
@@ -463,6 +466,9 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
                 .reports(CLI, open_only, after.map(AbuseReportId::from), limit)
                 .await
                 .map_err(|e| e.to_string())?;
+            if reports.is_empty() {
+                let _ = writeln!(out, "no abuse reports");
+            }
             for report in &reports {
                 describe_report(&mut out, report);
             }
