@@ -665,3 +665,12 @@ revalidation. `updateMyProfile` accepts both name forms only for the caller's ow
 Replacement deletes the old avatar file. `MemberProfileUpdated` identifies a changed profile
 in each workspace; the direct space sends the account's own change to its other sessions.
 Clients refetch the directory and, for their own user id, `me` when the event arrives.
+
+### Pinned plugin link fetch
+
+`POST /api/plugin-bundles/fetch` takes JSON `{url, sha256}`, at most 8 KiB, with a session and
+CSRF token. It returns a validated, hash-pinned bundle as an attachment, at most 8 MiB. The
+`plugin_link_fetch` feature is enabled by default, independent of `workspace_plugins`. Only
+public HTTPS targets are accepted, with at most ten safe redirects and a 120-second timeout.
+Twenty attempts per account per hour are allowed, with four concurrent downloads per server.
+Failures use the normal feature/auth/rate responses; invalid pins or bundles return 422.

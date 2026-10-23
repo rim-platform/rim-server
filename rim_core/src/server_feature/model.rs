@@ -22,11 +22,13 @@ pub enum ServerFeature {
     /// Profile pictures: the avatar upload and download routes and the avatar URLs of users
     /// and members.
     Avatars,
+    /// Server-side fetching of hash-pinned web plugin bundles.
+    PluginLinkFetch,
 }
 
 impl ServerFeature {
     /// Every known feature, in display order.
-    pub const ALL: [ServerFeature; 7] = [
+    pub const ALL: [ServerFeature; 8] = [
         ServerFeature::Attachments,
         ServerFeature::LinkPreviews,
         ServerFeature::Email,
@@ -34,6 +36,7 @@ impl ServerFeature {
         ServerFeature::WorkspacePlugins,
         ServerFeature::AiCommands,
         ServerFeature::Avatars,
+        ServerFeature::PluginLinkFetch,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -45,6 +48,7 @@ impl ServerFeature {
             ServerFeature::WorkspacePlugins => "workspace_plugins",
             ServerFeature::AiCommands => "ai_commands",
             ServerFeature::Avatars => "avatars",
+            ServerFeature::PluginLinkFetch => "plugin_link_fetch",
         }
     }
 
