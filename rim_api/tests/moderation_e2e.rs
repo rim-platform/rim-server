@@ -375,8 +375,8 @@ async fn author_ban_status_is_scoped_to_each_workspace_in_one_query() {
     exec_ok(&f.schema, f.mona.request(BAN, f.member_vars(&f.bob))).await;
     let query = format!(
         r#"query {{
-        first: messages(serverId:"{}", conversationId:"{}", dir:AFTER, limit:10) {{ items {{ author {{ banned bannedUntil }} }} }}
-        second: messages(serverId:"{}", conversationId:"{}", dir:AFTER, limit:10) {{ items {{ author {{ banned bannedUntil }} }} }}
+        first: messages(serverId:"{}", conversationId:"{}", dir:AFTER, limit:10, includeDeleted:false) {{ items {{ author {{ banned bannedUntil }} }} }}
+        second: messages(serverId:"{}", conversationId:"{}", dir:AFTER, limit:10, includeDeleted:false) {{ items {{ author {{ banned bannedUntil }} }} }}
     }}"#,
         f.server_id, f.channel_id, other.id, channel
     );
