@@ -170,8 +170,8 @@ The file routes are plain HTTP, not GraphQL. They answer JSON errors of the form
   `createAttachment` mutation, which returns an `attachmentId` and an `uploadToken`, then sends a
   multipart body with the text fields `upload_token` and `attachment_id` and exactly one file.
   The file is at most 25 MiB and its type is `image/*`, `text/*`, `audio/*`, `video/*`,
-  `application/pdf`, `application/json`, `application/zip`, `application/gzip`, or `application/octet-stream` for
-  the blob of an encrypted conversation. The answer is `{"size_bytes":<n>}`. Off when the
+  `application/pdf`, `application/json`, `application/zip`, `application/gzip`, or
+  `application/octet-stream` for the blob of an encrypted conversation. The answer is `{"size_bytes":<n>}`. Off when the
   `attachments` feature is not enabled. The ticket rejects unsupported plaintext media types
   before accepting bytes. After uploading, call `finalizeAttachment` to mark the file `READY`;
   finalizing an already ready file succeeds again. Attachment creation, finalization and deletion

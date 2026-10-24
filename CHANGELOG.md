@@ -488,7 +488,6 @@ tag `v<version>`, the version every crate in the workspace carries.
   succeeds, so an interrupted upload response can be recovered safely.
 - Audio and video attachments pass the same media-type checks as other supported files.
   Unsupported plaintext file types are rejected when requesting an upload ticket.
-
 - Removal events distinguish kicks, bans, workspace deletion and account deletion; the removed
   user alone receives the moderator's reason. Workspace message authors expose `User.banned`,
   `bannedUntil` and moderator-only `banReason`. An unban restores a local account to the current
