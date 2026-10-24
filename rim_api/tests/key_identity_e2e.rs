@@ -8,8 +8,6 @@
 
 mod support;
 
-use std::sync::Arc;
-
 use async_graphql::Request;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -17,16 +15,13 @@ use uuid::Uuid;
 use chrono::Utc;
 use rim_api::AppSchema;
 use rim_api::auth_context::RemoteIp;
-use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
 use rim_auth::opaque::client::Registration;
-use rim_auth::password::hash_password;
-use rim_auth::session_token::hash_token;
 use rim_core::auth::repository::{InstanceInviteRepository, SessionRepository};
 use rim_core::server::repository::ServerRepository;
-use rim_core::user::model::{NewUser, UserId};
+use rim_core::user::model::{NewUser, NewUserKeyIdentity, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_identity::testing::{TestIdentity, device_login, device_self_revoke, signing_key};
-use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
+use rim_identity::{KeyState, SignedStatement, StatementVersion};
 use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
@@ -34,31 +29,19 @@ use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::graphql::{
-    Call, Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code,
-    exec_ok, merged,
+    Call, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
+    merged,
 };
 use support::identity::{
-    Enrolled, SIGNUP_WITH_KEY, key_login, signed_login, signed_out, signup_input, statement,
-    tampered,
+    Enrolled, SIGNUP_WITH_KEY, key_login, signed_login, signed_out, signed_up_with, signup_input,
+    statement, tampered,
 };
 use support::password::{
     LOGIN_WITH_PASSWORD, REGISTRATION_START, TEST_PASSWORD, b64, login as password_login_steps,
-    registration, reset_password,
+    registration,
 };
 use support::registration::seed_operator_invite;
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
-
-const PASSWORD: &str = "correct horse battery";
-
-const ENROLL: &str = r#"
-mutation Enroll($input: EnrollIdentityKeyInput!) {
-  enrollIdentityKey(input: $input) {
-    principalId
-    keySeq
-    keyLog { seq kind statement { payload signature } }
-    devices { deviceId publicKey name keySeq revokedAt }
-  }
-}"#;
 
 const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce expiresAt } }";
 
@@ -76,129 +59,29 @@ query { myKeyIdentity { principalId keySeq devices { deviceId revokedAt } } }"#;
 const KEY_LOG: &str = r#"
 query KeyLog($principalId: String!) { keyLog(principalId: $principalId) { seq kind statement { payload } } }"#;
 
-const PASSWORD_LOGIN: &str = r#"
-mutation Login($input: LoginInput!) { login(input: $input) { userId } }"#;
-
-fn password_login(username: &str) -> Request {
-    anonymous_request(
-        PASSWORD_LOGIN,
-        json!({ "input": { "username": username, "password": PASSWORD } }),
-    )
-}
-
-/// Enroll a password account, sign in with the device key, revoke the device, and check that
-/// the password and the revoked device no longer sign in. Every statement is version 1.
+/// Sign up with a key, sign in with the device key and the password, revoke the device, and
+/// check that the revoked device no longer signs in. Every statement is version 1.
 #[tokio::test]
-async fn enroll_then_key_login_then_revoke() {
-    enroll_login_revoke(StatementVersion::V1).await;
+async fn signup_then_key_login_then_revoke() {
+    signup_login_revoke(StatementVersion::V1).await;
 }
 
 /// The same flow with version 2 statements: tagged keys and signatures.
 #[tokio::test]
-async fn enroll_then_key_login_then_revoke_v2() {
-    enroll_login_revoke(StatementVersion::V2).await;
+async fn signup_then_key_login_then_revoke_v2() {
+    signup_login_revoke(StatementVersion::V2).await;
 }
 
-async fn enroll_login_revoke(version: StatementVersion) {
+async fn signup_login_revoke(version: StatementVersion) {
     let ctx = TestCtx::new().await;
-    let users = SeaOrmUserRepository::new(ctx.db.clone());
-    let user = users
-        .create_user(NewUser {
-            username: "ada".to_string(),
-            password: Some(hash_password(PASSWORD).expect("hash")),
-            email: Some("ada@test.example.com".to_string()),
-            display_name: None,
-            key_identity: None,
-        })
-        .await
-        .expect("create_user");
-    let caller = Caller {
-        user_id: user.id,
-        session_id: ctx.create_session(&user).await,
-    };
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-
-    // The password signs in before enrollment.
-    exec_ok(&schema, password_login("ada")).await;
-
-    let id = TestIdentity::with_version(1, version);
-    let inception = id.inception();
-    let state = KeyState::from_inception(&inception).expect("inception");
-    let device_id = Uuid::now_v7();
-    let device = signing_key(20);
-    let cert = id.device_cert(&state, device_id, &device, "Laptop");
-    // The enrolling device proves it holds its key by signing a fresh challenge.
-    let challenge = exec_ok(&schema, anonymous_request(CHALLENGE, json!({}))).await;
-    let challenge = &challenge["keyLoginChallenge"];
-    let proof = device_login(
-        &device,
-        &state,
-        device_id,
-        challenge["challengeId"]
-            .as_str()
-            .expect("challengeId")
-            .parse()
-            .expect("uuid"),
-        challenge["nonce"].as_str().expect("nonce"),
-        KEY_LOGIN_AUDIENCE,
-    );
-
-    let data = exec_ok(
-        &schema,
-        caller.request(
-            ENROLL,
-            json!({ "input": {
-                "keyLog": [statement(&inception)],
-                "device": statement(&cert),
-                "proof": statement(&proof),
-            } }),
-        ),
-    )
-    .await;
-    // Another account replaying the enrollment is refused: its challenge is spent.
-    let eve = ctx.outsider("eve").await;
-    let replay = eve.request(
-        ENROLL,
-        json!({ "input": {
-            "keyLog": [statement(&inception)],
-            "device": statement(&cert),
-            "proof": statement(&proof),
-        } }),
-    );
-    assert_eq!(exec_err_code(&schema, replay).await, "VALIDATION");
-    let enrolled = &data["enrollIdentityKey"];
-    assert_eq!(enrolled["principalId"], json!(state.principal_id));
-    assert_eq!(enrolled["keySeq"], json!(0));
-    assert_eq!(enrolled["keyLog"][0]["kind"], json!("INCEPTION"));
-    assert_eq!(
-        enrolled["keyLog"][0]["statement"]["payload"],
-        json!(inception.payload)
-    );
-    assert_eq!(
-        enrolled["devices"][0]["deviceId"],
-        json!(device_id.to_string())
-    );
-    // The API returns the device key tagged, whichever version certified it.
-    assert_eq!(
-        enrolled["devices"][0]["publicKey"],
-        json!(PublicKey::from(&device).to_string())
-    );
-    assert!(
-        enrolled["devices"][0]["publicKey"]
-            .as_str()
-            .is_some_and(|k| k.starts_with("ed25519:"))
-    );
-
-    // The password no longer signs in.
-    assert_eq!(
-        exec_err_code(&schema, password_login("ada")).await,
-        "UNAUTHENTICATED"
-    );
+    let ada = signed_up_with(&ctx, "ada", 1, version).await;
+    let inception = ada.identity.inception();
 
     // The key log is public: a signed-out device reads it by principal id.
     let data = exec_ok(
         &schema,
-        anonymous_request(KEY_LOG, json!({ "principalId": state.principal_id })),
+        anonymous_request(KEY_LOG, json!({ "principalId": ada.principal_id })),
     )
     .await;
     assert_eq!(data["keyLog"][0]["kind"], json!("INCEPTION"));
@@ -215,28 +98,23 @@ async fn enroll_login_revoke(version: StatementVersion) {
         assert_eq!(data["keyLog"], json!([]));
     }
 
-    let data = exec_ok(&schema, caller.request(MY_KEY_IDENTITY, json!({}))).await;
+    let data = exec_ok(&schema, ada.caller.request(MY_KEY_IDENTITY, json!({}))).await;
     assert_eq!(
-        data["myKeyIdentity"]["devices"].as_array().map(Vec::len),
-        Some(1)
+        data["myKeyIdentity"]["principalId"],
+        json!(ada.principal_id)
     );
-
-    // A reset with the recovery key gives the account a password, and ends the enrolling
-    // session.
-    reset_password(&schema, &id, &state, TEST_PASSWORD).await;
-    let enrolling = SeaOrmSessionRepository::new(ctx.db.clone())
-        .get_by_id(caller.session_id)
-        .await
-        .expect("get session")
-        .expect("session");
-    assert!(enrolling.revoked_at.is_some());
+    assert_eq!(data["myKeyIdentity"]["keySeq"], json!(0));
+    assert_eq!(
+        data["myKeyIdentity"]["devices"],
+        json!([{ "deviceId": ada.device_id.to_string(), "revokedAt": null }])
+    );
 
     // Challenge login with the device key and the password.
     let login = |challenge: &Value, ticket: &str| {
         let proof = device_login(
-            &device,
-            &state,
-            device_id,
+            &ada.device,
+            &ada.state,
+            ada.device_id,
             challenge["challengeId"]
                 .as_str()
                 .expect("challengeId")
@@ -252,52 +130,42 @@ async fn enroll_login_revoke(version: StatementVersion) {
         .data(RemoteIp::new("198.51.100.1"))
     };
     let challenge = exec_ok(&schema, anonymous_request(CHALLENGE, json!({}))).await;
-    let intent = Arc::new(AuthIntentCtx::default());
     let data = exec_ok(
         &schema,
         login(
             &challenge["keyLoginChallenge"],
-            &password_ticket(&schema, &state).await,
-        )
-        .data(Arc::clone(&intent)),
+            &password_ticket(&schema, &ada.state).await,
+        ),
     )
     .await;
-    assert_eq!(data["loginWithKey"]["userId"], json!(user.id.to_string()));
-    let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
-        panic!("loginWithKey must set a session");
-    };
-    let signed_in = Caller {
-        user_id: user.id,
-        session_id: SeaOrmSessionRepository::new(ctx.db.clone())
-            .get_by_token_hash(&hash_token(&session_token))
-            .await
-            .expect("get session")
-            .expect("session")
-            .id,
-    };
+    assert_eq!(
+        data["loginWithKey"]["userId"],
+        json!(ada.user_id.to_string())
+    );
     // The same challenge cannot be used twice.
     assert_eq!(
         exec_err_code(
             &schema,
             login(
                 &challenge["keyLoginChallenge"],
-                &password_ticket(&schema, &state).await,
+                &password_ticket(&schema, &ada.state).await,
             ),
         )
         .await,
         "UNAUTHENTICATED"
     );
 
-    // Revoke the device with the identity key: its sessions end.
-    let revocation = id.revoke_device(&state, device_id);
+    // Revoke the device with the identity key: its sessions end, the signup's included.
+    let revocation = ada.identity.revoke_device(&ada.state, ada.device_id);
     let data = exec_ok(
         &schema,
-        signed_in.request(REVOKE, json!({ "revocation": statement(&revocation) })),
+        ada.caller
+            .request(REVOKE, json!({ "revocation": statement(&revocation) })),
     )
     .await;
     assert!(data["revokeDeviceKey"]["revokedAt"].is_string());
     let session = SeaOrmSessionRepository::new(ctx.db.clone())
-        .get_by_id(signed_in.session_id)
+        .get_by_id(ada.caller.session_id)
         .await
         .expect("get session")
         .expect("session");
@@ -310,7 +178,7 @@ async fn enroll_login_revoke(version: StatementVersion) {
             &schema,
             login(
                 &challenge["keyLoginChallenge"],
-                &password_ticket(&schema, &state).await,
+                &password_ticket(&schema, &ada.state).await,
             ),
         )
         .await,
@@ -325,18 +193,6 @@ async fn password_ticket(schema: &AppSchema, state: &KeyState) -> String {
         .expect("password login")
         .expect("the password opens")
         .ticket
-}
-
-/// `myKeyIdentity` is empty for an account without a key.
-#[tokio::test]
-async fn my_key_identity_before_enrollment() {
-    let ctx = TestCtx::new().await;
-    let caller = ctx.outsider("grace").await;
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-
-    let data = exec_ok(&schema, caller.request(MY_KEY_IDENTITY, json!({}))).await;
-    assert_eq!(data["myKeyIdentity"]["principalId"], Value::Null);
-    assert_eq!(data["myKeyIdentity"]["devices"], json!([]));
 }
 
 const ROTATE: &str = r#"
@@ -386,25 +242,16 @@ fn signed_calls(
 async fn signed_statements_apply_only_to_their_own_account_and_once() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let mut ada = ctx.enrolled(&schema, "ada", 6).await;
-    let bob = ctx.enrolled(&schema, "bob", 7).await;
+    let mut ada = ctx.enrolled("ada", 6).await;
+    let bob = ctx.enrolled("bob", 7).await;
     let signed = signed_by(&mut ada);
     let valid = signed_calls(&signed, Clone::clone);
 
     let mut nobody = TestIdentity::with_version(8, StatementVersion::V2);
     let nobody_state = KeyState::from_inception(&nobody.inception()).expect("inception");
-    // An enrollment of `inception` whose certificate and proof do not verify.
-    let enroll = |inception: &SignedStatement| {
-        let junk = statement(&tampered(inception));
-        (
-            ENROLL,
-            json!({ "input": { "keyLog": [statement(inception)], "device": junk, "proof": junk } }),
-        )
-    };
     let mut anonymous = valid.clone();
     anonymous.extend([
         (MY_KEY_IDENTITY, json!({})),
-        enroll(&ada.identity.inception()),
         (
             ROTATE,
             json!({ "input": { "entry": statement(&nobody.recover(&nobody_state, 9)) } }),
@@ -417,9 +264,6 @@ async fn signed_statements_apply_only_to_their_own_account_and_once() {
         payload: "{}".to_string(),
         signature: s.signature.clone(),
     }));
-    bad.push(enroll(&tampered(
-        &TestIdentity::with_version(10, StatementVersion::V2).inception(),
-    )));
     assert_each_refused_as(&schema, &ada.caller, &bad, "VALIDATION").await;
 
     for ((query, variables), code) in
@@ -454,7 +298,7 @@ async fn signed_statements_apply_only_to_their_own_account_and_once() {
 async fn rotation_keeps_devices_and_recovery_replaces_them() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let mut ada = ctx.enrolled(&schema, "ada", 11).await;
+    let mut ada = ctx.enrolled("ada", 11).await;
 
     let rotation = ada.identity.rotate_with_identity(&ada.state, 212);
     let data = exec_ok(
@@ -603,7 +447,6 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
         .await
         .expect("get user")
         .expect("user");
-    assert_eq!(user.password_hash, None);
     assert_eq!(user.email, None);
     assert_eq!(user.display_name.as_deref(), Some("Ada"));
     assert_eq!(
@@ -624,12 +467,6 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
     assert!(response.errors.is_empty(), "{:?}", response.errors);
     let data = response.data.into_json().expect("json");
     assert_eq!(data["loginWithKey"]["userId"], json!(user_id.to_string()));
-
-    // No password signs in to a key-only account.
-    assert_eq!(
-        exec_err_code(&schema, password_login("keyada")).await,
-        "UNAUTHENTICATED"
-    );
 }
 
 /// Invite-only mode with an operator's instance invite: the invite is spent and the account
@@ -680,7 +517,6 @@ async fn invite_only_signup_with_key_and_operator_invite() {
         .await
         .expect("get user")
         .expect("user");
-    assert_eq!(user.password_hash, None);
     assert_eq!(user.email, None);
     assert!(user.principal_id.is_some());
 
@@ -743,7 +579,7 @@ async fn second_signup_with_the_same_principal_is_a_conflict() {
 async fn finding_14_revocation_is_disclosed_only_to_a_proof_that_would_pass() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let lin = ctx.enrolled(&schema, "lin", 4).await;
+    let lin = ctx.enrolled("lin", 4).await;
     let revocation = lin.identity.revoke_device(&lin.state, lin.device_id);
     exec_ok(
         &schema,
@@ -857,10 +693,12 @@ async fn signup_with_key_and_an_email_bound_invite_takes_its_address() {
     let holder = users
         .create_user(NewUser {
             username: "holder".to_string(),
-            password: Some(hash_password(PASSWORD).expect("hash")),
             email: Some("ops@example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: Some(NewUserKeyIdentity {
+                principal_id: "rimp1_holder".to_string(),
+                identity_key: "ed25519:holder".to_string(),
+            }),
         })
         .await
         .expect("create holder");
@@ -884,7 +722,6 @@ async fn signup_with_key_and_an_email_bound_invite_takes_its_address() {
         .expect("get user")
         .expect("user");
     assert_eq!(user.email.as_deref(), Some("ops@example.com"));
-    assert_eq!(user.password_hash, None);
     assert!(user.principal_id.is_some());
     assert_eq!(invite_uses(&ctx, invite).await, 1);
 }
@@ -947,42 +784,4 @@ async fn racing_key_signups_for_one_email_bound_invite_create_one_account() {
         users.find_by_username("second").await.expect("find"),
     ];
     assert_eq!(accounts.iter().flatten().count(), 1);
-}
-
-/// Enrollment ends every other session of the account; the enrolling session, now the
-/// device's, and another account's sessions go on.
-#[tokio::test]
-async fn enrollment_ends_every_other_session_of_the_account() {
-    let ctx = TestCtx::new().await;
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let sessions = SeaOrmSessionRepository::new(ctx.db.clone());
-    let ada = ctx.create_user("ada").await;
-    let others = [
-        ctx.create_session(&ada).await,
-        ctx.create_session(&ada).await,
-    ];
-    let bob = ctx.create_user("bob").await;
-    let bobs = ctx.create_session(&bob).await;
-
-    let enrolled = ctx.enroll_user(&schema, ada, 34).await;
-
-    for id in others {
-        let session = sessions.get_by_id(id).await.expect("get").expect("session");
-        assert!(session.revoked_at.is_some(), "{id}");
-    }
-    let enrolling = sessions
-        .get_by_id(enrolled.caller.session_id)
-        .await
-        .expect("get")
-        .expect("session");
-    assert!(enrolling.revoked_at.is_none());
-    assert!(enrolling.device_key_id.is_some());
-    let bobs = sessions
-        .get_by_id(bobs)
-        .await
-        .expect("get")
-        .expect("session");
-    assert!(bobs.revoked_at.is_none());
-    let data = exec_ok(&schema, enrolled.caller.request(MY_KEY_IDENTITY, json!({}))).await;
-    assert!(data["myKeyIdentity"]["principalId"].is_string());
 }

@@ -140,16 +140,11 @@ pub(crate) async fn ensure_may_set_display_name(
 /// Mutations that change an account rather than a space, which a person from another server
 /// runs at their own relay, never here.
 pub const ACCOUNT_MUTATIONS: &[&str] = &[
-    "login",
     "logout",
     "logoutOtherSessions",
-    "requestPasswordReset",
-    "resetPassword",
     "keyLoginChallenge",
     "loginWithKey",
-    "signupWithInvite",
     "signupWithKey",
-    "enrollIdentityKey",
     "addDeviceKey",
     "revokeDeviceKey",
     "rotateIdentityKey",

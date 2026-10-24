@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use rim_api::AppSchema;
-use rim_api::auth_context::RemoteIp;
+use rim_api::auth_context::{AuthActorCtx, RemoteIp};
 use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
 use rim_auth::session_token::hash_token;
 use rim_core::auth::repository::SessionRepository;
@@ -20,6 +20,7 @@ use rim_identity::{KeyState, SignedStatement, StatementVersion};
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use rim_services::auth::dto::RegistrationMode;
+use rim_services::provider::AppServiceProvider;
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 
 use super::graphql::{Caller, anonymous_request, exec_ok};
@@ -28,8 +29,6 @@ use super::password::{
 };
 use super::{KEY_LOGIN_AUDIENCE, TestCtx};
 
-const ENROLL: &str = r#"
-mutation Enroll($input: EnrollIdentityKeyInput!) { enrollIdentityKey(input: $input) { principalId } }"#;
 const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce } }";
 
 pub const SIGNUP_WITH_KEY: &str = r#"
@@ -100,6 +99,32 @@ pub struct SignedUp {
 }
 
 impl SignedUp {
+    /// The account's user row.
+    pub async fn user(&self, ctx: &TestCtx) -> User {
+        SeaOrmUserRepository::new(ctx.db.clone())
+            .get_by_id(self.user_id)
+            .await
+            .expect("get user")
+            .expect("the signed-up user")
+    }
+
+    /// Sign in on the account's device through `schema` with [`TEST_PASSWORD`]; returns the
+    /// new session's token, the value of its cookie.
+    pub async fn sign_in(&self, schema: &AppSchema) -> String {
+        let (request, _) = key_login_request(
+            schema,
+            &self.device,
+            &self.state,
+            self.device_id,
+            Some(TEST_PASSWORD),
+        )
+        .await
+        .expect("password login");
+        let intent = Arc::new(AuthIntentCtx::default());
+        exec_ok(schema, request.data(Arc::clone(&intent))).await;
+        session_token(&intent)
+    }
+
     /// Sign in on the account's device through `schema`; see [`key_login`].
     pub async fn login(
         &self,
@@ -118,11 +143,34 @@ impl SignedUp {
 /// against the limits of the schema under test; every schema of a test binary shares the
 /// password key, so the password signs in through any of them.
 pub async fn signed_up(ctx: &TestCtx, username: &str, seed: u8) -> SignedUp {
+    signed_up_with(ctx, username, seed, StatementVersion::V2).await
+}
+
+/// [`signed_up`] with an identity whose statements are written at `version`.
+pub async fn signed_up_with(
+    ctx: &TestCtx,
+    username: &str,
+    seed: u8,
+    version: StatementVersion,
+) -> SignedUp {
     let schema = ctx.build_schema(RegistrationMode::Open).await;
-    let identity = TestIdentity::with_version(seed, StatementVersion::V2);
+    signed_up_through(ctx, &schema, username, seed, version, json!({})).await
+}
+
+/// Sign up `username` through `schema` as [`signed_up`] does, with an identity whose statements
+/// are written at `version` and `extra` input fields (a token).
+pub async fn signed_up_through(
+    ctx: &TestCtx,
+    schema: &AppSchema,
+    username: &str,
+    seed: u8,
+    version: StatementVersion,
+    extra: Value,
+) -> SignedUp {
+    let identity = TestIdentity::with_version(seed, version);
     let state = KeyState::from_inception(&identity.inception()).expect("inception");
     let device_seed = seed.wrapping_add(50);
-    let input = signup_input(&schema, username, &identity, device_seed, json!({})).await;
+    let input = signup_input(schema, username, &identity, device_seed, extra).await;
     let device_id: Uuid = {
         let payload: Value = serde_json::from_str(
             input["device"]["payload"]
@@ -138,18 +186,10 @@ pub async fn signed_up(ctx: &TestCtx, username: &str, seed: u8) -> SignedUp {
     };
     let intent = Arc::new(AuthIntentCtx::default());
     let data = exec_ok(
-        &schema,
+        schema,
         signed_out(SIGNUP_RETURNING_SHARE, json!({ "input": input })).data(Arc::clone(&intent)),
     )
     .await;
-    let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
-        panic!("signupWithKey must set a session");
-    };
-    let session = SeaOrmSessionRepository::new(ctx.db.clone())
-        .get_by_token_hash(&hash_token(&session_token))
-        .await
-        .expect("get session")
-        .expect("the signup's session");
     let user_id: UserId = data["signupWithKey"]["userId"]
         .as_str()
         .expect("userId")
@@ -168,18 +208,14 @@ pub async fn signed_up(ctx: &TestCtx, username: &str, seed: u8) -> SignedUp {
                 .as_str()
                 .expect("serverShare"),
         ),
-        caller: Caller {
-            user_id,
-            session_id: session.id,
-        },
+        caller: session_of(ctx, user_id, &intent).await,
     }
 }
 
 /// An account with a version 2 key identity, signed in on its first device.
 pub struct Enrolled {
     pub user: User,
-    /// The account's session, bound to `device_id`: the signup's, or the one that enrolled the
-    /// identity.
+    /// The signup's session, bound to `device_id`.
     pub caller: Caller,
     pub identity: TestIdentity,
     pub state: KeyState,
@@ -187,12 +223,34 @@ pub struct Enrolled {
     pub device: SigningKey,
 }
 
+const PUBLISH_CARD: &str = r#"
+mutation Publish($card: SignedStatementInput!) { publishProfileCard(card: $card) { version } }"#;
+
+impl Enrolled {
+    /// Publish a first profile card naming the account's device, through `schema`, as a client
+    /// does before it starts a conversation with someone here.
+    pub async fn publish_card(&self, schema: &AppSchema) {
+        let card = self.identity.profile_card(
+            &self.state,
+            1,
+            &self.user.username,
+            &[],
+            &[(self.device_id, &self.device)],
+        );
+        exec_ok(
+            schema,
+            self.caller
+                .request(PUBLISH_CARD, json!({ "card": statement(&card) })),
+        )
+        .await;
+    }
+}
+
 impl TestCtx {
     /// A user `name` signed up with the identity from `seed`, the device key from `seed + 50`
     /// and [`TEST_PASSWORD`] (see [`signed_up`]), with the email `<name>@test.example.com` that
-    /// [`TestCtx::create_user`] gives. `schema` is the schema under test, which the signup does
-    /// not go through.
-    pub async fn enrolled(&self, _schema: &AppSchema, name: &str, seed: u8) -> Enrolled {
+    /// [`TestCtx::create_user`] gives.
+    pub async fn enrolled(&self, name: &str, seed: u8) -> Enrolled {
         let account = signed_up(self, name, seed).await;
         self.conn
             .execute_raw(Statement::from_sql_and_values(
@@ -217,39 +275,6 @@ impl TestCtx {
             state: account.state,
             device_id: account.device_id,
             device: account.device,
-        }
-    }
-
-    /// An existing `user` who enrolled the identity from `seed` with the device key from
-    /// `seed + 50`, named "Desktop", from a new password session.
-    pub async fn enroll_user(&self, schema: &AppSchema, user: User, seed: u8) -> Enrolled {
-        let caller = self.caller(&user).await;
-        let identity = TestIdentity::with_version(seed, StatementVersion::V2);
-        let inception = identity.inception();
-        let state = KeyState::from_inception(&inception).expect("inception");
-        let device_id = Uuid::now_v7();
-        let device = signing_key(seed.wrapping_add(50));
-        let cert = identity.device_cert(&state, device_id, &device, "Desktop");
-        let proof = signed_login(schema, &device, &state, device_id).await;
-        exec_ok(
-            schema,
-            caller.request(
-                ENROLL,
-                json!({ "input": {
-                    "keyLog": [statement(&inception)],
-                    "device": statement(&cert),
-                    "proof": statement(&proof),
-                } }),
-            ),
-        )
-        .await;
-        Enrolled {
-            user,
-            caller,
-            identity,
-            state,
-            device_id,
-            device,
         }
     }
 }
@@ -301,11 +326,23 @@ pub async fn key_login(
     device_id: Uuid,
     password: Option<&[u8]>,
 ) -> (async_graphql::Response, Option<PasswordLogin>) {
+    match key_login_request(schema, device, state, device_id, password).await {
+        Ok((request, password_login)) => (schema.execute(request).await, password_login),
+        Err(refused) => (refused, None),
+    }
+}
+
+/// The `loginWithKey` request [`key_login`] sends, after its password login, for a caller that
+/// adds data to it; the refusal of a password login step instead.
+pub async fn key_login_request(
+    schema: &AppSchema,
+    device: &SigningKey,
+    state: &KeyState,
+    device_id: Uuid,
+    password: Option<&[u8]>,
+) -> Result<(Request, Option<PasswordLogin>), async_graphql::Response> {
     let password_login = match password {
-        Some(password) => match login(schema, &state.principal_id, password).await {
-            Ok(login) => login,
-            Err(refused) => return (refused, None),
-        },
+        Some(password) => login(schema, &state.principal_id, password).await?,
         None => None,
     };
     let proof = signed_login(schema, device, state, device_id).await;
@@ -313,10 +350,47 @@ pub async fn key_login(
         Some(login) => login.variables(statement(&proof)),
         None => json!({ "proof": statement(&proof) }),
     };
-    (
-        schema
-            .execute(signed_out(LOGIN_WITH_PASSWORD, variables))
-            .await,
-        password_login,
-    )
+    Ok((signed_out(LOGIN_WITH_PASSWORD, variables), password_login))
+}
+
+/// The token of the session `intent` set.
+///
+/// # Panics
+/// When the mutation set no session.
+fn session_token(intent: &AuthIntentCtx) -> String {
+    let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
+        panic!("the mutation must set a session");
+    };
+    session_token
+}
+
+/// The session `intent` set for `user_id`, as a [`Caller`].
+async fn session_of(ctx: &TestCtx, user_id: UserId, intent: &AuthIntentCtx) -> Caller {
+    let session = SeaOrmSessionRepository::new(ctx.db.clone())
+        .get_by_token_hash(&hash_token(&session_token(intent)))
+        .await
+        .expect("get session")
+        .expect("the new session");
+    Caller {
+        user_id,
+        session_id: session.id,
+    }
+}
+
+/// A request carrying `session_token` as the session cookie, resolved the way the HTTP layer
+/// resolves it: a revoked or unknown session yields no actor.
+pub async fn with_session(
+    provider: &Arc<dyn AppServiceProvider>,
+    session_token: &str,
+    query: &str,
+) -> Request {
+    let auth = provider
+        .request_authenticator()
+        .authenticate_session_token(
+            Some(session_token),
+            rim_services::auth::dto::SessionSecret::NotRequired,
+        )
+        .await
+        .expect("authenticate");
+    Request::new(query).data(AuthActorCtx::new(auth.user_id, auth.session_id))
 }

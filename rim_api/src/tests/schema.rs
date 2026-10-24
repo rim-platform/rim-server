@@ -22,12 +22,11 @@ fn sdl_export_is_nonempty_and_has_core_types() {
     );
 }
 
-/// Key-only signup's contract with the frontend codegen: the mutation, its input, and the
-/// payload it shares with `signupWithInvite`.
+/// Key signup's contract with the frontend codegen: the mutation, its input, and its payload.
 #[test]
 fn sdl_declares_signup_with_key() {
     let sdl = test_sdl();
-    assert!(sdl.contains("signupWithKey(input: SignupWithKeyInput!): SignupWithInvitePayloadGql!"));
+    assert!(sdl.contains("signupWithKey(input: SignupWithKeyInput!): SignupWithKeyPayload!"));
     assert!(sdl.contains("input SignupWithKeyInput {"));
     for field in [
         "username: String!",
@@ -159,7 +158,7 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains(
         "type ServerInfo { version: String! apiVersion: Int! features: [ServerFeatureInfo!]! \
          auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! \
-         signupRequiresKeys: Boolean! dmInbound: DmInbound! dmOutbound: DmOutbound! \
+         dmInbound: DmInbound! dmOutbound: DmOutbound! \
          dmPartners: [String!]! defaultWorkspace: ID registrationFull: Boolean! \
          abuseContact: String minimumAge: Int }"
     ));
@@ -224,8 +223,8 @@ async fn server_info_reports_the_audit_retention() {
     assert_eq!(data["serverInfo"]["auditRetentionDays"], 90);
 }
 
-/// `serverInfo.instanceNotice`, `termsUrl`, `signupRequiresKeys`, `defaultWorkspace`,
-/// `abuseContact` and `minimumAge` report the configured instance policy.
+/// `serverInfo.instanceNotice`, `termsUrl`, `defaultWorkspace`, `abuseContact` and `minimumAge`
+/// report the configured instance policy.
 #[tokio::test]
 async fn server_info_reports_the_instance_notice_and_terms() {
     let schema = schema_with_user_mock(MockUserService::new());
@@ -233,13 +232,12 @@ async fn server_info_reports_the_instance_notice_and_terms() {
     let res = schema
         .execute(
             Request::new(
-                "{ serverInfo { instanceNotice termsUrl signupRequiresKeys defaultWorkspace \
-                 abuseContact minimumAge } }",
+                "{ serverInfo { instanceNotice termsUrl defaultWorkspace abuseContact \
+                 minimumAge } }",
             )
             .data(crate::types::InstancePolicy {
                 notice: Some("Run by the Example club.".to_string()),
                 terms_url: Some("https://rim.example.org/terms".to_string()),
-                signup_requires_keys: true,
                 default_workspace: Some(workspace),
                 abuse_contact: Some("abuse@rim.example.org".to_string()),
                 minimum_age: Some(16),
@@ -253,7 +251,6 @@ async fn server_info_reports_the_instance_notice_and_terms() {
         serde_json::json!({
             "instanceNotice": "Run by the Example club.",
             "termsUrl": "https://rim.example.org/terms",
-            "signupRequiresKeys": true,
             "defaultWorkspace": workspace.to_string(),
             "abuseContact": "abuse@rim.example.org",
             "minimumAge": 16,
@@ -407,19 +404,14 @@ fn dm_policy_sdl_matches_the_contract() {
     }
 }
 
-/// Both signup inputs take the optional `acceptedTermsUrl` and `confirmedMinimumAge` after
-/// their other optional fields; the key signup ends with its keep choice.
+/// The signup input takes the optional `acceptedTermsUrl` and `confirmedMinimumAge` after its
+/// other optional fields, and ends with its keep choice.
 #[test]
 fn signup_inputs_take_the_accepted_terms_last() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
-    for expected in [
-        "instanceInviteToken: String workspaceInviteToken: String acceptedTermsUrl: String \
-         confirmedMinimumAge: Int }",
-        "proofOfWork: String acceptedTermsUrl: String confirmedMinimumAge: Int keepSignedIn: \
-         Boolean! keepKeyHeld: Boolean! }",
-    ] {
-        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
-    }
+    let expected = "proofOfWork: String acceptedTermsUrl: String confirmedMinimumAge: Int \
+                    keepSignedIn: Boolean! keepKeyHeld: Boolean! }";
+    assert!(sdl.contains(expected), "SDL lacks `{expected}`");
 }
 
 /// The instance moderation roots and types, with their exact signatures.
@@ -607,7 +599,7 @@ fn account_password_sdl_matches_the_contract() {
         "type LoginPayload { userId: ID! csrfToken: String! sessionSecret: String keepKey: \
          String }",
         "type PasswordLoginFinish { ticket: String! serverShare: String! rewraps: [String!]! }",
-        "type SignupWithInvitePayloadGql { userId: ID! serverId: ID csrfToken: String! \
+        "type SignupWithKeyPayload { userId: ID! serverId: ID csrfToken: String! \
          serverShare: String sessionSecret: String keepKey: String }",
         "proof: SignedStatementInput! passwordRegistration: String! instanceInviteToken: String",
         "type PasswordLoginStart { loginId: ID! response: String! }",

@@ -14,11 +14,14 @@ use std::time::Duration;
 use rim_api::broadcast::{Broadcaster, InMemoryBroadcaster, WorkspaceEvent};
 use rim_core::server::model::Server;
 use rim_core::user::model::User;
+use rim_core::user::repository::UserRepository;
+use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
 use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 
 use support::nodes::{Node, S2S_TABLES, start};
-use support::sessions::{LOGIN, PASSWORD};
+use support::password::{LOGIN_WITH_PASSWORD, TEST_PASSWORD, login_over_http};
+use support::relay::{key_signup, keys, login_proof, open_registration, statement};
 use support::ws::Socket;
 
 /// A mutation exempt from CSRF in sight, `updateMyProfile` two named fragments down.
@@ -41,7 +44,8 @@ enum Csrf {
     CookieAndHeader,
 }
 
-/// A server, and a password user signed in to it over HTTP who owns one workspace.
+/// A server, and a user signed up and signed in to it over HTTP, with a key and a password, who
+/// owns one workspace.
 struct SignedIn {
     node: Node,
     http: reqwest::Client,
@@ -58,17 +62,30 @@ impl SignedIn {
             .execute_unprepared(S2S_TABLES)
             .await
             .expect("truncate");
-        let user = ctx.create_password_user("gatekeeper").await;
+        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+        let node = start(&url, open_registration).await;
+        let http = reqwest::Client::new();
+        let keys = keys(1);
+        let (signup, _) = key_signup(&http, &node, "gatekeeper", &keys, json!({})).await;
+        assert!(signup.get("errors").is_none(), "{signup}");
+        let user = SeaOrmUserRepository::new(ctx.db.clone())
+            .find_by_username("gatekeeper")
+            .await
+            .expect("find user")
+            .expect("the signed-up user");
         let workspace = ctx.create_server("gate").await;
         ctx.add_owner(&workspace, &user).await;
-        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-        let node = start(&url, |_| {}).await;
-        let http = reqwest::Client::new();
+        // The password login, then the key login with its ticket.
+        let password =
+            login_over_http(&http, &node.origin, &keys.state.principal_id, TEST_PASSWORD)
+                .await
+                .expect("the password logs in");
+        let proof = login_proof(&http, &node, &keys).await;
         let res = http
             .post(format!("{}/api", node.origin))
             .json(&json!({
-                "query": LOGIN,
-                "variables": { "input": { "username": "gatekeeper", "password": PASSWORD } },
+                "query": LOGIN_WITH_PASSWORD,
+                "variables": password.variables(statement(&proof)),
             }))
             .send()
             .await
@@ -85,7 +102,11 @@ impl SignedIn {
         };
         let (session, csrf) = (cookie("rim_session"), cookie("rim_csrf"));
         let body: Value = res.json().await.expect("json");
-        assert_eq!(body["data"]["login"]["csrfToken"], json!(csrf), "{body}");
+        assert_eq!(
+            body["data"]["loginWithKey"]["csrfToken"],
+            json!(csrf),
+            "{body}"
+        );
         Self {
             node,
             http,
@@ -143,7 +164,7 @@ async fn a_protected_mutation_in_nested_fragments_needs_the_csrf_header() {
     }
     assert_eq!(signed_in.status_text().await, Value::Null);
 
-    // With the token `login` returned in the header and the cookie the same document runs, so
+    // With the token `loginWithKey` returned in the header and the cookie the same document runs, so
     // the refusals above were the check's.
     let ran = signed_in
         .post(NESTED_PROTECTED, Csrf::CookieAndHeader)

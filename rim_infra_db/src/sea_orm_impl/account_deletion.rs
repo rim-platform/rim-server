@@ -470,10 +470,6 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                 &[
                     ("sessions", "DELETE FROM session WHERE user_id = $1"),
                     ("activity", "DELETE FROM user_activity WHERE user_id = $1"),
-                    (
-                        "password_reset_tokens",
-                        "DELETE FROM password_reset_token WHERE user_id = $1",
-                    ),
                     ("device_links", "DELETE FROM device_link WHERE user_id = $1"),
                     (
                         "account_password",
@@ -657,7 +653,7 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
         let updated = self
             .execute(
                 r#"UPDATE "user" SET deleted_at = $2, updated_at = $2, username = $3,
-                       display_name = $4, email = NULL, password_hash = NULL, avatar_url = NULL,
+                       display_name = $4, email = NULL, avatar_url = NULL,
                        status_text = NULL, bio = NULL, timezone = NULL, last_login_at = NULL,
                        terms_accepted_at = NULL, terms_accepted_url = NULL,
                        minimum_age_confirmed = NULL,

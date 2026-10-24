@@ -2,21 +2,20 @@ use async_graphql::*;
 use rim_services::Actor;
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::key_auth::command::{
-    AddDeviceKeyCmd, EnrollIdentityKeyCmd, IssueKeyChallengeCmd, LoginWithKeyCmd,
-    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SessionKeepChoice,
-    SignupWithKeyCmd,
+    AddDeviceKeyCmd, IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd,
+    RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SessionKeepChoice, SignupWithKeyCmd,
 };
 use rim_services::key_auth::service::KeyAuthService;
 
-use crate::auth_context::{require_actor, require_session_id};
+use crate::auth_context::require_actor;
 use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::mutation::auth::LoginPayload;
 use crate::mutation::invite::registration_token;
 use crate::types::account_password::{decode_bytes, encode_bytes};
 use crate::types::{
-    DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLoginChallenge, ProfileCard,
-    RotateIdentityKeyInput, SignedStatementInput, SignupWithInvitePayloadGql, SignupWithKeyInput,
+    DeviceKey, KeyIdentity, KeyLoginChallenge, ProfileCard, RotateIdentityKeyInput,
+    SignedStatementInput, SignupWithKeyInput, SignupWithKeyPayload,
 };
 
 #[derive(Default)]
@@ -36,8 +35,8 @@ impl KeyIdentityMutations {
         Ok(dto.into())
     }
 
-    /// Sign in with a `login` statement signed by an enrolled device key. Sets the same session
-    /// cookie as `login`.
+    /// Sign in with a `login` statement signed by one of the account's device keys. Sets the
+    /// session and CSRF cookies.
     ///
     /// An account of this server also brings `passwordTicket`, from `passwordLoginFinish`:
     /// single use, valid for 120 seconds, and only for that account. Without one, with one that
@@ -87,30 +86,6 @@ impl KeyIdentityMutations {
             session_secret: res.keys.session_secret,
             keep_key: res.keys.keep_key.as_deref().map(encode_bytes),
         })
-    }
-
-    /// Bind a key identity to the signed-in account. The calling session becomes the new
-    /// device's and every other session of the account ends. Afterwards the password no longer
-    /// signs in.
-    async fn enroll_identity_key(
-        &self,
-        ctx: &Context<'_>,
-        input: EnrollIdentityKeyInput,
-    ) -> Result<KeyIdentity> {
-        let actor = require_actor(ctx)?;
-        let session_id = require_session_id(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
-        let dto = svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(actor),
-                session_id,
-                key_log: input.key_log.into_iter().map(Into::into).collect(),
-                device: input.device.into(),
-                proof: input.proof.into(),
-            })
-            .await
-            .map_err(map_service_error)?;
-        Ok(dto.into())
     }
 
     /// Add a device certified by the current identity key.
@@ -189,17 +164,17 @@ impl KeyIdentityMutations {
     }
 
     /// Create an account from a key identity and a password: `passwordRegistration` is the
-    /// OPAQUE `RegistrationUpload` registered with `passwordRegistrationStart`. The registration mode
-    /// applies as for `signupWithInvite` (exactly one token in invite-only mode, none in open
-    /// mode). An instance invite bound to an email address gives the account that address
-    /// (`EMAIL_TAKEN` when another account has it); otherwise the account has no email. Signs
-    /// the new account in on the device that signed up, setting the same session and CSRF
-    /// cookies as `signupWithInvite`, and returns the account's new server share in the clear.
+    /// OPAQUE `RegistrationUpload` registered with `passwordRegistrationStart`. The registration
+    /// mode decides the tokens (exactly one in invite-only mode, none in open mode, one token or
+    /// `proofOfWork` in pow mode). An instance invite bound to an email address gives the
+    /// account that address (`EMAIL_TAKEN` when another account has it); otherwise the account
+    /// has no email. Signs the new account in on the device that signed up, setting the session
+    /// and CSRF cookies, and returns the account's new server share in the clear.
     async fn signup_with_key(
         &self,
         ctx: &Context<'_>,
         input: SignupWithKeyInput,
-    ) -> Result<SignupWithInvitePayloadGql> {
+    ) -> Result<SignupWithKeyPayload> {
         let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
         let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
         let auth = ctx.data::<std::sync::Arc<dyn rim_services::auth::service::AuthService>>()?;
@@ -244,7 +219,7 @@ impl KeyIdentityMutations {
             });
         }
 
-        Ok(SignupWithInvitePayloadGql {
+        Ok(SignupWithKeyPayload {
             user_id: ID(res.user_id.to_string()),
             server_id: res.server_id.map(|id| ID(id.to_string())),
             csrf_token: res.csrf_token,
@@ -255,7 +230,7 @@ impl KeyIdentityMutations {
     }
 }
 
-/// What a key-only signup presents under the deployment's mode: in pow mode exactly one of a
+/// What a key signup presents under the deployment's mode: in pow mode exactly one of a
 /// registration token and a proof-of-work; otherwise the token rules of
 /// [`registration_token`], with no proof-of-work.
 ///

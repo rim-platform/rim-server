@@ -42,7 +42,6 @@ fn build_auth_service(db: sea_orm::DatabaseConnection) -> DefaultAuthService {
     DefaultAuthService::new(
         repos,
         Some(db),
-        Duration::days(30),
         Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>),
         Arc::new(rim_infra_services::email::LogEmailSender),
         None,
@@ -53,10 +52,12 @@ async fn create_user(handle: &DbHandle, name: &str) -> rim_core::user::model::Us
     SeaOrmUserRepository::new(handle.clone())
         .create_user(rim_core::user::model::NewUser {
             username: name.to_string(),
-            password: Some("hash".to_string()),
             email: Some(format!("{name}@example.com")),
             display_name: None,
-            key_identity: None,
+            key_identity: Some(rim_core::user::model::NewUserKeyIdentity {
+                principal_id: format!("rimp1_{name}"),
+                identity_key: format!("ed25519:{name}"),
+            }),
         })
         .await
         .expect("create user")

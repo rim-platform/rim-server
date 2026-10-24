@@ -84,14 +84,13 @@ pub use instance_moderation::{
     InstancePrincipalBlock, InstancePrincipalBlockOutcome, InstancePrincipalUnblockOutcome,
 };
 pub use invite::{
-    InviteTokenPreviewGql, InviteTokenTypeGql, RegistrationModeGql, SignupWithInvitePayloadGql,
+    InviteTokenPreviewGql, InviteTokenTypeGql, RegistrationModeGql, SignupWithKeyPayload,
     WorkspaceInvite, WorkspaceInviteCursorInput, WorkspaceInviteCursorOutput, WorkspaceInvitePage,
     WorkspaceInvitePreviewGql, WorkspaceInviteState,
 };
 pub use key_identity::{
-    DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLogEntry, KeyLogEntryKind,
-    KeyLoginChallenge, ProfileCard, RotateIdentityKeyInput, SignedStatement, SignedStatementInput,
-    SignupWithKeyInput,
+    DeviceKey, KeyIdentity, KeyLogEntry, KeyLogEntryKind, KeyLoginChallenge, ProfileCard,
+    RotateIdentityKeyInput, SignedStatement, SignedStatementInput, SignupWithKeyInput,
 };
 pub use keybind::{Keybind, KeybindContext, KeybindScope, KeybindSource};
 pub use macro_def::{MacroDef, MacroStep};

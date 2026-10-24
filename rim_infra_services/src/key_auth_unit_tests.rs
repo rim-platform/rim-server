@@ -41,9 +41,9 @@ mod tests {
     use rim_services::host::dto::IdentityRefresh;
     use rim_services::host::service::MockHostService;
     use rim_services::key_auth::command::{
-        AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
-        IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
-        RotateIdentityKeyCmd, SessionKeepChoice, SignedPayload, SignupWithKeyCmd,
+        AddDeviceKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery, IssueKeyChallengeCmd,
+        LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
+        SessionKeepChoice, SignedPayload, SignupWithKeyCmd,
     };
     use rim_services::key_auth::service::KeyAuthService;
     use rim_services::session_revocation::{SessionRevocations, SessionWatch, WatchedSession};
@@ -51,7 +51,7 @@ mod tests {
 
     use crate::account_password::{AccountPasswordRepos, DefaultAccountPasswordService};
     use crate::account_password_fakes::{
-        FakePasswords, TEST_PASSWORD, TEST_PASSWORD_KEY, registration_upload, store_password,
+        FakePasswords, TEST_PASSWORD, TEST_PASSWORD_KEY, registration_upload,
     };
     use crate::key_auth::{DefaultKeyAuthService, KeyAuthRepos};
     use crate::registration_rate_limiter::RegistrationRateLimiter;
@@ -153,26 +153,6 @@ mod tests {
                 .get(&user_id)
                 .cloned()
                 .unwrap_or_default())
-        }
-
-        async fn enroll(
-            &self,
-            user_id: UserId,
-            principal_id: &str,
-            identity_key: &str,
-            entries: Vec<NewKeyLogEntry>,
-        ) -> RepoResult<()> {
-            let mut s = self.0.lock().unwrap();
-            if s.principals.contains_key(&user_id)
-                || s.principals.values().any(|p| p == principal_id)
-            {
-                return Err(conflict());
-            }
-            s.principals.insert(user_id, principal_id.to_string());
-            s.identity_keys.insert(user_id, identity_key.to_string());
-            let entries = entries.into_iter().map(|e| log_entry(user_id, e)).collect();
-            s.log.insert(user_id, entries);
-            Ok(())
         }
 
         async fn insert_key_log(
@@ -587,7 +567,6 @@ mod tests {
             return User {
                 id,
                 username: new.username.clone(),
-                password_hash: new.password.clone(),
                 created_at: now,
                 updated_at: now,
                 last_login_at: None,
@@ -605,7 +584,6 @@ mod tests {
         User {
             id,
             username: format!("user-{id}"),
-            password_hash: Some("hash".to_string()),
             created_at: now,
             updated_at: now,
             last_login_at: None,
@@ -848,8 +826,8 @@ mod tests {
         }
     }
 
-    /// A user with a password session (`session`), enrolled with `id` and a first device. A
-    /// local one also has the OPAQUE password [`TEST_PASSWORD`].
+    /// An account signed up with `id`, a first device and the password [`TEST_PASSWORD`];
+    /// `session` is the signup's, bound to the device.
     struct Enrolled {
         user_id: UserId,
         session: SessionId,
@@ -881,7 +859,7 @@ mod tests {
                 .id
         }
 
-        /// A `login` statement by `device` over a fresh challenge, as enrollment requires.
+        /// A `login` statement by `device` over a fresh challenge, as a signup requires.
         async fn proof(
             &self,
             device: &SigningKey,
@@ -944,26 +922,14 @@ mod tests {
             ))
         }
 
-        async fn enroll(&self, seed: u8) -> Enrolled {
-            self.enroll_with(seed, StatementVersion::V1).await
+        /// Sign up with the identity from `seed`, a first device from `seed + 50` and the
+        /// password [`TEST_PASSWORD`], every statement written at version 1.
+        async fn signup(&self, seed: u8) -> Enrolled {
+            self.signup_with(seed, StatementVersion::V1).await
         }
 
-        /// Like [`Harness::enroll`], with every statement written at `version`.
-        async fn enroll_with(&self, seed: u8, version: StatementVersion) -> Enrolled {
-            let (user_id, session) = self.add_user_with_session().await;
-            self.enroll_from(user_id, session, seed, version).await
-        }
-
-        /// Enroll `user_id` from its password session `session` with the identity from `seed`
-        /// and a first device, every statement written at `version`. A local account then gets
-        /// the OPAQUE password [`TEST_PASSWORD`].
-        async fn enroll_from(
-            &self,
-            user_id: UserId,
-            session: SessionId,
-            seed: u8,
-            version: StatementVersion,
-        ) -> Enrolled {
+        /// Like [`Harness::signup`], with every statement written at `version`.
+        async fn signup_with(&self, seed: u8, version: StatementVersion) -> Enrolled {
             let id = TestIdentity::with_version(seed, version);
             let inception = id.inception();
             let state = KeyState::from_inception(&inception).unwrap();
@@ -971,27 +937,28 @@ mod tests {
             let device = signing_key(seed.wrapping_add(50));
             let cert = id.device_cert(&state, device_id, &device, "Laptop");
             let proof = self.proof(&device, &state, device_id).await;
-            let dto = self
+            let res = self
                 .svc
-                .enroll(EnrollIdentityKeyCmd {
-                    actor: Actor::new(user_id),
-                    session_id: session,
+                .signup_with_key(SignupWithKeyCmd {
+                    keep: DESKTOP_KEPT,
+                    username: format!("user{seed}"),
+                    display_name: None,
                     key_log: vec![payload(inception)],
                     device: payload(cert),
                     proof,
+                    password_registration: registration_upload(&state.principal_id, TEST_PASSWORD),
+                    registration_mode: RegistrationMode::Open,
+                    token: None,
+                    proof_of_work: None,
+                    remote_ip: IP.to_string(),
+                    terms_accepted_url: None,
+                    confirmed_minimum_age: None,
                 })
                 .await
-                .expect("enroll");
-            assert_eq!(
-                dto.principal_id.as_deref(),
-                Some(state.principal_id.as_str())
-            );
-            if self.local {
-                store_password(&self.passwords, &state.principal_id, user_id, TEST_PASSWORD).await;
-            }
+                .expect("signup");
             Enrolled {
-                user_id,
-                session,
+                user_id: res.user_id,
+                session: res.session.session_id,
                 id,
                 state,
                 device_id,
@@ -1175,7 +1142,7 @@ mod tests {
     #[tokio::test]
     async fn a_key_login_keeps_the_session_as_chosen() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
 
         let unkept = SessionKeepChoice {
             keep_signed_in: false,
@@ -1224,77 +1191,10 @@ mod tests {
         assert!(stored.kept && stored.keep_key_sealed.is_none());
     }
 
-    // ── Enrollment ────────────────────────────────────────────────────────────────────────
+    // ── Key identity ──────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn enroll_binds_the_enrolling_session_to_the_device() {
-        let h = harness();
-        let e = h.enroll(1).await;
-
-        let identity = h
-            .svc
-            .get_my_key_identity(GetMyKeyIdentityQuery {
-                actor: Actor::new(e.user_id),
-            })
-            .await
-            .unwrap();
-        assert_eq!(identity.key_seq, Some(0));
-        assert_eq!(identity.key_log.len(), 1);
-        assert_eq!(identity.devices.len(), 1);
-        assert_eq!(identity.devices[0].device_id, e.device_id);
-        assert!(h.session_device(e.session).is_some());
-    }
-
-    #[tokio::test]
-    async fn enroll_ends_every_other_session_of_the_account() {
-        let h = harness();
-        let (user_id, enrolling) = h.add_user_with_session().await;
-        let other = h.add_session(user_id).await;
-        let (_, stranger) = h.add_user_with_session().await;
-        let mut connections = [h.connection(other), h.connection(stranger)];
-
-        let e = h
-            .enroll_from(user_id, enrolling, 1, StatementVersion::V2)
-            .await;
-
-        assert!(h.session_revoked(other));
-        assert!(connections[0].has_ended());
-        assert!(!h.session_revoked(e.session));
-        assert!(h.session_device(e.session).is_some());
-        assert!(!h.session_revoked(stranger));
-        assert!(!connections[1].has_ended());
-    }
-
-    #[tokio::test]
-    async fn enroll_accepts_a_log_with_rotations() {
-        let h = harness();
-        let (user_id, session) = h.add_user_with_session().await;
-        let mut id = TestIdentity::new(1);
-        let inception = id.inception();
-        let s0 = KeyState::from_inception(&inception).unwrap();
-        let rotation = id.rotate_with_identity(&s0, 2);
-        let (s1, _) = s0.apply(&rotation).unwrap();
-        let device = signing_key(30);
-        let device_id = Uuid::now_v7();
-        let cert = id.device_cert(&s1, device_id, &device, "Phone");
-
-        let dto = h
-            .svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(user_id),
-                session_id: session,
-                key_log: vec![payload(inception), payload(rotation)],
-                device: payload(cert),
-                proof: h.proof(&device, &s1, device_id).await,
-            })
-            .await
-            .unwrap();
-        assert_eq!(dto.key_seq, Some(1));
-        assert_eq!(dto.devices[0].key_seq, 1);
-    }
-
-    #[tokio::test]
-    async fn get_my_key_identity_is_empty_before_enrollment() {
+    async fn get_my_key_identity_is_empty_for_an_account_without_a_key() {
         let h = harness();
         let (user_id, _) = h.add_user_with_session().await;
         let dto = h
@@ -1311,7 +1211,7 @@ mod tests {
     #[tokio::test]
     async fn key_log_is_public_by_principal_id() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
 
         let log = h
             .svc
@@ -1342,168 +1242,12 @@ mod tests {
         assert!(oversized.is_empty());
     }
 
-    #[tokio::test]
-    async fn enroll_twice_or_with_a_taken_principal_conflicts() {
-        let h = harness();
-        let e = h.enroll(1).await;
-
-        // Same account, a second identity.
-        let other = TestIdentity::new(2);
-        let inception = other.inception();
-        let state = KeyState::from_inception(&inception).unwrap();
-        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
-        let cert = other.device_cert(&state, device_id, &device, "Other");
-        let err = h
-            .svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(e.user_id),
-                session_id: e.session,
-                key_log: vec![payload(inception)],
-                device: payload(cert),
-                proof: h.proof(&device, &state, device_id).await,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
-
-        // Another account, the same identity.
-        let (user_id, session) = h.add_user_with_session().await;
-        let (device_id, device) = (Uuid::now_v7(), signing_key(61));
-        let cert = e.id.device_cert(&e.state, device_id, &device, "Other");
-        let err = h
-            .svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(user_id),
-                session_id: session,
-                key_log: vec![payload(e.id.inception())],
-                device: payload(cert),
-                proof: h.proof(&device, &e.state, device_id).await,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn enroll_rejects_a_certificate_from_another_identity() {
-        let h = harness();
-        let (user_id, session) = h.add_user_with_session().await;
-        let id = TestIdentity::new(1);
-        let state = KeyState::from_inception(&id.inception()).unwrap();
-        let stranger = TestIdentity::new(2);
-        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
-        let cert = stranger.device_cert(&state, device_id, &device, "Laptop");
-
-        let err = h
-            .svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(user_id),
-                session_id: session,
-                key_log: vec![payload(id.inception())],
-                device: payload(cert),
-                proof: h.proof(&device, &state, device_id).await,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
-        assert!(h.state.lock().unwrap().principals.is_empty());
-    }
-
-    /// A copied log and certificate, as another server would hold them, without the device's
-    /// own proof over a challenge from this server.
-    #[tokio::test]
-    async fn enroll_needs_a_fresh_proof_from_the_enrolling_device() {
-        let h = harness();
-        let (user_id, session) = h.add_user_with_session().await;
-        let id = TestIdentity::new(1);
-        let inception = id.inception();
-        let state = KeyState::from_inception(&inception).unwrap();
-        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
-        let cert = id.device_cert(&state, device_id, &device, "Laptop");
-        let enroll = |proof: SignedPayload| EnrollIdentityKeyCmd {
-            actor: Actor::new(user_id),
-            session_id: session,
-            key_log: vec![payload(inception.clone())],
-            device: payload(cert.clone()),
-            proof,
-        };
-
-        let other_key = h.proof(&signing_key(61), &state, device_id).await;
-        let other_device = h.proof(&device, &state, Uuid::now_v7()).await;
-        let other_server = h
-            .proof_for(&device, &state, device_id, "other.example.com")
-            .await;
-        for bad in [other_key, other_device, other_server] {
-            let err = h.svc.enroll(enroll(bad)).await.unwrap_err();
-            assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
-        }
-        // A proof whose challenge was never issued here.
-        let forged = payload(device_login(
-            &device,
-            &state,
-            device_id,
-            Uuid::now_v7(),
-            "bm9uY2U",
-            AUDIENCE,
-        ));
-        let err = h.svc.enroll(enroll(forged)).await.unwrap_err();
-        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
-        assert!(h.state.lock().unwrap().principals.is_empty());
-
-        // A proof over a challenge issued for joining through a relay.
-        let joining = h
-            .join_proof(&device, &state, device_id, "rims1_relay")
-            .await;
-        let err = h.svc.enroll(enroll(joining)).await.unwrap_err();
-        assert!(
-            matches!(&err, ServiceError::Validation(m) if m.contains("challenge")),
-            "{err:?}"
-        );
-        assert!(h.state.lock().unwrap().principals.is_empty());
-
-        let good = h.proof(&device, &state, device_id).await;
-        h.svc.enroll(enroll(good.clone())).await.unwrap();
-        // The challenge is spent.
-        let (user_id, session) = h.add_user_with_session().await;
-        let err = h
-            .svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(user_id),
-                session_id: session,
-                ..enroll(good)
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
-    }
-
-    #[tokio::test]
-    async fn enroll_rejects_an_oversized_key_log() {
-        let h = harness();
-        let (user_id, session) = h.add_user_with_session().await;
-        let id = TestIdentity::new(1);
-        let state = KeyState::from_inception(&id.inception()).unwrap();
-        let (device_id, device) = (Uuid::now_v7(), signing_key(60));
-        let err = h
-            .svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(user_id),
-                session_id: session,
-                key_log: vec![payload(id.inception()); 257],
-                device: payload(id.device_cert(&state, device_id, &device, "Laptop")),
-                proof: h.proof(&device, &state, device_id).await,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
-    }
-
     // ── Login ─────────────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn key_login_issues_a_session_bound_to_the_device() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
 
         let session = h
             .login(&e, e.device_id, &e.device, "rim.example.com")
@@ -1519,7 +1263,7 @@ mod tests {
     #[tokio::test]
     async fn key_login_audience_is_case_insensitive_and_must_match() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         assert!(
             h.login(&e, e.device_id, &e.device, "RIM.Example.COM")
                 .await
@@ -1536,7 +1280,7 @@ mod tests {
     #[tokio::test]
     async fn key_login_audience_may_be_the_server_id_compared_exactly() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         assert!(h.login(&e, e.device_id, &e.device, SERVER_ID).await.is_ok());
         for other in [
             SERVER_ID.to_ascii_lowercase(),
@@ -1557,7 +1301,7 @@ mod tests {
     #[tokio::test]
     async fn key_login_challenge_is_single_use() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let ticket = h.password_ticket(&e).await;
         let challenge = h
             .svc
@@ -1588,7 +1332,7 @@ mod tests {
     #[tokio::test]
     async fn key_login_refuses_a_proof_over_a_join_challenge() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let ticket = h.password_ticket(&e).await;
         let proof = h
             .join_proof(&e.device, &e.state, e.device_id, "rims1_relay")
@@ -1618,7 +1362,7 @@ mod tests {
     #[tokio::test]
     async fn key_login_with_a_wrong_nonce_fails() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let ticket = h.password_ticket(&e).await;
         let challenge = h
             .svc
@@ -1651,7 +1395,7 @@ mod tests {
     #[tokio::test]
     async fn key_login_signed_by_another_key_fails() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         // The enrolled device id, signed by a key that is not that device's.
         let err = h
             .login(&e, e.device_id, &signing_key(99), AUDIENCE)
@@ -1669,7 +1413,7 @@ mod tests {
     #[tokio::test]
     async fn key_login_for_an_unknown_principal_fails() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let stranger = TestIdentity::new(7);
         let state = KeyState::from_inception(&stranger.inception()).unwrap();
         let ghost = Enrolled {
@@ -1687,7 +1431,7 @@ mod tests {
     #[tokio::test]
     async fn failed_key_logins_are_rate_limited_and_successes_are_not_counted() {
         let h = harness_with_limits(100, 2);
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         for _ in 0..3 {
             h.login(&e, e.device_id, &e.device, AUDIENCE).await.unwrap();
         }
@@ -1753,7 +1497,7 @@ mod tests {
     #[tokio::test]
     async fn added_device_can_sign_in_and_duplicates_conflict() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let phone_id = Uuid::now_v7();
         let phone = signing_key(70);
         let cert = e.id.device_cert(&e.state, phone_id, &phone, "Phone");
@@ -1780,7 +1524,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_device_before_enrollment_is_refused() {
+    async fn add_device_for_an_account_without_a_key_is_refused() {
         let h = harness();
         let (user_id, _) = h.add_user_with_session().await;
         let id = TestIdentity::new(1);
@@ -1800,7 +1544,7 @@ mod tests {
     #[tokio::test]
     async fn revoking_a_device_ends_its_sessions_and_its_logins() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let key_session = h.login(&e, e.device_id, &e.device, AUDIENCE).await.unwrap();
         let mut connections = [h.connection(key_session), h.connection(e.session)];
 
@@ -1815,7 +1559,7 @@ mod tests {
             .unwrap();
         assert!(dto.revoked_at.is_some());
         assert!(h.session_revoked(key_session));
-        // The enrolling password session was bound to the device too.
+        // The signup's session was bound to the device too.
         assert!(h.session_revoked(e.session));
         assert!(connections.iter_mut().all(SessionWatch::has_ended));
 
@@ -1840,7 +1584,7 @@ mod tests {
     #[tokio::test]
     async fn revocation_is_disclosed_only_after_the_challenge_and_audience() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let ticket = h.password_ticket(&e).await;
         let revocation = e.id.revoke_device(&e.state, e.device_id);
         h.svc
@@ -1901,7 +1645,7 @@ mod tests {
     #[tokio::test]
     async fn a_device_can_revoke_itself_but_not_another() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let phone_id = Uuid::now_v7();
         let phone = signing_key(70);
         h.svc
@@ -1937,8 +1681,8 @@ mod tests {
     #[tokio::test]
     async fn another_account_cannot_revoke_my_device() {
         let h = harness();
-        let e = h.enroll(1).await;
-        let other = h.enroll(2).await;
+        let e = h.signup(1).await;
+        let other = h.signup(2).await;
         let err = h
             .svc
             .revoke_device(RevokeDeviceKeyCmd {
@@ -1956,7 +1700,7 @@ mod tests {
     #[tokio::test]
     async fn identity_rotation_needs_the_session_and_keeps_devices() {
         let h = harness();
-        let mut e = h.enroll(1).await;
+        let mut e = h.signup(1).await;
         let rotation = e.id.rotate_with_identity(&e.state, 3);
 
         let err = h
@@ -1971,7 +1715,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
 
-        let other = h.enroll(2).await;
+        let other = h.signup(2).await;
         let err = h
             .svc
             .rotate(RotateIdentityKeyCmd {
@@ -2017,7 +1761,7 @@ mod tests {
     #[tokio::test]
     async fn identity_rotations_stop_at_the_key_log_cap_and_recovery_does_not() {
         let h = harness();
-        let mut e = h.enroll(1).await;
+        let mut e = h.signup(1).await;
         let rotate = |entry: SignedStatement, actor: Option<Actor>| RotateIdentityKeyCmd {
             actor,
             entry: payload(entry),
@@ -2071,7 +1815,7 @@ mod tests {
     #[tokio::test]
     async fn recovery_without_a_session_revokes_everything_and_enrolls_the_new_device() {
         let h = harness();
-        let mut e = h.enroll(1).await;
+        let mut e = h.signup(1).await;
         let key_session = h.login(&e, e.device_id, &e.device, AUDIENCE).await.unwrap();
         let mut connections = [h.connection(key_session), h.connection(e.session)];
         let recovery = e.id.recover(&e.state, 4);
@@ -2131,7 +1875,7 @@ mod tests {
     #[tokio::test]
     async fn rotations_and_recoveries_push_the_identity_to_hosts() {
         let mut h = harness();
-        let mut e = h.enroll(1).await;
+        let mut e = h.signup(1).await;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut relay = rim_services::relay::service::MockRelayService::new();
         relay.expect_identity_changed().returning(move |user_id| {
@@ -2192,7 +1936,7 @@ mod tests {
     #[tokio::test]
     async fn anonymous_recovery_attempts_are_rate_limited() {
         let h = harness_with_limits(100, 2);
-        let mut e = h.enroll(1).await;
+        let mut e = h.signup(1).await;
         let recovery = e.id.recover(&e.state, 4);
         for _ in 0..2 {
             let err = h
@@ -2225,7 +1969,7 @@ mod tests {
     #[tokio::test]
     async fn profile_card_replaces_only_older_versions() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let publish = |version: u64, name: &str| PublishProfileCardCmd {
             actor: Actor::new(e.user_id),
             card: payload(e.id.profile_card(
@@ -2261,7 +2005,7 @@ mod tests {
     #[tokio::test]
     async fn profile_card_signed_by_a_stranger_is_rejected() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let stranger = TestIdentity::new(9);
         let card = stranger.profile_card(&e.state, 1, "Mallory", &[], &[]);
         let err = h
@@ -2278,9 +2022,9 @@ mod tests {
     // ── Statement versions and tagged keys ────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn version_2_identity_enrolls_signs_in_and_stores_tagged_keys() {
+    async fn version_2_identity_signs_up_signs_in_and_stores_tagged_keys() {
         let h = harness();
-        let e = h.enroll_with(1, StatementVersion::V2).await;
+        let e = h.signup_with(1, StatementVersion::V2).await;
         assert_eq!(e.state.version, StatementVersion::V2);
         assert!(h.login(&e, e.device_id, &e.device, AUDIENCE).await.is_ok());
 
@@ -2306,7 +2050,7 @@ mod tests {
     #[tokio::test]
     async fn version_1_identity_stores_tagged_keys_too() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let s = h.state.lock().unwrap();
         assert_eq!(
             s.devices[0].public_key,
@@ -2318,7 +2062,7 @@ mod tests {
     #[tokio::test]
     async fn version_1_log_moves_to_version_2_and_never_back() {
         let h = harness();
-        let mut e = h.enroll(1).await;
+        let mut e = h.signup(1).await;
 
         e.id.version = StatementVersion::V2;
         let rotation = e.id.rotate_with_identity(&e.state, 3);
@@ -2377,7 +2121,7 @@ mod tests {
     #[tokio::test]
     async fn one_device_key_spelled_both_ways_is_one_key() {
         let h = harness();
-        let mut e = h.enroll(1).await;
+        let mut e = h.signup(1).await;
         // The enrolled device key again, certified with a version 2 certificate (tagged
         // spelling) under a new device id.
         e.id.version = StatementVersion::V2;
@@ -2487,7 +2231,6 @@ mod tests {
         {
             let s = h.state.lock().unwrap();
             let created = &s.created[&res.user_id];
-            assert_eq!(created.password, None);
             assert_eq!(created.email, None);
             assert_eq!(created.display_name.as_deref(), Some("ada"));
             let key = created.key_identity.as_ref().expect("key identity");
@@ -2803,29 +2546,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signup_with_key_refuses_a_principal_enrolled_on_a_password_account() {
-        let h = harness();
-        let e = h.enroll_with(1, StatementVersion::V2).await;
-        let device = signing_key(77);
-        let device_id = Uuid::now_v7();
-        let again = Presented {
-            key_log: vec![payload(e.id.inception())],
-            cert: payload(e.id.device_cert(&e.state, device_id, &device, "Phone")),
-            proof: h.proof(&device, &e.state, device_id).await,
-            id: e.id,
-            state: e.state,
-            device_id,
-            device,
-        };
-        let err = h
-            .svc
-            .signup_with_key(open_cmd(&again, "ada_again"))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
-    }
-
-    #[tokio::test]
     async fn signup_with_key_refuses_a_taken_username() {
         let recorder = metrics_util::debugging::DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
@@ -2945,8 +2665,6 @@ mod tests {
             *chains.lock().unwrap(),
             vec![(res.user_id, invite_id.into(), creator)]
         );
-        let s = h.state.lock().unwrap();
-        assert_eq!(s.created[&res.user_id].password, None);
     }
 
     #[tokio::test]
@@ -3023,7 +2741,6 @@ mod tests {
         let s = h.state.lock().unwrap();
         let created = &s.created[&res.user_id];
         assert_eq!(created.email.as_deref(), Some("ops@example.com"));
-        assert_eq!(created.password, None);
         assert!(created.key_identity.is_some());
     }
 
@@ -3056,7 +2773,6 @@ mod tests {
                 holder,
                 NewUser {
                     username: "holder".to_string(),
-                    password: Some("hash".to_string()),
                     email: Some("ops@example.com".to_string()),
                     display_name: None,
                     key_identity: None,
@@ -3297,7 +3013,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_principal_blocked_here_cannot_sign_up_enroll_or_sign_in() {
+    async fn a_principal_blocked_here_cannot_sign_up_or_sign_in() {
         let h = harness();
         let p = h.present(1).await;
         h.state
@@ -3316,7 +3032,7 @@ mod tests {
         );
         assert_eq!(h.user_count(), 0);
 
-        let e = h.enroll(2).await;
+        let e = h.signup(2).await;
         assert!(h.login(&e, e.device_id, &e.device, AUDIENCE).await.is_ok());
         h.state
             .lock()
@@ -3325,29 +3041,6 @@ mod tests {
             .insert(e.state.principal_id.clone());
         let err = h
             .login(&e, e.device_id, &e.device, AUDIENCE)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
-
-        let (user_id, session_id) = h.add_user_with_session().await;
-        let id = TestIdentity::new(3);
-        h.state.lock().unwrap().blocked.insert(
-            KeyState::from_inception(&id.inception())
-                .unwrap()
-                .principal_id,
-        );
-        let state = KeyState::from_inception(&id.inception()).unwrap();
-        let device_id = Uuid::now_v7();
-        let device = signing_key(53);
-        let err = h
-            .svc
-            .enroll(EnrollIdentityKeyCmd {
-                actor: Actor::new(user_id),
-                session_id,
-                key_log: vec![payload(id.inception())],
-                device: payload(id.device_cert(&state, device_id, &device, "Laptop")),
-                proof: h.proof(&device, &state, device_id).await,
-            })
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
@@ -3363,7 +3056,7 @@ mod tests {
                 ..crate::quota::Quotas::default()
             },
         );
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let add = |n: u8| AddDeviceKeyCmd {
             actor: Actor::new(e.user_id),
             device: payload(e.id.device_cert(
@@ -3494,7 +3187,7 @@ mod tests {
         (signup, log)
     }
 
-    /// Every key-only signup, open, proof-of-work, with an instance invite and with a
+    /// Every key signup, open, proof-of-work, with an instance invite and with a
     /// workspace invite, makes the new account a Member of the default workspace and announces
     /// it there; the workspace invite also joins its own workspace.
     #[tokio::test]
@@ -3558,7 +3251,7 @@ mod tests {
         }
     }
 
-    /// Without a default workspace a key-only signup joins nothing.
+    /// Without a default workspace a key signup joins nothing.
     #[tokio::test]
     async fn without_a_default_workspace_a_key_signup_joins_nothing() {
         let (signup, log) = default_workspace_repos(ServerId::new(), ServerId::new());
@@ -3578,7 +3271,7 @@ mod tests {
     #[tokio::test]
     async fn a_direct_sign_in_is_refused_when_the_relays_identity_is_refused() {
         let h = remote_harness(IdentityRefresh::Refused);
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let err = h
             .login(&e, e.device_id, &e.device, AUDIENCE)
             .await
@@ -3592,7 +3285,7 @@ mod tests {
     async fn a_direct_sign_in_uses_the_stored_identity_when_the_relays_do_not_answer() {
         for refresh in [IdentityRefresh::Unreachable, IdentityRefresh::Applied(true)] {
             let h = remote_harness(refresh);
-            let e = h.enroll(1).await;
+            let e = h.signup(1).await;
             let session = h
                 .login(&e, e.device_id, &e.device, AUDIENCE)
                 .await
@@ -3607,8 +3300,8 @@ mod tests {
     #[tokio::test]
     async fn a_local_account_with_a_password_needs_a_ticket_to_sign_in() {
         let h = harness();
-        let e = h.enroll(1).await;
-        let other = h.enroll(2).await;
+        let e = h.signup(1).await;
+        let other = h.signup(2).await;
         let later = Utc::now() + Duration::seconds(120);
 
         let refused = [
@@ -3651,7 +3344,7 @@ mod tests {
     #[tokio::test]
     async fn a_local_account_without_a_password_record_cannot_sign_in() {
         let h = harness();
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let ticket = h.ticket(e.user_id, Utc::now() + Duration::seconds(120));
         h.passwords.state().passwords.remove(&e.user_id);
         let err = h
@@ -3659,7 +3352,7 @@ mod tests {
             .await
             .expect_err("refused");
         assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
-        // The session that enrolled stays the account's only one.
+        // The signup's session stays the account's only one.
         let sessions = h
             .state
             .lock()
@@ -3676,7 +3369,7 @@ mod tests {
     #[tokio::test]
     async fn a_remote_user_signs_in_with_the_key_alone() {
         let h = remote_harness(IdentityRefresh::Unreachable);
-        let e = h.enroll(1).await;
+        let e = h.signup(1).await;
         let res = h.login_with_ticket(&e, None).await.unwrap();
         assert_eq!(res.user_id, e.user_id);
     }

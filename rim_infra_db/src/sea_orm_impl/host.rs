@@ -239,9 +239,9 @@ impl HostRepository for SeaOrmHostRepository {
     async fn create_remote_user(&self, user: NewRemoteUser) -> RepoResult<UserId> {
         let id = UserId::new();
         self.execute(
-            r#"INSERT INTO "user" (id, username, password_hash, display_name, email, kind,
-                   principal_id, identity_key, home_relay, created_at, updated_at)
-               VALUES ($1, $2, NULL, $3, NULL, 'remote', $4, $5, $6, now(), now())"#,
+            r#"INSERT INTO "user" (id, username, display_name, email, kind, principal_id,
+                   identity_key, home_relay, created_at, updated_at)
+               VALUES ($1, $2, $3, NULL, 'remote', $4, $5, $6, now(), now())"#,
             vec![
                 uuid(id),
                 user.username.into(),

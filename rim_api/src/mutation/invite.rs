@@ -2,25 +2,22 @@ use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::auth::command::{
-    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, RevokeInviteCmd, SignupOpenCmd,
-    SignupToken, SignupWithInstanceInviteCmd,
+    CreateInviteCmd, JoinServerByInviteCmd, RevokeInviteCmd, SignupToken,
 };
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::auth::service::AuthService;
 
 use crate::auth_context::require_actor;
-use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
-use crate::types::{SignupWithInvitePayloadGql, WorkspaceInvite};
+use crate::types::WorkspaceInvite;
 
 #[derive(Default)]
 pub(crate) struct InviteMutations;
 
-/// The registration token a signup presents, under the deployment's mode: exactly one of the
-/// two in invite-only and pow mode, none in open mode. Shared by `signupWithInvite` and
-/// `signupWithKey` (which in pow mode may give a proof-of-work instead, see
-/// `key_signup_credential`).
+/// The registration token `signupWithKey` presents, under the deployment's mode: exactly one of
+/// the two in invite-only mode, at most one in pow mode, none in open mode. In pow mode a
+/// proof-of-work may stand in for the token; `key_signup_credential` checks that.
 ///
 /// # Errors
 /// `VALIDATION` when the number of tokens does not fit the mode.
@@ -40,8 +37,8 @@ pub(crate) fn registration_token(
         RegistrationMode::InviteOnly if tokens.len() != 1 => {
             "exactly one token is required in invite-only mode"
         }
-        RegistrationMode::Pow { .. } if tokens.len() != 1 => {
-            "exactly one token is required for a password signup in pow registration mode"
+        RegistrationMode::Pow { .. } if tokens.len() > 1 => {
+            "at most one token is allowed in pow registration mode"
         }
         RegistrationMode::Open if !tokens.is_empty() => {
             "tokens must not be supplied in open registration mode"
@@ -103,120 +100,6 @@ impl InviteMutations {
             server_id: ID(res.server_id.to_string()),
         })
     }
-
-    /// Unified signup mutation for all token-based and open-mode registration paths.
-    ///
-    /// In invite-only mode, exactly one of `instanceInviteToken` or `workspaceInviteToken`
-    /// must be supplied.
-    /// In open mode, all token fields must be absent.
-    /// Refused with `FORBIDDEN` when `serverInfo.signupRequiresKeys` is true: new accounts then
-    /// sign up with `signupWithKey`.
-    ///
-    /// On success, sets session and CSRF cookies via `AuthIntent`.
-    async fn signup_with_invite(
-        &self,
-        ctx: &Context<'_>,
-        input: SignupWithInviteInput,
-    ) -> Result<SignupWithInvitePayloadGql> {
-        let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
-        let mode = ctx.data::<std::sync::Arc<RegistrationMode>>()?;
-        auth.check_registration_capacity()
-            .await
-            .map_err(map_service_error)?;
-        let token = registration_token(
-            mode,
-            input.instance_invite_token,
-            input.workspace_invite_token,
-        )?;
-        let terms_accepted_url = input.accepted_terms_url;
-        let confirmed_minimum_age = input.confirmed_minimum_age;
-
-        // Normalise email at the resolver boundary (trim + lowercase) as
-        // defence in depth; the service also validates on the way in.
-        let email = input.email.trim().to_lowercase();
-
-        let (user_id, server_id, session_token, csrf_token) = match token {
-            Some(SignupToken::InstanceInvite(raw)) => {
-                let res = auth
-                    .signup_with_instance_invite(SignupWithInstanceInviteCmd {
-                        instance_invite_token: raw,
-                        username: input.username,
-                        password: input.password,
-                        email,
-                        display_name: input.display_name,
-                        terms_accepted_url,
-                        confirmed_minimum_age,
-                    })
-                    .await
-                    .map_err(map_service_error)?;
-                (
-                    res.user_id,
-                    res.server_id,
-                    res.session_token,
-                    res.csrf_token,
-                )
-            }
-            Some(SignupToken::WorkspaceInvite(raw)) => {
-                // Delegate to the existing accept_invite path.
-                let res = auth
-                    .accept_invite(AcceptInviteCmd {
-                        invite_token: raw,
-                        username: input.username,
-                        password: input.password,
-                        terms_accepted_url,
-                        confirmed_minimum_age,
-                    })
-                    .await
-                    .map_err(map_service_error)?;
-                (
-                    res.user_id,
-                    Some(res.server_id),
-                    res.session_token,
-                    res.csrf_token,
-                )
-            }
-            None => {
-                // Open mode. Remote IP for rate limiting — service enforces the limit.
-                let remote_ip = crate::auth_context::remote_ip(ctx);
-
-                let res = auth
-                    .signup_open(SignupOpenCmd {
-                        username: input.username,
-                        password: input.password,
-                        remote_ip,
-                        email,
-                        display_name: input.display_name,
-                        terms_accepted_url,
-                        confirmed_minimum_age,
-                    })
-                    .await
-                    .map_err(map_service_error)?;
-                (
-                    res.user_id,
-                    res.server_id,
-                    res.session_token,
-                    res.csrf_token,
-                )
-            }
-        };
-
-        if let Ok(intent) = ctx.data::<std::sync::Arc<AuthIntentCtx>>() {
-            intent.set(AuthIntent::SetSession {
-                session_token,
-                csrf_token: csrf_token.clone(),
-                kept: true,
-            });
-        }
-
-        Ok(SignupWithInvitePayloadGql {
-            user_id: ID(user_id.to_string()),
-            server_id: server_id.map(|id| ID(id.to_string())),
-            csrf_token,
-            server_share: None,
-            session_secret: None,
-            keep_key: None,
-        })
-    }
 }
 
 #[derive(Default)]
@@ -273,38 +156,6 @@ pub struct JoinServerByInvitePayload {
     pub server_id: ID,
 }
 
-// ── Registration inputs ───────────────────────────────────────────────────
-
-/// Input for `signupWithInvite`.
-///
-/// Exactly one token MUST be set in invite-only mode; all must be absent in
-/// open mode. The resolver enforces this with a `Validation` error.
-///
-/// `email` is required (max 254 chars, server trims + lowercases, case-insensitive unique).
-/// `displayName` is optional; falls back to `username` server-side if absent or blank.
-#[derive(InputObject)]
-pub struct SignupWithInviteInput {
-    pub username: String,
-    /// Required. The user's email address. Trimmed and lowercased before storage.
-    /// Must look like `local@domain.tld` and be at most 254 characters.
-    pub email: String,
-    /// Optional display name, stored without control and invisible format characters and with
-    /// whitespace collapsed; at most 64 characters after that. Falls back to `username` when
-    /// absent or when nothing visible is left.
-    pub display_name: Option<String>,
-    pub password: String,
-    pub instance_invite_token: Option<String>,
-    pub workspace_invite_token: Option<String>,
-    /// The terms of service the person accepted: `serverInfo.termsUrl`, sent back unchanged.
-    /// Required when the server has terms (`VALIDATION` when missing or different); ignored
-    /// when it has none.
-    pub accepted_terms_url: Option<String>,
-    /// The minimum age the person confirmed reaching: `serverInfo.minimumAge`, sent back
-    /// unchanged once they confirm it. Required when the server has a minimum age
-    /// (`VALIDATION` when missing or different); ignored when it has none.
-    pub confirmed_minimum_age: Option<i32>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,14 +188,15 @@ mod tests {
     }
 
     #[test]
-    fn pow_mode_takes_one_token_for_a_password_signup() {
+    fn pow_mode_takes_at_most_one_token() {
         let mode = RegistrationMode::Pow { bits: 24 };
         assert_eq!(
             registration_token(&mode, Some("i".into()), None).unwrap(),
             Some(SignupToken::InstanceInvite("i".into()))
         );
-        let err = registration_token(&mode, None, None).unwrap_err();
+        let err = registration_token(&mode, Some("i".into()), Some("w".into())).unwrap_err();
         assert_eq!(code(&err).as_deref(), Some("VALIDATION"));
+        assert!(err.message.contains("at most one token"));
     }
 
     #[test]

@@ -38,9 +38,6 @@ use support::graphql::{anonymous_request, exec_err_code, exec_ok};
 use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
 use support::registration::seed_operator_invite;
 
-const SIGNUP_WITH_INVITE: &str = r#"
-mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId serverId } }"#;
-
 const SERVER_INFO: &str = "{ serverInfo { defaultWorkspace } }";
 
 const CREATE_CHANNEL: &str = r#"
@@ -118,16 +115,17 @@ fn claim_token(file: &Path) -> String {
     token.to_string()
 }
 
-fn password_signup(username: &str, extra: Value) -> async_graphql::Request {
-    let mut input = json!({
-        "username": username,
-        "email": format!("{username}@test.example.com"),
-        "password": "ValidPass123!",
-    });
-    if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
-        input.extend(extra.clone());
-    }
-    anonymous_request(SIGNUP_WITH_INVITE, json!({ "input": input }))
+/// A `signupWithKey` request for `username` with the identity from `seed` and `extra` input
+/// fields (a token).
+async fn key_signup(
+    schema: &AppSchema,
+    username: &str,
+    seed: u8,
+    extra: Value,
+) -> async_graphql::Request {
+    let id = TestIdentity::with_version(seed, StatementVersion::V2);
+    let input = signup_input(schema, username, &id, seed.wrapping_add(50), extra).await;
+    signed_out(SIGNUP_WITH_KEY, json!({ "input": input }))
 }
 
 async fn rows(ctx: &TestCtx, sql: &str, values: Vec<sea_orm::Value>) -> Vec<sea_orm::QueryResult> {
@@ -259,7 +257,7 @@ fn cleanup(file: &Path) {
     }
 }
 
-/// The password signup through the owner claim link creates the workspace from the file, with
+/// The signup through the owner claim link creates the workspace from the file, with
 /// the new account as Owner and instance operator, its channels, topics and DM policy; adds the
 /// account that already existed as a Member; deletes the claim link file; and answers the
 /// workspace as `serverId` and in `serverInfo`. The link then admits nobody, and a later signup
@@ -290,11 +288,17 @@ async fn the_claim_creates_the_workspace_and_later_signups_join_it() {
 
     let data = exec_ok(
         &schema,
-        password_signup("dwc-owner", json!({ "instanceInviteToken": token })),
+        key_signup(
+            &schema,
+            "dwc-owner",
+            101,
+            json!({ "instanceInviteToken": token }),
+        )
+        .await,
     )
     .await;
-    let owner = id(&data["signupWithInvite"]["userId"]);
-    let workspace = id(&data["signupWithInvite"]["serverId"]);
+    let owner = id(&data["signupWithKey"]["userId"]);
+    let workspace = id(&data["signupWithKey"]["serverId"]);
 
     assert_eq!(
         workspaces(&ctx).await,
@@ -342,7 +346,13 @@ async fn the_claim_creates_the_workspace_and_later_signups_join_it() {
 
     let again = exec_err_code(
         &schema,
-        password_signup("dwc-second", json!({ "instanceInviteToken": token })),
+        key_signup(
+            &schema,
+            "dwc-second",
+            102,
+            json!({ "instanceInviteToken": token }),
+        )
+        .await,
     )
     .await;
     assert_eq!(again, "INVALID_TOKEN");
@@ -355,14 +365,17 @@ async fn the_claim_creates_the_workspace_and_later_signups_join_it() {
     .await;
     let data = exec_ok(
         &schema,
-        password_signup(
+        key_signup(
+            &schema,
             "dwc-later",
+            103,
             json!({ "instanceInviteToken": "rim_iinv_dwc_later" }),
-        ),
+        )
+        .await,
     )
     .await;
-    assert!(data["signupWithInvite"]["serverId"].is_null());
-    let later = id(&data["signupWithInvite"]["userId"]);
+    assert!(data["signupWithKey"]["serverId"].is_null());
+    let later = id(&data["signupWithKey"]["userId"]);
     assert_eq!(
         role(&ctx, &workspace, &later).await.as_deref(),
         Some("member")
@@ -435,7 +448,13 @@ async fn a_restart_while_unclaimed_revokes_the_previous_link() {
     let schema = ctx.build_schema_with_defined_workspace(defined, RegistrationMode::InviteOnly);
     let refused = exec_err_code(
         &schema,
-        password_signup("dwc-stale", json!({ "instanceInviteToken": first })),
+        key_signup(
+            &schema,
+            "dwc-stale",
+            104,
+            json!({ "instanceInviteToken": first }),
+        )
+        .await,
     )
     .await;
     assert_eq!(refused, "INVALID_TOKEN");
@@ -443,10 +462,16 @@ async fn a_restart_while_unclaimed_revokes_the_previous_link() {
 
     let data = exec_ok(
         &schema,
-        password_signup("dwc-fresh", json!({ "instanceInviteToken": second })),
+        key_signup(
+            &schema,
+            "dwc-fresh",
+            105,
+            json!({ "instanceInviteToken": second }),
+        )
+        .await,
     )
     .await;
-    assert!(data["signupWithInvite"]["serverId"].is_string());
+    assert!(data["signupWithKey"]["serverId"].is_string());
     assert_eq!(workspaces(&ctx).await.len(), 1);
     cleanup(&file);
 }
@@ -465,11 +490,17 @@ async fn a_later_start_adds_and_updates_but_deletes_nothing() {
     let schema = ctx.build_schema_with_defined_workspace(defined, RegistrationMode::InviteOnly);
     let data = exec_ok(
         &schema,
-        password_signup("dwc-keeper", json!({ "instanceInviteToken": token })),
+        key_signup(
+            &schema,
+            "dwc-keeper",
+            106,
+            json!({ "instanceInviteToken": token }),
+        )
+        .await,
     )
     .await;
-    let owner = id(&data["signupWithInvite"]["userId"]);
-    let workspace = id(&data["signupWithInvite"]["serverId"]);
+    let owner = id(&data["signupWithKey"]["userId"]);
+    let workspace = id(&data["signupWithKey"]["serverId"]);
     let owner_caller = caller_for(&ctx, &owner).await;
     exec_ok(
         &schema,
@@ -576,11 +607,17 @@ async fn a_later_start_leaves_a_members_channel_of_a_defined_title_alone() {
     let schema = ctx.build_schema_with_defined_workspace(defined, RegistrationMode::InviteOnly);
     let data = exec_ok(
         &schema,
-        password_signup("dwc-squat-owner", json!({ "instanceInviteToken": token })),
+        key_signup(
+            &schema,
+            "dwc-squat-owner",
+            107,
+            json!({ "instanceInviteToken": token }),
+        )
+        .await,
     )
     .await;
-    let owner = id(&data["signupWithInvite"]["userId"]);
-    let workspace = id(&data["signupWithInvite"]["serverId"]);
+    let owner = id(&data["signupWithKey"]["userId"]);
+    let workspace = id(&data["signupWithKey"]["serverId"]);
     let owner_caller = caller_for(&ctx, &owner).await;
     for title in ["plugins", "events"] {
         exec_ok(
@@ -685,7 +722,13 @@ async fn dropping_the_file_revokes_a_waiting_claim() {
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
     let refused = exec_err_code(
         &schema,
-        password_signup("dwc-dropped", json!({ "instanceInviteToken": token })),
+        key_signup(
+            &schema,
+            "dwc-dropped",
+            108,
+            json!({ "instanceInviteToken": token }),
+        )
+        .await,
     )
     .await;
     assert_eq!(refused, "INVALID_TOKEN");

@@ -113,7 +113,7 @@ async fn start(schema: &AppSchema, caller: &Caller) -> String {
 async fn a_new_device_links_signs_in_and_completes() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let old = ctx.enrolled(&schema, "ada", 1).await;
+    let old = ctx.enrolled("ada", 1).await;
 
     // Old device: start the link and show the code.
     let data = exec_ok(&schema, old.caller.request(START, json!({}))).await;
@@ -340,7 +340,7 @@ type AnonymousCall = (&'static str, fn(&str) -> Value, &'static str);
 async fn anonymous_refusals_are_identical_for_every_reason() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let ada = ctx.enrolled("ada", 1).await;
 
     let unknown = URL_SAFE_NO_PAD.encode([0xab; 16]);
     let malformed = "AAECAwQFBgcICQoLDA0ODw==".to_string();
@@ -445,7 +445,7 @@ async fn anonymous_refusals_are_identical_for_every_reason() {
     assert_each_refused_as(&schema, &ada.caller, &late, "CONFLICT").await;
 
     // A session of another account is just another holder of the link id.
-    let bob = ctx.enrolled(&schema, "bob", 2).await;
+    let bob = ctx.enrolled("bob", 2).await;
     assert_eq!(
         exec_err_code(
             &schema,
@@ -460,8 +460,8 @@ async fn anonymous_refusals_are_identical_for_every_reason() {
 async fn session_calls_on_another_users_link_are_not_found() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = ctx.enrolled(&schema, "ada", 1).await;
-    let bob = ctx.enrolled(&schema, "bob", 2).await;
+    let ada = ctx.enrolled("ada", 1).await;
+    let bob = ctx.enrolled("bob", 2).await;
     let link_id = start(&schema, &ada.caller).await;
     exec_ok(
         &schema,
@@ -511,7 +511,7 @@ async fn session_calls_on_another_users_link_are_not_found() {
 async fn an_answer_before_the_offer_is_a_conflict() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let ada = ctx.enrolled("ada", 1).await;
     let link_id = start(&schema, &ada.caller).await;
     assert_eq!(
         exec_err_code(
@@ -546,7 +546,7 @@ async fn an_answer_before_the_offer_is_a_conflict() {
 async fn random_sealed_bytes_are_stored_and_returned_byte_exact() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let ada = ctx.enrolled("ada", 1).await;
     let link_id = start(&schema, &ada.caller).await;
 
     let random = |len: usize| -> Vec<u8> {
@@ -595,7 +595,7 @@ async fn random_sealed_bytes_are_stored_and_returned_byte_exact() {
 async fn malformed_or_oversized_sealed_messages_are_validation_errors() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let ada = ctx.enrolled("ada", 1).await;
     let link_id = start(&schema, &ada.caller).await;
 
     let padded_nonce = json!({
@@ -660,27 +660,13 @@ async fn malformed_or_oversized_sealed_messages_are_validation_errors() {
     }
 }
 
-#[tokio::test]
-async fn start_needs_a_key_identity() {
-    let ctx = TestCtx::new().await;
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let caller = ctx.outsider("grace").await;
-    let res = schema.execute(caller.request(START, json!({}))).await;
-    let err = res.errors.first().expect("error");
-    assert_eq!(err.message, "this account has no key identity yet");
-    assert_eq!(
-        err.extensions.as_ref().and_then(|e| e.get("code")),
-        Some(&async_graphql::Value::from("VALIDATION"))
-    );
-}
-
 /// The link's user may cancel at any point before `CONSUMED`, and again after; a second start
 /// cancels the first link.
 #[tokio::test]
 async fn the_links_user_cancels_and_a_second_start_replaces_the_first() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let ada = ctx.enrolled("ada", 1).await;
 
     let first = start(&schema, &ada.caller).await;
     let second = start(&schema, &ada.caller).await;

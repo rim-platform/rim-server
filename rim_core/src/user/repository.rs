@@ -40,8 +40,6 @@ pub trait UserRepository: Send + Sync {
 
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User>;
 
-    async fn update_password(&self, id: UserId, password_hash: String) -> RepoResult<()>;
-
     /// Find a user by email address using a case-insensitive comparison.
     ///
     /// The lookup uses `LOWER(email) = LOWER($1)` so that `"Foo@Bar.COM"` and
@@ -94,7 +92,7 @@ pub trait UserRepository: Send + Sync {
     /// Returns how many.
     async fn revoke_invites_created_by(&self, id: UserId) -> RepoResult<u64>;
 
-    /// Refuse `email` (lowercased) at signup and password login, for `reason`, or replace the
+    /// Refuse `email` (lowercased) at signup, for `reason`, or replace the
     /// reason of its block. Returns whether the block is new.
     async fn block_email(&self, email: &str, reason: &str) -> RepoResult<bool>;
 

@@ -185,7 +185,7 @@ async fn migration_numbers_existing_messages_per_conversation_by_sent_at() {
         .await;
     let user = ctx.create_user("feed-user-5").await;
 
-    Migrator::down(&conn, Some(steps))
+    support::roll_back(&conn, steps)
         .await
         .expect("roll back add_message_change_feed");
 
@@ -213,7 +213,7 @@ async fn migration_numbers_existing_messages_per_conversation_by_sent_at() {
         .unwrap();
     }
 
-    Migrator::up(&conn, None)
+    support::migrate_up(&conn)
         .await
         .expect("re-apply add_message_change_feed");
 

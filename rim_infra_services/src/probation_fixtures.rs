@@ -9,7 +9,6 @@ pub(crate) fn account(id: UserId, created_at: DateTime<Utc>, principal_id: Optio
     User {
         id,
         username: format!("user-{id}"),
-        password_hash: None,
         created_at,
         updated_at: created_at,
         last_login_at: None,

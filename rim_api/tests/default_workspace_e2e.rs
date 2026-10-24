@@ -27,9 +27,6 @@ use support::graphql::{Caller, anonymous_request, exec_ok};
 use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
 use support::registration::seed_operator_invite;
 
-const SIGNUP_WITH_INVITE: &str = r#"
-mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId serverId } }"#;
-
 const CREATE_CHANNEL: &str = r#"
 mutation Create($input: CreateConversationInput!) { createConversation(input: $input) { id } }"#;
 
@@ -162,22 +159,22 @@ async fn assert_landed(ctx: &TestCtx, schema: &AppSchema, ws: &Workspace, user_i
     );
 }
 
-fn password_signup(username: &str, extra: Value) -> async_graphql::Request {
-    let mut input = json!({
-        "username": username,
-        "email": format!("{username}@test.example.com"),
-        "password": "ValidPass123!",
-    });
-    if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
-        input.extend(extra.clone());
-    }
-    anonymous_request(SIGNUP_WITH_INVITE, json!({ "input": input }))
+/// A `signupWithKey` request for `username` with the identity from `seed` and `extra` input
+/// fields (a token).
+async fn key_signup(
+    schema: &AppSchema,
+    username: &str,
+    seed: u8,
+    extra: Value,
+) -> async_graphql::Request {
+    let id = TestIdentity::with_version(seed, StatementVersion::V2);
+    let input = signup_input(schema, username, &id, seed.wrapping_add(50), extra).await;
+    signed_out(SIGNUP_WITH_KEY, json!({ "input": input }))
 }
 
-/// With a default workspace, a password signup in open mode, a key-only signup in open mode
-/// and a password signup with an instance invite each land the new account in the workspace
-/// as a Member with its public channels; the signup payload's `serverId` stays null, and
-/// `serverInfo.defaultWorkspace` names the workspace.
+/// With a default workspace, a key signup in open mode and one with an instance invite each
+/// land the new account in the workspace as a Member with its public channels; the signup
+/// payload's `serverId` stays null, and `serverInfo.defaultWorkspace` names the workspace.
 #[tokio::test]
 async fn every_signup_joins_the_default_workspace_and_its_public_channels() {
     let ctx = TestCtx::new().await;
@@ -191,17 +188,7 @@ async fn every_signup_joins_the_default_workspace_and_its_public_channels() {
     let info = exec_ok(&open, anonymous_request(SERVER_INFO, json!({}))).await;
     assert_eq!(info["serverInfo"]["defaultWorkspace"], json!(ws.id));
 
-    let data = exec_ok(&open, password_signup("dw-open", json!({}))).await;
-    assert!(data["signupWithInvite"]["serverId"].is_null());
-    assert_landed(&ctx, &open, &ws, &data["signupWithInvite"]["userId"]).await;
-
-    let id = TestIdentity::with_version(61, StatementVersion::V2);
-    let input = signup_input(&open, "dw-key", &id, 71, json!({})).await;
-    let data = exec_ok(
-        &open,
-        signed_out(SIGNUP_WITH_KEY, json!({ "input": input })),
-    )
-    .await;
+    let data = exec_ok(&open, key_signup(&open, "dw-key", 61, json!({})).await).await;
     assert!(data["signupWithKey"]["serverId"].is_null());
     assert_landed(&ctx, &open, &ws, &data["signupWithKey"]["userId"]).await;
 
@@ -213,14 +200,17 @@ async fn every_signup_joins_the_default_workspace_and_its_public_channels() {
     .await;
     let data = exec_ok(
         &invite_only,
-        password_signup(
+        key_signup(
+            &invite_only,
             "dw-invited",
+            62,
             json!({ "instanceInviteToken": "rim_iinv_default_workspace" }),
-        ),
+        )
+        .await,
     )
     .await;
-    assert!(data["signupWithInvite"]["serverId"].is_null());
-    assert_landed(&ctx, &invite_only, &ws, &data["signupWithInvite"]["userId"]).await;
+    assert!(data["signupWithKey"]["serverId"].is_null());
+    assert_landed(&ctx, &invite_only, &ws, &data["signupWithKey"]["userId"]).await;
 }
 
 /// Without a default workspace a signup joins no workspace, even with a workspace holding a
@@ -234,8 +224,12 @@ async fn without_a_default_workspace_a_signup_joins_nothing() {
     let info = exec_ok(&schema, anonymous_request(SERVER_INFO, json!({}))).await;
     assert!(info["serverInfo"]["defaultWorkspace"].is_null());
 
-    let data = exec_ok(&schema, password_signup("dw-alone", json!({}))).await;
-    let user_id = &data["signupWithInvite"]["userId"];
+    let data = exec_ok(
+        &schema,
+        key_signup(&schema, "dw-alone", 63, json!({})).await,
+    )
+    .await;
+    let user_id = &data["signupWithKey"]["userId"];
     assert_eq!(member_role(&ctx, &ws.id, user_id).await, None);
     let who = caller_for(&ctx, user_id).await;
     assert!(my_servers(&schema, &who).await.is_empty());
@@ -269,9 +263,13 @@ async fn the_default_workspace_notifies_plain_messages_only_to_members_who_chose
     let schema = ctx.build_schema_with_default_workspace(server_id.into(), RegistrationMode::Open);
 
     let mut members = Vec::new();
-    for username in ["dw-quiet", "dw-loud"] {
-        let data = exec_ok(&schema, password_signup(username, json!({}))).await;
-        let user_id = data["signupWithInvite"]["userId"].clone();
+    for (username, seed) in [("dw-quiet", 64), ("dw-loud", 65)] {
+        let data = exec_ok(
+            &schema,
+            key_signup(&schema, username, seed, json!({})).await,
+        )
+        .await;
+        let user_id = data["signupWithKey"]["userId"].clone();
         members.push((
             user_id.as_str().expect("userId").to_string(),
             caller_for(&ctx, &user_id).await,

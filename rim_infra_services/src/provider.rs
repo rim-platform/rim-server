@@ -30,7 +30,6 @@ use rim_services::moderation::service::ModerationService;
 use rim_services::notification::service::NotificationService;
 use rim_services::notification_preference::service::NotificationPreferenceService;
 use rim_services::operator::InstanceOperatorService;
-use rim_services::password_reset::service::PasswordResetService;
 use rim_services::pin::service::PinService;
 use rim_services::pipeline::service::PipelineService;
 use rim_services::provider::AppServiceProvider;
@@ -68,12 +67,8 @@ pub struct FederationHooks {
         Option<Arc<dyn rim_services::remote_workspace::service::RevocationFanout>>,
     /// Usernames and display names signups and profile edits refuse.
     pub reserved_names: crate::reserved_names::ReservedNames,
-    /// Runs Argon2 hashing and verification for signups, logins and password resets.
-    pub password_hashing: crate::password_hashing::PasswordHashing,
     /// The terms of service URL every signup must accept; `None` when there are none.
     pub terms_url: Option<String>,
-    /// Refuse every password signup, so new accounts sign up with a key.
-    pub signup_requires_keys: bool,
     /// The operator's DM settings.
     pub dm_policy: rim_services::dm_policy::dto::DmOperatorPolicy,
     /// The workspace every new account joins as a Member, and the definition an owner claim
@@ -89,7 +84,7 @@ pub struct FederationHooks {
     /// `http://localhost`.
     pub link_base: Option<String>,
     /// The OPAQUE setup and share key account passwords use; `None` leaves every password
-    /// root, and with it signup and the sign-in of an account with a password, unavailable.
+    /// root, and with it signup and the sign-in of a local account, unavailable.
     pub password_key: Option<crate::password_key::PasswordKey>,
 }
 
@@ -112,7 +107,6 @@ pub struct DefaultAppServiceProvider {
     moderation_service: Arc<dyn ModerationService>,
     notification_service: Arc<dyn NotificationService>,
     notification_preference_service: Arc<dyn NotificationPreferenceService>,
-    password_reset_service: Arc<dyn PasswordResetService>,
     pin_service: Arc<dyn PinService>,
     read_state_service: Arc<dyn ReadStateService>,
     server_service: Arc<dyn ServerService>,
@@ -163,32 +157,21 @@ impl DefaultAppServiceProvider {
         // Shared so every path that ends sessions closes the connections watching them.
         let session_revocations: Arc<dyn SessionRevocations> =
             Arc::new(crate::session_revocation::InProcessSessionRevocations::default());
-        // Shared so a password reset can forget the sources login exempts from its backstop.
-        let known_login_sources = crate::login_sources::KnownLoginSources::login_default();
-        // Shared so password and key-only signups count against one open-mode budget per IP.
+        // The open-mode budget per IP of the key signup.
         let signup_rate_limiter =
             crate::registration_rate_limiter::RegistrationRateLimiter::signup_default();
-        // Shared so a signup on either path refreshes the "full" answer the other gives.
+        // Shared so a key signup refreshes the "full" answer `registrationFull` gives.
         let account_cap = crate::account_cap::AccountCap::new(limits.accounts);
         let auth_service: Arc<dyn AuthService> = Arc::new(
             crate::auth::DefaultAuthService::new(
                 repos.for_auth(),
                 Some(db.clone()),
-                session_ttl,
                 observers.clone(),
                 Arc::clone(&email_sender),
                 public_base_url.clone(),
             )
-            .with_known_login_sources(known_login_sources.clone())
-            .with_signup_rate_limiter(signup_rate_limiter.clone())
             .with_limits(limits)
-            .with_reserved_names(federation.reserved_names.clone())
-            .with_password_hashing(federation.password_hashing.clone())
             .with_session_revocations(Arc::clone(&session_revocations))
-            .with_terms_url(federation.terms_url.clone())
-            .with_minimum_age(federation.minimum_age)
-            .with_signup_requires_keys(federation.signup_requires_keys)
-            .with_default_workspace(federation.default_workspace.clone())
             .with_account_cap(account_cap.clone()),
         );
         let account_deletion = DefaultAccountDeletionService::new(
@@ -373,17 +356,6 @@ impl DefaultAppServiceProvider {
             crate::notification_preference::DefaultNotificationPreferenceService::new(
                 repos.for_notification_preference(),
             ),
-        );
-        let password_reset_service: Arc<dyn PasswordResetService> = Arc::new(
-            crate::password_reset::DefaultPasswordResetService::new(
-                repos.for_password_reset(),
-                Some(db.clone()),
-                Arc::clone(&email_sender),
-                public_base_url.clone(),
-            )
-            .with_known_login_sources(known_login_sources)
-            .with_password_hashing(federation.password_hashing.clone())
-            .with_session_revocations(Arc::clone(&session_revocations)),
         );
         let pin_service: Arc<dyn PinService> = Arc::new(crate::pin::DefaultPinService::new(
             repos.for_pin(),
@@ -612,7 +584,6 @@ impl DefaultAppServiceProvider {
             moderation_service,
             notification_service,
             notification_preference_service,
-            password_reset_service,
             pin_service,
             read_state_service,
             server_service,
@@ -719,9 +690,6 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn notification_preference_service(&self) -> Arc<dyn NotificationPreferenceService> {
         Arc::clone(&self.notification_preference_service)
-    }
-    fn password_reset_service(&self) -> Arc<dyn PasswordResetService> {
-        Arc::clone(&self.password_reset_service)
     }
     fn pin_service(&self) -> Arc<dyn PinService> {
         Arc::clone(&self.pin_service)

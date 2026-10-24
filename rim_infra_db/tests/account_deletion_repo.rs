@@ -442,8 +442,9 @@ async fn create_user_sharing_the_id_prefix(
     sql(
         ctx,
         &format!(
-            "INSERT INTO \"user\" (id, username, password_hash, created_at, updated_at) \
-             VALUES ('{id}', '{username}', 'h', now(), now())"
+            "INSERT INTO \"user\" (id, username, principal_id, identity_key, created_at, \
+             updated_at) VALUES ('{id}', '{username}', 'rimp1_{username}', 'ed25519:{username}', \
+             now(), now())"
         ),
     )
     .await;
@@ -479,7 +480,6 @@ async fn a_tombstone_frees_the_username_and_is_found_by_id_only() {
     assert_eq!(tombstone.username, format!("deleted-{prefix}"));
     assert_eq!(tombstone.display_name.as_deref(), Some("Deleted account"));
     assert_eq!(tombstone.email, None);
-    assert_eq!(tombstone.password_hash, None);
     assert_eq!(tombstone.avatar_url, None);
     assert_eq!(tombstone.bio, None);
     let twin_row = users.get_by_id(twin).await.unwrap().unwrap();

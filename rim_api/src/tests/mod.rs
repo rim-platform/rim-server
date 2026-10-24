@@ -33,7 +33,6 @@ use rim_services::message_attachment::service::MockMessageAttachmentService;
 use rim_services::message_reaction::service::MockMessageReactionService;
 use rim_services::message_thread::service::MockThreadService;
 use rim_services::notification_preference::service::MockNotificationPreferenceService;
-use rim_services::password_reset::service::MockPasswordResetService;
 use rim_services::pin::service::MockPinService;
 use rim_services::pipeline::service::MockPipelineService;
 use rim_services::provider::AppServiceProvider;
@@ -117,7 +116,6 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
             message: Arc::new(MockMessageService::new()),
             attachment: Arc::new(MockMessageAttachmentService::new()),
             notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
             key_auth: Arc::new(MockKeyAuthService::new()),
             pin: Arc::new(MockPinService::new()),
             reaction: Arc::new(MockMessageReactionService::new()),
@@ -171,7 +169,6 @@ fn schema_with_server_mocks_on(
             message: Arc::new(MockMessageService::new()),
             attachment: Arc::new(MockMessageAttachmentService::new()),
             notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
             key_auth: Arc::new(MockKeyAuthService::new()),
             pin: Arc::new(MockPinService::new()),
             reaction: Arc::new(MockMessageReactionService::new()),
@@ -213,7 +210,6 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
             message: Arc::new(MockMessageService::new()),
             attachment: Arc::new(MockMessageAttachmentService::new()),
             notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
             key_auth: Arc::new(MockKeyAuthService::new()),
             pin: Arc::new(MockPinService::new()),
             reaction: Arc::new(MockMessageReactionService::new()),
@@ -373,7 +369,6 @@ struct TestAppServiceProvider {
     pin: Arc<dyn rim_services::pin::service::PinService>,
     notification_preference:
         Arc<dyn rim_services::notification_preference::service::NotificationPreferenceService>,
-    password_reset: Arc<dyn rim_services::password_reset::service::PasswordResetService>,
     key_auth: Arc<dyn rim_services::key_auth::service::KeyAuthService>,
     reaction: Arc<dyn rim_services::message_reaction::service::MessageReactionService>,
     read_state: Arc<dyn rim_services::read_state::service::ReadStateService>,
@@ -447,12 +442,6 @@ impl AppServiceProvider for TestAppServiceProvider {
 
     fn key_auth_service(&self) -> Arc<dyn rim_services::key_auth::service::KeyAuthService> {
         Arc::clone(&self.key_auth)
-    }
-
-    fn password_reset_service(
-        &self,
-    ) -> Arc<dyn rim_services::password_reset::service::PasswordResetService> {
-        Arc::clone(&self.password_reset)
     }
 
     fn pin_service(&self) -> Arc<dyn rim_services::pin::service::PinService> {
@@ -643,7 +632,6 @@ fn schema_with_mocks(
             message: Arc::new(msg),
             attachment: Arc::new(attachment),
             notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
             key_auth: Arc::new(MockKeyAuthService::new()),
             pin: Arc::new(MockPinService::new()),
             reaction: Arc::new(MockMessageReactionService::new()),
@@ -685,7 +673,6 @@ fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
             message: Arc::new(MockMessageService::new()),
             attachment: Arc::new(MockMessageAttachmentService::new()),
             notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
             key_auth: Arc::new(MockKeyAuthService::new()),
             pin: Arc::new(MockPinService::new()),
             reaction: Arc::new(MockMessageReactionService::new()),
@@ -731,7 +718,6 @@ fn schema_with_audit_mock(
             message: Arc::new(MockMessageService::new()),
             attachment: Arc::new(MockMessageAttachmentService::new()),
             notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-            password_reset: Arc::new(MockPasswordResetService::new()),
             key_auth: Arc::new(MockKeyAuthService::new()),
             pin: Arc::new(MockPinService::new()),
             reaction: Arc::new(MockMessageReactionService::new()),
@@ -788,7 +774,6 @@ fn test_service_provider() -> Arc<dyn AppServiceProvider> {
         message: Arc::new(MockMessageService::new()),
         attachment: Arc::new(MockMessageAttachmentService::new()),
         notification_preference: Arc::new(MockNotificationPreferenceService::new()),
-        password_reset: Arc::new(MockPasswordResetService::new()),
         key_auth: Arc::new(MockKeyAuthService::new()),
         pin: Arc::new(MockPinService::new()),
         reaction: Arc::new(MockMessageReactionService::new()),

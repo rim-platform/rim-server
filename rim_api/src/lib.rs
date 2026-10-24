@@ -113,7 +113,6 @@ pub fn build_schema(
         .data(service_provider.message_attachment_service())
         .data(service_provider.message_reaction_service())
         .data(service_provider.notification_preference_service())
-        .data(service_provider.password_reset_service())
         .data(service_provider.pin_service())
         .data(service_provider.read_state_service())
         .data(service_provider.thread_service())

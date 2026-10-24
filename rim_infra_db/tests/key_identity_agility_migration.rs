@@ -86,7 +86,7 @@ async fn existing_keys_are_tagged_and_hashed_and_down_restores_them() {
     let alice = ctx.create_user("alice").await;
     let alice_id: Uuid = alice.id.into();
 
-    Migrator::down(&conn, Some(steps_to_before_migration()))
+    support::roll_back(&conn, steps_to_before_migration())
         .await
         .expect("roll back to before key_identity_algorithm_agility");
 
@@ -150,7 +150,7 @@ async fn existing_keys_are_tagged_and_hashed_and_down_restores_them() {
     assert_eq!(err.kind(), RepoErrorKind::Conflict);
 
     // Down puts the bare keys and the raw-key index back.
-    Migrator::down(&conn, Some(steps_to_before_migration()))
+    support::roll_back(&conn, steps_to_before_migration())
         .await
         .expect("roll back again");
     assert_eq!(
@@ -193,7 +193,7 @@ async fn down_refuses_while_a_non_ed25519_key_is_stored() {
     )
     .await;
 
-    let err = Migrator::down(&conn, Some(steps_to_before_migration()))
+    let err = support::roll_back(&conn, steps_to_before_migration())
         .await
         .expect_err("down must refuse");
     assert!(err.to_string().contains("non-Ed25519"), "{err}");

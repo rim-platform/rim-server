@@ -1,4 +1,4 @@
-//! Proof-of-work for key-only signups on a relay in `pow` registration mode: an 8-byte nonce
+//! Proof-of-work for key signups on a relay in `pow` registration mode: an 8-byte nonce
 //! such that `SHA-256("rim.pow.v1\0" || relay server id || "\0" || inception payload || nonce)`
 //! starts with the relay's `powBits` zero bits. The work is bound to one relay and one
 //! principal; checking it costs one hash.

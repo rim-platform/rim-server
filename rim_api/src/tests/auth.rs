@@ -119,52 +119,6 @@ async fn mutation_logout_requires_actor_and_session() {
 }
 
 #[tokio::test]
-async fn mutation_login_sets_auth_intent_set_session() {
-    let user_id = UserId::new();
-    let session_id = SessionId::new();
-    let now = chrono::Utc::now();
-
-    let mut auth = MockAuthService::new();
-    auth.expect_login().returning(move |_cmd| {
-        Box::pin(async move {
-            Ok(rim_services::auth::dto::LoginResultDto {
-                user_id,
-                session: rim_services::auth::dto::AuthSessionDto {
-                    user_id,
-                    session_id,
-                    expires_at: now,
-                },
-                session_token: "rim_sess_test".to_string(),
-                csrf_token: "rim_csrf_test".to_string(),
-                keys: rim_services::auth::dto::SessionKeysDto::kept(),
-            })
-        })
-    });
-
-    let schema = schema_with_mocks(
-        auth,
-        MockConversationService::new(),
-        MockMessageService::new(),
-        MockMessageAttachmentService::new(),
-        MockThreadService::new(),
-    );
-
-    let intent_ctx = Arc::new(crate::auth_intent::AuthIntentCtx::default());
-    let req =
-        Request::new(r#"mutation { login(input: { username: "u", password: "p" }) { userId } }"#)
-            .data(Arc::clone(&intent_ctx));
-
-    let res = schema.execute(req).await;
-    assert_no_errors(&res);
-
-    let intent = intent_ctx.take();
-    assert!(matches!(
-        intent,
-        Some(crate::auth_intent::AuthIntent::SetSession { kept: true, .. })
-    ));
-}
-
-#[tokio::test]
 async fn mutation_logout_sets_auth_intent_clear_session() {
     let actor = UserId::new();
     let session_id = SessionId::new();
@@ -219,55 +173,4 @@ async fn query_id_parsing_error_is_reported() {
 
     assert!(!res.errors.is_empty());
     // Don't assert exact message, just that it fails before hitting the service.
-}
-
-fn invite_signup(accepted: &str) -> String {
-    format!(
-        r#"mutation {{ signupWithInvite(input: {{ username: "alice", email: "alice@example.com", password: "s3cur3p4ss!", instanceInviteToken: "t"{accepted} }}) {{ userId }} }}"#
-    )
-}
-
-/// The accepted terms reach the service as sent; the service applies the instance's terms.
-#[tokio::test]
-async fn signup_passes_the_accepted_terms_to_the_service() {
-    const TERMS: &str = "https://rim.example.org/terms";
-    for (accepted, sent) in [
-        (format!(r#", acceptedTermsUrl: "{TERMS}""#), Some(TERMS)),
-        (String::new(), None),
-    ] {
-        let mut auth = MockAuthService::new();
-        auth.expect_check_registration_capacity()
-            .times(1)
-            .returning(|| Box::pin(async { Ok(()) }));
-        auth.expect_signup_with_instance_invite()
-            .withf(move |cmd| cmd.terms_accepted_url.as_deref() == sent)
-            .times(1)
-            .returning(|_| {
-                Box::pin(async {
-                    let user_id = UserId::new();
-                    Ok(rim_services::auth::dto::SignupResultDto {
-                        user_id,
-                        server_id: None,
-                        session: rim_services::auth::dto::AuthSessionDto {
-                            user_id,
-                            session_id: SessionId::new(),
-                            expires_at: chrono::Utc::now(),
-                        },
-                        session_token: "rim_sess_test".to_string(),
-                        csrf_token: "rim_csrf_test".to_string(),
-                        server_share: None,
-                        keys: rim_services::auth::dto::SessionKeysDto::kept(),
-                    })
-                })
-            });
-        let schema = schema_with_mocks(
-            auth,
-            MockConversationService::new(),
-            MockMessageService::new(),
-            MockMessageAttachmentService::new(),
-            MockThreadService::new(),
-        );
-        let res = schema.execute(Request::new(invite_signup(&accepted))).await;
-        assert_no_errors(&res);
-    }
 }

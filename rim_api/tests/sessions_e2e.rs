@@ -14,7 +14,7 @@ use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
 use support::graphql::{anonymous_request, assert_each_refused, exec_err_code, exec_ok};
-use support::sessions::{LOGIN, PASSWORD, login, with_session};
+use support::identity::{signed_up, with_session};
 
 const LOGOUT_OTHER_SESSIONS: &str = "mutation { logoutOtherSessions }";
 
@@ -22,19 +22,21 @@ const ME: &str = "query { me { id username } }";
 
 const LOGOUT: &str = "mutation { logout }";
 
-/// Two password sessions of one account and one of another: `logoutOtherSessions` from the
-/// first ends the second, keeps the caller, and leaves the other account alone.
+/// Two key sessions of one account and one of another: `logoutOtherSessions` from the first
+/// ends the second, keeps the caller, and leaves the other account alone.
 #[tokio::test]
 async fn logout_other_sessions_ends_every_session_but_the_callers() {
     let ctx = TestCtx::new().await;
-    ctx.create_password_user("ada").await;
-    ctx.create_password_user("grace").await;
+    let ada = signed_up(&ctx, "ada", 1).await;
+    let grace = signed_up(&ctx, "grace", 2).await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
     let provider = ctx.build_provider();
+    // The signup's own session ends, so only the two below are ada's.
+    exec_ok(&schema, ada.caller.request(LOGOUT, json!({}))).await;
 
-    let desktop = login(&schema, "ada").await;
-    let laptop = login(&schema, "ada").await;
-    let grace = login(&schema, "grace").await;
+    let desktop = ada.sign_in(&schema).await;
+    let laptop = ada.sign_in(&schema).await;
+    let grace = grace.sign_in(&schema).await;
 
     let data = exec_ok(
         &schema,
@@ -61,7 +63,7 @@ async fn logout_other_sessions_ends_every_session_but_the_callers() {
     assert_eq!(data["logoutOtherSessions"], json!(0));
 }
 
-/// Without a session every session root but `login` is refused.
+/// Without a session every session root is refused.
 #[tokio::test]
 async fn every_session_root_needs_a_session() {
     let ctx = TestCtx::new().await;
@@ -76,11 +78,11 @@ async fn every_session_root_needs_a_session() {
 #[tokio::test]
 async fn logout_ends_only_the_calling_session() {
     let ctx = TestCtx::new().await;
-    ctx.create_password_user("ada").await;
+    let ada = signed_up(&ctx, "ada", 1).await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
     let provider = ctx.build_provider();
-    let desktop = login(&schema, "ada").await;
-    let laptop = login(&schema, "ada").await;
+    let desktop = ada.sign_in(&schema).await;
+    let laptop = ada.sign_in(&schema).await;
 
     let data = exec_ok(&schema, with_session(&provider, &laptop, LOGOUT).await).await;
     assert_eq!(data["logout"], json!(true));
@@ -91,21 +93,4 @@ async fn logout_ends_only_the_calling_session() {
     }
     let data = exec_ok(&schema, with_session(&provider, &desktop, ME).await).await;
     assert_eq!(data["me"]["username"], json!("ada"));
-}
-
-/// A wrong password and an unknown username get the same answer.
-#[tokio::test]
-async fn login_answers_a_wrong_password_like_an_unknown_user() {
-    let ctx = TestCtx::new().await;
-    ctx.create_password_user("ada").await;
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-
-    let calls =
-        [("ada", "wrong horse battery"), ("nobody", PASSWORD)].map(|(username, password)| {
-            (
-                LOGIN,
-                json!({ "input": { "username": username, "password": password } }),
-            )
-        });
-    assert_each_refused(&schema, &calls, "UNAUTHENTICATED", anonymous_request).await;
 }

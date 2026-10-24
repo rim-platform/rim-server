@@ -49,24 +49,18 @@ fn device(user_id: UserId, device_id: Uuid, public_key: &str) -> NewDeviceKey {
 }
 
 #[tokio::test]
-async fn enroll_sets_principal_and_stores_the_log_once() {
+async fn the_principal_names_its_account_and_the_log_is_stored_once() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmKeyIdentityRepository::new(ctx.db.clone());
     let users = SeaOrmUserRepository::new(ctx.db.clone());
-    let alice = ctx.create_user("alice").await;
-    let bob = ctx.create_user("bob").await;
+    let alice = ctx.create_key_only_user("alice", "rimp1_alice").await;
 
     assert!(repo.lock_user(alice.id).await.unwrap());
     assert!(!repo.lock_user(UserId::new()).await.unwrap());
 
-    repo.enroll(
-        alice.id,
-        "rimp1_alice",
-        "identity-key-0",
-        vec![entry(0, KeyLogEntryType::Inception)],
-    )
-    .await
-    .unwrap();
+    repo.insert_key_log(alice.id, vec![entry(0, KeyLogEntryType::Inception)])
+        .await
+        .unwrap();
 
     let stored = users.get_by_id(alice.id).await.unwrap().unwrap();
     assert_eq!(stored.principal_id.as_deref(), Some("rimp1_alice"));
@@ -78,26 +72,9 @@ async fn enroll_sets_principal_and_stores_the_log_once() {
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].entry_type, KeyLogEntryType::Inception);
 
-    // The same account again.
+    // The same log again.
     let err = repo
-        .enroll(
-            alice.id,
-            "rimp1_other",
-            "identity-key-x",
-            vec![entry(0, KeyLogEntryType::Inception)],
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(err.kind(), RepoErrorKind::Conflict);
-
-    // Another account, the same principal.
-    let err = repo
-        .enroll(
-            bob.id,
-            "rimp1_alice",
-            "identity-key-0",
-            vec![entry(0, KeyLogEntryType::Inception)],
-        )
+        .insert_key_log(alice.id, vec![entry(0, KeyLogEntryType::Inception)])
         .await
         .unwrap_err();
     assert_eq!(err.kind(), RepoErrorKind::Conflict);
@@ -107,15 +84,10 @@ async fn enroll_sets_principal_and_stores_the_log_once() {
 async fn rotation_appends_in_order_and_rejects_a_taken_seq() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmKeyIdentityRepository::new(ctx.db.clone());
-    let alice = ctx.create_user("alice").await;
-    repo.enroll(
-        alice.id,
-        "rimp1_alice",
-        "identity-key-0",
-        vec![entry(0, KeyLogEntryType::Inception)],
-    )
-    .await
-    .unwrap();
+    let alice = ctx.create_key_only_user("alice", "rimp1_alice").await;
+    repo.insert_key_log(alice.id, vec![entry(0, KeyLogEntryType::Inception)])
+        .await
+        .unwrap();
 
     repo.append_rotation(
         alice.id,

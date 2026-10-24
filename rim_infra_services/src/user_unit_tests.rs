@@ -17,7 +17,6 @@ mod tests {
         User {
             id,
             username: "u".to_string(),
-            password_hash: Some("h".to_string()),
             created_at: now,
             updated_at: now,
             last_login_at: Some(now),

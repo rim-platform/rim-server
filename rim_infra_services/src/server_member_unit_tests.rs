@@ -148,7 +148,6 @@ mod tests {
                 .map(|id| rim_core::user::model::User {
                     id: *id,
                     username: id.to_string(),
-                    password_hash: Some(String::new()),
                     created_at: chrono::Utc::now(),
                     updated_at: chrono::Utc::now(),
                     last_login_at: None,

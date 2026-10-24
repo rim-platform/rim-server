@@ -7,8 +7,8 @@ use rim_core::user::model::{
 use rim_core::user::repository::UserRepository;
 use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, Statement, Value, sea_query::Expr,
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, IntoActiveModel,
+    QueryFilter, QueryOrder, Set, Statement, Value, sea_query::Expr,
 };
 
 use crate::DbHandle;
@@ -89,7 +89,6 @@ impl UserRepository for SeaOrmUserRepository {
         let user = user::ActiveModel {
             id: Set(UserId::new().into()),
             username: Set(user_data.username.to_owned()),
-            password_hash: Set(user_data.password),
             email: Set(user_data.email),
             display_name: Set(user_data.display_name),
             principal_id: Set(user_data
@@ -189,20 +188,6 @@ impl UserRepository for SeaOrmUserRepository {
             .map_err(map_db_err)?;
 
         Ok(model.map(Into::into))
-    }
-
-    async fn update_password(&self, id: UserId, password_hash: String) -> RepoResult<()> {
-        let model = user::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(map_db_err)?
-            .ok_or(RepoError::new(RepoErrorKind::NotFound))?;
-
-        let mut active = model.into_active_model();
-        active.password_hash = Set(Some(password_hash));
-        active.updated_at = Set(chrono::Utc::now().into());
-        active.update(&self.db).await.map_err(map_db_err)?;
-        Ok(())
     }
 
     async fn record_terms_acceptance(

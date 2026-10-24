@@ -1,6 +1,6 @@
-//! Account creation shared by every signup path: the password signups in `auth.rs` and key-only
-//! signup in `key_auth.rs`. A registration token is checked, claimed and announced the same way
-//! whichever credential the new account signs in with.
+//! The steps of the key signup in `key_auth.rs`: the username and display name rules, the open
+//! signup rate, the registration token (checked before the signup's transaction, claimed inside
+//! it and announced after it), and the new user, its accepted terms and its session.
 
 use std::sync::Arc;
 
@@ -60,15 +60,6 @@ pub(crate) enum CheckedToken {
     InstanceInvite(InstanceInvite),
     WorkspaceInvite(Invite),
 }
-
-/// The refusal of a password signup with another address than its email-bound instance
-/// invite's.
-pub(crate) const EMAIL_BOUND_INVITE_REFUSAL: &str =
-    "this invite admits only the email address it was issued for";
-
-/// The refusal of a password signup on a server whose signups need a key.
-pub(crate) const KEYS_REQUIRED_REFUSAL: &str =
-    "password signup is turned off on this server; sign up with a key";
 
 /// The refusal of a signup with an address an operator blocked.
 pub(crate) const BLOCKED_EMAIL_REFUSAL: &str = "this email cannot sign up here";
@@ -175,20 +166,18 @@ pub(crate) fn check_open_signup_rate(
     Ok(())
 }
 
-/// Look a registration token up and check it is still usable, outside any transaction.
-/// `email` is the normalised address a password signup gives, `None` for a key-only signup,
-/// which takes the address of an email-bound instance invite.
+/// Look a registration token up and check it is still usable, outside any transaction. An
+/// email-bound instance invite gives the new account its address.
 ///
 /// # Errors
 /// As [`check_instance_invite`] and [`check_workspace_invite`].
 pub(crate) async fn check_token(
     repos: &SignupRepos,
     token: &SignupToken,
-    email: Option<&str>,
 ) -> ServiceResult<CheckedToken> {
     Ok(match token {
         SignupToken::InstanceInvite(raw) => CheckedToken::InstanceInvite(
-            check_instance_invite(repos.instance_invite_repo.as_ref(), raw, email).await?,
+            check_instance_invite(repos.instance_invite_repo.as_ref(), raw).await?,
         ),
         SignupToken::WorkspaceInvite(raw) => CheckedToken::WorkspaceInvite(
             check_workspace_invite(repos.invite_repo.as_ref(), raw).await?,
@@ -196,18 +185,14 @@ pub(crate) async fn check_token(
     })
 }
 
-/// The instance invite `raw`, if it is unrevoked, not used up, unexpired and, when bound to an
-/// address and `email` is given, presented with that address (compared trimmed and
-/// case-insensitively). `email` is `None` for a key-only signup, which an email-bound invite
-/// admits with the invite's address. The claim checks the uses again.
+/// The instance invite `raw`, if it is unrevoked, not used up and unexpired. The claim checks
+/// the uses again.
 ///
 /// # Errors
-/// `InvalidToken` when unknown, revoked or used up, `ExpiredToken` when expired, `Validation`
-/// when the invite is bound to another address than `email`.
+/// `InvalidToken` when unknown, revoked or used up, `ExpiredToken` when expired.
 pub(crate) async fn check_instance_invite(
     repo: &dyn InstanceInviteRepository,
     raw: &str,
-    email: Option<&str>,
 ) -> ServiceResult<InstanceInvite> {
     let invite = repo
         .get_by_token_hash(&hash_token(raw))
@@ -218,19 +203,6 @@ pub(crate) async fn check_instance_invite(
     }
     if invite.expires_at < Utc::now() {
         return Err(ServiceError::ExpiredToken);
-    }
-    if let (Some(bound), Some(email)) = (&invite.email, email)
-        && !email.trim().eq_ignore_ascii_case(bound.trim())
-    {
-        tracing::info!(
-            target: "audit",
-            event = "instance_invite_email_mismatch",
-            instance_invite_id = %invite.id,
-            "signup refused: the instance invite is bound to another email address"
-        );
-        return Err(ServiceError::Validation(
-            EMAIL_BOUND_INVITE_REFUSAL.to_string(),
-        ));
     }
     Ok(invite)
 }
@@ -578,7 +550,6 @@ pub(crate) mod tests {
     fn new_user(email: Option<&str>) -> NewUser {
         NewUser {
             username: "alice".to_string(),
-            password: Some("hash".to_string()),
             email: email.map(str::to_string),
             display_name: None,
             key_identity: None,
@@ -714,7 +685,7 @@ pub(crate) mod tests {
                 .returning(move |_| Ok(invite.clone()));
             let mut r = repos();
             r.instance_invite_repo = Arc::new(repo);
-            let res = check_token(&r, &SignupToken::InstanceInvite("raw".to_string()), None).await;
+            let res = check_token(&r, &SignupToken::InstanceInvite("raw".to_string())).await;
             match expected {
                 None => assert!(matches!(res, Ok(CheckedToken::InstanceInvite(_)))),
                 Some("InvalidToken") => assert!(matches!(res, Err(ServiceError::InvalidToken))),
@@ -724,29 +695,15 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn an_email_bound_instance_invite_admits_only_its_address_or_a_key_signup() {
-        for (email, admitted) in [
-            (Some("ops@example.com"), true),
-            (Some(" Ops@Example.COM "), true),
-            (Some("other@example.com"), false),
-            (None, true),
-        ] {
-            let mut repo = MockInstanceInviteRepository::new();
-            repo.expect_get_by_token_hash().returning(|_| {
-                let mut invite = instance_invite(Duration::minutes(5), false);
-                invite.email = Some("ops@example.com".to_string());
-                Ok(Some(invite))
-            });
-            let res = check_instance_invite(&repo, "raw", email).await;
-            if admitted {
-                assert!(res.is_ok(), "{email:?}");
-            } else {
-                assert!(
-                    matches!(&res, Err(ServiceError::Validation(m)) if m == EMAIL_BOUND_INVITE_REFUSAL),
-                    "{email:?}: {res:?}"
-                );
-            }
-        }
+    async fn an_email_bound_instance_invite_admits_a_key_signup() {
+        let mut repo = MockInstanceInviteRepository::new();
+        repo.expect_get_by_token_hash().returning(|_| {
+            let mut invite = instance_invite(Duration::minutes(5), false);
+            invite.email = Some("ops@example.com".to_string());
+            Ok(Some(invite))
+        });
+        let invite = check_instance_invite(&repo, "raw").await.unwrap();
+        assert_eq!(invite.email.as_deref(), Some("ops@example.com"));
     }
 
     #[tokio::test]
@@ -765,7 +722,7 @@ pub(crate) mod tests {
                 .returning(move |_| Ok(invite.clone()));
             let mut r = repos();
             r.invite_repo = Arc::new(repo);
-            let res = check_token(&r, &SignupToken::WorkspaceInvite("raw".to_string()), None).await;
+            let res = check_token(&r, &SignupToken::WorkspaceInvite("raw".to_string())).await;
             match expected {
                 None => assert!(matches!(res, Ok(CheckedToken::WorkspaceInvite(_)))),
                 Some("InvalidToken") => assert!(matches!(res, Err(ServiceError::InvalidToken))),
@@ -1046,7 +1003,6 @@ pub(crate) mod tests {
         User {
             id: UserId::new(),
             username: "alice".to_string(),
-            password_hash: None,
             created_at: now,
             updated_at: now,
             last_login_at: None,

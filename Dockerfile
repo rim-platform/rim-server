@@ -98,8 +98,6 @@ USER rim
 #                           sends to other servers, per day (default: 20)
 #   RIM_ENABLE_GRAPHIQL   — Serve the GraphiQL explorer at GET /api when true (default: false)
 #   RIM_OPEN_REGISTRATION — Let anyone sign up, rate-limited, when true (default: invite-only)
-#   RIM_SIGNUP_REQUIRE_KEYS — Refuse every password signup, so accounts sign up with a key
-#                           (default: true); password sign-in of existing accounts still works
 #   RIM_DEFAULT_WORKSPACE — id of a workspace here every new account joins as a member
 #                           (default: none); one that does not exist stops the server at boot
 #   RIM_DEFAULT_WORKSPACE_FILE — JSON definition of the default workspace (default: none);
@@ -194,9 +192,6 @@ USER rim
 #   RIM_RESERVED_NAMES    — comma-separated usernames and display names signups and profile
 #                           edits refuse, also followed by -, _, . or a space (default: none);
 #                           an empty entry stops the server at boot
-#   RIM_PASSWORD_HASH_CONCURRENCY — Argon2 password hashes and checks run at once, 1-64
-#                           (default: the number of CPUs); each holds 64 MiB while it runs, and
-#                           a request that waits over 10 seconds for a turn answers UNAVAILABLE
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

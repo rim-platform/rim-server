@@ -61,8 +61,6 @@ pub mod mls_welcome;
 pub mod mls_welcome_recipient;
 pub mod notification_preference;
 mod notification_preference_mapper;
-pub mod password_reset_token;
-mod password_reset_token_mapper;
 pub mod peer_key_log_entry;
 pub mod peer_server;
 pub mod pipeline;
