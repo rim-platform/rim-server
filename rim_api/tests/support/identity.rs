@@ -149,6 +149,8 @@ pub async fn signup_input(
         "device": statement(&cert),
         "proof": statement(&proof),
         "passwordRegistration": password_registration,
+        "keepSignedIn": true,
+        "keepKeyHeld": true,
     });
     if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
         input.extend(extra.clone());

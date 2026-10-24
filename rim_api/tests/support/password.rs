@@ -38,11 +38,14 @@ mutation Finish($loginId: ID!, $credentialFinalization: String!) {
   }
 }"#;
 
-/// `loginWithKey` with an optional password ticket.
+/// `loginWithKey` with an optional password ticket, kept on a client that holds its own keep
+/// key unless the variables say otherwise.
 pub const LOGIN_WITH_PASSWORD: &str = r#"
-mutation Login($proof: SignedStatementInput!, $passwordTicket: String) {
-  loginWithKey(proof: $proof, passwordTicket: $passwordTicket) {
-    userId csrfToken mustSetPassword
+mutation Login($proof: SignedStatementInput!, $passwordTicket: String,
+               $keepSignedIn: Boolean! = true, $keepKeyHeld: Boolean! = true) {
+  loginWithKey(proof: $proof, passwordTicket: $passwordTicket,
+               keepSignedIn: $keepSignedIn, keepKeyHeld: $keepKeyHeld) {
+    userId csrfToken mustSetPassword sessionSecret keepKey
   }
 }"#;
 

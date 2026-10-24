@@ -17,7 +17,8 @@ use sha2::{Digest, Sha256};
 
 use crate::body::{BodyError, read_bounded};
 use crate::file_handlers::{
-    map_service_error_to_response, require_auth, require_csrf, require_feature,
+    map_service_error_to_response, require_auth, require_csrf, require_download_auth,
+    require_feature,
 };
 
 /// Bundles are named by their hash, so a URL's bytes never change.
@@ -189,7 +190,7 @@ pub async fn handle_plugin_bundle_download(
     {
         return resp;
     }
-    let user_id = match require_auth(&req).await {
+    let user_id = match require_download_auth(&req).await {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -256,7 +257,7 @@ mod tests {
     fn authenticator(user_id: UserId) -> MockRequestAuthenticator {
         let mut auth = MockRequestAuthenticator::new();
         auth.expect_authenticate_session_token()
-            .returning(move |token| {
+            .returning(move |token, _| {
                 let known = token == Some(SESSION);
                 Box::pin(async move {
                     Ok(if known {
@@ -266,6 +267,7 @@ mod tests {
                             device_key_id: None,
                             expires_at: None,
                             must_set_password: false,
+                            secret_hash: None,
                         }
                     } else {
                         RequestAuthResultDto::default()

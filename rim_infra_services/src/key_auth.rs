@@ -425,6 +425,13 @@ impl DefaultKeyAuthService {
             .session_repo
             .bind_device(session.id, device.id)
             .await?;
+        let keys = crate::session_key::keep_new_session(
+            repos.session_repo.as_ref(),
+            self.password_key.as_ref(),
+            session.id,
+            cmd.keep,
+        )
+        .await?;
         repos.key_identity_repo.touch_device(device.id).await?;
         match &check {
             PasswordCheck::Ticket(token_hash) => {
@@ -454,6 +461,7 @@ impl DefaultKeyAuthService {
             remote,
             password = matches!(check, PasswordCheck::Ticket(_)),
             must_set_password,
+            kept = keys.kept,
             user_id = %user_id,
             device_id = %device.device_id,
             session_id = %session.id,
@@ -470,6 +478,7 @@ impl DefaultKeyAuthService {
             session_token: raw_token,
             csrf_token,
             must_set_password,
+            keys,
         })
     }
 
@@ -1331,6 +1340,13 @@ impl KeyAuthService for DefaultKeyAuthService {
             .session_repo
             .bind_device(session.id, device.id)
             .await?;
+        let keys = crate::session_key::keep_new_session(
+            repos.session_repo.as_ref(),
+            Some(password_key),
+            session.id,
+            cmd.keep,
+        )
+        .await?;
         repos.key_identity_repo.touch_device(device.id).await?;
         Self::commit(scope).await?;
         self.account_cap.admitted();
@@ -1384,6 +1400,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             session_token,
             csrf_token,
             server_share: Some(server_share.to_vec()),
+            keys,
         })
     }
 

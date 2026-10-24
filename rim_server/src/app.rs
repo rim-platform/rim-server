@@ -56,6 +56,8 @@ use rim_services::session_revocation::SessionRevocations;
 pub struct AppRuntime {
     pub schema: AppSchema,
     pub request_authenticator: Arc<dyn RequestAuthenticator>,
+    /// Records when an unkept session's WebSocket opens and closes, for its reload window.
+    pub session_key_service: Arc<dyn rim_services::session_key::service::SessionKeyService>,
     pub storage_backend: Arc<dyn StorageBackend>,
     pub storage_service: Arc<dyn StorageService>,
     pub message_attachment_service:
@@ -1093,11 +1095,13 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         }),
     );
     let request_authenticator = service_provider.request_authenticator();
+    let session_key_service = service_provider.session_key_service();
     let auth_service = service_provider.auth_service();
 
     Ok(AppRuntime {
         schema,
         request_authenticator,
+        session_key_service,
         storage_backend,
         storage_service,
         message_attachment_service,

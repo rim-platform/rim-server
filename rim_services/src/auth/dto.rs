@@ -84,6 +84,40 @@ pub struct LoginResultDto {
     pub csrf_token: String,
     /// The session may only set a password: the local account has none.
     pub must_set_password: bool,
+    /// What the new session keeps and hands the client.
+    pub keys: SessionKeysDto,
+}
+
+/// What a new session keeps, and the secrets it hands the client once, in the clear.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionKeysDto {
+    /// "Keep me signed in": a persistent cookie. Otherwise a browser-session cookie.
+    pub kept: bool,
+    /// The secret an unkept session requires with every request, base64url.
+    pub session_secret: Option<String>,
+    /// The keep key of a kept session whose keep key the server holds for a web client.
+    pub keep_key: Option<Vec<u8>>,
+}
+
+impl SessionKeysDto {
+    /// A kept session that hands out nothing: the sign-ins without "Keep me signed in".
+    pub fn kept() -> Self {
+        Self {
+            kept: true,
+            session_secret: None,
+            keep_key: None,
+        }
+    }
+}
+
+/// The secret a request presents for an unkept session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSecret {
+    /// The request must carry the session's secret: the value it presented, if any.
+    Presented(Option<String>),
+    /// The request is one an unkept session makes without its secret: a plain download, the
+    /// WebSocket upgrade (whose `connection_init` carries the secret), a reload or a sign-out.
+    NotRequired,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +150,9 @@ pub struct RequestAuthResultDto {
     pub expires_at: Option<DateTime<Utc>>,
     /// The session may only set a password: its local account has none.
     pub must_set_password: bool,
+    /// The SHA-256 hex of the secret of an unkept session; `None` for a kept one. The
+    /// WebSocket checks its `connection_init` against it.
+    pub secret_hash: Option<String>,
 }
 
 /// Result of any signup path (instance invite, workspace invite, open).
@@ -131,6 +168,8 @@ pub struct SignupResultDto {
     pub csrf_token: String,
     /// After a key signup: the new account's server share, in the clear.
     pub server_share: Option<Vec<u8>>,
+    /// What the new session keeps and hands the client.
+    pub keys: SessionKeysDto,
 }
 
 /// Token type discriminant for the preview query.

@@ -158,6 +158,11 @@ mod tests {
             ip: None,
             device_key_id: None,
             must_set_password: false,
+            kept: true,
+            secret_hash: None,
+            keep_key_sealed: None,
+            reload_key_sealed: None,
+            ws_closed_at: None,
         }
     }
 
@@ -235,6 +240,11 @@ mod tests {
                 ip: None,
                 device_key_id: None,
                 must_set_password: false,
+                kept: true,
+                secret_hash: None,
+                keep_key_sealed: None,
+                reload_key_sealed: None,
+                ws_closed_at: None,
             }))
         });
         session_repo.expect_revoke_session().never();

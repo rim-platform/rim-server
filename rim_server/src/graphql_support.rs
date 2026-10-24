@@ -5,9 +5,16 @@ use rim_services::auth::service::RequestAuthenticator;
 
 use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
 use rim_api::operation::{OperationFields, root_fields};
+use rim_services::auth::dto::SessionSecret;
 
 pub const COOKIE_SESSION: &str = "rim_session";
 pub const COOKIE_CSRF: &str = "rim_csrf";
+/// The header that carries an unkept session's secret.
+pub const SESSION_SECRET_HEADER: &str = "x-rim-session-secret";
+
+/// Mutation fields an unkept session runs without its secret: the tab that reloaded and lost
+/// the secret takes its reload key, or signs out.
+const SECRET_EXEMPT_MUTATIONS: &[&str] = &["reloadSession", "logout"];
 
 /// The root fields of one request of a batch, or the message its document fails to parse with.
 pub type RootFields = Result<OperationFields, String>;
@@ -43,6 +50,22 @@ pub fn count_mutation_fields(fields: &[RootFields]) -> u32 {
         .map(OperationFields::mutation_count)
         .sum();
     u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// Whether every request of the batch is a mutation whose root fields, all found, are among
+/// [`SECRET_EXEMPT_MUTATIONS`]: then an unkept session's cookie counts without its secret.
+pub fn batch_needs_no_secret(fields: &[RootFields]) -> bool {
+    !fields.is_empty()
+        && fields.iter().all(|f| {
+            f.as_ref().is_ok_and(|f| {
+                f.operation == Some(async_graphql::parser::types::OperationType::Mutation)
+                    && f.is_complete()
+                    && !f.fields.is_empty()
+                    && f.fields
+                        .iter()
+                        .all(|name| SECRET_EXEMPT_MUTATIONS.contains(&name.as_str()))
+            })
+        })
 }
 
 /// Mutation field names (camelCase, matching the GraphQL schema) that are
@@ -170,16 +193,41 @@ fn validate_csrf_tokens(req: &HttpRequest) -> Result<(), GraphQLResponse> {
     })
 }
 
-/// The session cookie's user, session and the device the session is bound to.
+/// The session cookie's user, session and the device the session is bound to. An unkept
+/// session counts only when the request carries its secret in [`SESSION_SECRET_HEADER`];
+/// otherwise the request is anonymous.
 pub async fn extract_auth(
     req: &HttpRequest,
     request_authenticator: &dyn RequestAuthenticator,
+) -> rim_services::ServiceResult<rim_services::auth::dto::RequestAuthResultDto> {
+    let secret = req
+        .headers()
+        .get(SESSION_SECRET_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    authenticate(req, request_authenticator, SessionSecret::Presented(secret)).await
+}
+
+/// [`extract_auth`] without the session secret, for the requests an unkept session makes
+/// without it: plain file downloads, the WebSocket upgrade (whose `connection_init` carries
+/// the secret), `reloadSession` and `logout`.
+pub async fn extract_auth_without_secret(
+    req: &HttpRequest,
+    request_authenticator: &dyn RequestAuthenticator,
+) -> rim_services::ServiceResult<rim_services::auth::dto::RequestAuthResultDto> {
+    authenticate(req, request_authenticator, SessionSecret::NotRequired).await
+}
+
+async fn authenticate(
+    req: &HttpRequest,
+    request_authenticator: &dyn RequestAuthenticator,
+    secret: SessionSecret,
 ) -> rim_services::ServiceResult<rim_services::auth::dto::RequestAuthResultDto> {
     let session_token = req
         .cookie(COOKIE_SESSION)
         .map(|cookie| cookie.value().to_string());
     request_authenticator
-        .authenticate_session_token(session_token.as_deref())
+        .authenticate_session_token(session_token.as_deref(), secret)
         .await
 }
 
@@ -230,7 +278,9 @@ pub(crate) fn resolve_secure_flag(
 /// Apply session / CSRF cookies from the resolved [`AuthIntent`] onto the response.
 ///
 /// Uses [`resolve_secure_flag`] to determine the `Secure` attribute so that the
-/// flag is set correctly for both direct-TLS and proxied deployments.
+/// flag is set correctly for both direct-TLS and proxied deployments. A kept session's cookies
+/// last `session_ttl_days`; an unkept session's have no `Max-Age`, so the browser drops them
+/// when it closes.
 pub fn apply_auth_cookies(
     gql_resp: GraphQLResponse,
     intent_ctx: &AuthIntentCtx,
@@ -250,26 +300,27 @@ pub fn apply_auth_cookies(
         AuthIntent::SetSession {
             session_token,
             csrf_token,
+            kept,
         } => {
-            let c1 = actix_web::cookie::Cookie::build(COOKIE_SESSION, session_token)
+            let max_age =
+                kept.then(|| actix_web::cookie::time::Duration::days(session_ttl_days as i64));
+            let mut c1 = actix_web::cookie::Cookie::build(COOKIE_SESSION, session_token)
                 .path("/")
                 .http_only(true)
                 .same_site(actix_web::cookie::SameSite::Lax)
                 .secure(secure)
-                .max_age(actix_web::cookie::time::Duration::days(
-                    session_ttl_days as i64,
-                ))
                 .finish();
 
-            let c2 = actix_web::cookie::Cookie::build(COOKIE_CSRF, csrf_token)
+            let mut c2 = actix_web::cookie::Cookie::build(COOKIE_CSRF, csrf_token)
                 .path("/")
                 .http_only(false)
                 .same_site(actix_web::cookie::SameSite::Lax)
                 .secure(secure)
-                .max_age(actix_web::cookie::time::Duration::days(
-                    session_ttl_days as i64,
-                ))
                 .finish();
+            if let Some(max_age) = max_age {
+                c1.set_max_age(max_age);
+                c2.set_max_age(max_age);
+            }
 
             resp.0 = append_set_cookie(resp.0, c1.to_string());
             resp.0 = append_set_cookie(resp.0, c2.to_string());
@@ -523,8 +574,8 @@ fragment Inner on Mutation {
         let req = session_cookie_request("session-token");
         let mut auth = MockRequestAuthenticator::new();
         auth.expect_authenticate_session_token()
-            .withf(|token| *token == Some("session-token"))
-            .return_once(|_| Box::pin(async { Err(rim_services::ServiceError::Unavailable) }));
+            .withf(|token, _| *token == Some("session-token"))
+            .return_once(|_, _| Box::pin(async { Err(rim_services::ServiceError::Unavailable) }));
 
         let result = extract_auth(&req, &auth).await;
 
@@ -539,8 +590,8 @@ fragment Inner on Mutation {
         let req = session_cookie_request("session-token");
         let mut auth = MockRequestAuthenticator::new();
         auth.expect_authenticate_session_token()
-            .withf(|token| *token == Some("session-token"))
-            .return_once(|_| Box::pin(async { Ok(RequestAuthResultDto::default()) }));
+            .withf(|token, _| *token == Some("session-token"))
+            .return_once(|_, _| Box::pin(async { Ok(RequestAuthResultDto::default()) }));
 
         let result = extract_auth(&req, &auth).await.unwrap();
 
@@ -555,8 +606,8 @@ fragment Inner on Mutation {
         let session_id = SessionId::new();
         let mut auth = MockRequestAuthenticator::new();
         auth.expect_authenticate_session_token()
-            .withf(|token| *token == Some("session-token"))
-            .return_once(move |_| {
+            .withf(|token, _| *token == Some("session-token"))
+            .return_once(move |_, _| {
                 Box::pin(async move {
                     Ok(RequestAuthResultDto {
                         user_id: Some(user_id),
@@ -564,6 +615,7 @@ fragment Inner on Mutation {
                         device_key_id: None,
                         expires_at: None,
                         must_set_password: false,
+                        secret_hash: None,
                     })
                 })
             });
@@ -752,5 +804,100 @@ fragment Inner on Mutation {
             .insert_header(("x-forwarded-proto", "http"))
             .to_http_request();
         assert!(!resolve_secure_flag(&req, true, false));
+    }
+
+    /// The `Set-Cookie` values `apply_auth_cookies` adds for a new session that is `kept` or
+    /// not, with a 30-day TTL.
+    fn session_cookies(kept: bool) -> Vec<String> {
+        let intent = AuthIntentCtx::default();
+        intent.set(AuthIntent::SetSession {
+            session_token: "rim_sess_t".to_string(),
+            csrf_token: "rim_csrf_t".to_string(),
+            kept,
+        });
+        let response =
+            GraphQLResponse::from(async_graphql::Response::new(async_graphql::Value::Null));
+        let req = TestRequest::default().to_http_request();
+        let response = apply_auth_cookies(response, &intent, &req, 30, false, false);
+        let async_graphql::BatchResponse::Single(response) = response.0 else {
+            panic!("a single response");
+        };
+        response
+            .http_headers
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().expect("ascii").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_kept_sessions_cookies_last_the_ttl_and_an_unkept_sessions_the_browser_session() {
+        let kept = session_cookies(true);
+        assert_eq!(kept.len(), 2);
+        for cookie in &kept {
+            assert!(cookie.contains("Max-Age=2592000"), "{cookie}");
+        }
+        let unkept = session_cookies(false);
+        assert_eq!(unkept.len(), 2);
+        assert!(unkept[0].starts_with("rim_session=rim_sess_t"));
+        assert!(unkept[1].starts_with("rim_csrf=rim_csrf_t"));
+        for cookie in &unkept {
+            assert!(!cookie.contains("Max-Age"), "{cookie}");
+            assert!(!cookie.contains("Expires"), "{cookie}");
+        }
+    }
+
+    #[test]
+    fn only_a_batch_of_reloads_and_sign_outs_needs_no_session_secret() {
+        let needs_none = |queries: &[&str]| {
+            let batch = async_graphql::BatchRequest::Batch(
+                queries
+                    .iter()
+                    .map(|q| async_graphql::Request::new(*q))
+                    .collect(),
+            );
+            batch_needs_no_secret(&batch_fields(&batch))
+        };
+        assert!(needs_none(&["mutation { reloadSession { reloadKey } }"]));
+        assert!(needs_none(&["mutation { logout }"]));
+        assert!(needs_none(&[
+            "mutation { reloadSession { reloadKey } logout }",
+            "mutation { logout }"
+        ]));
+        assert!(!needs_none(&[]));
+        assert!(!needs_none(&[
+            "mutation { reloadSession { reloadKey } setReloadKey }"
+        ]));
+        assert!(!needs_none(&["mutation { logout }", "query { me { id } }"]));
+        assert!(!needs_none(&["query { logout }"]));
+        assert!(!needs_none(&["mutation {"]));
+        assert!(!needs_none(&["mutation { ...F }"]));
+    }
+
+    #[actix_web::test]
+    async fn extract_auth_presents_the_secret_header_and_the_download_variant_none() {
+        let req = TestRequest::default()
+            .cookie(actix_web::cookie::Cookie::new(
+                COOKIE_SESSION,
+                "session-token",
+            ))
+            .insert_header((SESSION_SECRET_HEADER, "the-secret"))
+            .to_http_request();
+        let mut auth = MockRequestAuthenticator::new();
+        auth.expect_authenticate_session_token()
+            .withf(|token, secret| {
+                *token == Some("session-token")
+                    && *secret == SessionSecret::Presented(Some("the-secret".to_string()))
+            })
+            .times(1)
+            .return_once(|_, _| Box::pin(async { Ok(RequestAuthResultDto::default()) }));
+        auth.expect_authenticate_session_token()
+            .withf(|token, secret| {
+                *token == Some("session-token") && *secret == SessionSecret::NotRequired
+            })
+            .times(1)
+            .return_once(|_, _| Box::pin(async { Ok(RequestAuthResultDto::default()) }));
+        extract_auth(&req, &auth).await.unwrap();
+        extract_auth_without_secret(&req, &auth).await.unwrap();
     }
 }

@@ -50,6 +50,17 @@ checked with strict Ed25519 ([key identity](specs/key-identity-v1.md)).
   resets its password with its recovery phrase. An account of this server without a password
   signs in with its key alone and may only set one. People from other servers keep their
   password at their own server.
+- **Keep me signed in.** A key sign-in chooses it. A kept session has persistent cookies; for
+  a web client the server also holds a keep key for it, sealed under the password key file,
+  which opens the client's data key at start. An unkept session has browser-session cookies and
+  a session secret (32 random bytes, stored hashed) that the client holds only in memory and
+  that every request carries in a header and the WebSocket in its `connection_init`, so a
+  cookie left behind in a closed browser or a copied profile signs nobody in. Plain `GET`
+  downloads of files, avatars and attachments are the exception: an `<img>` tag cannot send a
+  header, so they answer to the cookie alone, as do `logout` and the reload below. A reloaded
+  tab takes back its sealed data with a reload key the server holds, once, and only within 60
+  seconds of the session's WebSocket closing and while none is open; after that the account
+  is locked on that device until the password is entered again.
 - **Linking a device.** The old device shows a code holding a 32-byte secret the server never
   sees. The new device sends its key sealed under that secret; the person compares an
   8-character fingerprint and confirms on the old device, which then signs the certificate
@@ -242,7 +253,7 @@ Joined from the spec tables and the review brief's summary.
 | Compromised device | Read what its cache, archive and MLS state hold; send as that device; on the desktop, read the vault | Revocation, then removal from every group; later epochs use new keys | What it already decrypted; anything else the user's account on that computer reaches |
 | Malicious own server | See metadata; withhold, delay, reorder; refuse Commits; control membership; read and change channels; mark any report verified | Pinned key-log heads; leaf checks; DM and encryption pins; MLS sender checks | Availability; channel confidentiality; metadata privacy; the verdict on reports, which moderators take from the server |
 | Database or key-file thief | Read channels, metadata, ciphertext and session token hashes; with the franking key file, mint receipts; with the link key file, read the public join links; with the password key file and the database, run offline guesses against a password record and open the server shares | No private key in the database; reports checked against recorded commitments; franking and server key rotation and recovery; OPAQUE records without the key file allow no guessing, and each guess costs an Argon2id run (64 MiB, 3 passes) | Channel text in the dump; a weak PIN once both the database and the key file are taken |
-| Another person using the same browser profile or OS account | Open the app on a device where the account was used | The account password at every sign-in, checked by the server with the counted, slowed and locked tries; the server share only after the password; the device key alone signs in no account of this server that has a password | What the device holds unencrypted until the clients seal it under the data key; a session left open |
+| Another person using the same browser profile or OS account | Open the app on a device where the account was used | The account password at every sign-in, checked by the server with the counted, slowed and locked tries; the server share only after the password; the device key alone signs in no account of this server that has a password | What the device holds unencrypted until the clients seal it under the data key; a kept session left open; an unkept one's file downloads while its cookie lives |
 | Another server | Signed junk within limits; DM requests and last-resort key package claims as a stranger | Self-certifying server ids and pinned keys; signed requests with nonces; the request inbox; peer blocks | What a person's own relay or a workspace's host sees |
 | Network attacker | See TLS metadata | TLS; signed requests and responses between servers; pinned server ids | Broken TLS between an app and its server; a forged certificate for a server not yet pinned |
 | Malicious plugin author | What the granted permissions allow; for a plugin on the computer, anything the user can do | Sandbox and per-plugin policy; the permission prompt; the signed registry; bundle fingerprints | Leaks through channels the sandbox cannot close; a local plugin the user chose to trust |

@@ -311,6 +311,7 @@ async fn mutation_signup_with_invite_operator_invite_happy_path() {
     let Some(rim_api::auth_intent::AuthIntent::SetSession {
         session_token,
         csrf_token,
+        kept: true,
     }) = intent.take()
     else {
         panic!("signupWithInvite must set a session");
@@ -841,7 +842,10 @@ async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
     for token in [&bob_session, &cy_session] {
         let auth = provider
             .request_authenticator()
-            .authenticate_session_token(Some(token))
+            .authenticate_session_token(
+                Some(token),
+                rim_services::auth::dto::SessionSecret::NotRequired,
+            )
             .await
             .expect("authenticate");
         let request = Request::new("query { me { id } }").data(

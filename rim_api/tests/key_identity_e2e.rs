@@ -55,7 +55,7 @@ mutation Enroll($input: EnrollIdentityKeyInput!) {
 const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce expiresAt } }";
 
 const LOGIN_WITH_KEY: &str = r#"
-mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof) { userId } }"#;
+mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof, keepSignedIn: true, keepKeyHeld: true) { userId } }"#;
 
 const REVOKE: &str = r#"
 mutation Revoke($revocation: SignedStatementInput!) {
@@ -509,6 +509,8 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
                 "device": statement(&cert),
                 "proof": statement(&proof),
                 "passwordRegistration": password_registration,
+                "keepSignedIn": true,
+                "keepKeyHeld": true,
             } }),
         )
         .data(RemoteIp::new("198.51.100.7")),

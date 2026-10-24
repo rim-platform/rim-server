@@ -13,7 +13,7 @@ use crate::auth::command::{
 use crate::auth::dto::{
     AcceptInviteResultDto, CreateInviteResultDto, InviteDto, InvitePageCursor,
     InviteTokenPreviewDto, JoinServerByInviteResultDto, LoginResultDto, RequestAuthResultDto,
-    SignupResultDto,
+    SessionSecret, SignupResultDto,
 };
 
 /// Password sign-in, sessions, invites and the password signups. A server whose signups need a
@@ -152,9 +152,16 @@ pub trait AuthService: Send + Sync {
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait RequestAuthenticator: Send + Sync {
+    /// The user, session and device of the live session whose cookie is `session_token`.
+    /// Anonymous without a token, for an unknown, revoked or expired session, and for an
+    /// unkept session when `secret` is required and does not match its secret.
+    ///
+    /// # Errors
+    /// Propagates storage errors.
     async fn authenticate_session_token(
         &self,
         session_token: Option<&str>,
+        secret: SessionSecret,
     ) -> ServiceResult<RequestAuthResultDto>;
 
     /// The sessions among `ids` that are still signed in: neither revoked nor expired.

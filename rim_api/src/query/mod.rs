@@ -43,6 +43,7 @@ pub(crate) mod public_join_link;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
 pub(crate) mod server_info;
+pub(crate) mod session_key;
 pub(crate) mod thread;
 pub(crate) mod workspace;
 pub(crate) mod workspace_plugin;
@@ -128,4 +129,5 @@ pub(crate) struct QueryGroup9(
     command::UserCommandQueries,
     invite::WorkspaceInviteQueries,
     public_join_link::PublicJoinLinkQueries,
+    session_key::SessionKeyQueries,
 );

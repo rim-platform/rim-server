@@ -407,14 +407,16 @@ fn dm_policy_sdl_matches_the_contract() {
     }
 }
 
-/// Both signup inputs end with the optional `acceptedTermsUrl` and `confirmedMinimumAge`.
+/// Both signup inputs take the optional `acceptedTermsUrl` and `confirmedMinimumAge` after
+/// their other optional fields; the key signup ends with its keep choice.
 #[test]
 fn signup_inputs_take_the_accepted_terms_last() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
         "instanceInviteToken: String workspaceInviteToken: String acceptedTermsUrl: String \
          confirmedMinimumAge: Int }",
-        "proofOfWork: String acceptedTermsUrl: String confirmedMinimumAge: Int }",
+        "proofOfWork: String acceptedTermsUrl: String confirmedMinimumAge: Int keepSignedIn: \
+         Boolean! keepKeyHeld: Boolean! }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }
@@ -549,7 +551,7 @@ fn public_join_link_sdl_matches_the_contract() {
         "WorkspaceInvitePage! publicJoinLink(serverId: ID!): PublicJoinLink! \
          publicJoinLinkPreview(token: String!): PublicJoinLinkPreview! joinRequests(serverId: \
          ID!, dir: PageDir, cursor: JoinRequestCursorInput, limit: Int): JoinRequestPage! \
-         myJoinRequests: [JoinRequest!]! }",
+         myJoinRequests: [JoinRequest!]! sessionKeepKey",
         "revokeInvite(inviteId: ID!): WorkspaceInvite! updatePublicJoinLink(input: \
          UpdatePublicJoinLinkInput!): PublicJoinLink! reissuePublicJoinLink(serverId: ID!): \
          PublicJoinLink! joinByPublicLink(token: String!, message: String): \
@@ -600,12 +602,14 @@ fn account_password_sdl_matches_the_contract() {
          passwordResetStart(statement: SignedStatementInput!, registrationRequest: String!): \
          PasswordResetStart! passwordResetFinish(resetId: ID!, registrationUpload: String!): \
          Boolean! setPasswordStart(registrationRequest: String!): String! \
-         setPassword(registrationUpload: String!): SetPasswordPayload! }",
-        "loginWithKey(proof: SignedStatementInput!, passwordTicket: String): LoginPayload!",
-        "type LoginPayload { userId: ID! csrfToken: String! mustSetPassword: Boolean! }",
+         setPassword(registrationUpload: String!): SetPasswordPayload! setReloadKey",
+        "loginWithKey(proof: SignedStatementInput!, passwordTicket: String, keepSignedIn: \
+         Boolean!, keepKeyHeld: Boolean!): LoginPayload!",
+        "type LoginPayload { userId: ID! csrfToken: String! mustSetPassword: Boolean! \
+         sessionSecret: String keepKey: String }",
         "type PasswordLoginFinish { ticket: String! serverShare: String! rewraps: [String!]! }",
         "type SignupWithInvitePayloadGql { userId: ID! serverId: ID csrfToken: String! \
-         serverShare: String }",
+         serverShare: String sessionSecret: String keepKey: String }",
         "proof: SignedStatementInput! passwordRegistration: String! instanceInviteToken: String",
         "type PasswordLoginStart { loginId: ID! response: String! }",
         "type PasswordChangeStart { loginId: ID! credentialResponse: String! \
@@ -613,6 +617,22 @@ fn account_password_sdl_matches_the_contract() {
         "type PasswordChanged { changedAt: DateTime! }",
         "type PasswordResetStart { resetId: ID! registrationResponse: String! }",
         "type SetPasswordPayload { serverShare: String! }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
+/// The session key roots, appended after the account password roots and the public join link
+/// queries, and the keep choice of key signup.
+#[test]
+fn session_key_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "setPassword(registrationUpload: String!): SetPasswordPayload! setReloadKey: String! \
+         reloadSession: ReloadSessionPayload! }",
+        "myJoinRequests: [JoinRequest!]! sessionKeepKey: String }",
+        "type ReloadSessionPayload { reloadKey: String! nextReloadKey: String! }",
+        "confirmedMinimumAge: Int keepSignedIn: Boolean! keepKeyHeld: Boolean! }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }

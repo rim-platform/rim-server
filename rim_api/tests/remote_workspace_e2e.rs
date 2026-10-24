@@ -60,7 +60,7 @@ const SIGNUP: &str = r#"
 mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { userId csrfToken } }"#;
 const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce } }";
 const LOGIN: &str = r#"
-mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof) { userId csrfToken } }"#;
+mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof, keepSignedIn: true, keepKeyHeld: true) { userId csrfToken } }"#;
 const PUBLISH: &str = r#"
 mutation Publish($card: SignedStatementInput!) { publishProfileCard(card: $card) { version } }"#;
 const CREATE_SERVER: &str =
@@ -408,6 +408,8 @@ async fn sign_up(node: &Node, name: &str, seed: u8) -> Person {
             "device": statement(&cert),
             "proof": statement(&proof),
             "passwordRegistration": password_registration,
+            "keepSignedIn": true,
+            "keepKeyHeld": true,
         } } }))
         .send()
         .await

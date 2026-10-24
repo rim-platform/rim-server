@@ -108,6 +108,12 @@ pub struct SignupWithInvitePayloadGql {
     /// After `signupWithKey`: the new account's server share, unpadded base64url, in the
     /// clear. `null` for the other signups.
     pub server_share: Option<String>,
+    /// After `signupWithKey` without `keepSignedIn`: the session secret, unpadded base64url, in
+    /// the clear, as `loginWithKey` returns it. `null` for a kept session.
+    pub session_secret: Option<String>,
+    /// After `signupWithKey` with `keepSignedIn` and without `keepKeyHeld`: the keep key the
+    /// server holds for this session, unpadded base64url, in the clear. `null` otherwise.
+    pub keep_key: Option<String>,
 }
 
 // ── Workspace invites ──────────────────────────────────────────────────────

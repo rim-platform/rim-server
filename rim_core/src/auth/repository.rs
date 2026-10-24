@@ -4,7 +4,7 @@ use mockall::automock;
 
 use crate::auth::model::{
     InstanceInvite, InstanceInviteId, Invite, InviteId, NewInstanceInvite, NewInvite, NewSession,
-    Session, SessionId,
+    Session, SessionId, SessionKeep,
 };
 use crate::key_identity::model::DeviceKeyId;
 use crate::repository::error::RepoResult;
@@ -56,6 +56,34 @@ pub trait SessionRepository: Send + Sync {
     /// Delete the sessions that sign nobody in at `now`: revoked ones and those whose expiry
     /// is reached. Returns how many were deleted.
     async fn delete_ended(&self, now: chrono::DateTime<chrono::Utc>) -> RepoResult<u64>;
+    /// Record what the new session `id` keeps ([`Session::kept`] and the columns that go with
+    /// it).
+    async fn set_keep(&self, id: SessionId, keep: SessionKeep) -> RepoResult<()>;
+    /// Store `reload_key_sealed` as the reload key of the unkept session `id`. Returns `false`,
+    /// storing nothing, when no unkept session has that id.
+    async fn set_reload_key(&self, id: SessionId, reload_key_sealed: Vec<u8>) -> RepoResult<bool>;
+    /// In one update, take the reload key of the unkept session `id`, live at `now`, whose last
+    /// WebSocket closed after `closed_since`: store `next_sealed` in its place and clear
+    /// [`Session::ws_closed_at`], so a second call fails until a WebSocket closes again.
+    /// Returns the reload key taken, or `None`, changing nothing, when the session does not
+    /// qualify or holds no reload key.
+    async fn take_reload_key(
+        &self,
+        id: SessionId,
+        next_sealed: Vec<u8>,
+        now: chrono::DateTime<chrono::Utc>,
+        closed_since: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<Option<Vec<u8>>>;
+    /// Record that a WebSocket of the unkept session `id` opened: clear
+    /// [`Session::ws_closed_at`]. A kept session records nothing.
+    async fn socket_opened(&self, id: SessionId) -> RepoResult<()>;
+    /// Record that a WebSocket of the unkept session `id` closed at `at`. A kept session
+    /// records nothing.
+    async fn socket_closed(
+        &self,
+        id: SessionId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<()>;
 }
 
 #[cfg_attr(any(test, feature = "mocks"), automock)]

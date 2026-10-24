@@ -1027,6 +1027,11 @@ pub(crate) mod tests {
                 ip: new.ip,
                 device_key_id: None,
                 must_set_password: false,
+                kept: true,
+                secret_hash: None,
+                keep_key_sealed: None,
+                reload_key_sealed: None,
+                ws_closed_at: None,
             })
         });
         let (session, raw, csrf) = create_session(&repo, Duration::days(1), user_id, None, None)

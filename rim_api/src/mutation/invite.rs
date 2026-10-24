@@ -204,6 +204,7 @@ impl InviteMutations {
             intent.set(AuthIntent::SetSession {
                 session_token,
                 csrf_token: csrf_token.clone(),
+                kept: true,
             });
         }
 
@@ -212,6 +213,8 @@ impl InviteMutations {
             server_id: server_id.map(|id| ID(id.to_string())),
             csrf_token,
             server_share: None,
+            session_secret: None,
+            keep_key: None,
         })
     }
 }

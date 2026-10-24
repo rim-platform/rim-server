@@ -25,7 +25,20 @@ pub struct LoginWithKeyCmd {
     /// The ticket `passwordLoginFinish` answered. Required for a local account with a
     /// password; ignored otherwise.
     pub password_ticket: Option<String>,
+    /// "Keep me signed in"; see [`SessionKeepChoice`].
+    pub keep: SessionKeepChoice,
     pub remote_ip: String,
+}
+
+/// What a new key session keeps, chosen at sign-in or signup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionKeepChoice {
+    /// "Keep me signed in": a persistent cookie. Otherwise a browser-session cookie and a
+    /// session secret every request carries.
+    pub keep_signed_in: bool,
+    /// The client holds its own keep key (the desktop app), so the server makes none. Ignored
+    /// when `keep_signed_in` is false.
+    pub keep_key_held: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +87,8 @@ pub struct SignupWithKeyCmd {
     /// instance has a minimum age and this is not it, and records it on the new account;
     /// without one it is ignored.
     pub confirmed_minimum_age: Option<i32>,
+    /// "Keep me signed in" for the new session.
+    pub keep: SessionKeepChoice,
 }
 
 #[derive(Debug, Clone)]

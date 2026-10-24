@@ -6,8 +6,9 @@ use crate::file_handlers::{
     handle_report_attachment_download,
 };
 use crate::graphql_support::{
-    RootFields, apply_auth_cookies, batch_has_mutation, batch_root_fields, enforce_csrf_for_batch,
-    extract_auth, internal_graphql_error_response,
+    RootFields, apply_auth_cookies, batch_has_mutation, batch_needs_no_secret, batch_root_fields,
+    enforce_csrf_for_batch, extract_auth, extract_auth_without_secret,
+    internal_graphql_error_response,
 };
 use crate::health::{ReadinessCache, SystemProbe};
 use crate::plugin_bundle_handlers::{
@@ -26,6 +27,7 @@ use tracing::{Instrument, info, info_span};
 use std::sync::Arc;
 
 use rim_services::auth::service::RequestAuthenticator;
+use rim_services::session_key::service::SessionKeyService;
 use rim_services::session_revocation::{SessionRevocations, WatchedSession};
 
 use rim_api::auth_context::AuthActorCtx;
@@ -101,6 +103,7 @@ pub async fn serve(
     let schema: AppSchema = runtime.schema;
     let schema_handle = schema.clone();
     let request_authenticator = runtime.request_authenticator;
+    let session_key_service = runtime.session_key_service;
     let session_revocations = runtime.session_revocations;
     let terms_page = runtime.terms_page;
     let storage_backend = runtime.storage_backend;
@@ -214,6 +217,7 @@ pub async fn serve(
             .app_data(readiness.clone())
             .app_data(web::Data::new(schema))
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
+            .app_data(web::Data::new(Arc::clone(&session_key_service)))
             .app_data(web::Data::new(Arc::clone(&session_revocations)))
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
             .app_data(web::Data::new(Arc::clone(&storage_service)))
@@ -284,8 +288,16 @@ async fn graphql_handler(
             .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
             .map(|d| Arc::clone(d.get_ref()));
 
-        let auth = match request_authenticator {
-            Some(authenticator) => match extract_auth(&req, authenticator.as_ref()).await {
+        // An unkept session's cookie counts without its secret only for a reload or a sign-out.
+        let extracted = match request_authenticator {
+            Some(authenticator) if batch_needs_no_secret(&fields) => {
+                Some(extract_auth_without_secret(&req, authenticator.as_ref()).await)
+            }
+            Some(authenticator) => Some(extract_auth(&req, authenticator.as_ref()).await),
+            None => None,
+        };
+        let auth = match extracted {
+            Some(extracted) => match extracted {
                 Ok(v) => v,
                 Err(err) => {
                     tracing::error!(request_id = %request_id, error = ?err, "failed to extract auth session");
@@ -402,16 +414,20 @@ async fn graphql_ws_handler(
         .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
         .map(|d| Arc::clone(d.get_ref()));
 
+    // An unkept session's secret comes in the `connection_init` payload, checked by the
+    // connection before anything else runs.
     let auth = match &request_authenticator {
-        Some(authenticator) => match extract_auth(&req, authenticator.as_ref()).await {
-            Ok(v) => v,
-            Err(err) => {
-                tracing::error!(error = ?err, "WS: failed to extract auth session");
-                return Err(actix_web::error::ErrorUnauthorized(
-                    "failed to validate session",
-                ));
+        Some(authenticator) => {
+            match extract_auth_without_secret(&req, authenticator.as_ref()).await {
+                Ok(v) => v,
+                Err(err) => {
+                    tracing::error!(error = ?err, "WS: failed to extract auth session");
+                    return Err(actix_web::error::ErrorUnauthorized(
+                        "failed to validate session",
+                    ));
+                }
             }
-        },
+        }
         None => Default::default(),
     };
 
@@ -472,12 +488,20 @@ async fn graphql_ws_handler(
         }
     }
 
+    let unkept = auth.secret_hash.map(|secret_hash| crate::ws::Unkept {
+        secret_hash,
+        session_id,
+        session_keys: req
+            .app_data::<web::Data<Arc<dyn SessionKeyService>>>()
+            .map(|d| Arc::clone(d.get_ref())),
+    });
     crate::ws::start(
         schema.into_inner().as_ref().clone(),
         data,
         crate::ws::SessionBound {
             watch,
             expires_at: auth.expires_at,
+            unkept,
         },
         &req,
         payload,
