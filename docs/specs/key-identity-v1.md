@@ -13,6 +13,10 @@ _Key-only signup: `signupWithKey` creates an account from a key
 identity alone, with no password and no email unless an email-bound invite gives one, so
 `user.password_hash` and `user.email` are nullable. See "Key-only signup"._
 
+_Account password: a local account also has a password, checked with OPAQUE and proved at every
+sign-in together with the device key; the recovery key resets it. See "Account password
+(OPAQUE)"._
+
 _Keys by default: `RIM_SIGNUP_REQUIRE_KEYS` (on unless `false`) refuses every password signup,
 and the desktop and web clients both sign up with a key. See "Signup policy"._
 
@@ -46,7 +50,9 @@ the key UI are client features of rim-ui.
     profile card. It stays off day-to-day devices where possible;
   - the **recovery key**, kept offline once the person saved the recovery kit (derived from the
     12-word recovery phrase, see "Recovery kit"). It can replace a lost identity key;
-  - one **device key** per device, certified by the identity key. Only device keys sign in.
+  - one **device key** per device, certified by the identity key. Only device keys sign in;
+    an account of this server also proves its password at sign-in, as an additional factor
+    ("Account password (OPAQUE)"), and the password never signs in alone.
 - The identity key must differ from the recovery key, and a device key must differ from both.
 
 ## Algorithms and statement versions
@@ -122,6 +128,7 @@ Every statement travels as `{ payload, signature }`:
 | Device revocation | `rim.device-revoke.v1\0` | current identity key, or the revoked device itself | 16 KiB |
 | Profile card | `rim.profile-card.v1\0` | current identity key | 128 KiB |
 | Login proof | `rim.login.v1\0` | a device key | 16 KiB |
+| Password reset | `rim.password-reset.v1\0` | the key log head's recovery key | 16 KiB |
 
 `\0` is one zero byte. The contexts end in `v1` in both statement versions: they name the
 purpose, and the version is inside the signed payload. The caps hold for both versions and are
@@ -274,9 +281,10 @@ token rules are the same either way.
 
 ### Key-only signup
 
-`signupWithKey(input: { username, displayName, keyLog, device, proof, instanceInviteToken,
-workspaceInviteToken })`, no session needed, creates an account from a key
-identity alone: no password, and no email unless an email-bound invite gives one (rule 1).
+`signupWithKey(input: { username, displayName, keyLog, device, proof, passwordRegistration,
+instanceInviteToken, workspaceInviteToken })`, no session needed, creates an account from a key
+identity and an account password ("Account password (OPAQUE)"): no password hash, and no email
+unless an email-bound invite gives one (rule 1).
 
 1. The registration mode applies as for `signupWithInvite`. In invite-only mode exactly one
    token is required, checked and consumed as by the password signup of its kind: an instance
@@ -298,28 +306,38 @@ identity alone: no password, and no email unless an email-bound invite gives one
    the username.
 3. In one transaction the server creates the user with `password_hash` null, `email` null or
    the email-bound invite's address, and `principal_id` and `identity_key` set, stores the log
-   and the device, consumes the token (or joins the server), and creates a session **bound to
-   the device**, recording the device's
-   `lastUsedAt`. It answers `{ userId, serverId }` and sets the same session and CSRF cookies as
-   `signupWithInvite`. Of two signups racing for one principal, the unique index refuses the
-   second (`CONFLICT`).
-4. A key-only account has no password. `login` answers `UNAUTHENTICATED` with the same timing as
+   and the device, consumes the token (or joins the server), stores the account password with a
+   new server share, and creates a session **bound to the device**, recording the device's
+   `lastUsedAt`. It answers `{ userId, serverId, serverShare }` (the share in the clear) and sets
+   the same session and CSRF cookies as `signupWithInvite`. Of two signups racing for one
+   principal, the unique index refuses the second (`CONFLICT`). `passwordRegistration` that is
+   not an OPAQUE `RegistrationUpload` is `VALIDATION`.
+4. A key account has no password hash. `login` answers `UNAUTHENTICATED` with the same timing as
    a wrong password, `requestPasswordReset` sends nothing, and `resetPassword` is `FORBIDDEN`, as
-   for an enrolled account.
+   for an enrolled account. Its account password is the OPAQUE one, which only works together
+   with a device key.
 5. Nothing emails an account without an email address: notification digests skip it.
 
 ### Challenge login
 
 1. `keyLoginChallenge` (no session) returns `{ challengeId, nonce, expiresAt }`: 32 random bytes,
    valid for **120 seconds**, single use. At most 60 challenges per IP per 5 minutes.
-2. The client signs a login proof with its device key and calls `loginWithKey(proof)`.
+2. The client signs a login proof with its device key and calls `loginWithKey(proof)`, with
+   `loginId` and `credentialFinalization` for an account of this server that has a password
+   ("Account password (OPAQUE)").
 3. The server finds the account by `principalId` and the device by `deviceId`, verifies the
    signature with that device's key, checks the audience against its accepted audiences, and
    claims the challenge atomically (a login challenge, unused, unexpired, same nonce).
-4. On success it locks the user row, reads the device again (a revocation that committed in the
+4. For a local account with a password it then finishes the password login: the login state
+   must exist, belong to this account, be a sign-in and be unexpired, and the finalization must
+   verify; without the two fields, or with a wrong password, the answer is `UNAUTHENTICATED`, as
+   for a wrong proof. A local account without a password signs in with the key alone and its
+   session gets `mustSetPassword`. Someone from another server signs in with the key alone.
+5. On success it locks the user row, reads the device again (a revocation that committed in the
    meantime refuses the login), creates a session bound to the device, records the device's
-   `lastUsedAt`, and sets the same session and CSRF cookies as `login`.
-5. Every refusal is `UNAUTHENTICATED` with no detail, except a valid proof from a **revoked**
+   `lastUsedAt`, clears the password's tries, and sets the same session and CSRF cookies as
+   `login`. The payload carries `serverShare` and `rewraps` after a password login.
+6. Every refusal is `UNAUTHENTICATED` with no detail, except a valid proof from a **revoked**
    device, which is `FORBIDDEN` so the client can tell the person to link the device again. A
    proof is valid here only when it passes every check of step 3: revocation is looked at after
    the audience and the challenge (which the attempt uses up), so an old proof, a replayed one or
@@ -333,7 +351,8 @@ loopback address: a server bound to any other address (`0.0.0.0` included) with 
 set refuses to start, with a message naming both. The server logs the list at start-up.
 
 `keyLoginChallenge`, `loginWithKey` and `signupWithKey` are exempt from the CSRF header check,
-because they are used without a session; `loginWithKey` and `signupWithKey` only act on a fresh
+because they are used without a session, and so are `passwordRegistrationStart`,
+`passwordLoginStart`, `passwordResetChallenge`, `passwordResetStart` and `passwordResetFinish`; `loginWithKey` and `signupWithKey` only act on a fresh
 signature, which a forged cross-site request cannot produce. `rotateIdentityKey` is exempt only when the request carries **no session
 cookie** (recovery, signed out). With a session cookie it needs the CSRF header like any other
 mutation, because an identity rotation is accepted on the strength of that session.
@@ -389,8 +408,13 @@ never interleave.
 | `key_log_entry` | `(user_id, seq)` primary key, `entry_type` inception or rotate, payload, signature |
 | `device_key` | `public_key` in tagged form, `key_hash` = SHA-256 of that text (32 bytes), certificate as signed, `key_seq`, `added_at`, `last_used_at`, `revoked_at` and the signed revocation; unique `(user_id, device_id)` and `(user_id, key_hash)` |
 | `profile_card` | One row per user, the newest card as signed |
-| `key_challenge` | Nonce, expiry, `used_at`, `purpose` (`login`, or `join` with the relay's server id in `relay_server_id`); expired rows are deleted when new challenges are issued |
+| `key_challenge` | Nonce, expiry, `used_at`, `purpose` (`login`, `password_reset`, or `join` with the relay's server id in `relay_server_id`); expired rows are deleted when new challenges are issued |
 | `session.device_key_id` | The device a session belongs to; null for password sessions not bound to a device |
+| `session.must_set_password` | The session of a local account without a password, which may only set one |
+| `account_password` | Per local account: the OPAQUE registration record, the server share sealed under the password key, `failed_attempts`, `next_attempt_at`, `locked_at` |
+| `password_login` | The server's OPAQUE login state between start and finish (`login` or `change`), 120 seconds; the finish deletes it |
+| `password_rewrap` | The previous unlock key sealed under the new one, from each change; the newest three per account |
+| `password_reset` | A verified reset between its start and its finish, 120 seconds |
 
 The plan called the log table `key_rotation`; it is `key_log_entry` because it also holds the
 inception. The device key index is on `key_hash` rather than on the key text, so it stays 32
@@ -416,6 +440,7 @@ input SignupWithKeyInput {
   keyLog: [SignedStatementInput!]!
   device: SignedStatementInput!
   proof: SignedStatementInput!
+  passwordRegistration: String!        # the OPAQUE RegistrationUpload, unpadded base64url
   instanceInviteToken: String
   workspaceInviteToken: String
 }
@@ -426,9 +451,10 @@ type Query {
 }
 type Mutation {
   keyLoginChallenge: KeyLoginChallenge!
-  loginWithKey(proof: SignedStatementInput!): LoginPayload!
+  loginWithKey(proof: SignedStatementInput!, loginId: ID, credentialFinalization: String): LoginPayload!
+  # LoginPayload { userId csrfToken serverShare rewraps mustSetPassword }
   enrollIdentityKey(input: EnrollIdentityKeyInput!): KeyIdentity!   # ends the account's other sessions
-  signupWithKey(input: SignupWithKeyInput!): SignupWithInvitePayloadGql!   # { userId, serverId }
+  signupWithKey(input: SignupWithKeyInput!): SignupWithInvitePayloadGql!   # { userId, serverId, serverShare }
   addDeviceKey(certificate: SignedStatementInput!): DeviceKey!
   revokeDeviceKey(revocation: SignedStatementInput!): DeviceKey!
   rotateIdentityKey(input: RotateIdentityKeyInput!): KeyIdentity!
@@ -449,6 +475,143 @@ rotation. It answers `[]` for a principal no account here has (and for anything 
 characters, which is not a principal id). It is not rate-limited: unlike the anonymous rotation,
 it checks no secret, and principal ids are 256-bit hashes that cannot be guessed, so answering
 whether one is enrolled here tells nothing a holder of the id does not already know.
+
+## Account password (OPAQUE)
+
+A local account (`user.kind = 'local'`) has a password, a PIN or a passphrase the client
+chooses, which the server checks with OPAQUE (RFC 9807) and never sees. It is an additional
+factor: a sign-in needs a device key's `login` proof and the password together, and the
+password never signs in alone. A person from another server signs in at a host with the key
+alone; their password lives at their own server.
+
+### Suite
+
+| Part | Value |
+|---|---|
+| Library | `opaque-ke` 4.0.1, `default-features = false`, features `ristretto255` and `argon2` |
+| OPRF | ristretto255 with SHA-512 |
+| Key exchange | `TripleDh<Ristretto255, Sha512>` |
+| Key-stretching function | Argon2id, version 0x13, m = 65536 KiB, t = 3, p = 4, zero salt of 16 bytes, run by the client |
+| Login context | `rim-opaque-v1` |
+| Credential identifier | the principal id (`rimp1_…`) as UTF-8 bytes |
+| Identities | the defaults: the client's and the server's public keys |
+
+Every message travels as unpadded base64url. `rim_auth/tests/vectors/opaque-v1.json` holds one
+registration and one login made with seeded generators (ChaCha20Rng seeded with 32 copies of a
+byte, a fresh generator per step); a client implementation replays it to prove a byte-identical
+suite.
+
+### Keys and derivations
+
+- **E**, the OPAQUE `export_key` (64 bytes), stays on the client. **K_s**, the OPAQUE
+  `session_key` (64 bytes), is known to both sides after a login.
+- **S**, the server share: 32 random bytes per account, made when the password is first
+  registered, kept across changes and resets, and stored sealed under the password key.
+- **Transport key** for what the server returns after a login:
+  `T = HKDF-SHA256(ikm = K_s, salt = "rim.opaque.transport.v1", info = <label>)`, 32 bytes, with
+  `<label>` `"server share"` (and later `"keep key"`, `"session secret"`). The value is
+  AES-256-GCM sealed under T with a random 12-byte nonce and no associated data, sent as
+  unpadded base64url of `nonce ‖ ciphertext ‖ tag`. At a signup or a reset there is no K_s:
+  `signupWithKey` and `setPassword` return S in the clear, over TLS, to the account's own new
+  session.
+- The client derives its unlock key from E and S:
+  `UK = HKDF-SHA256(ikm = E ‖ S, salt = "rim.unlock.v1", info = principal id)`. A rewrap a change
+  leaves is `AES-256-GCM(UK_new, nonce, UK_old, aad = "rim.uk-rewrap.v1|<principal id>")`; the
+  server stores it as opaque bytes.
+
+### The password key
+
+`RIM_PASSWORD_KEY_FILE` (default `<RIM_DATA_DIR>/password-key.json`, mode 0600):
+
+```json
+{"v":1,"opaqueSetup":"<base64url, 128 bytes>","shareKey":"<base64url, 32 bytes>","createdAt":"…"}
+```
+
+`opaqueSetup` is the serialized OPAQUE `ServerSetup` (OPRF seed, key pair, the key that answers
+unknown principals). `shareKey` seals each server share with XChaCha20-Poly1305, a random
+24-byte nonce and the user id as associated data. The server creates the file at first start
+and refuses to start when it is missing while passwords are stored. `/readyz` reports it as
+`passwordKey`. It belongs in every backup with the database: without it no password verifies and
+no share opens, and every account resets its password with its recovery phrase.
+
+### Registration
+
+1. `passwordRegistrationStart(principalId, request)`, no session: the OPAQUE
+   `RegistrationRequest`, answered with the `RegistrationResponse` for the principal. `CONFLICT`
+   when a local account here holds the principal; someone from another server held here may
+   sign up and become local. At most 60 per address per 5 minutes, shared with
+   `passwordResetChallenge`.
+2. The client finishes the registration and sends the `RegistrationUpload` as
+   `signupWithKey`'s `passwordRegistration` ("Key-only signup" rule 3).
+
+### Login and tries
+
+1. `passwordLoginStart(principalId, request)`, no session: the OPAQUE `CredentialRequest`.
+   For a local account with a password the server counts a try in one statement (below), runs
+   `ServerLogin::start` with the record, stores the login state for 120 seconds and answers
+   `{ loginId, response }`. For an unknown principal, an account of another server or one
+   without a password it runs `ServerLogin::start` without a record and answers a random
+   `loginId` that names nothing: the answer has the same shape, nothing is counted or stored,
+   and no finalization verifies.
+2. `loginWithKey(proof, loginId, credentialFinalization)` finishes it ("Challenge login" rule 4).
+   The login state is deleted whatever the outcome. A success clears the tries and answers
+   `serverShare` (sealed under T("server share")) and `rewraps`, newest first.
+3. **Tries.** Every start counts as a wrong try, since each lets the caller test one guess; a
+   finished login clears the count. Tries 1 to 3 are free. The 4th makes the next wait 1 minute,
+   the 5th 5 minutes, the 6th 15 minutes, the 7th 1 hour, the 8th 4 hours, the 9th 12 hours. The
+   10th still gets an answer, and locks the password until a reset. A start during a wait is
+   `RATE_LIMITED` with `retryAfterSeconds`; one at a locked password is `PASSWORD_LOCKED`. The
+   count, the wait and the lock are per account, set in the same `UPDATE` that counts the try,
+   so concurrent starts cannot pass one check. Each start also counts against the address in
+   the key sign-in's failure budget (20 per 15 minutes) and is never refunded.
+
+### Change
+
+`passwordChangeStart(credentialRequest, registrationRequest)`, signed in: counts a try and
+answers `{ loginId, credentialResponse, registrationResponse }` (`NOT_FOUND` for an account
+without a password). `passwordChangeFinish(loginId, credentialFinalization, registrationUpload,
+rewrap)` verifies the current password (`UNAUTHENTICATED` otherwise; the try stays counted),
+replaces the record and clears the tries, keeps S, stores the rewrap and keeps the newest three,
+and ends every other session of the account. It answers `{ changedAt }`.
+
+### Reset with the recovery key
+
+1. `passwordResetChallenge(principalId)`, no session: a challenge of purpose `password_reset`,
+   120 seconds, single use, which no login, signup or join consumes.
+2. The client signs a `password-reset` statement with the recovery key of its key log head:
+
+   ```json
+   {"v":2,"type":"password-reset","principalId":"rimp1_…","challengeId":"<uuid>","nonce":"…","audience":"rim.example.com"}
+   ```
+
+   Version 2 only. It neither rotates the identity nor revokes a device.
+3. `passwordResetStart(statement, registrationRequest)`, no session: the server reads the
+   statement, finds the local account, replays its key log and checks the signature with the
+   head's recovery key, checks the audience as for a login proof, and claims the challenge.
+   Every refusal is `UNAUTHENTICATED`, with no detail: an unknown principal, an account of
+   another server, a signature by any other key (the identity key included), a wrong audience or
+   a used challenge. A statement that is not a `password-reset` statement is `VALIDATION`. It
+   answers `{ resetId, registrationResponse }`; the reset is valid for 120 seconds, once.
+4. `passwordResetFinish(resetId, registrationUpload)`, no session: replaces the record (or
+   stores the first one, with a new S, for an account without a password), keeps S, deletes the
+   rewraps, clears the tries and the lock, lifts `mustSetPassword`, and ends every session of the
+   account. It answers `true`. Other devices' wraps of their data key no longer open, since E
+   changed: each asks once for the recovery phrase, or starts empty.
+
+### An account without a password
+
+A local key account made before passwords existed has none. It signs in with the key alone, and
+the session is marked `must_set_password`: every root but `setPasswordStart`, `setPassword`,
+`logout` and `me` answers `FORBIDDEN` "set a password first", and so do the WebSocket, uploads,
+downloads and the routes to other servers. `setPasswordStart(registrationRequest)` and
+`setPassword(registrationUpload)` register a password with a new S, return S in the clear, and
+lift the mark from the account's sessions. `CONFLICT` once the account has a password.
+
+### Audit
+
+`password_set`, `password_changed`, `password_reset`, `password_login_failure` (with the count),
+`password_locked`, and `key_login_failure` with reason `password_missing`, all with
+`target: "audit"` and ids only: never a password, E, S, K_s, a key or an OPAQUE message.
 
 ## Plugin principal ids: `rimp0_` to `rimp1_`
 

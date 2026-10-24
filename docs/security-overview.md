@@ -36,7 +36,20 @@ checked with strict Ed25519 ([key identity](specs/key-identity-v1.md)).
   start without an audience. Sessions are cookies whose tokens the server stores hashed, and a
   mutation made with a session needs a CSRF token.
 - **Passwords.** New accounts sign up with a key by default. Once an account has a key, its
-  password no longer signs in and a password reset sends nothing.
+  old password no longer signs in and a password reset sends nothing.
+- **The account password.** A local account also has a password (a PIN or a passphrase),
+  checked with OPAQUE ([key identity](specs/key-identity-v1.md), "Account password"): the
+  server stores a record that checks the password without revealing it, and a sign-in needs the
+  device key's proof and the password together. The server counts every login start as a wrong
+  try until a login finishes: three are free, the 4th to the 9th make the next wait from one
+  minute to twelve hours, and the 10th locks the password until a reset signed by the recovery
+  key. A finished login returns the account's server share, sealed under the login's session
+  key; the client needs it with the password to open its local data. The records need the
+  password key file `<RIM_DATA_DIR>/password-key.json` (`RIM_PASSWORD_KEY_FILE`), which also
+  seals the shares, which `/readyz` checks and which the backups hold; without it every account
+  resets its password with its recovery phrase. An account of this server without a password
+  signs in with its key alone and may only set one. People from other servers keep their
+  password at their own server.
 - **Linking a device.** The old device shows a code holding a 32-byte secret the server never
   sees. The new device sends its key sealed under that secret; the person compares an
   8-character fingerprint and confirms on the old device, which then signs the certificate
@@ -184,6 +197,10 @@ whose log forks is refused until an operator checks it out of band.
   limited per address, and a proof-of-work can be asked of every signup without an invite; the
   public relay asks 24 bits ([public relay](operations/relay-public.md)). Probation keeps new
   accounts from creating workspaces or messaging strangers for a set number of hours.
+- **Password tries.** Every OPAQUE login start counts against the account (the schedule in
+  "Identity") and against the address, sharing the key sign-in's 20 failures per address per 15
+  minutes. A principal without a password here gets an answer of the same shape, so the start
+  does not tell whether an account or a password exists.
 - **Rate and instance limits.** Request, mutation, message and connection limits per address,
   session or user, and caps on workspaces, members, devices, DM requests, invites and message
   size, are each off until the operator sets them. Pending invitations to encrypted
@@ -224,7 +241,8 @@ Joined from the spec tables and the review brief's summary.
 |---|---|---|---|
 | Compromised device | Read what its cache, archive and MLS state hold; send as that device; on the desktop, read the vault | Revocation, then removal from every group; later epochs use new keys | What it already decrypted; anything else the user's account on that computer reaches |
 | Malicious own server | See metadata; withhold, delay, reorder; refuse Commits; control membership; read and change channels; mark any report verified | Pinned key-log heads; leaf checks; DM and encryption pins; MLS sender checks | Availability; channel confidentiality; metadata privacy; the verdict on reports, which moderators take from the server |
-| Database or key-file thief | Read channels, metadata, ciphertext and session token hashes; with the franking key file, mint receipts; with the link key file, read the public join links | No private key in the database; reports checked against recorded commitments; franking and server key rotation and recovery | Channel text in the dump |
+| Database or key-file thief | Read channels, metadata, ciphertext and session token hashes; with the franking key file, mint receipts; with the link key file, read the public join links; with the password key file and the database, run offline guesses against a password record and open the server shares | No private key in the database; reports checked against recorded commitments; franking and server key rotation and recovery; OPAQUE records without the key file allow no guessing, and each guess costs an Argon2id run (64 MiB, 3 passes) | Channel text in the dump; a weak PIN once both the database and the key file are taken |
+| Another person using the same browser profile or OS account | Open the app on a device where the account was used | The account password at every sign-in, checked by the server with the counted, slowed and locked tries; the server share only after the password; the device key alone signs in no account of this server that has a password | What the device holds unencrypted until the clients seal it under the data key; a session left open |
 | Another server | Signed junk within limits; DM requests and last-resort key package claims as a stranger | Self-certifying server ids and pinned keys; signed requests with nonces; the request inbox; peer blocks | What a person's own relay or a workspace's host sees |
 | Network attacker | See TLS metadata | TLS; signed requests and responses between servers; pinned server ids | Broken TLS between an app and its server; a forged certificate for a server not yet pinned |
 | Malicious plugin author | What the granted permissions allow; for a plugin on the computer, anything the user can do | Sandbox and per-plugin policy; the permission prompt; the signed registry; bundle fingerprints | Leaks through channels the sandbox cannot close; a local plugin the user chose to trust |
@@ -233,7 +251,9 @@ Joined from the spec tables and the review brief's summary.
 ## Known gaps and review status
 
 - **Outside review open.** The outside cryptographic review of key identity, device linking,
-  recovery, the secret vault, the browser device key and end-to-end encryption is still open. The
+  recovery, the secret vault, the browser device key, the account password (OPAQUE with
+  `opaque-ke` 4.0.1, which has no public audit of its own) and end-to-end encryption is still
+  open. The
   0.0.x releases come out before it and are pre-review; `0.1.0` and any 1.0 or production-ready
   claim wait for its sign-off ([review brief](security/crypto-review-brief-2026-10.md),
   [roadmap](../ROADMAP.md)).

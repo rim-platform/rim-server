@@ -23,6 +23,24 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- **Upgrade:** account passwords, checked with OPAQUE (`docs/specs/key-identity-v1.md`,
+  "Account password (OPAQUE)"). `signupWithKey` requires `passwordRegistration` (from the new
+  `passwordRegistrationStart`) and answers `serverShare`; an account of this server with a
+  password signs in only with `loginWithKey(proof, loginId, credentialFinalization)` after the
+  new `passwordLoginStart`, and `LoginPayload` gains `serverShare`, `rewraps` and
+  `mustSetPassword`. Clients older than this release can no longer sign up, and cannot sign in
+  to accounts that have a password. Every login start counts as a try: three are free, then
+  waits from one minute to twelve hours (`RATE_LIMITED`), and the 10th locks the password
+  (`PASSWORD_LOCKED`, a new error code) until a reset with the recovery key
+  (`passwordResetChallenge`, `passwordResetStart`, `passwordResetFinish`, and a new
+  `password-reset` statement). New roots `passwordChangeStart`, `passwordChangeFinish`,
+  `setPasswordStart` and `setPassword`; an account without a password signs in with its key
+  and may only set one (`FORBIDDEN` "set a password first" elsewhere). People from other
+  servers sign in at a host with the key alone. The OPAQUE setup and the key the server shares
+  are sealed under live in the new password key file, `RIM_PASSWORD_KEY_FILE` (default
+  `<RIM_DATA_DIR>/password-key.json`), created at the first start and checked by `/readyz`
+  (`passwordKey`); back it up with the database, which the backup scripts do with the data
+  directory. `docs/api.md` ("Account password").
 - Public join links: a workspace's Owner can turn on one permanent link,
   `<server>/join/<token>` with a `rim_pjl_` token (off by default), that lets existing accounts
   of this server join (`DIRECT`) or ask to join (`REQUESTS`) as Member or Guest; it never
