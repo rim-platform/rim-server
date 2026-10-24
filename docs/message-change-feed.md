@@ -84,8 +84,10 @@ The result has one entry per requested conversation, in request order.
 
 ## What the feed does not carry
 
-Only changes to the message row itself bump a version: creation, text edits, soft delete, and
-`hasAttachments`. Reactions, pins, mentions, link previews and a message becoming a thread root
+Message creation, text edits, soft delete, `hasAttachments` and attachment lifecycle writes
+(creation, upload completion, finalization, failure and deletion) bump a version. An attachment
+change advances its parent message even when `hasAttachments` stays true; it does not set
+`editedAt`. Reactions, pins, mentions, link previews and a message becoming a thread root
 (`rootThreadId`) do not; those stay on their own queries and real-time events.
 
 ## Real-time events
@@ -104,7 +106,9 @@ database trigger runs before every insert into `message`, and before every updat
 `text`, `is_deleted` or `has_attachments`. It upserts the conversation's counter row and writes
 the new value to `version`; on a text change it also sets `edited_at`. Because this lives in the
 database, every write path (send, reply, forward, edit, delete, attachments, and any added later)
-feeds the change log without service code.
+feeds the change log without service code. Attachment repository writes lock the parent message
+and advance the same conversation counter in the transaction that changes the attachment row.
+That covers attachment metadata and upload status changes without requiring a text edit.
 
 The counter row stays locked until the writing transaction commits. A second writer in the same
 conversation waits, then takes the next number; after a rollback the number is reused. So a

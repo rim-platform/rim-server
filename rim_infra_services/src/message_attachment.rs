@@ -3,6 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
+use rim_services::events::{EventObserver, MessageEventData, Observers, WorkspaceEvent};
+use rim_services::message::{command::GetMessageQuery, service::MessageService};
 use rim_services::message_attachment::command::{
     CreateAttachmentCmd, DeleteAttachmentCmd, FinalizeAttachmentCmd,
 };
@@ -31,6 +33,7 @@ pub struct DefaultMessageAttachmentService {
     /// workspace is enough: the critical section is two short queries, and the server runs
     /// as a single process (presence and typing state are in-memory too).
     quota_lock: Arc<tokio::sync::Mutex<()>>,
+    notifications: Option<(Observers, Arc<dyn MessageService>)>,
 }
 
 impl DefaultMessageAttachmentService {
@@ -52,6 +55,67 @@ impl DefaultMessageAttachmentService {
             repos,
             storage_service,
             quota_lock: Arc::new(tokio::sync::Mutex::new(())),
+            notifications: None,
+        }
+    }
+
+    /// Publishes message updates after an attachment changes.
+    pub fn with_notifications(
+        mut self,
+        observers: Observers,
+        messages: Arc<dyn MessageService>,
+    ) -> Self {
+        self.notifications = Some((observers, messages));
+        self
+    }
+
+    async fn notify_changed(
+        &self,
+        actor: rim_services::Actor,
+        server_id: rim_core::server::model::ServerId,
+        message_id: rim_core::message::model::MessageId,
+    ) {
+        let Some((observers, messages)) = &self.notifications else {
+            return;
+        };
+        let notify = async {
+            let message = self
+                .repos
+                .message_repo
+                .get_by_id(message_id)
+                .await?
+                .ok_or(ServiceError::NotFound)?;
+            let conversation = self
+                .repos
+                .conversation_repo
+                .get_by_id(message.conversation_id)
+                .await?
+                .ok_or(ServiceError::NotFound)?;
+            let member_user_ids = self
+                .repos
+                .conversation_member_repo
+                .list_member_ids(message.conversation_id)
+                .await?;
+            let message = messages
+                .get_message(GetMessageQuery {
+                    actor,
+                    server_id,
+                    conversation_id: message.conversation_id,
+                    message_id,
+                })
+                .await?;
+            observers.emit(WorkspaceEvent::MessageUpdated {
+                workspace_id: server_id,
+                conversation_id: conversation.id,
+                conversation_type: conversation.conversation_type.as_str().to_string(),
+                member_user_ids,
+                is_private: conversation.is_private,
+                message: MessageEventData::from(&message),
+            });
+            ServiceResult::Ok(())
+        };
+        if let Err(error) = notify.await {
+            tracing::warn!(%error, %message_id, "could not publish the attachment change");
         }
     }
 
@@ -243,6 +307,13 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             }
             (None, false) => None,
         };
+        if blob_sha256.is_none()
+            && !rim_services::message_attachment::is_plaintext_content_type(&cmd.content_type)
+        {
+            return Err(ServiceError::Validation(
+                "file type not allowed".to_string(),
+            ));
+        }
 
         let sanitized_filename = Self::sanitize_filename(&cmd.filename).ok_or_else(|| {
             ServiceError::Validation("attachment filename is invalid".to_string())
@@ -306,6 +377,9 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .set_has_attachments(message_id, true)
             .await?;
 
+        self.notify_changed(cmd.actor, cmd.server_id, message_id)
+            .await;
+
         Ok(UploadTicketDto {
             attachment_id: attachment.id,
             upload_token,
@@ -320,12 +394,15 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         &self,
         cmd: FinalizeAttachmentCmd,
     ) -> ServiceResult<AttachmentDto> {
-        let (attachment, _message) = self
+        let (attachment, message) = self
             .ensure_actor_can_manage_attachment(cmd.server_id, cmd.actor.user_id, cmd.attachment_id)
             .await?;
 
         // Verify the attachment has been uploaded before finalizing.
         let current_status = Self::metadata_status(attachment.metadata.as_ref());
+        if current_status == AttachmentStatus::Ready {
+            return Ok(Self::attachment_dto(attachment));
+        }
         if current_status != AttachmentStatus::Uploaded {
             return Err(ServiceError::Validation(
                 "attachment must be uploaded before finalizing".to_string(),
@@ -342,6 +419,8 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             )
             .await?;
 
+        self.notify_changed(cmd.actor, cmd.server_id, message.id)
+            .await;
         Ok(Self::attachment_dto(updated))
     }
 
@@ -378,6 +457,8 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .set_has_attachments(message.id, !remaining.is_empty())
             .await?;
 
+        self.notify_changed(cmd.actor, cmd.server_id, message.id)
+            .await;
         Ok(())
     }
 
@@ -482,6 +563,13 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
                 ));
             }
             None => {}
+        }
+        if attachment.blob_sha256.is_none()
+            && !rim_services::message_attachment::is_plaintext_content_type(&cmd.content_type)
+        {
+            return Err(ServiceError::Validation(
+                "file type not allowed".to_string(),
+            ));
         }
         if uploaded_size > u64::try_from(attachment.file_size).unwrap_or(0) {
             return Err(ServiceError::Validation(format!(

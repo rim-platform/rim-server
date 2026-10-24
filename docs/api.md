@@ -169,10 +169,13 @@ The file routes are plain HTTP, not GraphQL. They answer JSON errors of the form
 - **`POST /api/files/upload`** completes an attachment. The client first calls the
   `createAttachment` mutation, which returns an `attachmentId` and an `uploadToken`, then sends a
   multipart body with the text fields `upload_token` and `attachment_id` and exactly one file.
-  The file is at most 25 MiB and its type is `image/*`, `text/*`, `application/pdf`,
-  `application/json`, `application/zip`, `application/gzip`, or `application/octet-stream` for
-  the blob of an encrypted conversation. The answer is `{"size_bytes":<n>}`. Off when the
-  `attachments` feature is not enabled.
+  The file is at most 25 MiB and its type is `image/*`, `text/*`, `audio/*`, `video/*`,
+  `application/pdf`, `application/json`, `application/zip`, `application/gzip`, or
+  `application/octet-stream` for the blob of an encrypted conversation. The answer is `{"size_bytes":<n>}`. Off when the
+  `attachments` feature is not enabled. The ticket rejects unsupported plaintext media types
+  before accepting bytes. After uploading, call `finalizeAttachment` to mark the file `READY`;
+  finalizing an already ready file succeeds again. Attachment creation, finalization and deletion
+  emit `MESSAGE_UPDATED`; attachment writes also advance the parent message's change-feed version.
 - **`POST /api/files/avatar`** stores the caller's avatar: a multipart body with one file of
   type `image/png`, `image/jpeg`, `image/gif` or `image/webp`, at most 2 MiB, whose bytes start
   with that format's signature (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`, GIF `GIF87a` or

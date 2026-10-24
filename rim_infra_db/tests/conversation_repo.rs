@@ -882,3 +882,49 @@ async fn pending_members_list_the_conversation_but_cannot_access_it() {
         vec![dm.id]
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_direct_creations_in_reverse_order_share_one_conversation() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("direct-race").await;
+    let alice = ctx.create_user("direct-alice").await.id;
+    let bob = ctx.create_user("direct-bob").await.id;
+    let new_direct = |creator| NewConversation {
+        server_id: server.id,
+        conversation_type: ConversationType::Direct,
+        title: None,
+        is_private: true,
+        created_by: Some(creator),
+        encrypted: true,
+    };
+    let first_members = [alice, bob];
+    let second_members = [bob, alice];
+    let (first, second) = tokio::join!(
+        repo.create_conversation_with_members(new_direct(alice), &first_members, &[]),
+        repo.create_conversation_with_members(new_direct(bob), &second_members, &[]),
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.id, second.id);
+    let members = SeaOrmConversationMemberRepository::new(ctx.db.clone())
+        .list_member_ids(first.id)
+        .await
+        .unwrap();
+    assert_eq!(members.len(), 2);
+    assert!(members.contains(&alice) && members.contains(&bob));
+
+    let other = ctx.create_server("other-direct-race").await;
+    let separate = repo
+        .create_conversation_with_members(
+            NewConversation {
+                server_id: other.id,
+                ..new_direct(alice)
+            },
+            &first_members,
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_ne!(separate.id, first.id);
+}

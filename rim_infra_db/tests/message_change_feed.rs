@@ -14,7 +14,10 @@ use sea_orm::{ConnectionTrait, DbBackend, Statement, TransactionTrait};
 use migration::{Migrator, MigratorTrait};
 use rim_core::conversation::model::ConversationType;
 use rim_core::message::repository::MessageRepository;
+use rim_core::message_attachment::model::{MessageAttachmentId, NewMessageAttachment};
+use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
+use rim_infra_db::sea_orm_impl::message_attachment::SeaOrmMessageAttachmentRepository;
 
 const MIGRATION_NAME: &str = "m20261008_211159_add_message_change_feed";
 
@@ -306,4 +309,88 @@ async fn a_later_version_never_commits_before_an_earlier_one() {
     assert_eq!(versions(&all), vec![1, 2]);
     assert_eq!(all[0].message.text.as_deref(), Some("first"));
     assert_eq!(all[1].message.text.as_deref(), Some("second"));
+}
+
+#[tokio::test]
+async fn attachment_lifecycle_advances_the_feed_without_a_text_edit() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+    let attachments = SeaOrmMessageAttachmentRepository::new(ctx.db.clone());
+    let server = ctx.create_server("attachments-feed").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    let user = ctx.create_user("attachments-feed-user").await;
+    let msg = ctx.create_message(conv.id, user.id, "a file").await;
+    let initial = repo.latest_change_version(conv.id).await.unwrap();
+    let attachment = attachments
+        .add_attachment(NewMessageAttachment {
+            id: MessageAttachmentId::new(),
+            message_id: msg.id,
+            storage_url: "pending://token".into(),
+            file_name: "clip.mp4".into(),
+            file_size: 3,
+            mime_type: "video/mp4".into(),
+            metadata: Some(serde_json::json!({"status": "pending_upload"})),
+            blob_sha256: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.latest_change_version(conv.id).await.unwrap(),
+        initial + 1
+    );
+    let uploaded = attachments
+        .try_complete_upload(
+            attachment.id,
+            "pending://token".into(),
+            Utc::now() - Duration::minutes(15),
+            "stored.mp4".into(),
+            3,
+            Some(serde_json::json!({"status": "uploaded"})),
+        )
+        .await
+        .unwrap();
+    assert!(uploaded.is_some());
+    assert_eq!(
+        repo.latest_change_version(conv.id).await.unwrap(),
+        initial + 2
+    );
+    let replay = attachments
+        .try_complete_upload(
+            attachment.id,
+            "pending://token".into(),
+            Utc::now() - Duration::minutes(15),
+            "replay.mp4".into(),
+            3,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(replay.is_none());
+    assert_eq!(
+        repo.latest_change_version(conv.id).await.unwrap(),
+        initial + 2
+    );
+    attachments
+        .update_attachment(
+            attachment.id,
+            "stored.mp4".into(),
+            Some(serde_json::json!({"status": "ready"})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.latest_change_version(conv.id).await.unwrap(),
+        initial + 3
+    );
+    attachments.delete_attachment(attachment.id).await.unwrap();
+    let changes = repo
+        .list_message_changes(conv.id, initial + 3, 10)
+        .await
+        .unwrap();
+    assert_eq!(versions(&changes), vec![initial + 4]);
+    assert_eq!(changes[0].message.id, msg.id);
+    assert!(changes[0].edited_at.is_none());
+    assert_eq!(changes[0].message.text.as_deref(), Some("a file"));
 }

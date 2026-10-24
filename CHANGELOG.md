@@ -482,6 +482,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- Concurrent first direct messages between the same two people reuse one conversation.
+- Attachment creation, completion and removal advance the message change feed; creation,
+  finalization and deletion notify connected clients. Repeating finalization of a ready file
+  succeeds, so an interrupted upload response can be recovered safely.
+- Audio and video attachments pass the same media-type checks as other supported files.
+  Unsupported plaintext file types are rejected when requesting an upload ticket.
 - Removal events distinguish kicks, bans, workspace deletion and account deletion; the removed
   user alone receives the moderator's reason. Workspace message authors expose `User.banned`,
   `bannedUntil` and moderator-only `banReason`. An unban restores a local account to the current

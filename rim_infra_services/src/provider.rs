@@ -330,7 +330,8 @@ impl DefaultAppServiceProvider {
             crate::message_attachment::DefaultMessageAttachmentService::new(
                 repos.for_attachment(),
                 Arc::clone(&storage_service),
-            ),
+            )
+            .with_notifications(observers.clone(), Arc::clone(&message_service)),
         );
         let mention_service: Arc<dyn MentionService> = Arc::new(
             crate::mention::DefaultMentionService::new(repos.for_mention()),
