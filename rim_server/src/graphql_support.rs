@@ -60,6 +60,13 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     "keyLoginChallenge",
     "loginWithKey",
     "signupWithKey",
+    // The password steps around key login and signup, and the reset of a forgotten password,
+    // run before there is a session.
+    "passwordRegistrationStart",
+    "passwordLoginStart",
+    "passwordResetChallenge",
+    "passwordResetStart",
+    "passwordResetFinish",
     // The new device sends its sealed offer before it has a session. It acts only on the link
     // id, a capability a cross-site page does not have.
     "sendDeviceLinkOffer",
@@ -555,6 +562,7 @@ fragment Inner on Mutation {
                         session_id: Some(session_id),
                         device_key_id: None,
                         expires_at: None,
+                        must_set_password: false,
                     })
                 })
             });

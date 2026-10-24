@@ -16,6 +16,7 @@ pub struct Model {
     pub user_agent: Option<String>,
     pub ip: Option<String>,
     pub device_key_id: Option<Uuid>,
+    pub must_set_password: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

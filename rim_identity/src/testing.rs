@@ -142,6 +142,21 @@ pub fn login_payload(
     )
 }
 
+/// A version 2 `password-reset` payload for the principal of `state`.
+pub fn password_reset_payload(
+    state: &KeyState,
+    challenge_id: Uuid,
+    nonce: &str,
+    audience: &str,
+) -> String {
+    format!(
+        r#"{{"v":2,"type":"password-reset","principalId":"{}","challengeId":"{challenge_id}","nonce":{},"audience":{}}}"#,
+        state.principal_id,
+        serde_json::Value::from(nonce),
+        serde_json::Value::from(audience),
+    )
+}
+
 /// A person's identity and recovery keys, signing statements as their first device would.
 pub struct TestIdentity {
     pub identity: SigningKey,
@@ -228,6 +243,22 @@ impl TestIdentity {
             self.version,
             &self.identity,
             device_cert_payload(self.version, state, device_id, device, name),
+        )
+    }
+
+    /// A `password-reset` statement over a challenge, signed by the recovery key.
+    pub fn password_reset(
+        &self,
+        state: &KeyState,
+        challenge_id: Uuid,
+        nonce: &str,
+        audience: &str,
+    ) -> SignedStatement {
+        sign(
+            Purpose::PasswordReset,
+            StatementVersion::V2,
+            &self.recovery,
+            password_reset_payload(state, challenge_id, nonce, audience),
         )
     }
 

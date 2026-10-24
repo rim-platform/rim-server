@@ -112,6 +112,8 @@ pub enum KeyChallengePurpose {
     Login,
     /// Joining a workspace hosted here through the relay with this server id.
     Join { relay_server_id: String },
+    /// Resetting the account password with a statement signed by the recovery key.
+    PasswordReset,
 }
 
 impl KeyChallengePurpose {
@@ -119,13 +121,14 @@ impl KeyChallengePurpose {
         match self {
             Self::Login => "login",
             Self::Join { .. } => "join",
+            Self::PasswordReset => "password_reset",
         }
     }
 
-    /// The relay a join challenge is bound to; `None` for a login challenge.
+    /// The relay a join challenge is bound to; `None` for every other purpose.
     pub fn relay_server_id(&self) -> Option<&str> {
         match self {
-            Self::Login => None,
+            Self::Login | Self::PasswordReset => None,
             Self::Join { relay_server_id } => Some(relay_server_id),
         }
     }
@@ -136,6 +139,7 @@ impl KeyChallengePurpose {
         match (purpose, relay_server_id) {
             ("login", None) => Some(Self::Login),
             ("join", Some(relay_server_id)) => Some(Self::Join { relay_server_id }),
+            ("password_reset", None) => Some(Self::PasswordReset),
             _ => None,
         }
     }

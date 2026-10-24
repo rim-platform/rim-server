@@ -1,4 +1,5 @@
 pub mod account_deletion;
+pub mod account_password;
 pub mod audit;
 pub mod auth;
 pub mod capability;

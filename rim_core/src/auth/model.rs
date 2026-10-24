@@ -22,6 +22,9 @@ pub struct Session {
     pub ip: Option<String>,
     /// The device a key login or enrollment bound the session to.
     pub device_key_id: Option<crate::key_identity::model::DeviceKeyId>,
+    /// The session of a local account without a password: it may only set one, sign out and
+    /// read who it is.
+    pub must_set_password: bool,
 }
 
 impl Session {

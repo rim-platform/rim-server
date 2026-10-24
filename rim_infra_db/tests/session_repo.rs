@@ -298,3 +298,59 @@ async fn delete_ended_removes_revoked_and_expired_sessions_and_keeps_live_ones()
     }
     assert_eq!(session_repo.delete_ended(now).await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn a_session_limited_to_setting_a_password_is_lifted_with_its_account() {
+    let ctx = support::TestCtx::new().await;
+    let session_repo = SeaOrmSessionRepository::new(ctx.db.clone());
+    let user = ctx.create_user("u").await;
+    let other = ctx.create_user("v").await;
+    let new = |user_id, hash: &str| NewSession {
+        user_id,
+        token_hash: hash.to_string(),
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        user_agent: None,
+        ip: None,
+    };
+    let first = session_repo
+        .create_session(new(user.id, "a"))
+        .await
+        .unwrap();
+    assert!(!first.must_set_password);
+    let second = session_repo
+        .create_session(new(user.id, "b"))
+        .await
+        .unwrap();
+    let others = session_repo
+        .create_session(new(other.id, "c"))
+        .await
+        .unwrap();
+    for id in [first.id, second.id, others.id] {
+        session_repo.require_password(id).await.unwrap();
+    }
+    let read = session_repo.get_by_id(first.id).await.unwrap().unwrap();
+    assert!(read.must_set_password);
+    assert_eq!(
+        session_repo
+            .clear_password_requirement(user.id)
+            .await
+            .unwrap(),
+        2
+    );
+    assert!(
+        !session_repo
+            .get_by_token_hash("b")
+            .await
+            .unwrap()
+            .unwrap()
+            .must_set_password
+    );
+    assert!(
+        session_repo
+            .get_by_id(others.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .must_set_password
+    );
+}

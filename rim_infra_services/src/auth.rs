@@ -555,6 +555,9 @@ impl DefaultAuthService {
             session: Self::to_session_dto(&sess),
             session_token: raw_token,
             csrf_token: csrf,
+            server_share: None,
+            rewraps: Vec::new(),
+            must_set_password: false,
         })
     }
 
@@ -1251,6 +1254,7 @@ impl AuthService for DefaultAuthService {
             session: Self::to_session_dto(&sess),
             session_token: raw_sess_token,
             csrf_token: csrf,
+            server_share: None,
         })
     }
 
@@ -1344,6 +1348,7 @@ impl AuthService for DefaultAuthService {
             session: Self::to_session_dto(&sess),
             session_token: raw_sess_token,
             csrf_token: csrf,
+            server_share: None,
         })
     }
 

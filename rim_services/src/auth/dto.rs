@@ -82,6 +82,13 @@ pub struct LoginResultDto {
     pub session: AuthSessionDto,
     pub session_token: String,
     pub csrf_token: String,
+    /// After a password login: the account's server share, sealed under the transport key for
+    /// "server share", as unpadded base64url. `None` otherwise.
+    pub server_share: Option<String>,
+    /// After a password login: the account's rewraps, newest first.
+    pub rewraps: Vec<Vec<u8>>,
+    /// The session may only set a password: the local account has none.
+    pub must_set_password: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +119,8 @@ pub struct RequestAuthResultDto {
     pub device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
     /// When the session expires.
     pub expires_at: Option<DateTime<Utc>>,
+    /// The session may only set a password: its local account has none.
+    pub must_set_password: bool,
 }
 
 /// Result of any signup path (instance invite, workspace invite, open).
@@ -125,6 +134,8 @@ pub struct SignupResultDto {
     pub session: AuthSessionDto,
     pub session_token: String,
     pub csrf_token: String,
+    /// After a key signup: the new account's server share, in the clear.
+    pub server_share: Option<Vec<u8>>,
 }
 
 /// Token type discriminant for the preview query.

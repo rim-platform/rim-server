@@ -62,6 +62,7 @@ pub enum Purpose {
     MlsReadd,
     DeviceRequest,
     Delegation,
+    PasswordReset,
 }
 
 impl Purpose {
@@ -78,6 +79,7 @@ impl Purpose {
             Self::MlsReadd => b"rim.mls-readd.v1\0",
             Self::DeviceRequest => b"rim.device-request.v1\0",
             Self::Delegation => b"rim.delegation.v1\0",
+            Self::PasswordReset => b"rim.password-reset.v1\0",
         }
     }
 

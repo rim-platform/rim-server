@@ -147,6 +147,7 @@ fn record_failure(response: &Response, executed: bool) {
                     | "MLS_COMMIT_REQUIRED"
                     | "FEATURE_DISABLED"
                     | "REGISTRATION_FULL"
+                    | "PASSWORD_LOCKED"
                     | "TOO_MANY_SUBSCRIPTIONS" => 0,
                     _ => 1,
                 },

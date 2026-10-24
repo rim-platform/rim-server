@@ -13,6 +13,9 @@ use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key}
 use rim_identity::{KeyState, SignedStatement, StatementVersion};
 
 use super::graphql::{Caller, anonymous_request, exec_ok};
+use super::password::{
+    LOGIN_WITH_PASSWORD, PasswordLogin, TEST_PASSWORD, b64, login, registration,
+};
 use super::{KEY_LOGIN_AUDIENCE, TestCtx};
 
 const ENROLL: &str = r#"
@@ -122,8 +125,9 @@ impl TestCtx {
 }
 
 /// The input of `signupWithKey` for `username` with the identity `id`: its inception as the key
-/// log, a new device from `device_seed` and a fresh login proof; `extra` adds input fields (a
-/// token).
+/// log, a new device from `device_seed`, a fresh login proof and the registration of
+/// [`TEST_PASSWORD`] (made only when `extra` brings no `passwordRegistration`); `extra` adds
+/// input fields (a token) or replaces them.
 pub async fn signup_input(
     schema: &AppSchema,
     username: &str,
@@ -137,14 +141,55 @@ pub async fn signup_input(
     let device = signing_key(device_seed);
     let cert = id.device_cert(&state, device_id, &device, "Laptop");
     let proof = signed_login(schema, &device, &state, device_id).await;
+    let password_registration = match extra.get("passwordRegistration") {
+        Some(given) => given.clone(),
+        None => json!(registration(schema, &state.principal_id, TEST_PASSWORD).await),
+    };
     let mut input = json!({
         "username": username,
         "keyLog": [statement(&inception)],
         "device": statement(&cert),
         "proof": statement(&proof),
+        "passwordRegistration": password_registration,
     });
     if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
         input.extend(extra.clone());
     }
     input
+}
+
+/// Sign in on `device` (id `device_id`, under the key log head `state`) with a fresh proof
+/// and, when `password` is given, a password login for it. Returns the answer, or the refusal
+/// of the password login's start, and the password login, whose session key opens the server
+/// share.
+pub async fn key_login(
+    schema: &AppSchema,
+    device: &SigningKey,
+    state: &KeyState,
+    device_id: Uuid,
+    password: Option<&[u8]>,
+) -> (async_graphql::Response, Option<PasswordLogin>) {
+    let password_login = match password {
+        Some(password) => match login(schema, &state.principal_id, password).await {
+            Ok(login) => login,
+            Err(refused) => return (refused, None),
+        },
+        None => None,
+    };
+    let proof = signed_login(schema, device, state, device_id).await;
+    let variables = match &password_login {
+        Some(login) => login.variables(statement(&proof)),
+        None if password.is_some() => json!({
+            "proof": statement(&proof),
+            "loginId": Uuid::new_v4().to_string(),
+            "credentialFinalization": b64(&[0; 64]),
+        }),
+        None => json!({ "proof": statement(&proof) }),
+    };
+    (
+        schema
+            .execute(signed_out(LOGIN_WITH_PASSWORD, variables))
+            .await,
+        password_login,
+    )
 }

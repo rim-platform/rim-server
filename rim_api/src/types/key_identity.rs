@@ -192,6 +192,9 @@ pub struct SignupWithKeyInput {
     pub device: SignedStatementInput,
     /// A `login` statement signed by that device over a fresh `keyLoginChallenge`.
     pub proof: SignedStatementInput,
+    /// The OPAQUE `RegistrationUpload` of the account's password, unpadded base64url,
+    /// registered for this principal with `passwordRegistrationStart`.
+    pub password_registration: String,
     pub instance_invite_token: Option<String>,
     pub workspace_invite_token: Option<String>,
     /// In pow registration mode: an 8-byte nonce, unpadded base64url, such that

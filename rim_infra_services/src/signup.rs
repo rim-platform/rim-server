@@ -1026,6 +1026,7 @@ pub(crate) mod tests {
                 user_agent: new.user_agent,
                 ip: new.ip,
                 device_key_id: None,
+                must_set_password: false,
             })
         });
         let (session, raw, csrf) = create_session(&repo, Duration::days(1), user_id, None, None)

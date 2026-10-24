@@ -136,6 +136,9 @@ async fn mutation_login_sets_auth_intent_set_session() {
                 },
                 session_token: "rim_sess_test".to_string(),
                 csrf_token: "rim_csrf_test".to_string(),
+                server_share: None,
+                rewraps: Vec::new(),
+                must_set_password: false,
             })
         })
     });
@@ -254,6 +257,7 @@ async fn signup_passes_the_accepted_terms_to_the_service() {
                         },
                         session_token: "rim_sess_test".to_string(),
                         csrf_token: "rim_csrf_test".to_string(),
+                        server_share: None,
                     })
                 })
             });

@@ -112,6 +112,14 @@ pub struct RIMConfig {
     /// `<RIM_DATA_DIR>/link-key.json`. Controlled by `RIM_LINK_KEY_FILE`.
     pub link_key_file: Option<String>,
 
+    /// Path of the password key file: the OPAQUE server setup account passwords are registered
+    /// and checked with, and the key the accounts' server shares are sealed under. Created at
+    /// first start; the server refuses to start when it is missing while passwords are stored.
+    /// Back it up with the database: without it every account resets its password with its
+    /// recovery phrase. Default `<RIM_DATA_DIR>/password-key.json`. Controlled by
+    /// `RIM_PASSWORD_KEY_FILE`.
+    pub password_key_file: Option<String>,
+
     /// Comma-separated server ids allowed on host endpoints; empty allows any relay.
     /// Controlled by `RIM_HOST_ALLOWED_RELAYS`.
     pub host_allowed_relays: Option<String>,
@@ -455,6 +463,7 @@ impl fmt::Debug for RIMConfig {
             .field("server_key_file", &self.server_key_file)
             .field("franking_key_file", &self.franking_key_file)
             .field("link_key_file", &self.link_key_file)
+            .field("password_key_file", &self.password_key_file)
             .field("host_allowed_relays", &self.host_allowed_relays)
             .field("s2s_denied_peers", &self.s2s_denied_peers)
             .field("dm_policy", &self.dm_policy())
@@ -530,6 +539,7 @@ impl Default for RIMConfig {
             server_key_file: None,
             franking_key_file: None,
             link_key_file: None,
+            password_key_file: None,
             host_allowed_relays: None,
             s2s_denied_peers: None,
             dm_inbound: None,
@@ -891,6 +901,16 @@ impl RIMConfig {
             .filter(|p| !p.is_empty())
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(&self.data_dir).join("link-key.json"))
+    }
+
+    /// The password key file: `RIM_PASSWORD_KEY_FILE`, or `<RIM_DATA_DIR>/password-key.json`.
+    pub fn password_key_file(&self) -> std::path::PathBuf {
+        self.password_key_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(&self.data_dir).join("password-key.json"))
     }
 
     pub fn s2s_allow_http(&self) -> bool {
@@ -1917,6 +1937,26 @@ mod tests {
         assert_eq!(
             config.link_key_file(),
             std::path::PathBuf::from("/secrets/link.json")
+        );
+    }
+
+    #[test]
+    fn password_key_file_defaults_to_the_data_dir() {
+        let config = RIMConfig {
+            data_dir: "/var/lib/rim".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.password_key_file(),
+            std::path::PathBuf::from("/var/lib/rim/password-key.json")
+        );
+        let config = RIMConfig {
+            password_key_file: Some(" /secrets/password.json ".to_string()),
+            ..config
+        };
+        assert_eq!(
+            config.password_key_file(),
+            std::path::PathBuf::from("/secrets/password.json")
         );
     }
 

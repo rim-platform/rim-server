@@ -14,6 +14,7 @@ impl From<session::Model> for Session {
             user_agent: m.user_agent,
             ip: m.ip,
             device_key_id: m.device_key_id.map(Into::into),
+            must_set_password: m.must_set_password,
         }
     }
 }

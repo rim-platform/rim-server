@@ -6,6 +6,7 @@
 //! Cursor inputs/outputs and the generic page types live in `pagination`.
 
 pub(crate) mod account;
+pub(crate) mod account_password;
 pub(crate) mod attachment;
 pub(crate) mod audit;
 pub(crate) mod channel_lens;
@@ -37,6 +38,10 @@ pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 
 pub use account::{AccountDeletionSchedule, RequestAccountDeletionInput};
+pub use account_password::{
+    PasswordChangeStart, PasswordChanged, PasswordLoginStart, PasswordResetStart,
+    SetPasswordPayload,
+};
 pub use attachment::{Attachment, AttachmentStatusEnum, UploadTicket};
 pub use audit::{
     AuditLogEntry, AuditLogFilterInput, AuditLogPage, AuditLogPageInfo, AuditLogPaginationInput,

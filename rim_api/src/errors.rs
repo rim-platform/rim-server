@@ -115,6 +115,11 @@ pub fn map_service_error(err: ServiceError) -> Error {
             .extend_with(|_, e| {
                 e.set("code", Value::from("REGISTRATION_FULL"));
             }),
+        // The client offers the reset with the recovery phrase.
+        ServiceError::PasswordLocked => Error::new(rim_services::PASSWORD_LOCKED_MESSAGE)
+            .extend_with(|_, e| {
+                e.set("code", Value::from("PASSWORD_LOCKED"));
+            }),
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),
@@ -146,6 +151,14 @@ mod tests {
         assert_eq!(ext.get("code"), Some(&Value::from("REGISTRATION_FULL")));
         assert!(err.message.contains("this server is full"));
         assert!(err.message.contains("run your own server"));
+    }
+
+    #[test]
+    fn password_locked_maps_to_its_code_with_a_message_naming_the_recovery_phrase() {
+        let err = map_service_error(ServiceError::PasswordLocked);
+        let ext = err.extensions.expect("missing extensions");
+        assert_eq!(ext.get("code"), Some(&Value::from("PASSWORD_LOCKED")));
+        assert!(err.message.contains("recovery phrase"));
     }
 
     #[test]

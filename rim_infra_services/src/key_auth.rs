@@ -7,9 +7,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument, warn};
+use zeroize::Zeroizing;
 
 use rim_auth::csrf::generate_csrf_token;
+use rim_auth::opaque::{LABEL_SERVER_SHARE, SESSION_KEY_LEN, transport_seal};
 use rim_auth::session_token::{generate_challenge_nonce, generate_session_token, hash_token};
+use rim_core::account_password::model::{AccountPassword, PasswordLoginPurpose};
+use rim_core::account_password::repository::AccountPasswordRepository;
 use rim_core::auth::model::NewSession;
 use rim_core::auth::repository::SessionRepository;
 use rim_core::host::model::UserKind;
@@ -37,8 +41,8 @@ use rim_services::host::dto::IdentityRefresh;
 use rim_services::host::service::HostService;
 use rim_services::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
-    IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
-    RotateIdentityKeyCmd, SignedPayload, SignupWithKeyCmd,
+    IssueKeyChallengeCmd, LoginWithKeyCmd, PasswordLoginProof, PublishProfileCardCmd,
+    RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SignedPayload, SignupWithKeyCmd,
 };
 use rim_services::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
@@ -51,7 +55,11 @@ use rim_services::session_revocation::SessionRevocations;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::account_cap::AccountCap;
+use crate::account_password::{
+    audit_login_failure, finish_login, open_share, registration_record, store_new_password,
+};
 use crate::default_workspace;
+use crate::password_key::PasswordKey;
 use crate::quota::Quotas;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
@@ -62,7 +70,7 @@ use crate::signup::{self, SignupRepos};
 const CHALLENGE_TTL_SECONDS: i64 = 120;
 
 /// Failure-limiter key shared by key logins and unauthenticated recoveries.
-const FAILURE_KEY: &str = "key_auth_failure";
+pub(crate) const FAILURE_KEY: &str = "key_auth_failure";
 
 /// How long a session lasts for someone whose relay is another server, signing in directly
 /// while their relay is unreachable.
@@ -93,12 +101,14 @@ pub struct KeyAuthRepos {
     pub host_repo: Arc<dyn HostRepository>,
     /// Principals this server refuses.
     pub relay_abuse_repo: Arc<dyn RelayAbuseRepository>,
+    /// The passwords local accounts sign in with besides their device key.
+    pub account_password_repo: Arc<dyn AccountPasswordRepository>,
 }
 
 /// An audience as compared: a server id (`rims1_…`) as it is, since base64url is
 /// case-sensitive; a `host[:port]` lowercased. Host names cannot contain `_`, so the prefix is
 /// unambiguous.
-fn normalize_audience(audience: &str) -> String {
+pub(crate) fn normalize_audience(audience: &str) -> String {
     if rim_s2s::is_server_id(audience) {
         audience.to_string()
     } else {
@@ -151,6 +161,17 @@ pub struct DefaultKeyAuthService {
     default_workspace: default_workspace::DefaultWorkspace,
     /// The cap on local accounts every key-only signup checks.
     account_cap: AccountCap,
+    /// Registers the password a signup brings and opens the server share a sign-in returns.
+    /// `None` in unit tests that neither sign up nor sign in with a password.
+    password_key: Option<PasswordKey>,
+}
+
+/// What the password check of a key sign-in found for a local account.
+struct PasswordCheck {
+    /// The account's password, when it has one.
+    password: Option<AccountPassword>,
+    /// The OPAQUE session key of the login that proved it.
+    session_key: Option<Zeroizing<[u8; SESSION_KEY_LEN]>>,
 }
 
 /// A key identity a device presented to enroll or sign up with: verified, not yet stored.
@@ -293,6 +314,83 @@ impl DefaultKeyAuthService {
             minimum_age: None,
             default_workspace: default_workspace::DefaultWorkspace::None,
             account_cap: AccountCap::default(),
+            password_key: None,
+        }
+    }
+
+    /// Registers signup passwords and opens server shares with `key`.
+    pub fn with_password_key(mut self, key: Option<PasswordKey>) -> Self {
+        self.password_key = key;
+        self
+    }
+
+    /// The per-IP limiter failed key sign-ins count against, which the password login start
+    /// shares.
+    pub(crate) fn failure_rate_limiter(&self) -> RegistrationRateLimiter {
+        self.failure_rate_limiter.clone()
+    }
+
+    fn password_key(&self) -> ServiceResult<&PasswordKey> {
+        self.password_key.as_ref().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("the password key is not loaded"))
+        })
+    }
+
+    /// Check the password a local account signs in with. An account with a password must
+    /// bring a login that proves it; one without a password signs in with its key alone and
+    /// must set one. Accounts of other servers keep their password at home.
+    ///
+    /// # Errors
+    /// `Unauthenticated` when the account has a password and the login is missing, unknown,
+    /// expired or wrong.
+    async fn check_password(
+        &self,
+        user_id: UserId,
+        remote: bool,
+        proof: Option<&PasswordLoginProof>,
+    ) -> ServiceResult<PasswordCheck> {
+        if remote {
+            return Ok(PasswordCheck {
+                password: None,
+                session_key: None,
+            });
+        }
+        let Some(password) = self.repos.account_password_repo.get(user_id).await? else {
+            return Ok(PasswordCheck {
+                password: None,
+                session_key: None,
+            });
+        };
+        let Some(proof) = proof else {
+            info!(
+                target: "audit",
+                event = "key_login_failure",
+                reason = "password_missing",
+                user_id = %user_id,
+                "key login refused: the account has a password and none was proved"
+            );
+            return Err(ServiceError::Unauthenticated);
+        };
+        match finish_login(
+            self.repos.account_password_repo.as_ref(),
+            user_id,
+            proof.login_id,
+            PasswordLoginPurpose::Login,
+            &proof.credential_finalization,
+            Utc::now(),
+        )
+        .await
+        {
+            Ok(session_key) => Ok(PasswordCheck {
+                password: Some(password),
+                session_key: Some(session_key),
+            }),
+            Err(e) => {
+                if matches!(e, ServiceError::Unauthenticated) {
+                    audit_login_failure(user_id, password.failed_attempts, "login");
+                }
+                Err(e)
+            }
         }
     }
 
@@ -904,7 +1002,13 @@ impl KeyAuthService for DefaultKeyAuthService {
         // any of them fails, and refunded unless the attempt turns out to be a failed login.
         let reserved_at = self.reserve_failure(&cmd.remote_ip)?;
         let remote = self.refresh_if_remote(&cmd.proof).await?;
-        let verified = self.verify_login(&cmd.proof).await;
+        let verified = match self.verify_login(&cmd.proof).await {
+            Ok((user_id, device)) => self
+                .check_password(user_id, remote, cmd.password.as_ref())
+                .await
+                .map(|check| (user_id, device, check)),
+            Err(e) => Err(e),
+        };
         if !matches!(
             verified,
             Err(ServiceError::Unauthenticated | ServiceError::PermissionDenied)
@@ -912,7 +1016,8 @@ impl KeyAuthService for DefaultKeyAuthService {
             self.failure_rate_limiter
                 .refund(&cmd.remote_ip, FAILURE_KEY, reserved_at);
         }
-        let (user_id, device) = verified?;
+        let (user_id, device, check) = verified?;
+        let must_set_password = !remote && check.password.is_none();
 
         // A revocation (or recovery) commits under the user row lock. Taking the same lock and
         // reading the device again means a revocation that raced the checks above either ends
@@ -957,12 +1062,33 @@ impl KeyAuthService for DefaultKeyAuthService {
             .bind_device(session.id, device.id)
             .await?;
         repos.key_identity_repo.touch_device(device.id).await?;
+        let (server_share, rewraps) = match (&check.password, &check.session_key) {
+            (Some(password), Some(session_key)) => {
+                repos
+                    .account_password_repo
+                    .clear_attempts(user_id, Utc::now())
+                    .await?;
+                let share = open_share(self.password_key()?, password)?;
+                let sealed = transport_seal(session_key.as_slice(), LABEL_SERVER_SHARE, &share)
+                    .map_err(ServiceError::internal)?;
+                (
+                    Some(sealed),
+                    repos.account_password_repo.list_rewraps(user_id).await?,
+                )
+            }
+            _ => (None, Vec::new()),
+        };
+        if must_set_password {
+            repos.session_repo.require_password(session.id).await?;
+        }
         Self::commit(scope).await?;
 
         info!(
             target: "audit",
             event = "key_login_success",
             remote,
+            password = check.session_key.is_some(),
+            must_set_password,
             user_id = %user_id,
             device_id = %device.device_id,
             session_id = %session.id,
@@ -978,6 +1104,9 @@ impl KeyAuthService for DefaultKeyAuthService {
             },
             session_token: raw_token,
             csrf_token,
+            server_share,
+            rewraps,
+            must_set_password,
         })
     }
 
@@ -1110,6 +1239,8 @@ impl KeyAuthService for DefaultKeyAuthService {
         } = self.verify_presented(&cmd.key_log, &cmd.device, &cmd.proof)?;
         self.ensure_not_blocked(&state.principal_id, "signup")
             .await?;
+        let password_record = registration_record(&cmd.password_registration)?;
+        let password_key = self.password_key()?;
 
         let (scope, repos) = self.begin().await?;
         Self::consume_proof_challenge(&repos, &proof).await?;
@@ -1199,6 +1330,14 @@ impl KeyAuthService for DefaultKeyAuthService {
         let server_id = server_id.or(claimed.as_ref().map(|c| c.workspace_id));
         let joined_default =
             default_workspace::join(&repos.signup, &self.default_workspace, user.id).await?;
+        let server_share = store_new_password(
+            repos.account_password_repo.as_ref(),
+            password_key,
+            user.id,
+            password_record,
+            Utc::now(),
+        )
+        .await?;
         let (session, session_token, csrf_token) = signup::create_session(
             repos.session_repo.as_ref(),
             self.session_ttl,
@@ -1245,7 +1384,13 @@ impl KeyAuthService for DefaultKeyAuthService {
             principal_id = %state.principal_id,
             device_id = %device.device_id,
             session_id = %session.id,
-            "key-only account created; it signs in with a device key only"
+            "key account created; it signs in with a device key and its password"
+        );
+        info!(
+            target: "audit",
+            event = "password_set",
+            user_id = %user.id,
+            "password registered at signup"
         );
         Ok(SignupResultDto {
             user_id: user.id,
@@ -1257,6 +1402,7 @@ impl KeyAuthService for DefaultKeyAuthService {
             },
             session_token,
             csrf_token,
+            server_share: Some(server_share.to_vec()),
         })
     }
 

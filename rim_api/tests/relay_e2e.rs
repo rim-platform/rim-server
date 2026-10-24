@@ -40,8 +40,8 @@ use support::nodes::{Node, databases_with, start};
 use support::relay::{
     ACK_WELCOMES, CLAIM, CREATE, EDIT_ENCRYPTED, HEADS, Item, MARK_READ, PUBLISH, Person,
     RELAY_INFO, REQUESTS, RESET, SEND_ENCRYPTED, SUBMIT, WELCOMES, anonymous_direct_space,
-    device_key_id, drained, eventually, key_signup, keys, login_proof, open_registration, relays,
-    sign_up, sign_up_with_card, statement, user_id, verify_item,
+    device_key_id, drained, eventually, key_signup, keys, open_registration, password_key_login,
+    relays, sign_up, sign_up_with_card, statement, user_id, verify_item,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1575,9 +1575,6 @@ async fn the_sdl_names_every_relay_type_and_field() {
     node.stop().await;
 }
 
-const LOGIN: &str = r#"
-mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof) { userId } }"#;
-
 /// The first error code of a GraphQL answer.
 fn error_code(body: &Value) -> &str {
     body["errors"][0]["extensions"]["code"]
@@ -1861,16 +1858,7 @@ async fn a_reported_request_is_listed_and_a_blocked_principal_is_signed_out_and_
         .await;
     assert_eq!(error_code(&body), "UNAUTHENTICATED", "{body}");
     let http = reqwest::Client::new();
-    let proof = login_proof(&http, &b, &keys(2)).await;
-    let body: Value = http
-        .post(format!("{}/api", b.origin))
-        .json(&json!({ "query": LOGIN, "variables": { "proof": statement(&proof) } }))
-        .send()
-        .await
-        .expect("login")
-        .json()
-        .await
-        .expect("json");
+    let body = password_key_login(&http, &b, &keys(2)).await;
     assert_eq!(error_code(&body), "FORBIDDEN", "{body}");
     assert!(
         operator(&second, "principal", &["list"])
@@ -1927,16 +1915,7 @@ async fn a_reported_request_is_listed_and_a_blocked_principal_is_signed_out_and_
     // Unblocked, Bob signs in again.
     let unblocked = operator(&second, "principal", &["unblock", &bob.principal()]).await;
     assert!(unblocked.contains("unblocked"), "{unblocked}");
-    let proof = login_proof(&http, &b, &keys(2)).await;
-    let body: Value = http
-        .post(format!("{}/api", b.origin))
-        .json(&json!({ "query": LOGIN, "variables": { "proof": statement(&proof) } }))
-        .send()
-        .await
-        .expect("login")
-        .json()
-        .await
-        .expect("json");
+    let body = password_key_login(&http, &b, &keys(2)).await;
     assert!(body.get("errors").is_none(), "{body}");
     a.stop().await;
     b.stop().await;

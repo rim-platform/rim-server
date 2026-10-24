@@ -39,6 +39,8 @@ pub(crate) trait ReadinessProbe: Send + Sync {
     async fn franking_key_file(&self) -> anyhow::Result<()>;
     /// Whether the link key file can be opened for reading.
     async fn link_key_file(&self) -> anyhow::Result<()>;
+    /// Whether the password key file can be opened for reading.
+    async fn password_key_file(&self) -> anyhow::Result<()>;
 }
 
 /// The probe of a running server: its database connection and configured key files.
@@ -47,6 +49,7 @@ pub(crate) struct SystemProbe {
     pub(crate) server_key_file: PathBuf,
     pub(crate) franking_key_file: PathBuf,
     pub(crate) link_key_file: PathBuf,
+    pub(crate) password_key_file: PathBuf,
 }
 
 /// The names of the migrations recorded as applied. Only reads `seaql_migrations`: a missing
@@ -109,6 +112,10 @@ impl ReadinessProbe for SystemProbe {
 
     async fn link_key_file(&self) -> anyhow::Result<()> {
         readable_file(&self.link_key_file).await
+    }
+
+    async fn password_key_file(&self) -> anyhow::Result<()> {
+        readable_file(&self.password_key_file).await
     }
 }
 
@@ -204,12 +211,13 @@ async fn migrations_check(probe: &dyn ReadinessProbe) -> CheckOutcome {
 
 /// Run every readiness check.
 pub(crate) async fn check(probe: &dyn ReadinessProbe) -> Readiness {
-    let (database, migrations, server_key, franking_key, link_key) = tokio::join!(
+    let (database, migrations, server_key, franking_key, link_key, password_key) = tokio::join!(
         bounded("database", "unreachable", probe.database()),
         migrations_check(probe),
         bounded("serverKey", "not readable", probe.server_key_file()),
         bounded("frankingKey", "not readable", probe.franking_key_file()),
         bounded("linkKey", "not readable", probe.link_key_file()),
+        bounded("passwordKey", "not readable", probe.password_key_file()),
     );
     Readiness {
         checks: vec![
@@ -218,6 +226,7 @@ pub(crate) async fn check(probe: &dyn ReadinessProbe) -> Readiness {
             ("serverKey", server_key),
             ("frankingKey", franking_key),
             ("linkKey", link_key),
+            ("passwordKey", password_key),
         ],
     }
 }
@@ -290,6 +299,7 @@ mod tests {
         server_key: bool,
         franking_key: bool,
         link_key: bool,
+        password_key: bool,
     }
 
     impl Default for FakeProbe {
@@ -302,6 +312,7 @@ mod tests {
                 server_key: true,
                 franking_key: true,
                 link_key: true,
+                password_key: true,
             }
         }
     }
@@ -344,6 +355,10 @@ mod tests {
         async fn link_key_file(&self) -> anyhow::Result<()> {
             answer(self.link_key)
         }
+
+        async fn password_key_file(&self) -> anyhow::Result<()> {
+            answer(self.password_key)
+        }
     }
 
     fn failing(readiness: &Readiness) -> Vec<&'static str> {
@@ -370,6 +385,7 @@ mod tests {
                     "serverKey": { "status": "ok" },
                     "frankingKey": { "status": "ok" },
                     "linkKey": { "status": "ok" },
+                    "passwordKey": { "status": "ok" },
                 },
             })
         );
@@ -414,12 +430,13 @@ mod tests {
             server_key: false,
             franking_key: false,
             link_key: false,
+            password_key: false,
             ..Default::default()
         };
         let readiness = check(&probe).await;
         assert_eq!(
             failing(&readiness),
-            vec!["serverKey", "frankingKey", "linkKey"]
+            vec!["serverKey", "frankingKey", "linkKey", "passwordKey"]
         );
         let body = readiness.to_json().to_string();
         assert!(body.contains("not readable"));

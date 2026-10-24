@@ -7,20 +7,30 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# `RimKsf::cheap`, a fast key-stretching setting for the client side of OPAQUE in tests.
+testing = []
+
 [dependencies]
+aes-gcm = "0.10.3"
+anyhow = "1.0.99"
 argon2 = "0.5.3"
 base64 = "0.22.1"
+generic-array = "0.14.7"
 getrandom = "0.3.4"
+hkdf = "0.12.4"
 hmac = "0.12.1"
+opaque-ke = { version = "4.0.1", default-features = false, features = ["ristretto255", "argon2"] }
 sha2 = "0.10.9"
 thiserror = "2.0.17"
 tracing = "0.1"
+zeroize = "1.8"
 
 [dependencies.rand_core]
 version = "0.6.4"
 features = ["getrandom"]
 
-# rand_core is never imported: it is here only to turn on its `getrandom` feature, which
-# argon2's re-exported `OsRng` (rim_auth/src/password.rs) needs.
-[package.metadata.cargo-machete]
-ignored = ["rand_core"]
+[dev-dependencies]
+rand_chacha = "0.3.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

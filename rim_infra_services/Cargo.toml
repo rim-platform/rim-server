@@ -62,6 +62,7 @@ mockall = "0.13"
 tempfile = "3"
 rim_core = { path = "../rim_core", features = ["mocks"] }
 rim_services = { path = "../rim_services", features = ["mocks"] }
+rim_auth = { path = "../rim_auth", features = ["testing"] }
 rim_identity = { path = "../rim_identity", features = ["testing"] }
 rim_s2s = { path = "../rim_s2s", features = ["testing"] }
 ed25519-dalek = "3.0"

@@ -11,6 +11,8 @@
 //! - [`verify_device_cert`], [`UnverifiedRevocation`]: device keys certified and revoked.
 //! - [`verify_profile_card`]: the signed card with display name, relays and devices.
 //! - [`UnverifiedLogin`]: the proof a device signs over a server's login challenge.
+//! - [`UnverifiedPasswordReset`]: the recovery key's signature over a server's challenge that
+//!   resets the account password.
 //! - [`verify_plugin_manifest`]: a publisher's signature over a plugin's manifest and source,
 //!   checked against their [`KeyHistory`].
 //! - [`verify_mls_key`], [`verify_mls_readd`]: a device's MLS signature key and its requests to
@@ -33,6 +35,7 @@ mod error;
 mod key_log;
 mod login;
 mod mls;
+mod password_reset;
 mod plugin_manifest;
 mod profile_card;
 mod statement;
@@ -68,6 +71,7 @@ pub use mls::{
     MAX_MLS_CREDENTIAL_LEN, MLS_READD_NONCE_LEN, MlsKeyStatement, MlsReaddRequest,
     UnverifiedMlsKey, UnverifiedMlsReadd, read_mls_credential, verify_mls_key, verify_mls_readd,
 };
+pub use password_reset::{PasswordResetProof, UnverifiedPasswordReset};
 pub use plugin_manifest::{
     KeyHistory, KeyHistoryEntry, MAX_BUNDLE_SIZE, MAX_GIT_URL_LEN, MAX_MANIFEST_LEN,
     MAX_PLUGIN_VERSION_CHARS, MAX_PUBLISHER_NAME_CHARS, PluginManifestStatement, PluginRuntimeKind,

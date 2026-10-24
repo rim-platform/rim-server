@@ -3,7 +3,8 @@ use rim_services::Actor;
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, IssueKeyChallengeCmd, LoginWithKeyCmd,
-    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SignupWithKeyCmd,
+    PasswordLoginProof, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
+    SignupWithKeyCmd,
 };
 use rim_services::key_auth::service::KeyAuthService;
 
@@ -12,6 +13,7 @@ use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::mutation::auth::LoginPayload;
 use crate::mutation::invite::registration_token;
+use crate::types::account_password::{decode_bytes, encode_bytes};
 use crate::types::{
     DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLoginChallenge, ProfileCard,
     RotateIdentityKeyInput, SignedStatementInput, SignupWithInvitePayloadGql, SignupWithKeyInput,
@@ -36,15 +38,38 @@ impl KeyIdentityMutations {
 
     /// Sign in with a `login` statement signed by an enrolled device key. Sets the same session
     /// cookie as `login`.
+    ///
+    /// An account of this server with a password also proves it: `loginId` from
+    /// `passwordLoginStart` and the OPAQUE `credentialFinalization`. Without them, or with a
+    /// wrong password, the answer is `UNAUTHENTICATED`, as for a wrong proof. The payload then
+    /// carries the account's server share, sealed under the login's transport key, and its
+    /// rewraps. An account of this server without a password signs in with the key alone and
+    /// gets `mustSetPassword`: its session may only set a password, sign out and read `me`.
+    /// Accounts of other servers sign in with the key alone.
     async fn login_with_key(
         &self,
         ctx: &Context<'_>,
         proof: SignedStatementInput,
+        login_id: Option<ID>,
+        credential_finalization: Option<String>,
     ) -> Result<LoginPayload> {
         let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
+        let password = match (login_id, credential_finalization) {
+            (Some(login_id), Some(finalization)) => Some(PasswordLoginProof {
+                login_id: crate::ids::parse_uuid_id(&login_id)?,
+                credential_finalization: decode_bytes(&finalization, "credentialFinalization")?,
+            }),
+            (None, None) => None,
+            _ => {
+                return Err(map_service_error(rim_services::ServiceError::Validation(
+                    "give loginId and credentialFinalization together".to_string(),
+                )));
+            }
+        };
         let res = svc
             .login_with_key(LoginWithKeyCmd {
                 proof: proof.into(),
+                password,
                 remote_ip: crate::auth_context::remote_ip(ctx),
             })
             .await
@@ -60,6 +85,9 @@ impl KeyIdentityMutations {
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
             csrf_token: res.csrf_token,
+            server_share: res.server_share,
+            rewraps: res.rewraps.iter().map(|r| encode_bytes(r)).collect(),
+            must_set_password: res.must_set_password,
         })
     }
 
@@ -162,12 +190,13 @@ impl KeyIdentityMutations {
         Ok(dto.into())
     }
 
-    /// Create an account from a key identity alone, with no password. The registration mode
+    /// Create an account from a key identity and a password: `passwordRegistration` is the
+    /// OPAQUE `RegistrationUpload` registered with `passwordRegistrationStart`. The registration mode
     /// applies as for `signupWithInvite` (exactly one token in invite-only mode, none in open
     /// mode). An instance invite bound to an email address gives the account that address
     /// (`EMAIL_TAKEN` when another account has it); otherwise the account has no email. Signs
     /// the new account in on the device that signed up, setting the same session and CSRF
-    /// cookies as `signupWithInvite`.
+    /// cookies as `signupWithInvite`, and returns the account's new server share in the clear.
     async fn signup_with_key(
         &self,
         ctx: &Context<'_>,
@@ -185,6 +214,8 @@ impl KeyIdentityMutations {
             input.workspace_invite_token,
             input.proof_of_work,
         )?;
+        let password_registration =
+            decode_bytes(&input.password_registration, "passwordRegistration")?;
         let res = svc
             .signup_with_key(SignupWithKeyCmd {
                 username: input.username,
@@ -192,6 +223,7 @@ impl KeyIdentityMutations {
                 key_log: input.key_log.into_iter().map(Into::into).collect(),
                 device: input.device.into(),
                 proof: input.proof.into(),
+                password_registration,
                 registration_mode: mode.as_ref().clone(),
                 token,
                 proof_of_work,
@@ -213,6 +245,7 @@ impl KeyIdentityMutations {
             user_id: ID(res.user_id.to_string()),
             server_id: res.server_id.map(|id| ID(id.to_string())),
             csrf_token: res.csrf_token,
+            server_share: res.server_share.as_deref().map(encode_bytes),
         })
     }
 }

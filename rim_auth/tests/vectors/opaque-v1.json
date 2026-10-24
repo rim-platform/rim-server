@@ -1,0 +1,30 @@
+{
+  "description": "RIM OPAQUE v1: one registration and one login. Every random draw comes from ChaCha20Rng (rand_chacha 0.3) seeded with 32 copies of the step's seed byte, a fresh generator per step. Byte strings are unpadded base64url.",
+  "suite": "OPRF ristretto255-SHA512, KE TripleDH ristretto255 SHA-512, KSF Argon2id m=65536 t=3 p=4 with a zero salt",
+  "context": "rim-opaque-v1",
+  "password": "correct horse battery staple",
+  "credentialId": "rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0",
+  "seeds": {
+    "serverSetup": 1,
+    "registrationStart": 2,
+    "registrationFinish": 3,
+    "loginStart": 4,
+    "serverLoginStart": 5,
+    "loginFinish": 6
+  },
+  "serverSetup": "ASdN0e5SFsIE-2mNrqRbUumLbw_dBG3MOoa7B5428CQUfkuHXVmp70MrjkWwSpjEsZ3Ix0dfXc5CWbTKLdZygrxE5fcO_KF0nE8WRjmxAt0gKyDhwoYQmvaGJm7RNhAJKu-3KNqW2Li9dObmzjytzgATequTL9qg0KbMqxonOn8",
+  "registrationRequest": "GHQjU2pWvIZOcURXp88UKfbGoBFNWel7T12Q_wyX71E",
+  "registrationResponse": "3g7014HL5a16D2k2Q6QPxX631y4dphPB13Jp17BN2lY-Vh2pqX8KDtrec2yRG679Eydzi0wEUIrVfM2Qi4roZQ",
+  "registrationUpload": "frBn3A9Ft9NT_ebFQU0RAlKuhuUWdUSEh0Z-uzo8rgI7c50ZjLxIm3saoBD_Ob_J4xLMGDbUmOht78OyudC10jJdQfp0Z6T3uFuSWkr8ZUd-_FF0IF9-jFGS6dIihiHROFVTqiOiSxTYu8Lf9gYnf0ROBJeXrn4EBOOpug7O8vvFi-Hvsc3pPXbCKsUfmuzbMA2mqBAkB08GHqo1lJjUlbQiduFgMWL80QNlQF8Wfm7F8jc_Ro66N3t4l9ROOwLJ",
+  "credentialRequest": "flOX0gOfHOYrOvdAdpDxcejE0REFOhgmHCgVbWr4gDb_Kz7KvUjfkm-n300PW_SOx7WHWeLKLUHiJsZ0Nxr3pBS5UBuUkRXecZyc-6aTXWKjdQtmaKkYVykaioStApox",
+  "credentialResponse": "6gqIHCcySHkY0LITOrCivmLYkpTyvVBmrvAbb-AmwwnRNp4lrikVNYT08uMujxbWacvv6ZfL5spgNnZ6wYzZs-HjwzLOAks6S-h-7NG3CjVxt-Vrx6QWwg50xDNvo2FLm8N46wZKdUKRN1HE9txA29RKDlKnmY4f7wCRmwtxaUZFYI-VYAQlg01XYB72EFNXwccQKsPXhBZnt1ED2aKeViUhQqdk37UANumG77Y1R2w6m-pXsuQakUUS8E0Zkor9HKwbuSuvlY7FfsxUuGhRc1yuTx_R5Yrhw_6yiALLdB3YqQ7NUnC8SSKNdCpK35EiEr8rd2CkP6_N2Swsz2IZBQBAUoz7lVq8aWL3rJJPVoP6b5SlLBegIv8M1dkqyA-Vjjee2FujbVNiQcmpD8aBFd0zUO88MsdPL8IVo6-7EzI",
+  "credentialFinalization": "AEC_4maFKc6Z8SeqbWAtfpQWQ7LaG4NqR6jj3bOUzOlCnHaQPKVPPnpM6jOCkx8FBkSMMlvOykdgiQ3ci-eIdg",
+  "exportKey": "Lp72e-dcIoopV3oHk9Q2NLbGzFHPAl0dfPq8urOyXORNSXAFff4Wm65WKQ38YpCYZGIw7vpK7D8pw8K4PWua5w",
+  "sessionKey": "CAd6ymWDgUtrlf4VByFidj2Cr299QbdnsuQPECw8yaxItwnB1CWkBdsT3dP60Wgty3m4pH3o4ZL5SNuDel1a_Q",
+  "transport": {
+    "label": "server share",
+    "key": "ltw6XEHkq5huO39iB19QQRRjzT8smls_KaV7toe0Y1w",
+    "plaintext": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+    "sealed": "0w04CZiqlkxgAmm5XGJX3MUExO8vjXCp1rO4DJkvnd3YEcVYDbhUw-Q0uc-VDxU6ByM-WRfzpshrPfXX"
+  }
+}

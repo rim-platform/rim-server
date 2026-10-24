@@ -49,6 +49,8 @@ pub struct AuthActorCtx {
     session_id: Option<rim_core::auth::model::SessionId>,
     /// The device the session is bound to; `None` for a password session.
     device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
+    /// The session may only set a password, sign out and read who it is.
+    must_set_password: bool,
 }
 
 impl AuthActorCtx {
@@ -60,7 +62,18 @@ impl AuthActorCtx {
             actor,
             session_id,
             device_key_id: None,
+            must_set_password: false,
         }
+    }
+
+    /// The context of a session that may only set a password when `must_set_password`.
+    pub fn with_must_set_password(mut self, must_set_password: bool) -> Self {
+        self.must_set_password = must_set_password;
+        self
+    }
+
+    pub fn must_set_password(&self) -> bool {
+        self.must_set_password
     }
 
     /// The context of a session bound to `device_key_id`.
@@ -91,14 +104,45 @@ fn unauthenticated_error() -> Error {
     })
 }
 
-/// The signed-in user, or `None` for an anonymous request.
+fn password_first_error() -> Error {
+    Error::new("set a password first").extend_with(|_, e| {
+        e.set("code", Value::from("FORBIDDEN"));
+    })
+}
+
+/// The signed-in user, or `None` for an anonymous request. A session that must set a password
+/// first counts as anonymous.
 pub(crate) fn optional_actor(ctx: &Context<'_>) -> Option<rim_core::user::model::UserId> {
     ctx.data::<AuthActorCtx>()
         .ok()
+        .filter(|auth| !auth.must_set_password())
         .and_then(AuthActorCtx::actor)
 }
 
+/// The signed-in user.
+///
+/// # Errors
+/// `UNAUTHENTICATED` without a session; `FORBIDDEN` for a session that must set a password
+/// first.
 pub fn require_actor(ctx: &Context<'_>) -> Result<rim_core::user::model::UserId, Error> {
+    let actor = require_actor_before_password(ctx)?;
+    if ctx
+        .data::<AuthActorCtx>()
+        .is_ok_and(AuthActorCtx::must_set_password)
+    {
+        return Err(password_first_error());
+    }
+    Ok(actor)
+}
+
+/// The signed-in user, including a session that must set a password first: for setting it,
+/// signing out and `me`.
+///
+/// # Errors
+/// `UNAUTHENTICATED` without a session.
+pub fn require_actor_before_password(
+    ctx: &Context<'_>,
+) -> Result<rim_core::user::model::UserId, Error> {
     ctx.data::<AuthActorCtx>()
         .map_err(|_| {
             Error::new("internal error: missing auth context").extend_with(|_, e| {

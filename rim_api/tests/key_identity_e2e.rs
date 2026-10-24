@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use chrono::Utc;
 use rim_api::auth_context::RemoteIp;
+use rim_auth::opaque::client::Registration;
 use rim_auth::password::hash_password;
 use rim_core::auth::repository::{InstanceInviteRepository, SessionRepository};
 use rim_core::server::repository::ServerRepository;
@@ -32,8 +33,10 @@ use support::graphql::{
     exec_ok, merged,
 };
 use support::identity::{
-    Enrolled, SIGNUP_WITH_KEY, signed_login, signed_out, signup_input, statement, tampered,
+    Enrolled, SIGNUP_WITH_KEY, key_login, signed_login, signed_out, signup_input, statement,
+    tampered,
 };
+use support::password::{REGISTRATION_START, TEST_PASSWORD, b64, registration};
 use support::registration::seed_operator_invite;
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
 
@@ -494,6 +497,7 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
     let device = signing_key(23);
     let cert = id.device_cert(&state, device_id, &device, "Laptop");
     let proof = signed_login(&schema, &device, &state, device_id).await;
+    let password_registration = registration(&schema, &state.principal_id, TEST_PASSWORD).await;
     let data = exec_ok(
         &schema,
         anonymous_request(
@@ -504,6 +508,7 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
                 "keyLog": [statement(&inception)],
                 "device": statement(&cert),
                 "proof": statement(&proof),
+                "passwordRegistration": password_registration,
             } }),
         )
         .data(RemoteIp::new("198.51.100.7")),
@@ -530,14 +535,18 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
         Some(state.principal_id.as_str())
     );
 
-    // The device signs in with a new challenge.
-    let proof = signed_login(&schema, &device, &state, device_id).await;
-    let data = exec_ok(
-        &schema,
-        anonymous_request(LOGIN_WITH_KEY, json!({ "proof": statement(&proof) }))
-            .data(RemoteIp::new("198.51.100.1")),
-    )
-    .await;
+    // The device signs in with a new challenge and the password; the key alone does not.
+    let (response, _) = key_login(&schema, &device, &state, device_id, None).await;
+    assert_eq!(
+        response.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|e| e.get("code")),
+        Some(&async_graphql::Value::from("UNAUTHENTICATED"))
+    );
+    let (response, _) = key_login(&schema, &device, &state, device_id, Some(TEST_PASSWORD)).await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().expect("json");
     assert_eq!(data["loginWithKey"]["userId"], json!(user_id.to_string()));
 
     // No password signs in to a key-only account.
@@ -619,8 +628,31 @@ async fn second_signup_with_the_same_principal_is_a_conflict() {
 
     let first = signup_input(&schema, "first", &id, 25, json!({})).await;
     exec_ok(&schema, signup(&first)).await;
-    // The same identity, from another device, under another username.
-    let request = signup_request(&schema, "second", &id, 26, json!({})).await;
+    // The same identity, from another device, under another username: refused at the password
+    // registration, and at the signup with any registration.
+    let (_, request) = Registration::start(TEST_PASSWORD);
+    let principal_id = KeyState::from_inception(&id.inception())
+        .expect("inception")
+        .principal_id;
+    assert_eq!(
+        exec_err_code(
+            &schema,
+            signed_out(
+                REGISTRATION_START,
+                json!({ "principalId": principal_id, "request": b64(&request) }),
+            ),
+        )
+        .await,
+        "CONFLICT"
+    );
+    let request = signup_request(
+        &schema,
+        "second",
+        &id,
+        26,
+        json!({ "passwordRegistration": first["passwordRegistration"] }),
+    )
+    .await;
     assert_eq!(exec_err_code(&schema, request).await, "CONFLICT");
     // The first signup again, under another username: its challenge is spent.
     let replay = merged(first, json!({ "username": "third" }));
