@@ -475,11 +475,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let link_preview_concurrency = config
         .link_preview_concurrency()
         .map_err(std::io::Error::other)?;
-    let password_hashing = rim_infra_services::password_hashing::PasswordHashing::new(
-        config
-            .password_hash_concurrency()
-            .map_err(std::io::Error::other)?,
-    );
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -496,13 +491,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     // The shared repo constructor keeps this composition root in sync with every other
     // production UoW path without hand-duplicating the repo literal.
     let repos = AppRepos::with_handle(&db);
-
-    // Build the dummy hash that unknown-username logins verify against now, so the first such
-    // login doesn't pay an extra Argon2 hash and stand out by its timing. Refuse to start
-    // without it: those logins would otherwise fail differently from wrong passwords.
-    rim_auth::password::verify_dummy_password("").map_err(|e| {
-        std::io::Error::other(format!("failed to prepare dummy password hash: {e}"))
-    })?;
 
     // Seed the builtin capabilities into the registry before the HTTP listener binds, so the
     // capability gate cannot deny a legitimate first request because the registry is still
@@ -632,9 +620,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             host_service: Some(Arc::clone(&s2s.host) as Arc<dyn HostService>),
             revocation_fanout: Some(Arc::clone(&s2s.workspace_relay) as Arc<dyn RevocationFanout>),
             reserved_names,
-            password_hashing,
             terms_url: instance_policy.terms_url.clone(),
-            signup_requires_keys: instance_policy.signup_requires_keys,
             dm_policy: dm_policy.clone(),
             default_workspace: default_workspace.clone(),
             handle_domain: s2s.descriptor_settings.handle_domain.clone(),
@@ -1051,12 +1037,6 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             pow_bits = bits,
             open_registration_ignored = config.open_registration.unwrap_or(false),
             "RIM_REGISTRATION_POW_BITS is set: key-only signups need a proof-of-work or a token"
-        );
-    }
-    if !instance_policy.signup_requires_keys {
-        tracing::info!(
-            target: "audit",
-            "RIM_SIGNUP_REQUIRE_KEYS=false: password signups are accepted"
         );
     }
 

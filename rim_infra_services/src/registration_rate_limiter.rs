@@ -21,13 +21,11 @@ type BucketKey = (String, String);
 type RateLimitStore = DashMap<BucketKey, VecDeque<DateTime<Utc>>>;
 
 /// Shared, thread-safe per-(normalised-IP, key) sliding-window rate limiter for
-/// unauthenticated registration and login endpoints.
+/// unauthenticated registration and sign-in endpoints.
 ///
 /// Used for, among others:
 /// - `previewInviteToken`: 30 req / 5-min / IP (keyed `"preview_invite"`)
-/// - `signupWithInvite` in open mode: 20 req / 10-min / IP (keyed `"signup"`)
-/// - `login`: 30 attempts / 5-min / IP, 10 failures / 15-min / (IP, username), and
-///   100 failures / hour / username from any IP
+/// - `signupWithKey` in open mode: 20 req / 10-min / IP (keyed `"signup"`)
 ///
 /// Single-node only; DashMap-backed.
 ///
@@ -103,79 +101,6 @@ impl RegistrationRateLimiter {
         // 20 signups per 10-minute window per IP — tighter than preview but
         // less tight than auth attempts.
         Self::new(600, 20)
-    }
-
-    /// Construct the per-IP login limiter (30 attempts / 5 min / IP).
-    ///
-    /// Counts every attempt, checked before the Argon2 verify, so it also bounds the
-    /// password-hashing CPU/memory a single source can burn.
-    ///
-    /// # Examples
-    /// ```
-    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
-    /// let limiter = RegistrationRateLimiter::login_ip_default();
-    /// ```
-    pub fn login_ip_default() -> Self {
-        Self::new(300, 30)
-    }
-
-    /// Construct the per-(IP, username) login limiter (10 failures / 15 min).
-    ///
-    /// The strict guessing limit. Keyed by source and account together, so an attacker
-    /// burning it throttles that account only from their own address (and anyone sharing it,
-    /// such as the same NAT or IPv6 /64), not from the owner's. Behind a proxy without
-    /// `RIM_TRUST_FORWARDED_HEADERS`, every client shares the proxy's address and this
-    /// degrades to a per-username limit. Only failures are recorded, so a user who signs in
-    /// correctly is never throttled by their own logins.
-    ///
-    /// # Examples
-    /// ```
-    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
-    /// let limiter = RegistrationRateLimiter::login_ip_account_default();
-    /// ```
-    pub fn login_ip_account_default() -> Self {
-        Self::new(900, 10)
-    }
-
-    /// Construct the per-account login limiter (100 failures / hour / username, any IP).
-    ///
-    /// A backstop against distributed credential stuffing that spreads guesses over many
-    /// addresses. Deliberately loose: every source counts here, so a tight limit would let
-    /// anyone lock an account's owner out. Each address can add at most 40 failures an hour
-    /// (the per-(IP, username) limit), so tripping it takes three or more addresses (or IPv6
-    /// /64s) guessing for up to an hour. Only failures are recorded.
-    ///
-    /// # Examples
-    /// ```
-    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
-    /// let limiter = RegistrationRateLimiter::login_account_default();
-    /// ```
-    pub fn login_account_default() -> Self {
-        Self::new(3600, 100)
-    }
-
-    /// Construct the per-IP password-reset limiter (10 requests / hour / IP).
-    ///
-    /// # Examples
-    /// ```
-    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
-    /// let limiter = RegistrationRateLimiter::password_reset_ip_default();
-    /// ```
-    pub fn password_reset_ip_default() -> Self {
-        Self::new(3600, 10)
-    }
-
-    /// Construct the per-username password-reset limiter (3 requests / hour / username).
-    ///
-    /// Bounds how many reset emails one address can receive, whoever asks for them.
-    ///
-    /// # Examples
-    /// ```
-    /// use rim_infra_services::registration_rate_limiter::RegistrationRateLimiter;
-    /// let limiter = RegistrationRateLimiter::password_reset_account_default();
-    /// ```
-    pub fn password_reset_account_default() -> Self {
-        Self::new(3600, 3)
     }
 
     /// Normalise a raw IP string to a canonical rate-limit key.
@@ -285,8 +210,8 @@ impl RegistrationRateLimiter {
     /// Remove one call recorded at `at` for `ip` under `key` by [`Self::check_and_record`].
     ///
     /// Lets a caller reserve a slot up front (so concurrent requests can't all slip past the
-    /// limit) and give it back when the outcome shouldn't count — e.g. login reserves before
-    /// verifying and refunds on success.
+    /// limit) and give it back when the outcome shouldn't count — e.g. an invite email is
+    /// reserved before the invite is stored and given back when storing fails.
     ///
     /// # Examples
     /// ```

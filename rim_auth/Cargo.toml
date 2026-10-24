@@ -23,7 +23,6 @@ hmac = "0.12.1"
 opaque-ke = { version = "4.0.1", default-features = false, features = ["ristretto255", "argon2"] }
 sha2 = "0.10.9"
 subtle = "2.6"
-thiserror = "2.0.17"
 tracing = "0.1"
 zeroize = "1.8"
 

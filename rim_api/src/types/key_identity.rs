@@ -140,8 +140,8 @@ impl From<ProfileCardDto> for ProfileCard {
     }
 }
 
-/// What this server holds about the signed-in account's key identity. Before the account
-/// enrolls a key, `principalId` and `keySeq` are null and the lists are empty.
+/// What this server holds about the signed-in account's key identity. For an account without
+/// one, `principalId` and `keySeq` are null and the lists are empty.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct KeyIdentity {
     pub principal_id: Option<String>,
@@ -165,20 +165,11 @@ impl From<KeyIdentityDto> for KeyIdentity {
     }
 }
 
-#[derive(InputObject, Clone, Debug)]
-pub struct EnrollIdentityKeyInput {
-    /// The whole key log, inception first.
-    pub key_log: Vec<SignedStatementInput>,
-    /// Certificate of the device enrolling; this session becomes its session.
-    pub device: SignedStatementInput,
-    /// A `login` statement signed by that device over a fresh `keyLoginChallenge`, proving the
-    /// caller holds the device key.
-    pub proof: SignedStatementInput,
-}
-
-/// Input for `signupWithKey`: an account created from a key identity alone, with no password
-/// and no email. The tokens follow the same rules as `signupWithInvite`: exactly one in
-/// invite-only mode, none in open mode. In pow mode it takes one token or `proofOfWork`.
+/// Input for `signupWithKey`: an account created from a key identity and an OPAQUE password.
+/// The registration mode decides the tokens: exactly one of `instanceInviteToken` and
+/// `workspaceInviteToken` in invite-only mode, none in open mode, and in pow mode one token or
+/// `proofOfWork`. The account has no email unless an instance invite bound to an address gives
+/// it that address.
 #[derive(InputObject, Clone, Debug)]
 pub struct SignupWithKeyInput {
     pub username: String,
@@ -201,9 +192,13 @@ pub struct SignupWithKeyInput {
     /// `SHA-256("rim.pow.v1\0" || server id || "\0" || inception payload || nonce)` starts with
     /// the descriptor's `powBits` zero bits.
     pub proof_of_work: Option<String>,
-    /// The terms of service the person accepted, as for `signupWithInvite`.
+    /// The terms of service the person accepted: `serverInfo.termsUrl`, sent back unchanged.
+    /// Required when the server has terms (`VALIDATION` when missing or different); ignored
+    /// when it has none.
     pub accepted_terms_url: Option<String>,
-    /// The minimum age the person confirmed reaching, as for `signupWithInvite`.
+    /// The minimum age the person confirmed reaching: `serverInfo.minimumAge`, sent back
+    /// unchanged once they confirm it. Required when the server has a minimum age
+    /// (`VALIDATION` when missing or different); ignored when it has none.
     pub confirmed_minimum_age: Option<i32>,
     /// "Keep me signed in", as for `loginWithKey`.
     pub keep_signed_in: bool,

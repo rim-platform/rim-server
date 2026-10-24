@@ -207,19 +207,16 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 |---|---|---|---|
 | `rim_rate_limit_rejections_total` | counter | `limiter` | Requests a rate limiter or quota refused. |
 | `rim_ip_blocked_requests_total` | counter | | Requests refused because their address is on the IP deny list (`rim_server ip block`). |
-| `rim_pow_rejections_total` | counter | | Key-only signups whose proof-of-work did not meet `RIM_REGISTRATION_POW_BITS` or was malformed. |
+| `rim_pow_rejections_total` | counter | | Key signups whose proof-of-work did not meet `RIM_REGISTRATION_POW_BITS` or was malformed. |
 
 `limiter` values:
 
 | `limiter` | What it limits |
 |---|---|
-| `login` | Password logins per address, per address and account, and per account. |
 | `key_auth_failure` | Failed key logins per address. |
 | `key_challenge` | Key login challenges per address. |
 | `signup` | Open and proof-of-work signups per address. |
 | `preview_invite` | Invite token previews per address. |
-| `password_reset` | Password reset requests per address. |
-| `password_reset_account` | Password reset requests per account; the caller sees success and no email is sent. |
 | `device_link_start`, `device_link_offer`, `device_link_answer`, `device_link_refusal` | Device linking steps. |
 | `mls_claim`, `mls_one_time_claim`, `mls_readd` | MLS key package claims and re-add requests. |
 | `mls_commit`, `mls_commit_bytes` | MLS Commits per user, by count and by size. |

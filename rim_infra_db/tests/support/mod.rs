@@ -121,6 +121,66 @@ async fn recreate_database(url: &str) {
     conn.close().await.expect("close");
 }
 
+/// The migration that removed the password accounts.
+#[allow(dead_code)]
+const REMOVE_PASSWORD_ACCOUNTS: &str = "m20261024_174153_remove_password_accounts";
+
+/// Undo the newest `steps` migrations, as `Migrator::down` does. Once
+/// `remove_password_accounts` is undone, every account without a password hash gets a stand-in
+/// one, which the migrations older than key signup require of an account.
+///
+/// # Errors
+/// The refusal of the migration whose `down` failed.
+#[allow(dead_code)]
+pub async fn roll_back(conn: &DatabaseConnection, steps: u32) -> Result<(), sea_orm::DbErr> {
+    let names: Vec<String> = migration::Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
+    let index = names
+        .iter()
+        .position(|n| n == REMOVE_PASSWORD_ACCOUNTS)
+        .expect("remove_password_accounts is registered");
+    let to_passwords = u32::try_from(names.len() - index).expect("step count fits u32");
+    if steps <= to_passwords {
+        return migration::Migrator::down(conn, Some(steps)).await;
+    }
+    migration::Migrator::down(conn, Some(to_passwords)).await?;
+    conn.execute_unprepared(
+        r#"UPDATE "user" SET password_hash = 'stand-in' WHERE password_hash IS NULL"#,
+    )
+    .await?;
+    migration::Migrator::down(conn, Some(steps - to_passwords)).await
+}
+
+/// Apply every pending migration, as `Migrator::up` does. Before `remove_password_accounts`
+/// runs, every live account without a key identity, as a rollback past `add_key_identity`
+/// leaves it, gets a stand-in principal id and identity key.
+///
+/// # Errors
+/// The refusal of the migration whose `up` failed.
+#[allow(dead_code)]
+pub async fn migrate_up(conn: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
+    let pending: Vec<String> = migration::Migrator::get_pending_migrations(conn)
+        .await?
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
+    if let Some(before) = pending.iter().position(|n| n == REMOVE_PASSWORD_ACCOUNTS) {
+        if before > 0 {
+            let before = u32::try_from(before).expect("step count fits u32");
+            migration::Migrator::up(conn, Some(before)).await?;
+        }
+        conn.execute_unprepared(
+            r#"UPDATE "user" SET principal_id = 'rimp1_test_' || replace(id::text, '-', ''),
+                   identity_key = 'ed25519:test_' || replace(id::text, '-', '')
+               WHERE principal_id IS NULL AND deleted_at IS NULL"#,
+        )
+        .await?;
+    }
+    migration::Migrator::up(conn, None).await
+}
+
 pub async fn reset_db(conn: &DatabaseConnection) {
     // Full application-table truncate list, alphabetical. Kept in sync with
     // entity/src/*.rs (table_name = "..."); excludes seaql_migrations.
@@ -167,7 +227,6 @@ TRUNCATE TABLE
   mls_welcome,
   mls_welcome_recipient,
   notification_preference,
-  password_reset_token,
   peer_key_log_entry,
   peer_server,
   peer_server_forgotten,
@@ -228,21 +287,26 @@ impl TestCtx {
         Self { db: conn.into() }
     }
 
+    /// Create an account with the email `<username>@test.example.com`, a fresh principal id and
+    /// a stand-in identity key.
     pub async fn create_user(&self, username: &str) -> rim_core::user::model::User {
+        let principal_id = format!("rimp1_test_{}", uuid::Uuid::now_v7().simple());
         let repo = SeaOrmUserRepository::new(self.db.clone());
         repo.create_user(rim_core::user::model::NewUser {
             username: username.to_string(),
-            password: Some("test_hash".to_string()),
             email: Some(format!("{}@test.example.com", username.to_lowercase())),
             display_name: None,
-            key_identity: None,
+            key_identity: Some(rim_core::user::model::NewUserKeyIdentity {
+                identity_key: format!("ed25519:{principal_id}"),
+                principal_id,
+            }),
         })
         .await
         .unwrap()
     }
 
-    /// Create a key-only account: no password, no email, `principal_id` and a stand-in
-    /// identity key set (key-only signup).
+    /// Create an account as a key signup leaves it: no email, `principal_id` and a stand-in
+    /// identity key set.
     pub async fn create_key_only_user(
         &self,
         username: &str,
@@ -251,7 +315,6 @@ impl TestCtx {
         let repo = SeaOrmUserRepository::new(self.db.clone());
         repo.create_user(rim_core::user::model::NewUser {
             username: username.to_string(),
-            password: None,
             email: None,
             display_name: None,
             key_identity: Some(rim_core::user::model::NewUserKeyIdentity {

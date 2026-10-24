@@ -118,7 +118,7 @@ pub struct InstanceAccount {
     pub user_id: ID,
     /// The account's username.
     pub username: String,
-    /// The account's principal (`rimp1_…`); null for an account that never enrolled a key.
+    /// The account's principal (`rimp1_…`); null for a purged account that never had one.
     pub principal_id: Option<String>,
     /// When the account was created.
     pub created_at: DateTime<Utc>,
@@ -138,7 +138,7 @@ impl From<AccountSummaryDto> for InstanceAccount {
 /// What blocking one principal or account did.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct InstancePrincipalBlockOutcome {
-    /// The principal blocked; null for an account of a cascade that has no key identity.
+    /// The principal blocked; null for an account of a cascade that never had a key identity.
     pub principal_id: Option<String>,
     /// False when it was blocked already; its reason was replaced.
     pub newly_blocked: bool,
@@ -152,7 +152,7 @@ pub struct InstancePrincipalBlockOutcome {
     pub ignored_requests: u64,
     /// How many of the account's invites with uses left were revoked.
     pub revoked_invites: u64,
-    /// Whether the account's email is now refused at signup and password login.
+    /// Whether the account's email is now refused at signup.
     pub email_blocked: bool,
     /// The accounts the account's invites created, oldest first.
     pub invitees: Vec<InstanceAccount>,

@@ -192,9 +192,9 @@ impl Member {
 
 // ── Fixture ─────────────────────────────────────────────────────────────────────────────
 
-/// A user who enrolled the identity from `seed`, signed in on its first device.
-async fn member(ctx: &TestCtx, schema: &AppSchema, name: &str, seed: u8) -> Member {
-    let enrolled = ctx.enrolled(schema, name, seed).await;
+/// A user signed up with the identity from `seed`, signed in on its first device.
+async fn member(ctx: &TestCtx, name: &str, seed: u8) -> Member {
+    let enrolled = ctx.enrolled(name, seed).await;
     let session = SeaOrmSessionRepository::new(ctx.db.clone())
         .get_by_id(enrolled.caller.session_id)
         .await
@@ -241,8 +241,8 @@ async fn fixture() -> Fixture {
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
     let provider = ctx.build_provider();
     let server = ctx.create_server("e2ee").await;
-    let alice = member(&ctx, &schema, "alice", 1).await;
-    let bob = member(&ctx, &schema, "bob", 2).await;
+    let alice = member(&ctx, "alice", 1).await;
+    let bob = member(&ctx, "bob", 2).await;
     ctx.add_owner(&server, &alice.user).await;
     ctx.add_member(&server, &bob.user, ServerMemberRole::Member)
         .await;
@@ -270,8 +270,8 @@ async fn direct_space_fixture() -> Fixture {
         .await
         .expect("read")
         .expect("the direct space row");
-    let alice = member(&ctx, &schema, "alice", 1).await;
-    let bob = member(&ctx, &schema, "bob", 2).await;
+    let alice = member(&ctx, "alice", 1).await;
+    let bob = member(&ctx, "bob", 2).await;
     Fixture {
         ctx,
         schema,
@@ -1302,8 +1302,8 @@ async fn mls_roots_refuse_outsiders_devices_outside_the_group_and_revoked_device
     every.push((PRINCIPAL_DEVICES, json!({ "ids": [f.bob.principal_id] })));
     assert_each_refused(&f.schema, &every, "UNAUTHENTICATED", anonymous_request).await;
 
-    let olive = member(&f.ctx, &f.schema, "olive", 3).await;
-    let carol = member(&f.ctx, &f.schema, "carol", 4).await;
+    let olive = member(&f.ctx, "olive", 3).await;
+    let carol = member(&f.ctx, "carol", 4).await;
     f.ctx
         .add_member(&f.server, &carol.user, ServerMemberRole::Member)
         .await;
@@ -2297,8 +2297,8 @@ async fn an_unready_party_is_invited_and_joins_by_accepting() {
     let ctx = TestCtx::new().await;
     let (schema, _provider, events) = ctx.build_recording(RegistrationMode::InviteOnly);
     let server = ctx.create_server("pending").await;
-    let alice = member(&ctx, &schema, "alice", 1).await;
-    let bob = member(&ctx, &schema, "bob", 2).await;
+    let alice = member(&ctx, "alice", 1).await;
+    let bob = member(&ctx, "bob", 2).await;
     ctx.add_owner(&server, &alice.user).await;
     ctx.add_member(&server, &bob.user, ServerMemberRole::Member)
         .await;
@@ -2404,7 +2404,7 @@ async fn an_unready_party_is_invited_and_joins_by_accepting() {
     assert_eq!(events.events().len(), before);
 
     // Carol and dave, never ready, are invited into a group: carol declines, dave is kicked.
-    let carol = member(&ctx, &schema, "carol", 3).await;
+    let carol = member(&ctx, "carol", 3).await;
     let dave = ctx.create_user("dave").await;
     ctx.add_member(&server, &carol.user, ServerMemberRole::Member)
         .await;
@@ -2464,9 +2464,9 @@ async fn invitations_are_capped_per_user_and_expire() {
         ..Default::default()
     });
     let server = ctx.create_server("capped").await;
-    let alice = member(&ctx, &schema, "alice", 1).await;
-    let bob = member(&ctx, &schema, "bob", 2).await;
-    let carol = member(&ctx, &schema, "carol", 3).await;
+    let alice = member(&ctx, "alice", 1).await;
+    let bob = member(&ctx, "bob", 2).await;
+    let carol = member(&ctx, "carol", 3).await;
     ctx.add_owner(&server, &alice.user).await;
     for m in [&bob, &carol] {
         ctx.add_member(&server, &m.user, ServerMemberRole::Member)

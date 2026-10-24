@@ -20,18 +20,16 @@ use rim_core::server::model::ServerId;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_core::user::model::{NewUser, UserId};
+use rim_core::user::model::{NewUser, NewUserKeyIdentity, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::DbHandle;
 use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
 use rim_infra_db::sea_orm_impl::server::SeaOrmServerRepository;
 use rim_infra_db::sea_orm_impl::server_member::SeaOrmServerMemberRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
-use rim_infra_services::AppRepos;
-use rim_infra_services::auth::DefaultAuthService;
-use rim_services::auth::command::{AcceptInviteCmd, JoinServerByInviteCmd};
-use rim_services::auth::service::AuthService;
-use rim_services::events::{NoopBroadcaster, Observers};
+use rim_infra_services::{AppRepos, DefaultAppServiceProvider};
+use rim_services::auth::command::{JoinServerByInviteCmd, SignupToken};
+use rim_services::provider::AppServiceProvider;
 use rim_services::{Actor, ServiceError};
 
 /// The stored invite as the pre-check read it; the row is then changed by `after_read`, as a
@@ -91,18 +89,16 @@ impl InviteRepository for ChangedAfterRead {
     }
 }
 
-fn noop_observers() -> Observers {
-    Observers::new(Arc::new(NoopBroadcaster) as Arc<dyn rim_services::events::Broadcaster>)
-}
-
 async fn user(handle: &DbHandle, name: &str) -> UserId {
     SeaOrmUserRepository::new(handle.clone())
         .create_user(NewUser {
             username: name.to_string(),
-            password: Some("hash".to_string()),
             email: Some(format!("{name}@example.com")),
             display_name: None,
-            key_identity: None,
+            key_identity: Some(NewUserKeyIdentity {
+                principal_id: format!("rimp1_{name}"),
+                identity_key: format!("ed25519:{name}"),
+            }),
         })
         .await
         .expect("create user")
@@ -112,10 +108,10 @@ async fn user(handle: &DbHandle, name: &str) -> UserId {
 /// The raw token of the invite every test redeems.
 const RAW_TOKEN: &str = "rim_inv_changed_after_read";
 
-/// A workspace with one invite, and an auth service whose invite pre-check is followed by
+/// A workspace with one invite, and services whose invite pre-check is followed by
 /// `after_read` changing the invite's row.
 struct Race {
-    svc: DefaultAuthService,
+    provider: DefaultAppServiceProvider,
     handle: DbHandle,
     server_id: ServerId,
 }
@@ -147,22 +143,15 @@ impl Race {
             .await
             .expect("create invite");
 
-        let mut repos = AppRepos::with_handle(&handle).for_auth();
+        let mut repos = AppRepos::with_handle(&handle);
         repos.invite_repo = Arc::new(ChangedAfterRead {
             inner: SeaOrmInviteRepository::new(handle.clone()),
             db: db.clone(),
             after_read,
         });
-        let svc = DefaultAuthService::new(
-            repos,
-            Some(db),
-            Duration::days(30),
-            noop_observers(),
-            Arc::new(rim_infra_services::email::LogEmailSender),
-            None,
-        );
+        let provider = support::provider(db, &repos, Default::default());
         Self {
-            svc,
+            provider,
             handle,
             server_id: server.id,
         }
@@ -173,7 +162,8 @@ impl Race {
     async fn join(&self) -> (Result<(), ServiceError>, bool) {
         let joiner = user(&self.handle, "joiner").await;
         let result = self
-            .svc
+            .provider
+            .auth_service()
             .join_server_by_invite(JoinServerByInviteCmd {
                 actor: Actor::new(joiner),
                 invite_token: RAW_TOKEN.to_string(),
@@ -187,19 +177,18 @@ impl Race {
         (result, member)
     }
 
-    /// A newcomer signs up with the invite; returns the result and whether the account exists.
+    /// A newcomer signs up with a key and the invite; returns the result and whether the
+    /// account exists.
     async fn sign_up(&self) -> (Result<(), ServiceError>, bool) {
-        let result = self
-            .svc
-            .accept_invite(AcceptInviteCmd {
-                invite_token: RAW_TOKEN.to_string(),
-                username: "newcomer".to_string(),
-                password: "password1234".to_string(),
-                terms_accepted_url: None,
-                confirmed_minimum_age: None,
-            })
-            .await
-            .map(|_| ());
+        let result = support::key_signup(
+            &self.provider,
+            "newcomer",
+            7,
+            Some(SignupToken::WorkspaceInvite(RAW_TOKEN.to_string())),
+            "203.0.113.9",
+        )
+        .await
+        .map(|_| ());
         let account = SeaOrmUserRepository::new(self.handle.clone())
             .find_by_username("newcomer")
             .await

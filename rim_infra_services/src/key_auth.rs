@@ -37,9 +37,9 @@ use rim_services::events::Observers;
 use rim_services::host::dto::IdentityRefresh;
 use rim_services::host::service::HostService;
 use rim_services::key_auth::command::{
-    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
-    IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
-    RotateIdentityKeyCmd, SignedPayload, SignupWithKeyCmd,
+    AddDeviceKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery, IssueKeyChallengeCmd, LoginWithKeyCmd,
+    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SignedPayload,
+    SignupWithKeyCmd,
 };
 use rim_services::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
@@ -74,10 +74,9 @@ const REMOTE_SESSION_TTL: Duration = Duration::hours(24);
 /// How long a direct sign-in waits for the person's relays to refresh their identity.
 const REMOTE_REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Most entries a key log may have: at enrollment and key-only signup (every entry is verified
-/// before the transaction starts, so the bound keeps one request's work small), and grown by
-/// identity rotations, so that a log they grew can be enrolled on another server. Recoveries
-/// may pass it.
+/// Most entries a key log may have: at a key signup (every entry is verified before the
+/// transaction starts, so the bound keeps one request's work small), and grown by identity
+/// rotations, so that a log they grew can sign up on another server. Recoveries may pass it.
 const MAX_KEY_LOG_LEN: usize = 256;
 
 /// Longest `principalId` the public key log query looks up (a real one is 49 characters).
@@ -89,7 +88,7 @@ pub struct KeyAuthRepos {
     pub session_repo: Arc<dyn SessionRepository>,
     pub key_identity_repo: Arc<dyn KeyIdentityRepository>,
     pub key_challenge_repo: Arc<dyn KeyChallengeRepository>,
-    /// Registration tokens and workspace joins, for key-only signup.
+    /// Registration tokens and workspace joins, for key signup.
     pub signup: SignupRepos,
     /// Whether a user holding a principal is someone from another server, whom a key-only
     /// signup turns into a local user.
@@ -122,9 +121,9 @@ pub struct DefaultKeyAuthService {
     challenge_rate_limiter: RegistrationRateLimiter,
     /// Failed key logins and recovery attempts per IP.
     failure_rate_limiter: RegistrationRateLimiter,
-    /// Open-mode signups per IP; the same instance the password signup counts against.
+    /// Open-mode signups per IP.
     signup_rate_limiter: RegistrationRateLimiter,
-    /// Announces a key-only signup through a workspace invite (`MemberJoined`).
+    /// Announces a key signup through a workspace invite (`MemberJoined`).
     observers: Observers,
     /// Told when a user's devices change, so their encrypted groups are updated. `None` in
     /// unit tests; the composition root wires it.
@@ -154,7 +153,7 @@ pub struct DefaultKeyAuthService {
     /// The workspace every new account joins as a Member, and the definition an owner claim
     /// creates it from.
     default_workspace: default_workspace::DefaultWorkspace,
-    /// The cap on local accounts every key-only signup checks.
+    /// The cap on local accounts every key signup checks.
     account_cap: AccountCap,
     /// Registers the password a signup brings and opens the server share a sign-in returns.
     /// `None` in unit tests that neither sign up nor sign in with a password.
@@ -169,7 +168,7 @@ enum PasswordCheck {
     Ticket(String),
 }
 
-/// A key identity a device presented to enroll or sign up with: verified, not yet stored.
+/// A key identity a device presented to sign up with: verified, not yet stored.
 struct PresentedIdentity {
     state: KeyState,
     cert: DeviceCert,
@@ -236,7 +235,7 @@ fn new_device(user_id: UserId, cert: &DeviceCert, statement: &SignedPayload) -> 
     }
 }
 
-/// The user's verified key log head, or `None` before enrollment.
+/// The user's verified key log head, or `None` for an account without a key identity.
 ///
 /// The server verified every entry before storing it, so a log that no longer verifies means the
 /// stored rows were changed by hand: an internal error, never the caller's fault.
@@ -273,8 +272,7 @@ async fn insert_device(repos: &KeyAuthRepos, device: NewDeviceKey) -> ServiceRes
 }
 
 impl DefaultKeyAuthService {
-    /// Build the service. `signup_rate_limiter` is the instance the password signup uses, so
-    /// both signups share one per-IP budget.
+    /// Build the service; open-mode signups count against `signup_rate_limiter` per IP.
     pub fn new(
         repos: KeyAuthRepos,
         db: Option<DatabaseConnection>,
@@ -501,8 +499,8 @@ impl DefaultKeyAuthService {
         self
     }
 
-    /// Checks every key-only signup against `cap`, built from the same limits and shared with
-    /// the password signups, so a signup on either path refreshes the other's "full" answer.
+    /// Checks every key signup against `cap`, built from the same limits and shared with the
+    /// auth service, so a signup refreshes the "full" answer `registrationFull` gives.
     pub(crate) fn with_account_cap(mut self, cap: AccountCap) -> Self {
         self.account_cap = cap;
         self
@@ -558,7 +556,7 @@ impl DefaultKeyAuthService {
         Ok(())
     }
 
-    /// Check a key-only signup's proof-of-work: its hash over this server's id, the log's
+    /// Check a key signup's proof-of-work: its hash over this server's id, the log's
     /// inception and the nonce has `bits` leading zero bits.
     fn check_proof_of_work(
         &self,
@@ -770,7 +768,7 @@ impl DefaultKeyAuthService {
         }
     }
 
-    /// Verify an identity presented for enrollment or key-only signup, without touching
+    /// Verify an identity presented for a key signup, without touching
     /// storage: the whole log (at most 256 entries) replays from its inception, the certificate
     /// is signed by the head identity key, and the proof is a `login` statement by that device
     /// naming this log's principal, the certificate's device id and this server's audience. The
@@ -855,19 +853,6 @@ impl DefaultKeyAuthService {
         Ok(())
     }
 
-    /// `Conflict` when an account on this server already has `principal_id`; `Validation` when
-    /// a deleted account had it.
-    async fn ensure_principal_unused(
-        repos: &KeyAuthRepos,
-        principal_id: &str,
-    ) -> ServiceResult<()> {
-        Self::ensure_principal_not_retired(repos, principal_id).await?;
-        match Self::remote_holder(repos, principal_id).await? {
-            None => Ok(()),
-            Some(_) => Err(Self::principal_taken()),
-        }
-    }
-
     /// `Validation` when an account deleted on this server held `principal_id`; its tombstone
     /// keeps the id, so the key identity cannot come back here.
     async fn ensure_principal_not_retired(
@@ -912,7 +897,7 @@ impl DefaultKeyAuthService {
         ))
     }
 
-    /// Turn a remote user into the local account a key-only signup creates: their stored log
+    /// Turn a remote user into the local account a key signup creates: their stored log
     /// must be a prefix of the presented one, which extends it; the presented device is reused
     /// when it is stored already. Memberships stay. `email` is the address an email-bound
     /// invite gives the account, checked as a new account's is.
@@ -1100,70 +1085,6 @@ impl KeyAuthService for DefaultKeyAuthService {
         result
     }
 
-    #[instrument(name = "key_auth.enroll", skip_all, fields(actor_id = %cmd.actor.user_id))]
-    async fn enroll(&self, cmd: EnrollIdentityKeyCmd) -> ServiceResult<KeyIdentityDto> {
-        let user_id = cmd.actor.user_id;
-        let PresentedIdentity {
-            state,
-            cert,
-            proof,
-            entries,
-        } = self.verify_presented(&cmd.key_log, &cmd.device, &cmd.proof)?;
-        self.ensure_not_blocked(&state.principal_id, "enroll")
-            .await?;
-
-        let (scope, repos) = self.begin().await?;
-        Self::consume_proof_challenge(&repos, &proof).await?;
-        if !repos.key_identity_repo.lock_user(user_id).await? {
-            return Err(ServiceError::NotFound);
-        }
-        let user = repos
-            .user_repo
-            .get_by_id(user_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
-        if user.principal_id.is_some() {
-            return Err(ServiceError::Conflict(
-                "this account already has a key identity".to_string(),
-            ));
-        }
-        Self::ensure_principal_unused(&repos, &state.principal_id).await?;
-        repos
-            .key_identity_repo
-            .enroll(
-                user_id,
-                &state.principal_id,
-                &state.identity_key.to_string(),
-                entries,
-            )
-            .await?;
-        let device = insert_device(&repos, new_device(user_id, &cert, &cmd.device)).await?;
-        repos
-            .session_repo
-            .bind_device(cmd.session_id, device.id)
-            .await?;
-        // No other session is bound to a device yet, so none of them may outlive the password.
-        let ended_sessions = repos
-            .session_repo
-            .revoke_all_for_user_except(user_id, cmd.session_id)
-            .await?;
-        Self::commit(scope).await?;
-        self.session_revocations
-            .revoke_user_except(user_id, cmd.session_id);
-
-        info!(
-            target: "audit",
-            event = "key_identity_enrolled",
-            user_id = %user_id,
-            principal_id = %state.principal_id,
-            device_id = %device.device_id,
-            ended_sessions,
-            "key identity enrolled; password sign-in disabled and other sessions ended"
-        );
-        self.get_my_key_identity(GetMyKeyIdentityQuery { actor: cmd.actor })
-            .await
-    }
-
     #[instrument(name = "key_auth.signup_with_key", skip_all, fields(username = %cmd.username))]
     async fn signup_with_key(&self, cmd: SignupWithKeyCmd) -> ServiceResult<SignupResultDto> {
         self.account_cap
@@ -1172,8 +1093,8 @@ impl KeyAuthService for DefaultKeyAuthService {
         let terms_accepted_url =
             accepted_terms(self.terms_url.as_deref(), cmd.terms_accepted_url.as_deref())?;
         let confirmed_age = confirmed_minimum_age(self.minimum_age, cmd.confirmed_minimum_age)?;
-        // The same mode rules as `signupWithInvite`, checked here too so the service never
-        // relies on the resolver alone. In pow mode a proof-of-work stands in for the token.
+        // The registration mode's rules, checked here too so the service never relies on the
+        // resolver alone. In pow mode a proof-of-work stands in for the token.
         let refuse = |why: &str| Err(ServiceError::Validation(why.to_string()));
         let pow_bits = match (&cmd.registration_mode, &cmd.token, &cmd.proof_of_work) {
             (RegistrationMode::Pow { .. }, Some(_), Some(_)) => {
@@ -1211,7 +1132,7 @@ impl KeyAuthService for DefaultKeyAuthService {
         signup::check_reserved(&self.reserved_names, username, &display_name)?;
 
         let token = match &cmd.token {
-            Some(token) => Some(signup::check_token(&self.repos.signup, token, None).await?),
+            Some(token) => Some(signup::check_token(&self.repos.signup, token).await?),
             None => None,
         };
         // An email-bound instance invite gives the account its address.
@@ -1268,7 +1189,6 @@ impl KeyAuthService for DefaultKeyAuthService {
                     repos.user_repo.as_ref(),
                     NewUser {
                         username: username.to_string(),
-                        password: None,
                         email,
                         display_name: Some(display_name),
                         key_identity: Some(NewUserKeyIdentity {

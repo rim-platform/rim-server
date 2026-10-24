@@ -72,14 +72,8 @@ pub fn batch_needs_no_secret(fields: &[RootFields]) -> bool {
 /// exempt from CSRF validation because they are used before the client has
 /// a CSRF token.
 const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
-    "login",
     "logout",
-    // signupWithInvite is unauthenticated (no session, no CSRF token yet).
-    "signupWithInvite",
-    // Password reset is used signed out, from the emailed link.
-    "requestPasswordReset",
-    "resetPassword",
-    // Key login and key-only signup are used before there is a session.
+    // Key login and key signup are used before there is a session.
     "keyLoginChallenge",
     "loginWithKey",
     "signupWithKey",
@@ -480,7 +474,7 @@ fragment Inner on Mutation {
             (
                 "protected field in a nested named fragment beside an exempt one",
                 format!(
-                    "mutation {{ login(username: \"u\", password: \"p\") {{ userId }} ...A }} fragment A on Mutation {{ ...B }} fragment B on Mutation {{ {PROFILE} }}"
+                    "mutation {{ signupWithKey(input: {{ username: \"u\" }}) {{ userId }} ...A }} fragment A on Mutation {{ ...B }} fragment B on Mutation {{ {PROFILE} }}"
                 ),
                 None,
                 true,
@@ -650,8 +644,6 @@ fragment Inner on Mutation {
             r#"mutation { loginWithKey(proof: { payload: "p", signature: "s" }) { userId } }"#,
             r#"mutation { signupWithKey(input: { username: "u", keyLog: [], device: { payload: "p", signature: "s" }, proof: { payload: "p", signature: "s" } }) { userId } }"#,
             r#"mutation { rotateIdentityKey(input: { entry: { payload: "p", signature: "s" } }) { keySeq } }"#,
-            r#"mutation { requestPasswordReset(username: "u") }"#,
-            r#"mutation { resetPassword(token: "t", newPassword: "p") }"#,
         ] {
             assert!(
                 !request_needs_csrf(&fields_of(&async_graphql::Request::new(query)), false),

@@ -1,8 +1,8 @@
 # Transactional Email
 
-RIM sends transactional email for password resets, invites, and notification digests. This
-document covers the `RIM_SMTP_*` config matrix, TLS modes, the three wired flows, retry policy,
-and the "unconfigured → log-only" fallback behavior.
+RIM sends transactional email for invites and notification digests. This document covers the
+`RIM_SMTP_*` config matrix, TLS modes, the two wired flows, retry policy, and the
+"unconfigured → log-only" fallback behavior.
 
 ## Config matrix
 
@@ -12,8 +12,8 @@ and the "unconfigured → log-only" fallback behavior.
 | set | unset | Same as above — `RIM_SMTP_FROM` is also required. |
 | set | set | `SmtpEmailSender` — real SMTP delivery via `lettre`. |
 
-`RIM_FEATURES_DISABLED=email` overrides the matrix: every message is dropped, the digest job does
-not run and `requestPasswordReset` answers `FEATURE_DISABLED`. Without SMTP, `serverInfo.features`
+`RIM_FEATURES_DISABLED=email` overrides the matrix: every message is dropped and the digest job
+does not run. Without SMTP, `serverInfo.features`
 reports email as `UNAVAILABLE` (`docs/operations/features.md`).
 
 Both `RIM_SMTP_HOST` and `RIM_SMTP_FROM` must be present to enable real delivery
@@ -40,32 +40,21 @@ transport. Everything else is optional:
 
 ### `RIM_PUBLIC_BASE_URL` and link building
 
-Every email that includes a link (`reset-password`, `join`, digest permalinks) needs a base
-URL to build it from. If `RIM_PUBLIC_BASE_URL` is unset:
-- Password reset / invite emails fall back to including the **bare token** instead of a link
-  (a warning is logged). The user has to construct the URL themselves — acceptable for local
+Every email that includes a link (`join`, digest permalinks) needs a base URL to build it from.
+If `RIM_PUBLIC_BASE_URL` is unset:
+- Invite emails fall back to including the **bare token** instead of a link (a warning is
+  logged). The user has to construct the URL themselves — acceptable for local
   dev, not for production.
 - Notification digests are sent without links.
 
 Links are always a **path segment**, never a `?token=` query string:
-- Password reset: `{RIM_PUBLIC_BASE_URL}/reset-password/{raw_token}`
 - Invite (server or instance): `{RIM_PUBLIC_BASE_URL}/join/{raw_token}`
 
-This matters for two reasons: query strings would fail to route against the frontend's
-`/reset-password/:token` and `/join/:token` routes, and the reset-password page ships a
-`<meta name="referrer" content="no-referrer">` specifically so a path-segment token isn't
-leaked via the `Referer` header on outbound links — a query-string token would defeat that.
-The token is percent-encoded defensively before being placed in the path, even though the
-`rim_rst_`/`rim_inv_`/`rim_iinv_`-prefixed base64url tokens are already path-safe.
+A query string would fail to route against the frontend's `/join/:token` route. The token is percent-encoded defensively before
+being placed in the path, even though the `rim_inv_`/`rim_iinv_`-prefixed base64url tokens are
+already path-safe.
 
 ## Wired flows
-
-### Password reset
-
-`request_reset` looks up the user by username, creates the reset token as before, then builds
-the reset link and sends `templates::password_reset(to, link)`. **Send failure is non-fatal** —
-the request still returns `Ok(())` either way, so reset requests never leak whether a username
-exists and never fail because of an SMTP hiccup.
 
 ### Invites
 

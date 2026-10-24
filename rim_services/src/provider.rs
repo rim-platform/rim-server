@@ -21,7 +21,6 @@ use crate::message_reaction::service::MessageReactionService;
 use crate::message_thread::service::ThreadService;
 use crate::notification_preference::service::NotificationPreferenceService;
 use crate::operator::InstanceOperatorService;
-use crate::password_reset::service::PasswordResetService;
 use crate::pin::service::PinService;
 use crate::pipeline::service::PipelineService;
 use crate::read_state::service::ReadStateService;
@@ -47,7 +46,6 @@ pub trait AppServiceProvider: Send + Sync {
     fn message_attachment_service(&self) -> Arc<dyn MessageAttachmentService>;
     fn message_reaction_service(&self) -> Arc<dyn MessageReactionService>;
     fn notification_preference_service(&self) -> Arc<dyn NotificationPreferenceService>;
-    fn password_reset_service(&self) -> Arc<dyn PasswordResetService>;
     fn pin_service(&self) -> Arc<dyn PinService>;
     fn read_state_service(&self) -> Arc<dyn ReadStateService>;
     fn server_service(&self) -> Arc<dyn ServerService>;

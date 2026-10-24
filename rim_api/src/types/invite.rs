@@ -14,8 +14,7 @@ pub enum RegistrationModeGql {
     /// `RIM_OPEN_REGISTRATION=true`: signup accepts no token; rate-limited.
     Open,
     /// `RIM_REGISTRATION_POW_BITS`: `signupWithKey` takes a token or a proof-of-work whose
-    /// difficulty the discovery document's `registration.powBits` gives; a password signup
-    /// takes a token.
+    /// difficulty the discovery document's `registration.powBits` gives.
     Pow,
 }
 
@@ -33,7 +32,7 @@ impl From<rim_services::auth::dto::RegistrationMode> for RegistrationModeGql {
 /// The type of an invite token, used by `InviteTokenPreview`.
 #[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum InviteTokenTypeGql {
-    /// Instance invite: routes to `instanceInviteToken` input on `signupWithInvite`.
+    /// Instance invite: routes to `instanceInviteToken` input on `signupWithKey`.
     Instance,
     /// Workspace invite: join-a-workspace flow.
     Workspace,
@@ -94,25 +93,24 @@ impl From<rim_services::auth::dto::InviteTokenPreviewDto> for InviteTokenPreview
     }
 }
 
-/// Payload returned from `signupWithInvite` and `signupWithKey`.
+/// Payload returned from `signupWithKey`.
 ///
-/// `server_id` is `Some` only when a `workspaceInviteToken` was used;
-/// the instance-invite and open paths land in "no workspaces yet" state.
+/// `server_id` is `Some` only when a `workspaceInviteToken` was used; a signup with an instance
+/// invite, a proof-of-work or none lands in "no workspaces yet" state.
 #[derive(SimpleObject, Clone, Debug)]
-pub struct SignupWithInvitePayloadGql {
+pub struct SignupWithKeyPayload {
     pub user_id: async_graphql::ID,
     pub server_id: Option<async_graphql::ID>,
     /// The new session's CSRF token, the value of the `rim_csrf` cookie. A client that cannot
     /// read that cookie keeps it in memory and sends it in the `X-CSRF-Token` header.
     pub csrf_token: String,
-    /// After `signupWithKey`: the new account's server share, unpadded base64url, in the
-    /// clear. `null` for the other signups.
+    /// The new account's server share, unpadded base64url, in the clear.
     pub server_share: Option<String>,
-    /// After `signupWithKey` without `keepSignedIn`: the session secret, unpadded base64url, in
-    /// the clear, as `loginWithKey` returns it. `null` for a kept session.
+    /// Without `keepSignedIn`: the session secret, unpadded base64url, in the clear, as
+    /// `loginWithKey` returns it. `null` for a kept session.
     pub session_secret: Option<String>,
-    /// After `signupWithKey` with `keepSignedIn` and without `keepKeyHeld`: the keep key the
-    /// server holds for this session, unpadded base64url, in the clear. `null` otherwise.
+    /// With `keepSignedIn` and without `keepKeyHeld`: the keep key the server holds for this
+    /// session, unpadded base64url, in the clear. `null` otherwise.
     pub keep_key: Option<String>,
 }
 

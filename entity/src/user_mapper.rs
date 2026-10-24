@@ -12,7 +12,6 @@ impl From<user::Model> for User {
         Self {
             id: m.id.into(),
             username: m.username,
-            password_hash: m.password_hash,
             created_at: m.created_at.into(),
             updated_at: m.updated_at.into(),
             last_login_at: m.last_login_at.map(Into::into),

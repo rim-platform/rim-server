@@ -252,7 +252,6 @@ mod tests {
         User {
             id,
             username: format!("user-{id}"),
-            password_hash: None,
             created_at: now,
             updated_at: now,
             last_login_at: None,

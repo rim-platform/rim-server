@@ -1,5 +1,3 @@
-use rim_core::auth::model::SessionId;
-
 use crate::Actor;
 use crate::auth::command::SignupToken;
 use crate::auth::dto::RegistrationMode;
@@ -22,8 +20,8 @@ pub struct IssueKeyChallengeCmd {
 pub struct LoginWithKeyCmd {
     /// A `login` statement signed by a device key.
     pub proof: SignedPayload,
-    /// The ticket `passwordLoginFinish` answered. Required for a local account with a
-    /// password; ignored otherwise.
+    /// The ticket `passwordLoginFinish` answered. Required for a local account; ignored for
+    /// someone from another server.
     pub password_ticket: Option<String>,
     /// "Keep me signed in"; see [`SessionKeepChoice`].
     pub keep: SessionKeepChoice,
@@ -41,25 +39,11 @@ pub struct SessionKeepChoice {
     pub keep_key_held: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct EnrollIdentityKeyCmd {
-    pub actor: Actor,
-    /// The caller's session; it is bound to the enrolled device.
-    pub session_id: SessionId,
-    /// The whole key log, inception first.
-    pub key_log: Vec<SignedPayload>,
-    /// Certificate of the device doing the enrolling.
-    pub device: SignedPayload,
-    /// A `login` statement signed by that device over a fresh challenge from this server, so
-    /// a log and certificate copied from another server cannot be enrolled here.
-    pub proof: SignedPayload,
-}
-
 /// Create an account from a key identity and a password, with no email.
 #[derive(Debug, Clone)]
 pub struct SignupWithKeyCmd {
     pub username: String,
-    /// Raw input; normalized as for password signups, falling back to `username`.
+    /// Raw input; cleaned, falling back to `username` when blank or absent.
     pub display_name: Option<String>,
     /// The whole key log, inception first.
     pub key_log: Vec<SignedPayload>,

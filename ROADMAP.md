@@ -75,7 +75,7 @@ build and metadata were tidied. The documentation and comment pass (C-4) is merg
 | Plugins | Protocol v1 frozen with a spec; TypeScript SDK; Kubernetes pods and GitHub pull-request showcases; plugin commands in the palette, keybinds and the agent; web plugins in a sandboxed iframe; per-workspace registries of publisher-signed plugins |
 | Agent | Anthropic and OpenAI, keys in the OS keyring; 41 AI-callable builtins plus plugin commands; every agent write goes through the confirmation gate |
 | Client history | Encrypted local message cache, local search, an encrypted archive in a folder or a cloud drive |
-| Identity | Key identity: identity and device keys, challenge login, key-only signup, device linking, recovery phrase, identity-key backup; password accounts still work |
+| Identity | Key identity: identity and device keys, challenge login with an OPAQUE account password, key signup, device linking, recovery phrase, identity-key backup; one kind of account, without username and password sign-in |
 | Encryption | MLS for DMs and private groups, hybrid post-quantum key agreement, franked reports of encrypted messages; channels stay plaintext |
 | Decentralization | Server keys and ids, relays with a request inbox, workspace hosts serving members from other servers through their relay, a public relay setup with proof-of-work signups and abuse tools |
 | Operations | `/healthz`, `/readyz`, Prometheus metrics, compose stack with backup, restore and a restore drill, audit retention, instance feature switches, background jobs documented |
@@ -223,8 +223,8 @@ The daily-comfort list. Items beyond this go through "can a plugin do it?" first
 ### Track 6 — Security and sovereignty (bet 5)
 
 1. **Account security — folded into Track 7.2 (Stage 3).** The device list with revoke and
-   session rotation come from device keys. TOTP and passkeys are not built for new accounts;
-   existing password accounts migrate to a key.
+   session rotation come from device keys. TOTP and passkeys are not built: every account signs
+   in with a device key and its OPAQUE password.
 2. **Operator features** (M): OIDC login for teams that want it, data export per user and
    per workspace, admin audit views. Audit retention is done: configurable, kept forever by
    default (`docs/operations/audit-retention.md`).

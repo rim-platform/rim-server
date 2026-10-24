@@ -22,9 +22,11 @@ use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
 use support::graphql::{Caller, anonymous_request, exec_err, exec_err_code, exec_ok};
-use support::identity::{SIGNUP_WITH_KEY, signup_input};
+use support::identity::{
+    SIGNUP_WITH_KEY, key_login_request, signed_up, signup_input, with_session,
+};
+use support::password::TEST_PASSWORD;
 use support::roles::create_channel;
-use support::sessions::{LOGIN, PASSWORD, login, with_session};
 
 const REQUEST: &str = r#"mutation($u: String!) {
   requestAccountDeletion(input: { confirmUsername: $u }) { scheduledFor }
@@ -133,7 +135,8 @@ async fn scalar(ctx: &TestCtx, sql: &str) -> Option<String> {
 #[tokio::test]
 async fn a_deletion_is_requested_with_the_username_shows_on_me_and_can_be_cancelled() {
     let ctx = TestCtx::new().await;
-    let alice = ctx.create_password_user("alice").await;
+    let account = signed_up(&ctx, "alice", 1).await;
+    let alice = account.user(&ctx).await;
     let bob = ctx.create_user("bob").await;
     let team = ctx.create_server("Team").await;
     ctx.add_owner(&team, &alice).await;
@@ -141,7 +144,7 @@ async fn a_deletion_is_requested_with_the_username_shows_on_me_and_can_be_cancel
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
     let provider = ctx.build_provider();
     let caller = ctx.caller(&alice).await;
-    let laptop = login(&schema, "alice").await;
+    let laptop = account.sign_in(&schema).await;
 
     assert_eq!(
         exec_err_code(&schema, request_as(&caller, "alicia")).await,
@@ -201,7 +204,8 @@ async fn the_purge_leaves_a_tombstone_that_cannot_sign_in_and_shows_nowhere() {
     let ctx = TestCtx::new().await;
     let (schema, provider) =
         ctx.build_with_deletion_grace(Duration::zero(), RegistrationMode::InviteOnly);
-    let alice_user = ctx.create_password_user("alice").await;
+    let account = signed_up(&ctx, "alice", 1).await;
+    let alice_user = account.user(&ctx).await;
     let bob_user = ctx.create_user("bob").await;
     let shared = ctx.create_server("Shared").await;
     ctx.add_owner(&shared, &alice_user).await;
@@ -210,7 +214,7 @@ async fn the_purge_leaves_a_tombstone_that_cannot_sign_in_and_shows_nowhere() {
     let alone = ctx.create_server("Alone").await;
     ctx.add_owner(&alone, &alice_user).await;
     let (alice, bob) = (ctx.caller(&alice_user).await, ctx.caller(&bob_user).await);
-    let session = login(&schema, "alice").await;
+    let session = account.sign_in(&schema).await;
     let s = shared.id.to_string();
     let c = create_channel(&schema, &bob, &s, "general", false).await;
     exec_ok(&schema, alice.request(JOIN, json!({ "s": s, "c": c }))).await;
@@ -271,16 +275,21 @@ async fn the_purge_leaves_a_tombstone_that_cannot_sign_in_and_shows_nowhere() {
     assert_eq!(run.purged[0].user_id, alice.user_id);
 
     // No sign-in, no session, and the username is free.
-    let refused = anonymous_request(
-        LOGIN,
-        json!({ "input": { "username": "alice", "password": PASSWORD } }),
-    );
+    let (refused, _) = key_login_request(
+        &schema,
+        &account.device,
+        &account.state,
+        account.device_id,
+        Some(TEST_PASSWORD),
+    )
+    .await
+    .expect("the password login steps answer");
     assert_eq!(exec_err_code(&schema, refused).await, "UNAUTHENTICATED");
     assert_eq!(
         exec_err_code(&schema, with_session(&provider, &session, ME).await).await,
         "UNAUTHENTICATED"
     );
-    ctx.create_password_user("alice").await;
+    ctx.create_user("alice").await;
 
     // Bob sees the question as deleted, by "Deleted account", with his reply under it; the
     // plan is gone.
@@ -349,8 +358,8 @@ async fn a_purged_key_identity_leaves_its_groups_and_cannot_sign_up_again() {
     let ctx = TestCtx::new().await;
     let (schema, provider) =
         ctx.build_with_deletion_grace(Duration::zero(), RegistrationMode::Open);
-    let alice = ctx.enrolled(&schema, "alice", 41).await;
-    let bob = ctx.enrolled(&schema, "bob", 42).await;
+    let alice = ctx.enrolled("alice", 41).await;
+    let bob = ctx.enrolled("bob", 42).await;
     let shared = ctx.create_server("Shared").await;
     ctx.add_owner(&shared, &bob.user).await;
     ctx.add_member(&shared, &alice.user, ServerMemberRole::Member)
@@ -414,7 +423,7 @@ async fn avatar_files_go_with_a_changed_avatar_and_with_the_account() {
     let ctx = TestCtx::new().await;
     let (schema, provider) =
         ctx.build_with_deletion_grace(Duration::zero(), RegistrationMode::InviteOnly);
-    let alice_user = ctx.create_password_user("alice").await;
+    let alice_user = ctx.create_user("alice").await;
     let bob_user = ctx.create_user("bob").await;
     let alice = ctx.caller(&alice_user).await;
     let (a, b) = (alice_user.id, bob_user.id);

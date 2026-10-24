@@ -1,8 +1,7 @@
 //! Resolver-level e2e tests for the registration GraphQL endpoints.
 //!
 //! These tests exercise the *full* GraphQL resolver path:
-//! parse input → resolve via context → call into a real `DefaultAuthService`
-//! over a real database.  Schema-only unit variants are covered in
+//! parse input → resolve via context → call into the real services over a real database.  Schema-only unit variants are covered in
 //! `rim_api/src/tests.rs` (tests 20–25).
 //!
 //! Run with:
@@ -19,8 +18,26 @@ use chrono::Utc;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::auth::dto::RegistrationMode;
 
+use rim_identity::StatementVersion;
+use rim_identity::testing::TestIdentity;
+use serde_json::{Value, json};
+
 use support::TestCtx;
+use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
 use support::registration::{seed_operator_invite, seed_workspace_invite};
+
+/// A `signupWithKey` request for `username` with the identity from `seed` and `extra` input
+/// fields (a token, a display name).
+async fn key_signup(
+    schema: &rim_api::AppSchema,
+    username: &str,
+    seed: u8,
+    extra: Value,
+) -> Request {
+    let id = TestIdentity::with_version(seed, StatementVersion::V2);
+    let input = signup_input(schema, username, &id, seed.wrapping_add(50), extra).await;
+    signed_out(SIGNUP_WITH_KEY, json!({ "input": input }))
+}
 
 // ── Test 13 ──────────────────────────────────────────────────────────────────
 
@@ -254,17 +271,17 @@ async fn query_preview_invite_token_workspace_happy_path() {
 
 // ── Test 15 ──────────────────────────────────────────────────────────────────
 
-/// Verify `signupWithInvite` end-to-end using an operator's single-use instance invite, the
+/// Verify `signupWithKey` end-to-end using an operator's single-use instance invite, the
 /// one `rim_server invite create` issues for a fresh server's first account.
 ///
-/// Seeds an `instance_invite` row, submits `mutation { signupWithInvite(...) }`,
+/// Seeds an `instance_invite` row, submits `mutation { signupWithKey(...) }`,
 /// and asserts:
 /// 1. `userId` is non-null.
 /// 2. `serverId` is null (the account lands in "no workspaces yet" state).
 /// 3. The invite's one use is spent.
 /// 4. There is no `server_member` row for the created user.
 #[tokio::test]
-async fn mutation_signup_with_invite_operator_invite_happy_path() {
+async fn mutation_signup_with_key_operator_invite_happy_path() {
     let ctx = TestCtx::new().await;
 
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
@@ -273,28 +290,27 @@ async fn mutation_signup_with_invite_operator_invite_happy_path() {
     let expires_at = Utc::now() + chrono::Duration::minutes(15);
     let invite_id = seed_operator_invite(&ctx.db, raw_token, expires_at).await;
 
-    let mutation = format!(
-        r#"mutation {{
-            signupWithInvite(input: {{
-                username: "newuser_operator_e2e",
-                email: "newuser_operator_e2e@test.example.com",
-                password: "ValidPass123!",
-                instanceInviteToken: "{raw_token}"
-            }}) {{
-                userId
-                serverId
-                csrfToken
-            }}
-        }}"#
-    );
+    let id = TestIdentity::with_version(1, StatementVersion::V2);
+    let input = signup_input(
+        &schema,
+        "newuser_operator_e2e",
+        &id,
+        51,
+        json!({ "instanceInviteToken": raw_token }),
+    )
+    .await;
+    let mutation = "mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) \
+                    { userId serverId csrfToken } }";
 
     let intent = std::sync::Arc::new(rim_api::auth_intent::AuthIntentCtx::default());
     let res = schema
-        .execute(Request::new(&mutation).data(std::sync::Arc::clone(&intent)))
+        .execute(
+            signed_out(mutation, json!({ "input": input })).data(std::sync::Arc::clone(&intent)),
+        )
         .await;
     assert!(
         res.errors.is_empty(),
-        "signupWithInvite operator invite: unexpected errors: {:?}",
+        "signupWithKey operator invite: unexpected errors: {:?}",
         res.errors
     );
 
@@ -302,7 +318,7 @@ async fn mutation_signup_with_invite_operator_invite_happy_path() {
         .data
         .into_json()
         .expect("data must be JSON-serialisable");
-    let user_id_str = json["signupWithInvite"]["userId"]
+    let user_id_str = json["signupWithKey"]["userId"]
         .as_str()
         .expect("userId must be a non-null string");
     assert!(!user_id_str.is_empty(), "userId must be non-empty");
@@ -314,10 +330,10 @@ async fn mutation_signup_with_invite_operator_invite_happy_path() {
         kept: true,
     }) = intent.take()
     else {
-        panic!("signupWithInvite must set a session");
+        panic!("signupWithKey must set a session");
     };
     assert_eq!(
-        json["signupWithInvite"]["csrfToken"],
+        json["signupWithKey"]["csrfToken"],
         serde_json::json!(csrf_token)
     );
     assert!(rim_auth::csrf::verify_csrf_token(
@@ -327,9 +343,9 @@ async fn mutation_signup_with_invite_operator_invite_happy_path() {
 
     // serverId must be null — the new account has no workspace.
     assert!(
-        json["signupWithInvite"]["serverId"].is_null(),
+        json["signupWithKey"]["serverId"].is_null(),
         "serverId must be null for an instance invite signup, got: {:?}",
-        json["signupWithInvite"]["serverId"]
+        json["signupWithKey"]["serverId"]
     );
 
     // ── Verify the invite's one use was spent ─────────────────────────────
@@ -460,143 +476,7 @@ async fn query_preview_invite_token_returns_instance_for_every_instance_invite()
     );
 }
 
-/// An email-bound instance invite admits a password signup with its address only: another
-/// address is a `VALIDATION` error that leaves the invite unspent, and the bound address, in
-/// any case, signs up.
-#[tokio::test]
-async fn mutation_signup_with_an_email_bound_invite_admits_only_its_address() {
-    use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
-
-    let ctx = TestCtx::new().await;
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let owner = ctx.create_user("email_bound_invite_owner").await;
-    let raw_token = "test_email_bound_invite_token_abcdef";
-    seed_instance_invite(
-        &ctx.db,
-        owner.id,
-        raw_token,
-        SeedInstanceInviteOpts {
-            email: Some("ops@example.com".to_string()),
-            ..Default::default()
-        },
-    )
-    .await;
-    let signup = |email: &str| {
-        format!(
-            r#"mutation {{
-                signupWithInvite(input: {{
-                    username: "email_bound_user",
-                    email: "{email}",
-                    password: "ValidPass123!",
-                    instanceInviteToken: "{raw_token}"
-                }}) {{
-                    userId
-                }}
-            }}"#
-        )
-    };
-
-    let refused = schema
-        .execute(Request::new(signup("someone@example.com")))
-        .await;
-    assert_eq!(refused.errors.len(), 1, "{:?}", refused.errors);
-    let code = refused.errors[0]
-        .extensions
-        .as_ref()
-        .and_then(|e| e.get("code"))
-        .cloned();
-    assert_eq!(
-        code,
-        Some(async_graphql::Value::String("VALIDATION".to_string()))
-    );
-    assert_eq!(
-        refused.errors[0].message,
-        "this invite admits only the email address it was issued for"
-    );
-
-    let admitted = schema
-        .execute(Request::new(signup("Ops@Example.com")))
-        .await;
-    assert!(admitted.errors.is_empty(), "{:?}", admitted.errors);
-}
-
 // ── Test 39 ──────────────────────────────────────────────────────────────────
-
-/// Verify that submitting `signupWithInvite` **without** the required `email`
-/// field is rejected as a GraphQL schema validation error (not a resolver error).
-///
-/// This proves the SDL contract: `email: String!` is enforced at the parse layer
-/// before any resolver code runs.
-#[tokio::test]
-async fn mutation_signup_with_invite_missing_email_rejected_by_schema() {
-    let ctx = TestCtx::new().await;
-
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-
-    // Omit the `email` field — this violates the `email: String!` SDL contract.
-    let mutation = r#"mutation {
-        signupWithInvite(input: {
-            username: "schema_test_user",
-            password: "ValidPass123!",
-            instanceInviteToken: "does_not_matter"
-        }) {
-            userId
-        }
-    }"#;
-
-    let res = schema.execute(Request::new(mutation)).await;
-
-    // The schema layer must reject the request with a parse/validation error
-    // before the resolver is invoked. The error list must be non-empty.
-    assert!(
-        !res.errors.is_empty(),
-        "expected schema-level error for missing required email field, but got no errors"
-    );
-
-    // At least one error must indicate the email field is missing / unknown input.
-    // async-graphql surfaces this as a parse error with a message containing
-    // "email" or a generic "unknown field" message.
-    let error_text = res
-        .errors
-        .iter()
-        .map(|e| e.message.as_str())
-        .collect::<Vec<_>>()
-        .join("; ");
-
-    // The data must be null when there are schema validation errors.
-    assert!(
-        matches!(res.data, async_graphql::Value::Null),
-        "data must be null when schema validation fails, got: {:?}",
-        res.data
-    );
-
-    // Verify it is NOT an EMAIL_TAKEN or VALIDATION resolver error.
-    let any_resolver_code = res
-        .errors
-        .iter()
-        .any(|e| {
-            e.extensions
-                .as_ref()
-                .and_then(|ext| ext.get("code"))
-                .map(|v| matches!(v, async_graphql::Value::String(s) if s == "EMAIL_TAKEN" || s == "VALIDATION"))
-                .unwrap_or(false)
-        });
-    assert!(
-        !any_resolver_code,
-        "schema error must not carry EMAIL_TAKEN or VALIDATION code (was not a resolver error): {error_text}"
-    );
-}
-
-/// A `signupWithInvite` request for `username` presenting `raw` in the token field `field`.
-fn signup_request(field: &str, raw: &str, username: &str, email: &str) -> Request {
-    let vars = serde_json::json!({ "input": {
-        "username": username, "email": email, "password": "ValidPass123!", field: raw,
-    } });
-    Request::new(
-        "mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId serverId } }",
-    )
-    .variables(async_graphql::Variables::from_json(vars))
-}
 
 /// Set `column` of the invite in `table` whose token is `raw` to a minute ago: `revoked_at`
 /// revokes it, `expires_at` expires it.
@@ -615,9 +495,9 @@ async fn age_invite(ctx: &TestCtx, table: &str, column: &str, raw: &str) {
 }
 
 /// Both kinds of invite answer an unusable token alike: unknown, revoked or used up is
-/// `INVALID_TOKEN`, expired is `EXPIRED_TOKEN`, before the username or email is looked at.
+/// `INVALID_TOKEN`, expired is `EXPIRED_TOKEN`, before the username is looked at.
 #[tokio::test]
-async fn signup_with_invite_answers_an_unusable_token_alike_for_both_kinds() {
+async fn signup_with_key_answers_an_unusable_token_alike_for_both_kinds() {
     use support::graphql::{exec_err_code, exec_ok};
     use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
 
@@ -642,8 +522,12 @@ async fn signup_with_invite_answers_an_unusable_token_alike_for_both_kinds() {
         }
         let spent = format!("rim_{table}_spent_token");
         let first = format!("{table}_first");
-        let email = format!("{first}@example.com");
-        exec_ok(&schema, signup_request(field, &spent, &first, &email)).await;
+        let first_seed = if table == "invite" { 1 } else { 2 };
+        exec_ok(
+            &schema,
+            key_signup(&schema, &first, first_seed, json!({ field: spent })).await,
+        )
+        .await;
         age_invite(
             &ctx,
             table,
@@ -666,7 +550,7 @@ async fn signup_with_invite_answers_an_unusable_token_alike_for_both_kinds() {
             ("expired", "EXPIRED_TOKEN"),
         ] {
             let raw = format!("rim_{table}_{state}_token");
-            let request = signup_request(field, &raw, &first, &email);
+            let request = key_signup(&schema, &first, 3, json!({ field: raw })).await;
             assert_eq!(
                 exec_err_code(&schema, request).await,
                 code,
@@ -676,89 +560,7 @@ async fn signup_with_invite_answers_an_unusable_token_alike_for_both_kinds() {
     }
 }
 
-/// A workspace invite signs up with `<username>@local.invalid` and drops the email it was given,
-/// however malformed: that path takes no email.
-#[tokio::test]
-async fn signup_with_a_workspace_invite_keeps_a_placeholder_email() {
-    use rim_core::user::repository::UserRepository;
-    use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
-    use support::graphql::exec_ok;
-
-    let ctx = TestCtx::new().await;
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let owner = ctx.create_user("placeholder_owner").await;
-    let server = ctx.create_server("placeholder_ws").await;
-    ctx.add_owner(&server, &owner).await;
-    seed_workspace_invite(&ctx.db, owner.id, server.id, "rim_placeholder_token").await;
-
-    let data = exec_ok(
-        &schema,
-        signup_request(
-            "workspaceInviteToken",
-            "rim_placeholder_token",
-            "Placeholder_User",
-            "not an email",
-        ),
-    )
-    .await;
-    assert_eq!(
-        data["signupWithInvite"]["serverId"],
-        serde_json::json!(server.id.to_string())
-    );
-    let user = SeaOrmUserRepository::new(ctx.db.clone())
-        .find_by_username("placeholder_user")
-        .await
-        .expect("lookup")
-        .expect("user");
-    assert_eq!(user.username, "placeholder_user");
-    assert_eq!(
-        user.email.as_deref(),
-        Some("placeholder_user@local.invalid")
-    );
-}
-
 // ── The complete ban ─────────────────────────────────────────────────────────
-
-const SIGNUP_WITH_INVITE: &str = r#"
-mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId } }"#;
-
-const PASSWORD: &str = "ValidPass123!";
-
-/// Sign `username` up with the instance invite `token`; returns the user id and session token.
-async fn invited_signup(
-    schema: &rim_api::AppSchema,
-    username: &str,
-    token: &str,
-) -> (rim_core::user::model::UserId, String) {
-    use std::sync::Arc;
-
-    use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
-    use serde_json::json;
-    use support::graphql::{anonymous_request, exec_ok};
-
-    let intent = Arc::new(AuthIntentCtx::default());
-    let request = anonymous_request(
-        SIGNUP_WITH_INVITE,
-        json!({ "input": {
-            "username": username,
-            "email": format!("{username}@test.example.com"),
-            "password": PASSWORD,
-            "instanceInviteToken": token,
-        } }),
-    )
-    .data(Arc::clone(&intent));
-    let data = exec_ok(schema, request).await;
-    let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
-        panic!("signup must set a session");
-    };
-    let user_id = data["signupWithInvite"]["userId"]
-        .as_str()
-        .expect("userId")
-        .parse::<uuid::Uuid>()
-        .expect("uuid")
-        .into();
-    (user_id, session_token)
-}
 
 /// `rim_server principal …` against the test database.
 async fn principal_cmd(args: &[&str]) -> String {
@@ -772,20 +574,20 @@ async fn principal_cmd(args: &[&str]) -> String {
 }
 
 /// Ada invited Bob, who invited Cyd. Blocking Ada with `--cascade` blocks all three: their
-/// sessions end, their unused invites are revoked, their emails can neither sign up nor sign
-/// in, and `principal show` lists the chain.
+/// sessions end, their unused invites are revoked, they no longer sign in, Ada's email cannot
+/// sign up again, and `principal show` lists the chain.
 #[tokio::test]
 async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
     use rim_core::auth::repository::SessionRepository;
     use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
-    use serde_json::json;
-    use support::graphql::{anonymous_request, exec_err, exec_err_code};
+    use support::graphql::{exec_err, exec_err_code};
+    use support::identity::signed_up_through;
+    use support::password::TEST_PASSWORD;
     use support::registration::{SeedInstanceInviteOpts, seed_instance_invite};
 
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let provider = ctx.build_provider();
-    let ada = ctx.enrolled(&schema, "ada", 1).await;
+    let ada = ctx.enrolled("ada", 1).await;
     let principal = ada.state.principal_id.clone();
 
     seed_instance_invite(
@@ -795,10 +597,18 @@ async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
         SeedInstanceInviteOpts::default(),
     )
     .await;
-    let (bob, bob_session) = invited_signup(&schema, "bob", "rim_iinv_for_bob").await;
+    let bob = signed_up_through(
+        &ctx,
+        &schema,
+        "bob",
+        2,
+        StatementVersion::V2,
+        json!({ "instanceInviteToken": "rim_iinv_for_bob" }),
+    )
+    .await;
     seed_instance_invite(
         &ctx.db,
-        bob,
+        bob.user_id,
         "rim_iinv_for_cy",
         SeedInstanceInviteOpts {
             max_uses: Some(3),
@@ -806,87 +616,91 @@ async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
         },
     )
     .await;
-    let (_, cy_session) = invited_signup(&schema, "cyd", "rim_iinv_for_cy").await;
+    let cyd = signed_up_through(
+        &ctx,
+        &schema,
+        "cyd",
+        3,
+        StatementVersion::V2,
+        json!({ "instanceInviteToken": "rim_iinv_for_cy" }),
+    )
+    .await;
 
     let shown = principal_cmd(&["show", &principal]).await;
     for needle in [
-        "account    : ada",
-        "invitees   : 2",
-        "bob (no key identity)",
-        "    cyd (no key identity)",
-        "blocked    : no",
+        "account    : ada".to_string(),
+        "invitees   : 2".to_string(),
+        format!("bob ({})", bob.principal_id),
+        format!("    cyd ({})", cyd.principal_id),
+        "blocked    : no".to_string(),
     ] {
-        assert!(shown.contains(needle), "{needle:?} in {shown}");
+        assert!(shown.contains(&needle), "{needle:?} in {shown}");
     }
 
     let blocked = principal_cmd(&["block", &principal, "--reason", "spam ring", "--cascade"]).await;
     for needle in [
         format!("blocked ada ({principal})"),
         "blocked email ada@test.example.com".to_string(),
-        "blocked bob (no key identity)".to_string(),
+        format!("blocked bob ({})", bob.principal_id),
         "reason: spam ring (invited by ada)".to_string(),
-        "blocked cyd (no key identity)".to_string(),
+        format!("blocked cyd ({})", cyd.principal_id),
         "reason: spam ring (invited by bob)".to_string(),
     ] {
         assert!(blocked.contains(&needle), "{needle:?} in {blocked}");
     }
 
-    // Every session ends: Ada's enrolling session, Bob's and Cyd's signup sessions.
+    // Every session ends: the signup sessions of Ada, Bob and Cyd.
     let sessions = SeaOrmSessionRepository::new(ctx.db.clone());
-    let ada_session = sessions
-        .get_by_id(ada.caller.session_id)
-        .await
-        .expect("lookup")
-        .expect("session row");
-    assert!(ada_session.revoked_at.is_some());
-    for token in [&bob_session, &cy_session] {
-        let auth = provider
-            .request_authenticator()
-            .authenticate_session_token(
-                Some(token),
-                rim_services::auth::dto::SessionSecret::NotRequired,
-            )
+    for session_id in [
+        ada.caller.session_id,
+        bob.caller.session_id,
+        cyd.caller.session_id,
+    ] {
+        let session = sessions
+            .get_by_id(session_id)
             .await
-            .expect("authenticate");
-        let request = Request::new("query { me { id } }").data(
-            rim_api::auth_context::AuthActorCtx::new(auth.user_id, auth.session_id),
-        );
-        assert_eq!(exec_err_code(&schema, request).await, "UNAUTHENTICATED");
+            .expect("lookup")
+            .expect("session row");
+        assert!(session.revoked_at.is_some(), "{session_id}");
     }
 
-    // Bob's password no longer signs him in, and the invite he gave Cyd, uses left, is revoked.
-    let login = anonymous_request(
-        "mutation($input: LoginInput!) { login(input: $input) { userId } }",
-        json!({ "input": { "username": "bob", "password": PASSWORD } }),
+    // Bob no longer signs in, and the invite he gave Cyd, uses left, is revoked.
+    let response = bob.login(&schema, Some(TEST_PASSWORD)).await;
+    assert_eq!(
+        response.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|e| e.get("code")),
+        Some(&async_graphql::Value::from("FORBIDDEN"))
     );
-    assert_eq!(exec_err_code(&schema, login).await, "FORBIDDEN");
-    let request = anonymous_request(
-        SIGNUP_WITH_INVITE,
-        json!({ "input": {
-            "username": "dee",
-            "email": "dee@test.example.com",
-            "password": PASSWORD,
-            "instanceInviteToken": "rim_iinv_for_cy",
-        } }),
-    );
+    let request = key_signup(
+        &schema,
+        "dee",
+        4,
+        json!({ "instanceInviteToken": "rim_iinv_for_cy" }),
+    )
+    .await;
     assert_eq!(exec_err_code(&schema, request).await, "INVALID_TOKEN");
 
     // Ada's address cannot sign up again, whatever its case.
-    seed_operator_invite(
+    let issuer = ctx.create_user("issuer").await;
+    seed_instance_invite(
         &ctx.db,
-        "rim_iinv_operator",
-        Utc::now() + chrono::Duration::minutes(15),
+        issuer.id,
+        "rim_iinv_for_ada_again",
+        SeedInstanceInviteOpts {
+            email: Some("ADA@test.example.com".to_string()),
+            ..Default::default()
+        },
     )
     .await;
-    let request = anonymous_request(
-        SIGNUP_WITH_INVITE,
-        json!({ "input": {
-            "username": "ada_again",
-            "email": "ADA@test.example.com",
-            "password": PASSWORD,
-            "instanceInviteToken": "rim_iinv_operator",
-        } }),
-    );
+    let request = key_signup(
+        &schema,
+        "ada_again",
+        5,
+        json!({ "instanceInviteToken": "rim_iinv_for_ada_again" }),
+    )
+    .await;
     assert_eq!(
         exec_err(&schema, request).await,
         (
@@ -897,12 +711,12 @@ async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
 
     let shown = principal_cmd(&["show", &principal]).await;
     for needle in [
-        "email      : ada@test.example.com (blocked)",
-        "blocked    : since",
-        "bob (no key identity)",
-        "  blocked",
+        "email      : ada@test.example.com (blocked)".to_string(),
+        "blocked    : since".to_string(),
+        format!("bob ({})", bob.principal_id),
+        "  blocked".to_string(),
     ] {
-        assert!(shown.contains(needle), "{needle:?} in {shown}");
+        assert!(shown.contains(&needle), "{needle:?} in {shown}");
     }
 }
 
@@ -910,8 +724,7 @@ async fn a_complete_ban_with_cascade_follows_the_invite_chain() {
 /// refused.
 #[tokio::test]
 async fn a_reserved_name_is_refused_at_signup_and_on_profile_edit() {
-    use serde_json::json;
-    use support::graphql::{anonymous_request, exec_err};
+    use support::graphql::exec_err;
 
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema_reserving("rim");
@@ -926,15 +739,13 @@ async fn a_reserved_name_is_refused_at_signup_and_on_profile_edit() {
         "this name is reserved".to_string(),
     );
 
-    let signup = anonymous_request(
-        SIGNUP_WITH_INVITE,
-        json!({ "input": {
-            "username": "rim-admin",
-            "email": "rim-admin@test.example.com",
-            "password": PASSWORD,
-            "instanceInviteToken": "rim_iinv_reserved",
-        } }),
-    );
+    let signup = key_signup(
+        &schema,
+        "rim-admin",
+        1,
+        json!({ "instanceInviteToken": "rim_iinv_reserved" }),
+    )
+    .await;
     assert_eq!(exec_err(&schema, signup).await, refused);
 
     let carol = ctx.create_user("carol").await;
@@ -953,25 +764,24 @@ async fn a_reserved_name_is_refused_at_signup_and_on_profile_edit() {
 async fn display_names_lose_invisible_characters_and_hide_no_reserved_name() {
     use rim_core::user::repository::UserRepository;
     use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
-    use serde_json::json;
-    use support::graphql::{anonymous_request, exec_err, exec_ok};
+    use support::graphql::{exec_err, exec_ok};
 
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema_reserving("rim,admin");
     for token in ["rim_iinv_dn_refused", "rim_iinv_dn_ok"] {
         seed_operator_invite(&ctx.db, token, Utc::now() + chrono::Duration::minutes(15)).await;
     }
-    let signup = |username: &str, display_name: &str, token: &str| {
-        anonymous_request(
-            SIGNUP_WITH_INVITE,
-            json!({ "input": {
-                "username": username,
-                "email": format!("{username}@test.example.com"),
-                "password": PASSWORD,
-                "displayName": display_name,
-                "instanceInviteToken": token,
-            } }),
-        )
+    let signup = |username: &'static str, display_name: String, token: &'static str| {
+        let schema = &schema;
+        async move {
+            key_signup(
+                schema,
+                username,
+                1,
+                json!({ "displayName": display_name, "instanceInviteToken": token }),
+            )
+            .await
+        }
     };
     let reserved = (
         "VALIDATION".to_string(),
@@ -984,10 +794,10 @@ async fn display_names_lose_invisible_characters_and_hide_no_reserved_name() {
         "\u{410}dmin",
         "R\u{456}m Team",
     ] {
-        let refused = signup("dana", name, "rim_iinv_dn_refused");
+        let refused = signup("dana", name.to_string(), "rim_iinv_dn_refused").await;
         assert_eq!(exec_err(&schema, refused).await, reserved, "{name:?}");
     }
-    let too_long = signup("dana", &"x".repeat(70), "rim_iinv_dn_refused");
+    let too_long = signup("dana", "x".repeat(70), "rim_iinv_dn_refused").await;
     assert_eq!(
         exec_err(&schema, too_long).await,
         (
@@ -998,9 +808,10 @@ async fn display_names_lose_invisible_characters_and_hide_no_reserved_name() {
 
     let accepted = signup(
         "dana",
-        "\u{202E}Dana \u{200B}\n Scully\u{FEFF}",
+        "\u{202E}Dana \u{200B}\n Scully\u{FEFF}".to_string(),
         "rim_iinv_dn_ok",
-    );
+    )
+    .await;
     exec_ok(&schema, accepted).await;
     let dana = SeaOrmUserRepository::new(ctx.db.clone())
         .find_by_username("dana")
@@ -1024,127 +835,19 @@ async fn display_names_lose_invisible_characters_and_hide_no_reserved_name() {
     assert_eq!(data["updateMyProfile"]["displayName"], json!(family));
 }
 
-/// On a server whose signups need a key, `serverInfo.signupRequiresKeys` is true and every
-/// password signup is `FORBIDDEN` and spends nothing: open, with an instance invite and with a
-/// workspace invite. An existing password account still signs in, and the instance invite
-/// still signs up with a key.
-#[tokio::test]
-async fn with_signups_requiring_keys_password_signups_are_forbidden_and_password_login_works() {
-    use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository};
-    use rim_identity::StatementVersion;
-    use rim_identity::testing::TestIdentity;
-    use rim_infra_db::sea_orm_impl::instance_invite::SeaOrmInstanceInviteRepository;
-    use rim_infra_db::sea_orm_impl::invite::SeaOrmInviteRepository;
-    use serde_json::json;
-    use support::graphql::{anonymous_request, exec_err, exec_ok};
-    use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
-
-    let ctx = TestCtx::new().await;
-    let refused = (
-        "FORBIDDEN".to_string(),
-        "password signup is turned off on this server; sign up with a key".to_string(),
-    );
-    let requires_keys = |schema: rim_api::AppSchema| async move {
-        exec_ok(
-            &schema,
-            anonymous_request("{ serverInfo { signupRequiresKeys } }", json!({})),
-        )
-        .await["serverInfo"]["signupRequiresKeys"]
-            .clone()
-    };
-    assert_eq!(
-        requires_keys(ctx.build_schema(RegistrationMode::InviteOnly).await).await,
-        json!(false)
-    );
-
-    let open = ctx.build_schema_requiring_keys(RegistrationMode::Open);
-    assert_eq!(requires_keys(open.clone()).await, json!(true));
-    let request = anonymous_request(
-        SIGNUP_WITH_INVITE,
-        json!({ "input": {
-            "username": "opencarol",
-            "email": "opencarol@test.example.com",
-            "password": PASSWORD,
-        } }),
-    );
-    assert_eq!(exec_err(&open, request).await, refused);
-
-    let schema = ctx.build_schema_requiring_keys(RegistrationMode::InviteOnly);
-    let instance_invite = seed_operator_invite(
-        &ctx.db,
-        "rim_iinv_keys_only",
-        Utc::now() + chrono::Duration::minutes(15),
-    )
-    .await;
-    let owner = ctx.create_user("keysowner").await;
-    let server = ctx.create_server("Keys only").await;
-    ctx.add_owner(&server, &owner).await;
-    let workspace_invite =
-        seed_workspace_invite(&ctx.db, owner.id, server.id, "rim_inv_keys_only").await;
-    for (field, raw) in [
-        ("instanceInviteToken", "rim_iinv_keys_only"),
-        ("workspaceInviteToken", "rim_inv_keys_only"),
-    ] {
-        let request = signup_request(field, raw, "carol", "carol@test.example.com");
-        assert_eq!(exec_err(&schema, request).await, refused, "{field}");
-    }
-    let instance = SeaOrmInstanceInviteRepository::new(ctx.db.clone())
-        .get_by_id(instance_invite)
-        .await
-        .expect("get instance invite")
-        .expect("instance invite");
-    assert_eq!(instance.use_count, 0);
-    let workspace = SeaOrmInviteRepository::new(ctx.db.clone())
-        .get_by_id(workspace_invite)
-        .await
-        .expect("get workspace invite")
-        .expect("workspace invite");
-    assert_eq!(workspace.use_count, 0);
-
-    ctx.create_password_user("dora").await;
-    support::sessions::login(&schema, "dora").await;
-
-    let id = TestIdentity::with_version(41, StatementVersion::V2);
-    let input = signup_input(
-        &schema,
-        "carol",
-        &id,
-        91,
-        json!({ "instanceInviteToken": "rim_iinv_keys_only" }),
-    )
-    .await;
-    let data = exec_ok(
-        &schema,
-        signed_out(SIGNUP_WITH_KEY, json!({ "input": input })),
-    )
-    .await;
-    assert!(data["signupWithKey"]["userId"].is_string());
-}
-
-/// A signup as `Alice` stores the username `alice` and keeps `Alice` as the display name, a
-/// password login as `ALICE` signs that account in, and a later signup as `aLiCe`, with a
-/// password or a key, is refused with `CONFLICT`.
+/// A signup as `Alice` stores the username `alice` and keeps `Alice` as the display name, and a
+/// later signup as `aLiCe` is refused with `CONFLICT`.
 #[tokio::test]
 async fn a_username_is_stored_lowercase_and_matched_in_any_case() {
     use rim_core::user::repository::UserRepository;
-    use rim_identity::StatementVersion;
-    use rim_identity::testing::TestIdentity;
     use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
-    use serde_json::json;
-    use support::graphql::{anonymous_request, exec_err, exec_ok};
-    use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
+    use support::graphql::{exec_err, exec_ok};
 
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::Open).await;
-    let signup = |username: &str, email: &str| {
-        anonymous_request(
-            SIGNUP_WITH_INVITE,
-            json!({ "input": { "username": username, "email": email, "password": PASSWORD } }),
-        )
-    };
 
-    let data = exec_ok(&schema, signup(" Alice ", "alice@test.example.com")).await;
-    let user_id = data["signupWithInvite"]["userId"].clone();
+    let data = exec_ok(&schema, key_signup(&schema, " Alice ", 1, json!({})).await).await;
+    let user_id = data["signupWithKey"]["userId"].clone();
 
     let stored = SeaOrmUserRepository::new(ctx.db.clone())
         .find_by_username("alice")
@@ -1155,28 +858,12 @@ async fn a_username_is_stored_lowercase_and_matched_in_any_case() {
     assert_eq!(stored.username, "alice");
     assert_eq!(stored.display_name.as_deref(), Some("Alice"));
 
-    let login = anonymous_request(
-        "mutation($input: LoginInput!) { login(input: $input) { userId } }",
-        json!({ "input": { "username": "ALICE", "password": PASSWORD } }),
-    );
-    assert_eq!(exec_ok(&schema, login).await["login"]["userId"], user_id);
-
     let taken = (
         "CONFLICT".to_string(),
         "username already exists".to_string(),
     );
     assert_eq!(
-        exec_err(&schema, signup("aLiCe", "alice2@test.example.com")).await,
-        taken
-    );
-    let id = TestIdentity::with_version(43, StatementVersion::V2);
-    let input = signup_input(&schema, "aLiCe", &id, 93, json!({})).await;
-    assert_eq!(
-        exec_err(
-            &schema,
-            signed_out(SIGNUP_WITH_KEY, json!({ "input": input }))
-        )
-        .await,
+        exec_err(&schema, key_signup(&schema, "aLiCe", 43, json!({})).await).await,
         taken
     );
 }

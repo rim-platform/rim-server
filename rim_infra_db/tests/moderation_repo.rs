@@ -421,7 +421,7 @@ async fn role_migration_turns_existing_guests_into_members() {
     let owner = ctx.create_user("owner").await.id;
     let guest = ctx.create_user("old-guest").await.id;
 
-    Migrator::down(&conn, Some(steps))
+    support::roll_back(&conn, steps)
         .await
         .expect("roll back to before add_member_role");
 
@@ -437,7 +437,7 @@ async fn role_migration_turns_existing_guests_into_members() {
         .expect("seed member");
     }
 
-    Migrator::up(&conn, None)
+    support::migrate_up(&conn)
         .await
         .expect("re-apply migrations");
 

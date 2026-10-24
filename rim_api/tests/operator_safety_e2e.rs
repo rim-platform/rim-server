@@ -23,19 +23,17 @@ use support::graphql::{anonymous_request, exec_err, exec_ok};
 use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
 use support::nodes::{S2S_TABLES, start};
 
-const SIGNUP_WITH_INVITE: &str = r#"
-mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId } }"#;
-
-fn password_signup(username: &str, extra: Value) -> async_graphql::Request {
-    let mut input = json!({
-        "username": username,
-        "email": format!("{username}@test.example.com"),
-        "password": "ValidPass123!",
-    });
-    if let (Some(input), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
-        input.extend(extra.clone());
-    }
-    anonymous_request(SIGNUP_WITH_INVITE, json!({ "input": input }))
+/// A `signupWithKey` request for `username` with the identity from `seed` and `extra` input
+/// fields.
+async fn key_signup(
+    schema: &rim_api::AppSchema,
+    username: &str,
+    seed: u8,
+    extra: Value,
+) -> async_graphql::Request {
+    let id = TestIdentity::with_version(seed, StatementVersion::V2);
+    let input = signup_input(schema, username, &id, seed.wrapping_add(50), extra).await;
+    signed_out(SIGNUP_WITH_KEY, json!({ "input": input }))
 }
 
 /// The minimum age recorded on the account `user_id`.
@@ -53,9 +51,8 @@ async fn recorded_age(ctx: &TestCtx, user_id: &Value) -> Option<i16> {
     row.try_get("", "minimum_age_confirmed").expect("column")
 }
 
-/// With a minimum age of 16, a password signup and a key signup are refused without the
-/// confirmation and with another age, and succeed with 16, which the account records;
-/// `serverInfo.minimumAge` names it.
+/// With a minimum age of 16, a signup is refused without the confirmation and with another
+/// age, and succeeds with 16, which the account records; `serverInfo.minimumAge` names it.
 #[tokio::test]
 async fn every_signup_confirms_the_minimum_age() {
     let ctx = TestCtx::new().await;
@@ -69,40 +66,15 @@ async fn every_signup_confirms_the_minimum_age() {
     assert_eq!(info["serverInfo"]["minimumAge"], json!(16));
 
     for extra in [json!({}), json!({ "confirmedMinimumAge": 13 })] {
-        let (code, message) = exec_err(&schema, password_signup("age-pw", extra)).await;
+        let (code, message) =
+            exec_err(&schema, key_signup(&schema, "age-key", 62, extra).await).await;
         assert_eq!(code, "VALIDATION");
         assert!(message.contains("minimum age"), "{message}");
         assert!(!message.contains("terms"), "{message}");
     }
     let data = exec_ok(
         &schema,
-        password_signup("age-pw", json!({ "confirmedMinimumAge": 16 })),
-    )
-    .await;
-    assert_eq!(
-        recorded_age(&ctx, &data["signupWithInvite"]["userId"]).await,
-        Some(16)
-    );
-
-    let id = TestIdentity::with_version(62, StatementVersion::V2);
-    let input = signup_input(&schema, "age-key", &id, 72, json!({})).await;
-    let (code, _) = exec_err(
-        &schema,
-        signed_out(SIGNUP_WITH_KEY, json!({ "input": input })),
-    )
-    .await;
-    assert_eq!(code, "VALIDATION");
-    let input = signup_input(
-        &schema,
-        "age-key",
-        &id,
-        72,
-        json!({ "confirmedMinimumAge": 16 }),
-    )
-    .await;
-    let data = exec_ok(
-        &schema,
-        signed_out(SIGNUP_WITH_KEY, json!({ "input": input })),
+        key_signup(&schema, "age-key", 62, json!({ "confirmedMinimumAge": 16 })).await,
     )
     .await;
     assert_eq!(
@@ -120,11 +92,11 @@ async fn without_a_minimum_age_nothing_is_recorded() {
         .await;
     let data = exec_ok(
         &schema,
-        password_signup("no-age", json!({ "confirmedMinimumAge": 16 })),
+        key_signup(&schema, "no-age", 63, json!({ "confirmedMinimumAge": 16 })).await,
     )
     .await;
     assert_eq!(
-        recorded_age(&ctx, &data["signupWithInvite"]["userId"]).await,
+        recorded_age(&ctx, &data["signupWithKey"]["userId"]).await,
         None
     );
 }

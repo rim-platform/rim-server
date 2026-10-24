@@ -226,8 +226,7 @@ decide, and each may only tighten the one above it:
   (`workspace_invite_revoked`), as the creation is (`workspace_invite_created`).
 - An invite stored without an expiry, by a server from before invites had to expire, keeps
   admitting until it is used up or revoked.
-- Redeeming an invite (`joinServerByInvite`, `signupWithInvite`, `signupWithKey`, a join through
-  another server) checks the revocation, the expiry and the uses in the same update that counts
+- Redeeming an invite (`joinServerByInvite`, `signupWithKey`, a join through another server) checks the revocation, the expiry and the uses in the same update that counts
   the use. A revoked, expired or used-up invite is `FORBIDDEN` for `joinServerByInvite`; a signup
   gets `INVALID_TOKEN` for a revoked or used-up invite and `EXPIRED_TOKEN` for an expired one.
 
@@ -250,8 +249,8 @@ proof-of-work and the per-address signup limit, and on an invite-only server it 
 registration. A permanent, unlimited link posted on a public page would let anyone, scripts
 included, create accounts on the server for free. So the link only admits accounts that already
 exist; someone without one signs up the server's normal way (proof-of-work, an instance invite,
-open registration) and then opens the link again. `signupWithInvite`, `signupWithKey` and
-`acceptInvite` refuse a link token as `INVALID_TOKEN`, as they do any unknown token.
+open registration) and then opens the link again. `signupWithKey` refuses a link token as
+`INVALID_TOKEN`, as it does any unknown token.
 `joinByPublicLink` is for accounts this server holds; an account of another server joins through
 its own server, which presents it here (below), and nothing about that creates an account
 either: the host holds the person as a remote user, as for any member from elsewhere.

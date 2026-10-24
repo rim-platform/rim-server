@@ -3850,7 +3850,6 @@ fn reinvite_writer(
     let user = |id: UserId, principal: &str| User {
         id,
         username: principal.to_string(),
-        password_hash: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         last_login_at: None,
@@ -4109,7 +4108,6 @@ fn default_workspace_writer(
     let user = |id: UserId, principal: &str| User {
         id,
         username: principal.to_string(),
-        password_hash: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         last_login_at: None,

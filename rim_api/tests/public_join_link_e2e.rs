@@ -17,10 +17,13 @@ use serde_json::{Value, json};
 
 use rim_api::AppSchema;
 use rim_api::auth_context::RemoteIp;
+use rim_identity::StatementVersion;
+use rim_identity::testing::TestIdentity;
 use rim_services::events::WorkspaceEvent;
 use rim_services::limits::InstanceLimits;
 
 use support::graphql::{Caller, anonymous_request, exec_err, exec_err_code, exec_ok};
+use support::identity::{SIGNUP_WITH_KEY, signup_input};
 use support::roles::Roles;
 use support::{RecordingBroadcaster, TestCtx};
 
@@ -577,18 +580,22 @@ async fn the_link_never_creates_an_account() {
     let token = f.link_on("DIRECT").await;
     let users_before = f.count(r#"SELECT count(*) AS count FROM "user""#).await;
 
-    let signup = format!(
-        r#"mutation {{
-            signupWithInvite(input: {{
-                username: "linkjoiner", email: "linkjoiner@test.example.com",
-                password: "ValidPass123!", workspaceInviteToken: "{token}"
-            }}) {{ userId }}
-        }}"#
-    );
+    let identity = TestIdentity::with_version(71, StatementVersion::V2);
+    let input = signup_input(
+        &f.schema,
+        "linkjoiner",
+        &identity,
+        121,
+        json!({ "workspaceInviteToken": token }),
+    )
+    .await;
     let intent = std::sync::Arc::new(rim_api::auth_intent::AuthIntentCtx::default());
     let res = f
         .schema
-        .execute(from(Request::new(&signup).data(intent), IP))
+        .execute(from(
+            anonymous_request(SIGNUP_WITH_KEY, json!({ "input": input })).data(intent),
+            IP,
+        ))
         .await;
     let code = res.errors[0]
         .extensions

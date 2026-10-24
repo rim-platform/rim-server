@@ -2,8 +2,17 @@
 
 mod support;
 
+use rim_core::user::model::NewUserKeyIdentity;
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
+
+/// A stand-in key identity for the account `name`.
+fn identity(name: &str) -> Option<NewUserKeyIdentity> {
+    Some(NewUserKeyIdentity {
+        principal_id: format!("rimp1_{name}"),
+        identity_key: format!("ed25519:{name}"),
+    })
+}
 
 #[tokio::test]
 async fn create_and_get_user_roundtrip() {
@@ -13,10 +22,9 @@ async fn create_and_get_user_roundtrip() {
     let created = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_roundtrip".to_string(),
-            password: Some("pw".to_string()),
             email: Some("u_test_roundtrip@test.example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: identity("u_test_roundtrip"),
         })
         .await
         .unwrap();
@@ -40,10 +48,9 @@ async fn create_user_duplicate_username_is_conflict() {
     let _u1 = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_duplicate".to_string(),
-            password: Some("pw".to_string()),
             email: Some("u_test_duplicate@test.example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: identity("u_test_duplicate"),
         })
         .await
         .unwrap();
@@ -51,10 +58,9 @@ async fn create_user_duplicate_username_is_conflict() {
     let err = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_duplicate".to_string(),
-            password: Some("pw2".to_string()),
             email: Some("u_test_duplicate2@test.example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: identity("u_test_duplicate2"),
         })
         .await
         .unwrap_err();
@@ -76,10 +82,9 @@ async fn find_by_username() {
     let created = repo
         .create_user(rim_core::user::model::NewUser {
             username: "u_test_find".to_string(),
-            password: Some("pw".to_string()),
             email: Some("u_test_find@test.example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: identity("u_test_find"),
         })
         .await
         .unwrap();
@@ -110,10 +115,9 @@ async fn a_username_differing_only_in_case_is_conflict() {
     let err = repo
         .create_user(rim_core::user::model::NewUser {
             username: "U_Test_Fold".to_string(),
-            password: Some("pw".to_string()),
             email: Some("u_test_fold2@test.example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: identity("u_test_fold"),
         })
         .await
         .unwrap_err();

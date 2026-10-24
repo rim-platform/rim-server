@@ -22,7 +22,7 @@ use rim_core::pipeline::repository::PipelineRepository;
 use rim_core::server::repository::ServerRepository;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_core::user::model::{NewUser, UserId};
+use rim_core::user::model::{NewUser, NewUserKeyIdentity, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::begin_transaction;
 use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
@@ -199,7 +199,7 @@ async fn local_accounts_count_those_in_their_grace_period_but_no_remote_user_or_
     update_user(
         &ctx.db,
         r#"UPDATE "user" SET deleted_at = now(), username = 'deleted-0000gone', email = NULL,
-               password_hash = NULL, principal_id = 'rimp1_gone' WHERE id = $1"#,
+               principal_id = 'rimp1_gone' WHERE id = $1"#,
         gone.id,
     )
     .await;
@@ -231,10 +231,12 @@ async fn signups_counting_under_the_lock_never_pass_the_cap() {
             users
                 .create_user(NewUser {
                     username: format!("racer{n}"),
-                    password: Some("test_hash".to_string()),
                     email: Some(format!("racer{n}@test.example.com")),
                     display_name: None,
-                    key_identity: None,
+                    key_identity: Some(NewUserKeyIdentity {
+                        principal_id: format!("rimp1_racer{n}"),
+                        identity_key: format!("ed25519:racer{n}"),
+                    }),
                 })
                 .await
                 .unwrap();

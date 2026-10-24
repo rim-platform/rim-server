@@ -33,7 +33,6 @@ pub mod moderation;
 pub mod monitoring;
 pub mod notification;
 pub mod notification_preference;
-pub mod password_reset;
 pub mod pipeline;
 pub mod principal;
 // pub: rim_infra_db stores it, rim_services and rim_infra_services apply it, rim_api shows it.

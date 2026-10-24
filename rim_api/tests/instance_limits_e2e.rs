@@ -69,7 +69,7 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
     };
 
     // Ada's account is two hours old, past its probation.
-    let ada = ctx.enrolled(schema, "ada", 1).await;
+    let ada = ctx.enrolled("ada", 1).await;
     ctx.conn
         .execute_unprepared(&format!(
             "UPDATE \"user\" SET created_at = now() - interval '2 hours' WHERE id = '{}'",
@@ -148,8 +148,9 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
 
     // Probation: a new account creates no workspace and says when its probation ends; Ada's
     // has ended.
-    let newcomer = ctx.create_user("newcomer").await;
-    let fresh = ctx.caller(&newcomer).await;
+    let newcomer = ctx.enrolled("newcomer", 3).await;
+    newcomer.publish_card(schema).await;
+    let fresh = &newcomer.caller;
     let in_probation = |(code, message): (String, String), action: &str| {
         assert_eq!(code, "VALIDATION", "{message}");
         let prefix = format!("a new account can {action} in ");
@@ -203,7 +204,7 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
     SeaOrmServerMemberRepository::new(ctx.db.clone())
         .add_member(
             ServerId::from(Uuid::parse_str(&server_id).expect("uuid")),
-            newcomer.id,
+            newcomer.user.id,
             ServerMemberRole::Member,
         )
         .await
@@ -213,13 +214,14 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
     // An instance operator is never on probation: an account as new as the newcomer's, granted
     // the role after its creation, has no probation end from then on, creates a workspace and
     // sends a DM request to Ada, a stranger.
-    let operator = ctx.create_user("operator").await;
-    let op = ctx.caller(&operator).await;
+    let operator = ctx.enrolled("operator", 4).await;
+    operator.publish_card(schema).await;
+    let op = &operator.caller;
     let before = exec_ok(schema, op.request(PROBATION_ENDS, json!({}))).await;
     assert!(before["me"]["probationEndsAt"].is_string(), "{before}");
     assert!(
         SeaOrmUserRepository::new(ctx.db.clone())
-            .set_instance_operator(operator.id, true)
+            .set_instance_operator(operator.user.id, true)
             .await
             .expect("grant")
     );
@@ -240,8 +242,7 @@ async fn each_cap_refuses_the_write_past_it_and_allows_those_within() {
 
 /// With a default workspace every new account joins, two new accounts that share only it are
 /// strangers to each other during probation, for a DM in the direct space and for one in the
-/// default workspace, with a key or without one; once they share another workspace they are
-/// not.
+/// default workspace; once they share another workspace they are not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_default_workspace_makes_nobody_known_during_probation() {
     let ctx = TestCtx::new().await;
@@ -259,11 +260,12 @@ async fn the_default_workspace_makes_nobody_known_during_probation() {
     .await;
     let schema = &node.schema;
 
-    let amy = ctx.create_user("amy").await;
-    let fresh = ctx.caller(&amy).await;
-    let ben = ctx.enrolled(schema, "ben", 2).await;
+    let amy = ctx.enrolled("amy", 1).await;
+    amy.publish_card(schema).await;
+    let fresh = &amy.caller;
+    let ben = ctx.enrolled("ben", 2).await;
     let cal = ctx.create_user("cal").await;
-    for user in [&amy, &ben.user, &cal] {
+    for user in [&amy.user, &ben.user, &cal] {
         ctx.add_member(&everyone, user, ServerMemberRole::Member)
             .await;
     }
@@ -286,7 +288,7 @@ async fn the_default_workspace_makes_nobody_known_during_probation() {
     }
 
     let team = ctx.create_server("team").await;
-    for user in [&amy, &ben.user, &cal] {
+    for user in [&amy.user, &ben.user, &cal] {
         ctx.add_member(&team, user, ServerMemberRole::Member).await;
     }
     exec_ok(schema, dm(&direct, &ben.user)).await;

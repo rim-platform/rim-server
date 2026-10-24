@@ -34,10 +34,6 @@ pub struct ServerInfo {
     pub terms_url: Option<String>,
     /// The instance-wide caps, so a client can show "5 of 5" before it tries.
     pub limits: ServerLimits,
-    /// Whether new accounts sign up with a key only: `signupWithInvite` is refused with
-    /// `FORBIDDEN` and `signupWithKey` is the signup. Password sign-in of existing accounts
-    /// works either way.
-    pub signup_requires_keys: bool,
     /// DMs from people on other servers, and from people here outside the recipient's
     /// workspaces (`RIM_DM_INBOUND`): a floor for every account here.
     pub dm_inbound: crate::types::DmInbound,
@@ -133,8 +129,6 @@ pub struct InstancePolicy {
     pub notice: Option<String>,
     /// The terms of service URL; `None` when signups accept no terms.
     pub terms_url: Option<String>,
-    /// Whether password signups are refused.
-    pub signup_requires_keys: bool,
     /// The workspace every new account joins as a Member, when configured by id; `None` leaves
     /// `serverInfo` to the workspace an owner claimed from the definition file, if any.
     pub default_workspace: Option<rim_core::server::model::ServerId>,
@@ -196,7 +190,6 @@ impl ServerInfo {
             instance_notice: policy.notice.clone(),
             terms_url: policy.terms_url.clone(),
             limits: limits.into(),
-            signup_requires_keys: policy.signup_requires_keys,
             dm_inbound: dm_policy.inbound.into(),
             dm_outbound: dm_policy.outbound.into(),
             dm_partners: dm_policy.partners.clone(),

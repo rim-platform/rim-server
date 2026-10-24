@@ -661,7 +661,6 @@ mod tests {
         User {
             id: UserId::new(),
             username: username.to_string(),
-            password_hash: email.map(|_| "hash".to_string()),
             created_at: now,
             updated_at: now,
             last_login_at: None,

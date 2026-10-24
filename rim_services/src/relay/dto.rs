@@ -320,7 +320,7 @@ pub struct PrincipalBlockOutcome {
     pub ignored_requests: u64,
     /// The account's invites that still had uses left.
     pub revoked_invites: u64,
-    /// The account's email, now refused at signup and password login.
+    /// The account's email, now refused at signup.
     pub blocked_email: Option<String>,
     /// Accounts the account's invites created, oldest first.
     pub invitees: Vec<AccountSummaryDto>,

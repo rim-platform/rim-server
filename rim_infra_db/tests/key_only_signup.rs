@@ -1,9 +1,8 @@
 #![cfg(feature = "db-tests")]
 
-//! Key-only accounts: `user.password_hash` and `user.email` are nullable, a row needs a
-//! password or a principal id, and the `key_only_signup` migration's `down` refuses while a
-//! key-only account exists. Destructive for the shared test database, like every db-test: run
-//! single-threaded.
+//! Key-only accounts: `user.email` is nullable, a live row needs a principal id, and the
+//! `key_only_signup` migration's `down` refuses while a key-only account exists. Destructive for
+//! the shared test database, like every db-test: run single-threaded.
 
 mod support;
 
@@ -45,7 +44,6 @@ fn inception() -> NewKeyLogEntry {
 fn key_only(username: &str, principal_id: &str) -> NewUser {
     NewUser {
         username: username.to_string(),
-        password: None,
         email: None,
         display_name: Some(username.to_string()),
         key_identity: Some(NewUserKeyIdentity {
@@ -65,7 +63,6 @@ async fn a_key_only_account_round_trips_with_its_log() {
         .create_user(key_only("ada", "rimp1_ada"))
         .await
         .unwrap();
-    assert_eq!(user.password_hash, None);
     assert_eq!(user.email, None);
     assert_eq!(user.principal_id.as_deref(), Some("rimp1_ada"));
     assert_eq!(
@@ -107,7 +104,7 @@ async fn a_principal_id_is_held_by_one_account() {
 }
 
 #[tokio::test]
-async fn an_account_needs_a_password_or_a_principal() {
+async fn a_live_account_needs_a_principal() {
     let ctx = support::TestCtx::new().await;
     let users = SeaOrmUserRepository::new(ctx.db.clone());
     let err = users

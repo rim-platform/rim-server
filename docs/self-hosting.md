@@ -36,7 +36,7 @@ Everything marked **FILL** is the operator's choice, recorded here once made.
    cp deploy/.env.example deploy/.env
    chmod 600 deploy/.env
    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')|" deploy/.env
-   $EDITOR deploy/.env          # RIM_VERSION, RIM_DOMAIN, and SMTP for password resets and invites
+   $EDITOR deploy/.env          # RIM_VERSION, RIM_DOMAIN, and SMTP for invites
    ```
 
    Every variable the compose files read is in `.env.example` with what it does. Without
@@ -107,8 +107,7 @@ for both names:
   there;
 - on `RIM_DOMAIN`, the API, discovery and server-to-server paths go to rim-server as before, and
   every other path is redirected (`302`) to the web domain with its path and query, so the
-  invite, owner claim and password reset links the server builds on `RIM_PUBLIC_BASE_URL` open
-  the web client.
+  invite and owner claim links the server builds on `RIM_PUBLIC_BASE_URL` open the web client.
 
 The compose file derives two server settings from it. `RIM_CORS_ALLOWED_ORIGIN` becomes
 `https://<RIM_WEB_DOMAIN>`, since the browser sends that `Origin` with the client's requests,
@@ -164,10 +163,9 @@ Signups are invite-only by default. Issue a single-use link for your own account
 dc exec rim /app/rim-server invite create --public-url https://rim.example.org
 ```
 
-`--email you@example.org` binds the link to that address: a key signup with it gives the new
-account that address, and a password signup must give that address. It does not keep others
-out: a key signup gives no address, so whoever holds the link can sign up with it. Hand the
-link only to the person it is for.
+`--email you@example.org` binds the link to that address: the account that signs up with it
+gets that address. It does not keep others out: whoever holds the link can sign up with it and
+get the address. Hand the link only to the person it is for.
 
 Open the link it prints (`https://rim.example.org/join/…`) and sign up. For other people, a link
 for up to 50 signups that lasts up to 30 days:
@@ -181,12 +179,6 @@ dc exec rim /app/rim-server invite revoke <id>
 The owner of a workspace can also invite from the app. `RIM_OPEN_REGISTRATION=true` lets
 anyone sign up, rate-limited per address; `RIM_REGISTRATION_POW_BITS` asks a proof-of-work of
 signups without an invite.
-
-New accounts sign up with a key: the app creates the account's identity on the device that signs
-up and shows its recovery kit. `RIM_SIGNUP_REQUIRE_KEYS` (commented out in `deploy/.env.example`,
-on unless set to `false`) refuses every password signup, whatever the registration mode;
-password accounts that already exist still sign in. Set it to `false` only for clients that
-cannot sign up with a key.
 
 ### Check it answers
 

@@ -13,17 +13,14 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_infra_db::begin_transaction;
 use rim_services::auth::command::{
-    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery, LoginCmd, LogoutCmd,
-    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, RevokeInviteCmd, SignupOpenCmd,
-    SignupWithInstanceInviteCmd,
+    CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery, LogoutCmd, LogoutOtherSessionsCmd,
+    PreviewInviteTokenQuery, RevokeInviteCmd,
 };
 use rim_services::auth::dto::{
-    AcceptInviteResultDto, AuthSessionDto, CreateInviteResultDto, InviteDto, InvitePageCursor,
-    InviteTokenPreviewDto, InviteTokenType, JoinServerByInviteResultDto, LoginResultDto,
-    SessionKeysDto, SignupResultDto, WorkspaceInvitePreviewDto,
+    CreateInviteResultDto, InviteDto, InvitePageCursor, InviteTokenPreviewDto, InviteTokenType,
+    JoinServerByInviteResultDto, WorkspaceInvitePreviewDto,
 };
 use rim_services::auth::service::AuthService;
-use rim_services::auth::terms::{accepted_terms, confirmed_minimum_age};
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::limits::{InstanceLimits, ensure_below, limit_reached};
 use rim_services::session_revocation::SessionRevocations;
@@ -33,19 +30,11 @@ use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 
 use crate::AuthRepos;
 use crate::account_cap::AccountCap;
-use crate::default_workspace;
 use crate::email::{EmailSender, templates};
-use crate::login_sources::KnownLoginSources;
-use crate::password_hashing::PasswordHashing;
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 use crate::repos::AppRepos;
-use crate::reserved_names::ReservedNames;
-use crate::signup;
 use crate::url_encode::percent_encode_path_segment;
 use crate::util::{add_workspace_member, ensure_not_banned, ensure_server_owner};
-
-/// Fixed "IP" slot for the per-account login limiter, whose buckets are keyed by username alone.
-const LOGIN_ACCOUNT_SCOPE: &str = "account";
 
 /// Fixed "IP" slot for the invite email limiter, whose buckets are keyed by user id alone.
 const INVITE_EMAIL_SCOPE: &str = "invite_email";
@@ -57,15 +46,8 @@ const INVITE_EMAIL_WINDOW_SECS: u64 = 86_400;
 pub struct DefaultAuthService {
     repos: AuthRepos,
     db: Option<DatabaseConnection>,
-    session_ttl: Duration,
     observers: Observers,
     preview_rate_limiter: RegistrationRateLimiter,
-    signup_rate_limiter: RegistrationRateLimiter,
-    login_ip_rate_limiter: RegistrationRateLimiter,
-    login_ip_account_rate_limiter: RegistrationRateLimiter,
-    login_account_rate_limiter: RegistrationRateLimiter,
-    /// Sources that recently signed in to an account; they skip the per-username backstop.
-    login_known_sources: KnownLoginSources,
     email_sender: std::sync::Arc<dyn EmailSender>,
     /// e.g. `https://rim.example.com`. Used to build the `/join/{token}` invite link. If unset,
     /// invite emails fall back to the bare token (dev-only).
@@ -75,38 +57,22 @@ pub struct DefaultAuthService {
     /// Invite emails one user sends per day, at the invites-per-day cap; `None` when that cap is
     /// off. Counted apart from the invites, which go when their workspace is deleted.
     invite_email_rate_limiter: Option<RegistrationRateLimiter>,
-    /// Usernames and display names signups may not take.
-    reserved_names: ReservedNames,
-    /// Runs the Argon2 work of signups and logins.
-    password_hashing: PasswordHashing,
     /// Told of every session a logout ends, so the session's live connections close.
     session_revocations: std::sync::Arc<dyn SessionRevocations>,
-    /// The terms of service URL every signup must accept; `None` when there are none.
-    terms_url: Option<String>,
-    /// The minimum age every signup must confirm; `None` when there is none.
-    minimum_age: Option<u8>,
-    /// Refuse every password signup.
-    signup_requires_keys: bool,
-    /// The workspace every new account joins as a Member, and the definition an owner claim
-    /// creates it from.
-    default_workspace: default_workspace::DefaultWorkspace,
-    /// The cap on local accounts every signup checks.
+    /// The cap on local accounts `registrationFull` and the signup capacity check read.
     account_cap: AccountCap,
 }
 
 impl DefaultAuthService {
-    /// Construct a new auth service with default rate limiters.
+    /// Construct a new auth service with the default preview rate limiter.
     ///
     /// # Examples
     /// ```ignore
-    /// let svc = DefaultAuthService::new(
-    ///     repos, Some(db), Duration::days(30), observers, email_sender, None,
-    /// );
+    /// let svc = DefaultAuthService::new(repos, Some(db), observers, email_sender, None);
     /// ```
     pub fn new(
         repos: AuthRepos,
         db: Option<DatabaseConnection>,
-        session_ttl: Duration,
         observers: Observers,
         email_sender: std::sync::Arc<dyn EmailSender>,
         public_base_url: Option<String>,
@@ -114,25 +80,13 @@ impl DefaultAuthService {
         Self {
             repos,
             db,
-            session_ttl,
             observers,
             preview_rate_limiter: RegistrationRateLimiter::preview_default(),
-            signup_rate_limiter: RegistrationRateLimiter::signup_default(),
-            login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
-            login_ip_account_rate_limiter: RegistrationRateLimiter::login_ip_account_default(),
-            login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
-            login_known_sources: KnownLoginSources::login_default(),
             email_sender,
             public_base_url,
             limits: InstanceLimits::default(),
             invite_email_rate_limiter: None,
-            reserved_names: ReservedNames::default(),
-            password_hashing: PasswordHashing::default(),
             session_revocations: crate::session_revocation::unshared(),
-            terms_url: None,
-            minimum_age: None,
-            signup_requires_keys: false,
-            default_workspace: default_workspace::DefaultWorkspace::None,
             account_cap: AccountCap::default(),
         }
     }
@@ -152,28 +106,6 @@ impl DefaultAuthService {
                 raw_token.to_string()
             }
         }
-    }
-
-    /// Replace the login rate limiters (per-IP attempts, per-(IP, username) failures,
-    /// per-username failures from any IP).
-    #[cfg(test)]
-    pub(crate) fn with_login_rate_limiters(
-        mut self,
-        ip_limiter: RegistrationRateLimiter,
-        ip_account_limiter: RegistrationRateLimiter,
-        account_limiter: RegistrationRateLimiter,
-    ) -> Self {
-        self.login_ip_rate_limiter = ip_limiter;
-        self.login_ip_account_rate_limiter = ip_account_limiter;
-        self.login_account_rate_limiter = account_limiter;
-        self
-    }
-
-    /// Use `limiter` for open-mode signups, so other signup paths (key-only signup) can share
-    /// one per-IP budget with the password signup.
-    pub(crate) fn with_signup_rate_limiter(mut self, limiter: RegistrationRateLimiter) -> Self {
-        self.signup_rate_limiter = limiter;
-        self
     }
 
     /// Applies the instance's caps: invites, workspace members and, with a cap of its own
@@ -236,65 +168,10 @@ impl DefaultAuthService {
         }
     }
 
-    pub(crate) fn with_reserved_names(mut self, reserved_names: ReservedNames) -> Self {
-        self.reserved_names = reserved_names;
-        self
-    }
-
-    /// Requires every signup to accept the terms at `terms_url`.
-    pub fn with_terms_url(mut self, terms_url: Option<String>) -> Self {
-        self.terms_url = terms_url;
-        self
-    }
-
-    /// Requires every signup to confirm the person has reached `minimum_age`.
-    pub fn with_minimum_age(mut self, minimum_age: Option<u8>) -> Self {
-        self.minimum_age = minimum_age;
-        self
-    }
-
-    /// Refuse every password signup when `required`, so new accounts sign up with a key.
-    pub fn with_signup_requires_keys(mut self, required: bool) -> Self {
-        self.signup_requires_keys = required;
-        self
-    }
-
-    /// Makes every new account a Member of `workspace`: a workspace id, or a definition an owner
-    /// claim creates the workspace from.
-    pub fn with_default_workspace(
-        mut self,
-        workspace: impl Into<default_workspace::DefaultWorkspace>,
-    ) -> Self {
-        self.default_workspace = workspace.into();
-        self
-    }
-
-    /// Checks every signup against `cap`, built from the same limits and shared with the
-    /// key-only signup, so a signup on either path refreshes the other's "full" answer.
+    /// Answers `registrationFull` from `cap`, built from the same limits and shared with the key
+    /// signup, so a signup refreshes the answer.
     pub(crate) fn with_account_cap(mut self, cap: AccountCap) -> Self {
         self.account_cap = cap;
-        self
-    }
-
-    /// `Forbidden` ([`signup::KEYS_REQUIRED_REFUSAL`]) when password signups are refused.
-    fn ensure_password_signup_allowed(&self, path: &str) -> ServiceResult<()> {
-        if !self.signup_requires_keys {
-            return Ok(());
-        }
-        info!(
-            target: "audit",
-            event = "password_signup_refused",
-            path,
-            "password signup refused: this server takes key signups only"
-        );
-        Err(ServiceError::Forbidden(
-            signup::KEYS_REQUIRED_REFUSAL.to_string(),
-        ))
-    }
-
-    /// Run hashing and verification through `hashing`, shared with other services.
-    pub(crate) fn with_password_hashing(mut self, hashing: PasswordHashing) -> Self {
-        self.password_hashing = hashing;
         self
     }
 
@@ -307,59 +184,11 @@ impl DefaultAuthService {
         self
     }
 
-    /// Share the store of recent successful login sources, so other services (password
-    /// reset) can forget an account's sources.
-    pub(crate) fn with_known_login_sources(mut self, sources: KnownLoginSources) -> Self {
-        self.login_known_sources = sources;
-        self
-    }
-
-    /// Construct with explicit preview and signup rate limiters.
+    /// Use `limiter` for the invite token preview.
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn with_rate_limiters(
-        repos: AuthRepos,
-        db: Option<DatabaseConnection>,
-        session_ttl: Duration,
-        observers: Observers,
-        preview_rate_limiter: RegistrationRateLimiter,
-        signup_rate_limiter: RegistrationRateLimiter,
-        email_sender: std::sync::Arc<dyn EmailSender>,
-        public_base_url: Option<String>,
-    ) -> Self {
-        Self {
-            repos,
-            db,
-            session_ttl,
-            observers,
-            preview_rate_limiter,
-            signup_rate_limiter,
-            login_ip_rate_limiter: RegistrationRateLimiter::login_ip_default(),
-            login_ip_account_rate_limiter: RegistrationRateLimiter::login_ip_account_default(),
-            login_account_rate_limiter: RegistrationRateLimiter::login_account_default(),
-            login_known_sources: KnownLoginSources::login_default(),
-            email_sender,
-            public_base_url,
-            limits: InstanceLimits::default(),
-            invite_email_rate_limiter: None,
-            reserved_names: ReservedNames::default(),
-            password_hashing: PasswordHashing::default(),
-            session_revocations: crate::session_revocation::unshared(),
-            terms_url: None,
-            minimum_age: None,
-            signup_requires_keys: false,
-            default_workspace: default_workspace::DefaultWorkspace::None,
-            account_cap: AccountCap::default(),
-        }
-    }
-
-    fn validate_password(password: &str) -> ServiceResult<()> {
-        if password.len() < 8 {
-            return Err(ServiceError::Validation(
-                "password must be at least 8 characters".to_string(),
-            ));
-        }
-        Ok(())
+    pub(crate) fn with_preview_rate_limiter(mut self, limiter: RegistrationRateLimiter) -> Self {
+        self.preview_rate_limiter = limiter;
+        self
     }
 
     /// Validate and normalise an email address.
@@ -409,302 +238,10 @@ impl DefaultAuthService {
             role: inv.role,
         }
     }
-
-    fn to_session_dto(sess: &rim_core::auth::model::Session) -> AuthSessionDto {
-        AuthSessionDto {
-            user_id: sess.user_id,
-            session_id: sess.id,
-            expires_at: sess.expires_at,
-        }
-    }
-
-    /// Look up `username` and verify `password`, creating a session on success.
-    ///
-    /// Returns `Unauthenticated` for both unknown user and wrong password; the caller counts
-    /// that outcome against the per-account login limiter.
-    async fn verify_login(&self, username: &str, password: &str) -> ServiceResult<LoginResultDto> {
-        let Some(user) = self.repos.user_repo.find_by_username(username).await? else {
-            // Pay the same Argon2 cost as a wrong password, so response time doesn't reveal
-            // whether the username exists.
-            self.password_hashing.verify_dummy(password).await?;
-            // Audit: failed login (user not found).
-            tracing::info!(
-                target: "audit",
-                event = "login_failure",
-                username = %username,
-                reason = "user_not_found",
-                "login attempt failed: user not found"
-            );
-            return Err(ServiceError::Unauthenticated);
-        };
-
-        // A key-only account has no password: pay the same Argon2 cost as a wrong password,
-        // so neither the answer nor its timing tells it apart.
-        let Some(password_hash) = user.password_hash.as_deref() else {
-            self.password_hashing.verify_dummy(password).await?;
-            tracing::info!(
-                target: "audit",
-                event = "login_failure",
-                user_id = %user.id,
-                username = %username,
-                reason = "key_only_account",
-                "login attempt failed: account has no password"
-            );
-            return Err(ServiceError::Unauthenticated);
-        };
-        let ok = self
-            .password_hashing
-            .verify(password, password_hash)
-            .await?;
-        if !ok {
-            // Audit: wrong password.
-            tracing::info!(
-                target: "audit",
-                event = "login_failure",
-                user_id = %user.id,
-                username = %username,
-                reason = "wrong_password",
-                "login attempt failed: wrong password"
-            );
-            return Err(ServiceError::Unauthenticated);
-        }
-
-        // An account that enrolled a key signs in with a device key only. Checked after the
-        // password so the answer and its timing are the same as for a wrong password.
-        if user.principal_id.is_some() {
-            tracing::info!(
-                target: "audit",
-                event = "login_failure",
-                user_id = %user.id,
-                username = %username,
-                reason = "key_account",
-                "login attempt failed: account signs in with a device key"
-            );
-            return Err(ServiceError::Unauthenticated);
-        }
-
-        // A password reset, a key enrollment and a ban commit under the user row lock. Taking
-        // the same lock and reading the account again means a change that raced the checks
-        // above either ends this session too or is seen here; it never leaves a session the
-        // change should have ended.
-        let scope = match &self.db {
-            Some(db) => Some(
-                begin_transaction(db)
-                    .await
-                    .map_err(ServiceError::internal)?,
-            ),
-            None => None,
-        };
-        let repos = match &scope {
-            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
-            None => self.repos.clone(),
-        };
-        let current = if repos.user_repo.lock_user(user.id).await? {
-            repos.user_repo.get_by_id(user.id).await?
-        } else {
-            None
-        };
-        let Some(current) = current.filter(|current| {
-            current.password_hash.as_deref() == Some(password_hash)
-                && current.principal_id.is_none()
-        }) else {
-            tracing::info!(
-                target: "audit",
-                event = "login_failure",
-                user_id = %user.id,
-                username = %username,
-                reason = "credentials_changed",
-                "login attempt failed: the account's credentials changed during sign-in"
-            );
-            return Err(ServiceError::Unauthenticated);
-        };
-
-        // An operator's complete ban blocks the account's address.
-        if let Some(email) = &current.email
-            && repos.user_repo.is_email_blocked(email).await?
-        {
-            tracing::info!(
-                target: "audit",
-                event = "blocked_email_refused",
-                action = "login",
-                user_id = %user.id,
-                "login refused: the account's email is blocked on this server"
-            );
-            return Err(ServiceError::Forbidden(
-                "this account is blocked on this server".to_string(),
-            ));
-        }
-
-        let (sess, raw_token, csrf) =
-            Self::create_session_in_txn(&repos, self.session_ttl, user.id, None, None).await?;
-        if let Some(scope) = scope {
-            scope.commit().await.map_err(ServiceError::internal)?;
-        }
-
-        // Audit: successful login.
-        tracing::info!(
-            target: "audit",
-            event = "login_success",
-            user_id = %user.id,
-            session_id = %sess.id,
-            "login succeeded"
-        );
-
-        Ok(LoginResultDto {
-            user_id: user.id,
-            session: Self::to_session_dto(&sess),
-            session_token: raw_token,
-            csrf_token: csrf,
-            keys: SessionKeysDto::kept(),
-        })
-    }
-
-    /// Insert a session row using the supplied `repos` handle.
-    ///
-    /// The method takes an explicit [`AuthRepos`] reference so that callers can
-    /// pass transactional repos. Every signup path that creates the user inside a
-    /// transaction **must** pass them for the session insert; otherwise the
-    /// session INSERT runs on a separate connection that cannot see the
-    /// uncommitted user row, causing an `fk-session-user` FK violation. A password
-    /// login passes the repos of the transaction that holds the user row lock.
-    ///
-    /// # Transaction contract
-    /// The `repos` argument **must** share the same database transaction as the
-    /// user-creation call that precedes this. When both operations commit
-    /// together, the FK is satisfied. If the transaction rolls back, neither the
-    /// user row nor the session row is persisted.
-    ///
-    /// # Errors
-    /// Propagates any underlying storage error from `session_repo.create_session`.
-    async fn create_session_in_txn(
-        repos: &AuthRepos,
-        session_ttl: Duration,
-        user_id: rim_core::user::model::UserId,
-        user_agent: Option<String>,
-        ip: Option<String>,
-    ) -> ServiceResult<(rim_core::auth::model::Session, String, String)> {
-        signup::create_session(
-            repos.session_repo.as_ref(),
-            session_ttl,
-            user_id,
-            user_agent,
-            ip,
-        )
-        .await
-    }
-
-    /// Create a password account inside an open transaction (see [`signup::create_user`]).
-    /// The `email` must already be normalised (lowercased, trimmed) by the caller, and
-    /// `display_name` resolved.
-    ///
-    /// # Errors
-    /// - `ServiceError::Conflict` — username already taken.
-    /// - `ServiceError::EmailTaken` — email already in use (case-insensitive).
-    /// - Propagates any underlying storage error.
-    async fn create_user_in_txn(
-        repos: &AuthRepos,
-        username: &str,
-        password_hash: String,
-        email: &str,
-        display_name: Option<String>,
-    ) -> ServiceResult<rim_core::user::model::User> {
-        signup::create_user(
-            repos.user_repo.as_ref(),
-            rim_core::user::model::NewUser {
-                username: username.to_string(),
-                password: Some(password_hash),
-                email: Some(email.to_string()),
-                display_name,
-                key_identity: None,
-            },
-        )
-        .await
-    }
 }
 
 #[async_trait]
 impl AuthService for DefaultAuthService {
-    #[instrument(name = "auth.login", skip_all, fields(username = %cmd.username))]
-    async fn login(&self, cmd: LoginCmd) -> ServiceResult<LoginResultDto> {
-        let LoginCmd {
-            username,
-            password,
-            remote_ip,
-        } = cmd;
-        let (username, password) = (username.as_str(), password.as_str());
-
-        // Every limit is checked before any lookup or Argon2 verify, so a throttled caller
-        // costs no hashing work and gets the same answer whether or not the username exists.
-        // The strict failure limit is per (IP, username), so one source exhausting it can't
-        // lock the account's owner out; the per-username limit across all IPs is a loose
-        // backstop against distributed guessing (tripping it needs several addresses). A
-        // source that signed in to this account recently skips the backstop, so even a
-        // distributed attack can't lock the owner out of their usual address. Failure slots
-        // are reserved up front (not recorded after a failure) so concurrent attempts can't
-        // all pass the check before any of them fails; they are refunded below unless the
-        // attempt turns out to be a failed login.
-        let now = Utc::now();
-        // Usernames are compared without regard to case, so every case variant names one
-        // account and shares its known sources and failure budgets.
-        let account_key = username.to_lowercase();
-        let known_source = self
-            .login_known_sources
-            .is_known(&remote_ip, &account_key, now);
-        let mut decision = self
-            .login_ip_rate_limiter
-            .check_and_record(&remote_ip, "login", now);
-        if decision == RateLimitDecision::Allowed {
-            decision =
-                self.login_ip_account_rate_limiter
-                    .check_and_record(&remote_ip, &account_key, now);
-            if decision == RateLimitDecision::Allowed && !known_source {
-                decision = self.login_account_rate_limiter.check_and_record(
-                    LOGIN_ACCOUNT_SCOPE,
-                    &account_key,
-                    now,
-                );
-                if decision != RateLimitDecision::Allowed {
-                    self.login_ip_account_rate_limiter
-                        .refund(&remote_ip, &account_key, now);
-                }
-            }
-        }
-        if let RateLimitDecision::Limited {
-            retry_after_seconds,
-        } = decision
-        {
-            tracing::warn!(
-                target: "audit",
-                event = "login_rate_limited",
-                username = %username,
-                remote_ip = %remote_ip,
-                retry_after_seconds = %retry_after_seconds,
-                "login rate limited"
-            );
-            crate::metrics::rate_limited("login");
-            return Err(ServiceError::RateLimited {
-                retry_after_seconds,
-            });
-        }
-
-        let result = self.verify_login(username, password).await;
-        if !matches!(result, Err(ServiceError::Unauthenticated)) {
-            self.login_ip_account_rate_limiter
-                .refund(&remote_ip, &account_key, now);
-            // A known source never reserved a backstop slot; refunding would free someone
-            // else's slot recorded at the same instant.
-            if !known_source {
-                self.login_account_rate_limiter
-                    .refund(LOGIN_ACCOUNT_SCOPE, &account_key, now);
-            }
-        }
-        if result.is_ok() {
-            self.login_known_sources
-                .record(&remote_ip, &account_key, Utc::now());
-        }
-        result
-    }
-
     #[instrument(name = "auth.logout", skip_all, fields(actor_id = %cmd.actor.user_id, session_id = %cmd.session_id))]
     async fn logout(&self, cmd: LogoutCmd) -> ServiceResult<()> {
         let LogoutCmd { actor, session_id } = cmd;
@@ -922,122 +459,6 @@ impl AuthService for DefaultAuthService {
         ))
     }
 
-    #[instrument(name = "auth.accept_invite", skip_all, fields(username = %cmd.username))]
-    async fn accept_invite(&self, cmd: AcceptInviteCmd) -> ServiceResult<AcceptInviteResultDto> {
-        self.check_registration_capacity().await?;
-        self.ensure_password_signup_allowed("workspace_invite")?;
-        let AcceptInviteCmd {
-            invite_token,
-            username,
-            password,
-            terms_accepted_url,
-            confirmed_minimum_age: confirmed_age,
-        } = cmd;
-        let terms_accepted_url =
-            accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
-        let confirmed_age = confirmed_minimum_age(self.minimum_age, confirmed_age)?;
-        let normalized_username = signup::normalize_username(&username)?;
-        let (invite_token, username, password) = (
-            invite_token.as_str(),
-            normalized_username.as_str(),
-            password.as_str(),
-        );
-        // The display name falls back to the username.
-        signup::check_reserved(&self.reserved_names, username, username)?;
-        Self::validate_password(password)?;
-
-        let inv =
-            signup::check_workspace_invite(self.repos.invite_repo.as_ref(), invite_token).await?;
-        let server_id = inv.server_id;
-        let token = signup::CheckedToken::WorkspaceInvite(inv);
-
-        let password_hash = self.password_hashing.hash(password).await?;
-
-        // Run all writes inside a single transaction when DB is available.
-        let scope = if let Some(db) = &self.db {
-            Some(
-                begin_transaction(db)
-                    .await
-                    .map_err(ServiceError::internal)?,
-            )
-        } else {
-            None
-        };
-        let repos = match &scope {
-            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
-            None => self.repos.clone(),
-        };
-
-        self.account_cap.admit(repos.user_repo.as_ref()).await?;
-        // Ensure username not taken (inside transaction to prevent TOCTOU race).
-        if repos.user_repo.find_by_username(username).await?.is_some() {
-            return Err(ServiceError::Conflict(
-                "username already exists".to_string(),
-            ));
-        }
-
-        // `accept_invite` takes no email (only signupWithInvite does), so supply a
-        // synthetic placeholder. The user can set their email via profile-edit.
-        let user = repos
-            .user_repo
-            .create_user(rim_core::user::model::NewUser {
-                username: username.to_string(),
-                password: Some(password_hash),
-                email: Some(format!("{username}@local.invalid")),
-                display_name: None,
-                key_identity: None,
-            })
-            .await
-            .map_err(|e| {
-                // Catch unique constraint violation as a clean Conflict error
-                if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
-                    return rim_core::repository::error::RepoError::new(
-                        rim_core::repository::error::RepoErrorKind::Conflict,
-                    );
-                }
-                e
-            })?;
-        signup::record_terms(
-            repos.user_repo.as_ref(),
-            user.id,
-            terms_accepted_url,
-            confirmed_age,
-        )
-        .await?;
-
-        // Joins the server, then consumes the invite; a failure rolls the transaction back.
-        let signup_repos = repos.signup_repos();
-        signup::claim_token(
-            &signup_repos,
-            &token,
-            user.id,
-            self.limits.members_per_workspace,
-        )
-        .await?;
-        let joined_default =
-            default_workspace::join(&signup_repos, &self.default_workspace, user.id).await?;
-
-        let (sess, raw_token, csrf) =
-            Self::create_session_in_txn(&repos, self.session_ttl, user.id, None, None).await?;
-
-        if let Some(scope) = scope {
-            scope.commit().await.map_err(ServiceError::internal)?;
-        }
-        self.account_cap.admitted();
-
-        crate::metrics::registered();
-        signup::announce_claimed(&token, user.id, username, &self.observers);
-        default_workspace::announce(joined_default, user.id, username, &self.observers);
-
-        Ok(AcceptInviteResultDto {
-            user_id: user.id,
-            server_id,
-            session: Self::to_session_dto(&sess),
-            session_token: raw_token,
-            csrf_token: csrf,
-        })
-    }
-
     #[instrument(name = "auth.join_server_by_invite", skip_all, fields(actor_id = %cmd.actor.user_id))]
     async fn join_server_by_invite(
         &self,
@@ -1139,216 +560,6 @@ impl AuthService for DefaultAuthService {
 
         Ok(JoinServerByInviteResultDto {
             server_id: inv.server_id,
-        })
-    }
-
-    #[instrument(name = "auth.signup_with_instance_invite", skip_all, fields(username = %cmd.username))]
-    async fn signup_with_instance_invite(
-        &self,
-        cmd: SignupWithInstanceInviteCmd,
-    ) -> ServiceResult<SignupResultDto> {
-        self.check_registration_capacity().await?;
-        self.ensure_password_signup_allowed("instance_invite")?;
-        let SignupWithInstanceInviteCmd {
-            instance_invite_token: raw_token,
-            username: typed_username,
-            password,
-            email,
-            display_name,
-            terms_accepted_url,
-            confirmed_minimum_age: confirmed_age,
-        } = cmd;
-        let terms_accepted_url =
-            accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
-        let confirmed_age = confirmed_minimum_age(self.minimum_age, confirmed_age)?;
-        let normalized_username = signup::normalize_username(&typed_username)?;
-        let (username, password) = (normalized_username.as_str(), password.as_str());
-
-        Self::validate_password(password)?;
-        let email = Self::validate_email(&email)?;
-        // The display name falls back to the username as typed, keeping its case.
-        let resolved_display_name =
-            signup::normalize_display_name(display_name.as_deref(), typed_username.trim())?;
-        signup::check_reserved(&self.reserved_names, username, &resolved_display_name)?;
-
-        let token = signup::CheckedToken::InstanceInvite(
-            signup::check_instance_invite(
-                self.repos.instance_invite_repo.as_ref(),
-                &raw_token,
-                Some(&email),
-            )
-            .await?,
-        );
-
-        let password_hash = self.password_hashing.hash(password).await?;
-
-        let scope = if let Some(db) = &self.db {
-            Some(
-                begin_transaction(db)
-                    .await
-                    .map_err(ServiceError::internal)?,
-            )
-        } else {
-            None
-        };
-        let txn_repos = match &scope {
-            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
-            None => self.repos.clone(),
-        };
-
-        self.account_cap.admit(txn_repos.user_repo.as_ref()).await?;
-        let user = Self::create_user_in_txn(
-            &txn_repos,
-            username,
-            password_hash,
-            &email,
-            Some(resolved_display_name),
-        )
-        .await?;
-        signup::record_terms(
-            txn_repos.user_repo.as_ref(),
-            user.id,
-            terms_accepted_url,
-            confirmed_age,
-        )
-        .await?;
-
-        // An invite used up since the pre-check is `InvalidToken`.
-        let signup_repos = txn_repos.signup_repos();
-        signup::claim_token(
-            &signup_repos,
-            &token,
-            user.id,
-            self.limits.members_per_workspace,
-        )
-        .await?;
-        let claimed = default_workspace::claim(
-            &signup_repos,
-            &self.default_workspace,
-            Some(&token),
-            user.id,
-        )
-        .await?;
-        let claimed_workspace = claimed.as_ref().map(|c| c.workspace_id);
-        let joined_default =
-            default_workspace::join(&signup_repos, &self.default_workspace, user.id).await?;
-
-        let (sess, raw_sess_token, csrf) =
-            Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
-
-        if let Some(scope) = scope {
-            scope.commit().await.map_err(ServiceError::internal)?;
-        }
-        self.account_cap.admitted();
-
-        crate::metrics::registered();
-        signup::announce_claimed(&token, user.id, username, &self.observers);
-        default_workspace::announce_claim(claimed, user.id, &self.observers);
-        default_workspace::announce(joined_default, user.id, username, &self.observers);
-
-        Ok(SignupResultDto {
-            user_id: user.id,
-            server_id: claimed_workspace,
-            session: Self::to_session_dto(&sess),
-            session_token: raw_sess_token,
-            csrf_token: csrf,
-            server_share: None,
-            keys: SessionKeysDto::kept(),
-        })
-    }
-
-    #[instrument(name = "auth.signup_open", skip_all, fields(username = %cmd.username))]
-    async fn signup_open(&self, cmd: SignupOpenCmd) -> ServiceResult<SignupResultDto> {
-        self.check_registration_capacity().await?;
-        self.ensure_password_signup_allowed("open")?;
-        let SignupOpenCmd {
-            username: typed_username,
-            password,
-            remote_ip,
-            email,
-            display_name,
-            terms_accepted_url,
-            confirmed_minimum_age: confirmed_age,
-        } = cmd;
-        let terms_accepted_url =
-            accepted_terms(self.terms_url.as_deref(), terms_accepted_url.as_deref())?;
-        let confirmed_age = confirmed_minimum_age(self.minimum_age, confirmed_age)?;
-
-        // Rate limit check.
-        signup::check_open_signup_rate(&self.signup_rate_limiter, &remote_ip)?;
-
-        let normalized_username = signup::normalize_username(&typed_username)?;
-        let (username, password) = (normalized_username.as_str(), password.as_str());
-        Self::validate_password(password)?;
-        let email = Self::validate_email(&email)?;
-        // The display name falls back to the username as typed, keeping its case.
-        let resolved_display_name =
-            signup::normalize_display_name(display_name.as_deref(), typed_username.trim())?;
-        signup::check_reserved(&self.reserved_names, username, &resolved_display_name)?;
-
-        let password_hash = self.password_hashing.hash(password).await?;
-
-        let scope = if let Some(db) = &self.db {
-            Some(
-                begin_transaction(db)
-                    .await
-                    .map_err(ServiceError::internal)?,
-            )
-        } else {
-            None
-        };
-        let txn_repos = match &scope {
-            Some(s) => AppRepos::with_handle(&s.handle()).for_auth(),
-            None => self.repos.clone(),
-        };
-
-        self.account_cap.admit(txn_repos.user_repo.as_ref()).await?;
-        let user = Self::create_user_in_txn(
-            &txn_repos,
-            username,
-            password_hash,
-            &email,
-            Some(resolved_display_name),
-        )
-        .await?;
-        signup::record_terms(
-            txn_repos.user_repo.as_ref(),
-            user.id,
-            terms_accepted_url,
-            confirmed_age,
-        )
-        .await?;
-        let joined_default =
-            default_workspace::join(&txn_repos.signup_repos(), &self.default_workspace, user.id)
-                .await?;
-        let (sess, raw_sess_token, csrf) =
-            Self::create_session_in_txn(&txn_repos, self.session_ttl, user.id, None, None).await?;
-
-        if let Some(scope) = scope {
-            scope.commit().await.map_err(ServiceError::internal)?;
-        }
-        self.account_cap.admitted();
-
-        crate::metrics::registered();
-        default_workspace::announce(joined_default, user.id, username, &self.observers);
-        // Audit: successful open-mode signup.
-        tracing::info!(
-            target: "audit",
-            event = "signup_open_success",
-            user_id = %user.id,
-            remote_ip = %remote_ip,
-            "user created via open signup"
-        );
-        info!(user_id = %user.id, "user created via open signup");
-
-        Ok(SignupResultDto {
-            user_id: user.id,
-            server_id: None,
-            session: Self::to_session_dto(&sess),
-            session_token: raw_sess_token,
-            csrf_token: csrf,
-            server_share: None,
-            keys: SessionKeysDto::kept(),
         })
     }
 

@@ -75,8 +75,8 @@ pub struct RIMConfig {
     pub smtp_from: Option<String>,
     /// `"starttls"` (default) | `"implicit"` | `"none"` (dev/localhost only).
     pub smtp_tls: Option<String>,
-    /// e.g. `https://rim.example.com`. Required to build clickable reset-password/invite
-    /// links; without it, emails fall back to including the bare token/no link.
+    /// e.g. `https://rim.example.com`. Required to build clickable invite links; without it,
+    /// invite emails fall back to including the bare token.
     pub public_base_url: Option<String>,
 
     /// How often (seconds) the notification digest job looks for due digests.
@@ -287,11 +287,6 @@ pub struct RIMConfig {
     /// `RIM_MINIMUM_AGE`; see [`RIMConfig::minimum_age`].
     pub minimum_age: Option<u32>,
 
-    /// Refuse every password signup, so new accounts sign up with a key only; unset is `true`.
-    /// Password sign-in of existing accounts is unaffected. Controlled by
-    /// `RIM_SIGNUP_REQUIRE_KEYS`; see [`RIMConfig::signup_requires_keys`].
-    pub signup_require_keys: Option<bool>,
-
     /// The id of a workspace on this server that every new account joins as a member, with its
     /// public channels, whichever way it signs up. Unset keeps signups as they are: a new
     /// account joins only the workspace its invite names. The server refuses to start when the
@@ -369,12 +364,6 @@ pub struct RIMConfig {
     /// each followed by `-`, `_`, `.` or a space. Controlled by `RIM_RESERVED_NAMES`; see
     /// [`RIMConfig::reserved_names`].
     pub reserved_names: Option<String>,
-
-    // ── Password hashing ────────────────────────────────────────────────────
-    /// Argon2 hashes and verifications the server runs at once, 1 to 64; default the number
-    /// of CPUs. Controlled by `RIM_PASSWORD_HASH_CONCURRENCY`; see
-    /// [`RIMConfig::password_hash_concurrency`].
-    pub password_hash_concurrency: Option<usize>,
 }
 
 /// Which parts of the server-to-server protocol this server runs (`RIM_ROLE`).
@@ -496,7 +485,6 @@ impl fmt::Debug for RIMConfig {
             .field("terms_file", &self.terms_file)
             .field("abuse_contact", &self.abuse_contact)
             .field("minimum_age", &self.minimum_age)
-            .field("signup_requires_keys", &self.signup_requires_keys())
             .field("default_workspace", &self.default_workspace)
             .field("default_workspace_file", &self.default_workspace_file)
             .field("instance_limits", &self.instance_limits())
@@ -579,7 +567,6 @@ impl Default for RIMConfig {
             terms_file: None,
             abuse_contact: None,
             minimum_age: None,
-            signup_require_keys: None,
             default_workspace: None,
             default_workspace_file: None,
             limit_workspaces_per_user: None,
@@ -599,7 +586,6 @@ impl Default for RIMConfig {
             rate_probation_messages_per_min: None,
             account_deletion_grace_days: None,
             reserved_names: None,
-            password_hash_concurrency: None,
         }
     }
 }
@@ -737,9 +723,8 @@ impl RIMConfig {
         )
     }
 
-    /// e.g. `https://rim.example.com`. Required to build clickable password-reset/invite
-    /// links in transactional emails; without it, those emails fall back to a bare token or no
-    /// link.
+    /// e.g. `https://rim.example.com`. Required to build clickable invite links in
+    /// transactional emails; without it, those emails fall back to a bare token.
     ///
     /// # Examples
     /// ```ignore
@@ -1083,22 +1068,6 @@ impl RIMConfig {
         }
     }
 
-    /// `RIM_PASSWORD_HASH_CONCURRENCY`: the Argon2 computations run at once; the number of
-    /// CPUs, within 1 to 64, when unset.
-    ///
-    /// # Errors
-    /// A message naming the variable when the value is outside 1 to 64.
-    pub fn password_hash_concurrency(&self) -> Result<usize, String> {
-        use rim_infra_services::password_hashing::{MAX_CONCURRENCY, PasswordHashing};
-        match self.password_hash_concurrency {
-            None => Ok(PasswordHashing::default_concurrency()),
-            Some(n) if (1..=MAX_CONCURRENCY).contains(&n) => Ok(n),
-            Some(n) => Err(format!(
-                "RIM_PASSWORD_HASH_CONCURRENCY={n} is outside 1 to {MAX_CONCURRENCY}"
-            )),
-        }
-    }
-
     /// `RIM_S2S_DENIED_PEERS` as server ids.
     ///
     /// # Errors
@@ -1228,11 +1197,6 @@ impl RIMConfig {
                 "RIM_TERMS_URL={terms} is not an absolute http or https URL"
             )),
         }
-    }
-
-    /// Whether password signups are refused: `RIM_SIGNUP_REQUIRE_KEYS`, `true` when unset.
-    pub fn signup_requires_keys(&self) -> bool {
-        self.signup_require_keys.unwrap_or(true)
     }
 
     /// `RIM_DEFAULT_WORKSPACE`, trimmed; `None` when unset or blank. Whether the workspace
@@ -1368,7 +1332,6 @@ impl RIMConfig {
         Ok(rim_api::types::InstancePolicy {
             notice: self.instance_notice()?,
             terms_url,
-            signup_requires_keys: self.signup_requires_keys(),
             default_workspace: self.default_workspace()?,
             abuse_contact: self.abuse_contact()?,
             minimum_age: self.minimum_age()?,
@@ -2269,26 +2232,6 @@ mod tests {
     }
 
     #[test]
-    fn password_hash_concurrency_is_read_from_its_variable_within_1_to_64() {
-        let load = |value: &str| {
-            RIMConfig::load_from(env(&[
-                ("DATABASE_URL", "postgres://localhost/rim"),
-                ("RIM_PASSWORD_HASH_CONCURRENCY", value),
-            ]))
-            .expect("loads")
-            .password_hash_concurrency()
-        };
-        let default = RIMConfig::default().password_hash_concurrency();
-        assert!(matches!(default, Ok(1..=64)), "{default:?}");
-        assert_eq!(load("1"), Ok(1));
-        assert_eq!(load("64"), Ok(64));
-        for outside in ["0", "65"] {
-            let err = load(outside).unwrap_err();
-            assert!(err.contains("RIM_PASSWORD_HASH_CONCURRENCY"), "{err}");
-        }
-    }
-
-    #[test]
     fn audit_retention_days_is_read_from_its_variable_and_a_non_number_is_refused() {
         let parse = |value: &str| {
             Config::builder()
@@ -2541,7 +2484,6 @@ mod tests {
             Ok(rim_api::types::InstancePolicy {
                 notice: Some("Run by the Example club, rules at /rules".to_string()),
                 terms_url: Some("https://rim.example.org/terms".to_string()),
-                signup_requires_keys: true,
                 default_workspace: None,
                 abuse_contact: None,
                 minimum_age: None,
@@ -2848,27 +2790,6 @@ mod tests {
             Ok(DefaultWorkspace::Fixed(workspace))
                 if workspace == uuid::Uuid::parse_str(id).expect("uuid").into()
         ));
-    }
-
-    #[test]
-    fn signup_requires_keys_unless_the_variable_turns_it_off() {
-        let load = |pairs: &[(&str, &str)]| {
-            let mut all = vec![("DATABASE_URL", "postgres://localhost/rim")];
-            all.extend_from_slice(pairs);
-            RIMConfig::load_from(env(&all))
-        };
-        assert!(RIMConfig::default().signup_requires_keys());
-        assert!(load(&[]).expect("loads").signup_requires_keys());
-        for (value, requires) in [("false", false), ("0", false), ("true", true), ("1", true)] {
-            let config = load(&[("RIM_SIGNUP_REQUIRE_KEYS", value)]).expect("loads");
-            assert_eq!(config.signup_requires_keys(), requires, "{value}");
-            assert_eq!(
-                config.instance_policy(None).map(|p| p.signup_requires_keys),
-                Ok(requires),
-                "{value}"
-            );
-        }
-        assert!(load(&[("RIM_SIGNUP_REQUIRE_KEYS", "sometimes")]).is_err());
     }
 
     #[test]

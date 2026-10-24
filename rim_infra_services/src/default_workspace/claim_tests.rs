@@ -114,7 +114,6 @@ fn user(id: UserId, username: &str) -> User {
     User {
         id,
         username: username.to_string(),
-        password_hash: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         last_login_at: None,

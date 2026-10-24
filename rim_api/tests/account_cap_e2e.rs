@@ -1,6 +1,5 @@
-//! The account cap (`RIM_LIMIT_ACCOUNTS`): every signup path, password and key-only, with an
-//! instance invite, a workspace invite, in open mode, a remote user signing up here and a
-//! proof-of-work, is refused with `REGISTRATION_FULL` once the server holds as many local
+//! The account cap (`RIM_LIMIT_ACCOUNTS`): every key signup path, with an instance invite, a
+//! workspace invite, in open mode, a remote user signing up here and a proof-of-work, is refused with `REGISTRATION_FULL` once the server holds as many local
 //! accounts as the cap allows, leaves nothing behind, and goes through with one place more.
 //! Accounts waiting out their deletion grace period count; remote users and tombstones do not.
 //! `serverInfo.registrationFull`, `serverInfo.limits.accounts` and the discovery document's
@@ -39,38 +38,32 @@ use support::nodes::{Node, databases, start};
 use support::registration::{seed_operator_invite, seed_workspace_invite};
 use support::relay::{key_signup, keys};
 
-const SIGNUP_WITH_INVITE: &str = r#"
-mutation Signup($input: SignupWithInviteInput!) { signupWithInvite(input: $input) { userId } }"#;
-
 const REGISTRATION_FULL: &str = "{ serverInfo { registrationFull } }";
 
 /// The ways an account comes to exist here, each refused at the cap.
 #[derive(Debug, Clone, Copy)]
 enum Path {
-    PasswordInstanceInvite,
-    PasswordWorkspaceInvite,
-    PasswordOpen,
-    KeyInstanceInvite,
-    KeyOpen,
-    KeyAdoptsRemote,
+    InstanceInvite,
+    WorkspaceInvite,
+    Open,
+    AdoptsRemote,
 }
 
 impl Path {
     fn mode(self) -> RegistrationMode {
         match self {
-            Self::PasswordInstanceInvite
-            | Self::PasswordWorkspaceInvite
-            | Self::KeyInstanceInvite => RegistrationMode::InviteOnly,
-            Self::PasswordOpen | Self::KeyOpen | Self::KeyAdoptsRemote => RegistrationMode::Open,
+            Self::InstanceInvite | Self::WorkspaceInvite => RegistrationMode::InviteOnly,
+            Self::Open | Self::AdoptsRemote => RegistrationMode::Open,
         }
     }
 
-    /// The identity seed of a key-only path; its device's seed is ten more.
+    /// The identity seed of a path; its device's seed is ten more.
     fn seed(self) -> u8 {
         match self {
-            Self::KeyInstanceInvite => 31,
-            Self::KeyOpen => 32,
-            _ => 33,
+            Self::InstanceInvite => 31,
+            Self::Open => 32,
+            Self::AdoptsRemote => 33,
+            Self::WorkspaceInvite => 34,
         }
     }
 
@@ -78,20 +71,8 @@ impl Path {
         TestIdentity::with_version(self.seed(), StatementVersion::V2)
     }
 
-    /// The signup this path makes on `schema`, with a fresh proof for a key-only one.
+    /// The signup this path makes on `schema`, with a fresh proof.
     async fn request(self, schema: &rim_api::AppSchema) -> Request {
-        let password = |username: &str, token: Option<(&str, &str)>| {
-            let mut input = json!({
-                "username": username,
-                "email": format!("{username}@example.com"),
-                "password": "ValidPass123!",
-            });
-            if let Some((field, raw)) = token {
-                input[field] = json!(raw);
-            }
-            anonymous_request(SIGNUP_WITH_INVITE, json!({ "input": input }))
-                .data(RemoteIp::new("198.51.100.7"))
-        };
         let key = |username: &'static str, extra: Value| async move {
             let input =
                 signup_input(schema, username, &self.identity(), self.seed() + 10, extra).await;
@@ -99,24 +80,22 @@ impl Path {
                 .data(RemoteIp::new("198.51.100.8"))
         };
         match self {
-            Self::PasswordInstanceInvite => password(
-                "cap_instance",
-                Some(("instanceInviteToken", "rim_cap_instance")),
-            ),
-            Self::PasswordWorkspaceInvite => password(
-                "cap_workspace",
-                Some(("workspaceInviteToken", "rim_cap_workspace")),
-            ),
-            Self::PasswordOpen => password("cap_open", None),
-            Self::KeyInstanceInvite => {
+            Self::WorkspaceInvite => {
+                key(
+                    "cap_key_workspace",
+                    json!({ "workspaceInviteToken": "rim_cap_workspace" }),
+                )
+                .await
+            }
+            Self::InstanceInvite => {
                 key(
                     "cap_key_invite",
                     json!({ "instanceInviteToken": "rim_cap_key_instance" }),
                 )
                 .await
             }
-            Self::KeyOpen => key("cap_key_open", json!({})).await,
-            Self::KeyAdoptsRemote => key("cap_adopted", json!({})).await,
+            Self::Open => key("cap_key_open", json!({})).await,
+            Self::AdoptsRemote => key("cap_adopted", json!({})).await,
         }
     }
 }
@@ -166,11 +145,11 @@ async fn every_signup_path_is_refused_at_the_cap_and_admitted_with_one_place_mor
     sql(
         &ctx,
         r#"UPDATE "user" SET deleted_at = now(), username = 'deleted-0000cap', email = NULL,
-               password_hash = NULL, principal_id = 'rimp1_cap_gone' WHERE id = $1"#,
+               principal_id = 'rimp1_cap_gone' WHERE id = $1"#,
         vec![uuid::Uuid::from(gone.id).into()],
     )
     .await;
-    let remote = Path::KeyAdoptsRemote.identity();
+    let remote = Path::AdoptsRemote.identity();
     let remote_state = KeyState::from_inception(&remote.inception()).expect("inception");
     let remote_id = SeaOrmHostRepository::new(ctx.db.clone())
         .create_remote_user(NewRemoteUser {
@@ -183,7 +162,6 @@ async fn every_signup_path_is_refused_at_the_cap_and_admitted_with_one_place_mor
         .await
         .expect("remote user");
     let expires = Utc::now() + chrono::Duration::hours(1);
-    seed_operator_invite(&ctx.db, "rim_cap_instance", expires).await;
     seed_operator_invite(&ctx.db, "rim_cap_key_instance", expires).await;
     seed_workspace_invite(&ctx.db, owner.id, server.id, "rim_cap_workspace").await;
 
@@ -194,12 +172,10 @@ async fn every_signup_path_is_refused_at_the_cap_and_admitted_with_one_place_mor
     );
 
     for path in [
-        Path::PasswordInstanceInvite,
-        Path::PasswordWorkspaceInvite,
-        Path::PasswordOpen,
-        Path::KeyInstanceInvite,
-        Path::KeyOpen,
-        Path::KeyAdoptsRemote,
+        Path::InstanceInvite,
+        Path::WorkspaceInvite,
+        Path::Open,
+        Path::AdoptsRemote,
     ] {
         let count = local_accounts(&ctx).await;
         let capped = |accounts| {
@@ -336,18 +312,6 @@ async fn a_full_instance_refuses_invalid_signup_inputs_before_validation() {
             json!({"instanceInviteToken":"unknown"}),
             json!({"instanceInviteToken":"unknown", "workspaceInviteToken":"unknown"}),
         ] {
-            let mut input = json!({"username":"!", "email":"invalid", "password":"",
-                "acceptedTermsUrl":"https://wrong.example/terms"});
-            input
-                .as_object_mut()
-                .expect("input")
-                .extend(tokens.as_object().expect("tokens").clone());
-            let (code, _) = exec_err(
-                &schema,
-                anonymous_request(SIGNUP_WITH_INVITE, json!({"input":input})),
-            )
-            .await;
-            assert_eq!(code, "REGISTRATION_FULL");
             let identity = TestIdentity::with_version(91, StatementVersion::V2);
             let mut input = signup_input(&schema, "!", &identity, 92, tokens).await;
             input["keyLog"] = json!([]);

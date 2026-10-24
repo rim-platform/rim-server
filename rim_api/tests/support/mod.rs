@@ -10,7 +10,7 @@
 /// `rim_infra_db/tests/support/mod.rs`).
 #[allow(dead_code)] // Not every test binary that includes `support` uses the GraphQL helpers.
 pub mod graphql;
-#[allow(dead_code)] // Only the key identity, device link and encryption suites enroll keys.
+#[allow(dead_code)] // Not every suite signs up with a key.
 pub mod identity;
 #[allow(dead_code)] // Only the encryption tests use the MLS client.
 pub mod mls;
@@ -20,14 +20,12 @@ pub mod nodes;
 pub mod password;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
-#[allow(dead_code)] // Only the relay tests sign people up on two servers.
+#[allow(dead_code)] // Only the relay and HTTP suites sign people up over HTTP.
 pub mod relay;
 #[allow(dead_code)] // Only some test binaries seed the shared role cast.
 pub mod roles;
 #[allow(dead_code)] // Only the messaging suites send every messaging root.
 pub mod roots;
-#[allow(dead_code)] // Only the suites that sign in with a password use it.
-pub mod sessions;
 #[allow(dead_code)] // Only the suites that open a WebSocket use it.
 pub mod ws;
 
@@ -240,15 +238,19 @@ impl TestCtx {
         Self { conn, db }
     }
 
-    /// Create a user with the given `username` and an unusable password hash.
+    /// Create a user with the given `username`, the email `<username>@test.example.com`, a
+    /// fresh principal id and a stand-in identity key.
     pub async fn create_user(&self, username: &str) -> User {
+        let principal_id = format!("rimp1_test_{}", uuid::Uuid::now_v7().simple());
         let repo = SeaOrmUserRepository::new(self.db.clone());
         repo.create_user(NewUser {
             username: username.to_string(),
-            password: Some("$argon2id$v=invalid$test_only".to_string()),
             email: Some(format!("{}@test.example.com", username.to_lowercase())),
             display_name: None,
-            key_identity: None,
+            key_identity: Some(rim_core::user::model::NewUserKeyIdentity {
+                identity_key: format!("ed25519:{principal_id}"),
+                principal_id,
+            }),
         })
         .await
         .expect("create_user failed")
@@ -457,33 +459,6 @@ impl TestCtx {
             std::sync::Arc::new(provider),
             observers,
             rim_services::auth::dto::RegistrationMode::InviteOnly,
-        )
-    }
-
-    /// Build the schema on an instance whose signups need a key, as `RIM_SIGNUP_REQUIRE_KEYS`
-    /// does, in `registration_mode`.
-    pub fn build_schema_requiring_keys(
-        &self,
-        registration_mode: rim_services::auth::dto::RegistrationMode,
-    ) -> rim_api::AppSchema {
-        let (provider, observers) = test_provider(
-            &self.conn,
-            std::sync::Arc::new(NoopBroadcaster),
-            rim_infra_services::feature_gate::InstanceFeatureGate::all_enabled(),
-            rim_infra_services::FederationHooks {
-                signup_requires_keys: true,
-                ..Default::default()
-            },
-            rim_services::limits::InstanceLimits::default(),
-        );
-        schema_with_policy(
-            std::sync::Arc::new(provider),
-            observers,
-            registration_mode,
-            rim_api::types::InstancePolicy {
-                signup_requires_keys: true,
-                ..Default::default()
-            },
         )
     }
 
@@ -765,9 +740,6 @@ fn test_provider(
             rim_infra_db::sea_orm_impl::notification_preference::SeaOrmNotificationPreferenceRepository::new(
                 db.clone(),
             ),
-        ),
-        password_reset_token_repo: Arc::new(
-            rim_infra_db::sea_orm_impl::password_reset_token::SeaOrmPasswordResetTokenRepository::new(db.clone()),
         ),
         read_state_repo: Arc::new(
             rim_infra_db::sea_orm_impl::conversation_read_state::SeaOrmConversationReadStateRepository::new(

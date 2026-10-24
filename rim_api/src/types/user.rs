@@ -59,8 +59,8 @@ pub struct User {
     pub avatar_url: AvatarUrl,
     pub status_text: Option<String>,
     pub bio: Option<String>,
-    /// Key-based principal id (`rimp1_...`) once the account enrolled a key; null before. Plugins
-    /// see this id, and the host maps a provisional `rimp0_` id to it once.
+    /// Key-based principal id (`rimp1_...`); null only for a purged account that never had one.
+    /// Plugins see this id, and the host maps a provisional `rimp0_` id to it once.
     pub principal_id: Option<String>,
     /// When the account leaves probation, while it is in it. Read on `me` only; null for
     /// everyone else and once probation is over.

@@ -14,7 +14,7 @@
 //! - [`SharedIdentity`]: this server's key, log and descriptor, shared by everything that
 //!   signs.
 //! - [`handle`]: handle domains and the `@<username>:<domain>` form.
-//! - [`pow`]: the proof-of-work a relay in `pow` registration mode asks of key-only signups.
+//! - [`pow`]: the proof-of-work a relay in `pow` registration mode asks of key signups.
 
 pub mod descriptor;
 mod error;

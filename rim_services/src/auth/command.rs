@@ -5,14 +5,6 @@ use rim_core::server::model::ServerId;
 use crate::Actor;
 
 #[derive(Debug, Clone)]
-pub struct LoginCmd {
-    pub username: String,
-    pub password: String,
-    /// Client IP for per-IP login rate limiting (`"unknown"` when unavailable).
-    pub remote_ip: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct LogoutCmd {
     pub actor: Actor,
     pub session_id: rim_core::auth::model::SessionId,
@@ -59,81 +51,18 @@ pub struct ListInvitesQuery {
 }
 
 #[derive(Debug, Clone)]
-pub struct AcceptInviteCmd {
-    pub invite_token: String,
-    pub username: String,
-    pub password: String,
-    /// The terms URL the person accepted. The service refuses the signup when the instance has
-    /// terms and this is not their URL, and records it on the new account; without instance
-    /// terms it is ignored.
-    pub terms_accepted_url: Option<String>,
-    /// The minimum age the person confirmed reaching. The service refuses the signup when the
-    /// instance has a minimum age and this is not it, and records it on the new account;
-    /// without one it is ignored.
-    pub confirmed_minimum_age: Option<i32>,
-}
-
-#[derive(Debug, Clone)]
 pub struct JoinServerByInviteCmd {
     pub actor: Actor,
     pub invite_token: String,
 }
 
-/// The registration token a signup presents in invite-only mode, by kind. Each kind is
-/// checked and consumed the way its password signup does it: an instance invite creates an
-/// account with no workspace; a workspace invite also joins its server.
+/// The registration token a key signup presents in invite-only mode, by kind. Each takes one
+/// use inside the signup's transaction: an instance invite creates an account with no workspace
+/// of its own; a workspace invite also joins its server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignupToken {
     InstanceInvite(String),
     WorkspaceInvite(String),
-}
-
-/// Command for signing up with an instance invite token.
-#[derive(Debug, Clone)]
-pub struct SignupWithInstanceInviteCmd {
-    pub instance_invite_token: String,
-    pub username: String,
-    pub password: String,
-    /// Required. Pre-normalised (trimmed + lowercased) at the resolver boundary;
-    /// the service also validates before insert as defence in depth.
-    pub email: String,
-    /// Optional display name (raw input). The service normalises and falls back
-    /// to `username` when absent or blank after trim.
-    pub display_name: Option<String>,
-    /// The terms URL the person accepted. The service refuses the signup when the instance has
-    /// terms and this is not their URL, and records it on the new account; without instance
-    /// terms it is ignored.
-    pub terms_accepted_url: Option<String>,
-    /// The minimum age the person confirmed reaching. The service refuses the signup when the
-    /// instance has a minimum age and this is not it, and records it on the new account;
-    /// without one it is ignored.
-    pub confirmed_minimum_age: Option<i32>,
-}
-
-/// Command for open-mode signup (no token required).
-#[derive(Debug, Clone)]
-pub struct SignupOpenCmd {
-    pub username: String,
-    pub password: String,
-    /// Caller's remote IP for rate-limit enforcement.
-    ///
-    /// The service checks the signup rate limiter against this IP before
-    /// creating the user, returning `RateLimited` if the limit is exceeded.
-    pub remote_ip: String,
-    /// Required. Pre-normalised (trimmed + lowercased) at the resolver boundary;
-    /// the service also validates before insert as defence in depth.
-    pub email: String,
-    /// Optional display name (raw input). The service normalises and falls back
-    /// to `username` when absent or blank after trim.
-    pub display_name: Option<String>,
-    /// The terms URL the person accepted. The service refuses the signup when the instance has
-    /// terms and this is not their URL, and records it on the new account; without instance
-    /// terms it is ignored.
-    pub terms_accepted_url: Option<String>,
-    /// The minimum age the person confirmed reaching. The service refuses the signup when the
-    /// instance has a minimum age and this is not it, and records it on the new account;
-    /// without one it is ignored.
-    pub confirmed_minimum_age: Option<i32>,
 }
 
 /// Query to preview a registration token (instance or workspace invite).

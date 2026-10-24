@@ -6,24 +6,18 @@ use rim_core::repository::pagination::Page;
 
 use crate::ServiceResult;
 use crate::auth::command::{
-    AcceptInviteCmd, CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery, LoginCmd, LogoutCmd,
-    LogoutOtherSessionsCmd, PreviewInviteTokenQuery, RevokeInviteCmd, SignupOpenCmd,
-    SignupWithInstanceInviteCmd,
+    CreateInviteCmd, JoinServerByInviteCmd, ListInvitesQuery, LogoutCmd, LogoutOtherSessionsCmd,
+    PreviewInviteTokenQuery, RevokeInviteCmd,
 };
 use crate::auth::dto::{
-    AcceptInviteResultDto, CreateInviteResultDto, InviteDto, InvitePageCursor,
-    InviteTokenPreviewDto, JoinServerByInviteResultDto, LoginResultDto, RequestAuthResultDto,
-    SessionSecret, SignupResultDto,
+    CreateInviteResultDto, InviteDto, InvitePageCursor, InviteTokenPreviewDto,
+    JoinServerByInviteResultDto, RequestAuthResultDto, SessionSecret,
 };
 
-/// Password sign-in, sessions, invites and the password signups. A server whose signups need a
-/// key refuses every password signup with `Forbidden`; sign-in of existing accounts is
-/// unaffected.
+/// Sessions, workspace invites, the invite token preview and the account cap.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait AuthService: Send + Sync {
-    async fn login(&self, cmd: LoginCmd) -> ServiceResult<LoginResultDto>;
-
     async fn logout(&self, cmd: LogoutCmd) -> ServiceResult<()>;
 
     /// Revoke every session of the actor's account except the calling one. Returns how many
@@ -61,57 +55,10 @@ pub trait AuthService: Send + Sync {
         query: ListInvitesQuery,
     ) -> ServiceResult<Page<InviteDto, InvitePageCursor>>;
 
-    async fn accept_invite(&self, cmd: AcceptInviteCmd) -> ServiceResult<AcceptInviteResultDto>;
-
     async fn join_server_by_invite(
         &self,
         cmd: JoinServerByInviteCmd,
     ) -> ServiceResult<JoinServerByInviteResultDto>;
-
-    /// Sign up using an operator-issued instance invite token.
-    ///
-    /// Atomically consumes one use slot and creates the user.
-    /// On success the user has no workspace membership.
-    ///
-    /// # Errors
-    /// - `InvalidToken` — token not found, exhausted, or revoked.
-    /// - `ExpiredToken` — token exists but is past `expires_at`.
-    /// - `Conflict` — username already taken.
-    /// - `Validation` — username or password fails validation rules, or the invite is bound
-    ///   to another email address.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let result = auth.signup_with_instance_invite(SignupWithInstanceInviteCmd {
-    ///     instance_invite_token: raw_token,
-    ///     username: "bob".into(),
-    ///     password: "s3cur3p4ss".into(),
-    /// }).await?;
-    /// ```
-    async fn signup_with_instance_invite(
-        &self,
-        cmd: SignupWithInstanceInviteCmd,
-    ) -> ServiceResult<SignupResultDto>;
-
-    /// Sign up in open-registration mode (no token required).
-    ///
-    /// Internally checks the signup rate limiter for `cmd.remote_ip` before
-    /// creating the user. The calling resolver is responsible for verifying
-    /// `RegistrationMode::Open` and supplying the remote IP.
-    ///
-    /// # Errors
-    /// - `Conflict` — username already taken.
-    /// - `Validation` — username or password fails validation rules.
-    /// - `RateLimited` — signup rate limit exceeded for the caller's IP.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let result = auth.signup_open(SignupOpenCmd {
-    ///     username: "carol".into(),
-    ///     password: "s3cur3p4ss".into(),
-    /// }).await?;
-    /// ```
-    async fn signup_open(&self, cmd: SignupOpenCmd) -> ServiceResult<SignupResultDto>;
 
     /// Preview a registration token without consuming it.
     ///

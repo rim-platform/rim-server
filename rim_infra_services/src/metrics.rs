@@ -383,13 +383,13 @@ mod tests {
     #[test]
     fn rejections_are_counted_by_limiter() {
         let ((), got) = recorded(|| {
-            rate_limited("login");
-            rate_limited("login");
+            rate_limited("preview_invite");
+            rate_limited("preview_invite");
             rate_limited("signup");
             pow_rejected();
         });
         assert_eq!(
-            got.counter(RATE_LIMIT_REJECTIONS, &[("limiter", "login")]),
+            got.counter(RATE_LIMIT_REJECTIONS, &[("limiter", "preview_invite")]),
             2
         );
         assert_eq!(

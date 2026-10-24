@@ -82,28 +82,6 @@ impl KeyIdentityRepository for SeaOrmKeyIdentityRepository {
         models.into_iter().map(TryInto::try_into).collect()
     }
 
-    async fn enroll(
-        &self,
-        user_id: UserId,
-        principal_id: &str,
-        identity_key: &str,
-        entries: Vec<NewKeyLogEntry>,
-    ) -> RepoResult<()> {
-        let res = user::Entity::update_many()
-            .col_expr(user::Column::PrincipalId, Expr::value(principal_id))
-            .col_expr(user::Column::IdentityKey, Expr::value(identity_key))
-            .col_expr(user::Column::UpdatedAt, Expr::value(Utc::now()))
-            .filter(user::Column::Id.eq(Uuid::from(user_id)))
-            .filter(user::Column::PrincipalId.is_null())
-            .exec(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        if res.rows_affected != 1 {
-            return Err(RepoError::new(RepoErrorKind::Conflict));
-        }
-        self.insert_key_log(user_id, entries).await
-    }
-
     async fn insert_key_log(
         &self,
         user_id: UserId,

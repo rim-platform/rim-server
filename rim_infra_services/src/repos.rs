@@ -27,7 +27,6 @@ use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::moderation::repository::ModerationRepository;
 use rim_core::notification::repository::NotificationRepository;
 use rim_core::notification_preference::repository::NotificationPreferenceRepository;
-use rim_core::password_reset::repository::PasswordResetTokenRepository;
 use rim_core::pipeline::repository::PipelineRepository;
 use rim_core::public_join_link::repository::PublicJoinLinkRepository;
 use rim_core::relay::repository::{RelayAbuseRepository, RelayRepository, SubscriptionRepository};
@@ -59,7 +58,6 @@ pub struct AppRepos {
     pub message_mention_repo: Arc<dyn MessageMentionRepository>,
     pub message_pin_repo: Arc<dyn MessagePinRepository>,
     pub notification_preference_repo: Arc<dyn NotificationPreferenceRepository>,
-    pub password_reset_token_repo: Arc<dyn PasswordResetTokenRepository>,
     pub read_state_repo: Arc<dyn ConversationReadStateRepository>,
     pub link_preview_repo: Arc<dyn LinkPreviewRepository>,
     pub custom_emoji_repo: Arc<dyn CustomEmojiRepository>,
@@ -489,14 +487,6 @@ impl AppRepos {
         }
     }
 
-    pub fn for_password_reset(&self) -> crate::password_reset::PasswordResetRepos {
-        crate::password_reset::PasswordResetRepos {
-            user_repo: Arc::clone(&self.user_repo),
-            password_reset_token_repo: Arc::clone(&self.password_reset_token_repo),
-            session_repo: Arc::clone(&self.session_repo),
-        }
-    }
-
     pub fn for_command(&self) -> CommandRepos {
         CommandRepos {
             user_command_repo: Arc::clone(&self.user_command_repo),
@@ -695,11 +685,6 @@ impl AppRepos {
             )),
             notification_preference_repo: Arc::new(
                 sea_orm_impl::notification_preference::SeaOrmNotificationPreferenceRepository::new(
-                    handle.clone(),
-                ),
-            ),
-            password_reset_token_repo: Arc::new(
-                sea_orm_impl::password_reset_token::SeaOrmPasswordResetTokenRepository::new(
                     handle.clone(),
                 ),
             ),

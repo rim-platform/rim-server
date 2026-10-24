@@ -5,19 +5,15 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::auth::dto::{LoginResultDto, SignupResultDto};
 use crate::key_auth::command::{
-    AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
-    IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
-    RotateIdentityKeyCmd, SignupWithKeyCmd,
+    AddDeviceKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery, IssueKeyChallengeCmd, LoginWithKeyCmd,
+    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SignupWithKeyCmd,
 };
 use crate::key_auth::dto::{
     DeviceKeyDto, KeyChallengeDto, KeyIdentityDto, KeyLogEntryDto, ProfileCardDto,
 };
 
-/// Key identity and challenge login.
-///
-/// Sits beside the password [`crate::auth::service::AuthService`]: a key login issues the same
-/// session the password login does. Once an account enrolls a key, its password no longer signs
-/// in.
+/// Key identity, key signup and challenge login. A local account signs in with a device key
+/// and a ticket from its OPAQUE password login.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait KeyAuthService: Send + Sync {
@@ -36,20 +32,12 @@ pub trait KeyAuthService: Send + Sync {
     /// - `RateLimited` when the caller's IP fails too often.
     async fn login_with_key(&self, cmd: LoginWithKeyCmd) -> ServiceResult<LoginResultDto>;
 
-    /// Bind a key identity to the signed-in account, with its first device. The calling session
-    /// becomes that device's session, every other session of the account ends, and the password
-    /// stops signing in.
-    ///
-    /// # Errors
-    /// - `Validation` when the log or the certificate does not verify.
-    /// - `Conflict` when the account already has a key, or another account here has this one.
-    async fn enroll(&self, cmd: EnrollIdentityKeyCmd) -> ServiceResult<KeyIdentityDto>;
-
-    /// Create an account from a key identity alone, with no password, and sign it in on the
-    /// device that signed up. The identity is verified as for [`Self::enroll`]; the
-    /// registration token (or, in open mode, the per-IP signup limit) is handled as for the
-    /// password signups. An email-bound instance invite gives the account its address; the
-    /// account has no email otherwise.
+    /// Create an account from a key identity and an OPAQUE password, and sign it in on the
+    /// device that signed up. The key log, the device certificate and a login proof over a
+    /// challenge from this server are verified, and the registration token (or, in open mode,
+    /// the per-IP signup limit, in pow mode a token or a proof of work) takes one use. An
+    /// email-bound instance invite gives the account its address; the account has no email
+    /// otherwise.
     ///
     /// # Errors
     /// - `Validation` when the log, certificate or proof does not verify, the proof names
@@ -57,8 +45,9 @@ pub trait KeyAuthService: Send + Sync {
     ///   token does not match the registration mode, or an operator blocked the invite's email.
     /// - `EmailTaken` when another account has the email-bound invite's address.
     /// - `Conflict` when the username is taken or another account here has this principal.
-    /// - `InvalidToken`, `ExpiredToken`, `NotFound` or `PermissionDenied` for a token refused
-    ///   the way its password signup refuses it.
+    /// - `InvalidToken`, `ExpiredToken`, `NotFound` or `PermissionDenied` for a token that is
+    ///   unknown, used up, revoked or expired, or a workspace invite whose workspace refuses the
+    ///   join.
     /// - `RateLimited` in open mode when the caller's IP signs up too often.
     async fn signup_with_key(&self, cmd: SignupWithKeyCmd) -> ServiceResult<SignupResultDto>;
 

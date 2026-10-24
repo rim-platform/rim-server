@@ -91,7 +91,6 @@ pub(crate) struct MutationGroup3(
 
 #[derive(MergedObject, Default)]
 pub(crate) struct MutationGroup4(
-    auth::PasswordResetMutations,
     custom_emoji::CustomEmojiMutations,
     macro_def::MacroMutations,
     channel_lens::ChannelLensMutations,

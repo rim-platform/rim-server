@@ -54,7 +54,6 @@ pub mod keyed_rate_limiter;
 // pub: rim_server loads the key file at boot and hands the key to the provider.
 pub mod link_key;
 pub(crate) mod link_preview;
-pub(crate) mod login_sources;
 pub mod macro_def;
 pub(crate) mod mention;
 pub(crate) mod message;
@@ -70,9 +69,6 @@ pub(crate) mod notification_preference;
 /// Public for `rim_server`, whose `operator` command grants and revokes the role.
 pub mod operator;
 pub(crate) mod outbound;
-/// Public for `rim_server`, whose composition root sizes the hasher from its configuration.
-pub mod password_hashing;
-pub(crate) mod password_reset;
 // pub: rim_server loads the key file at boot and hands the key to the provider.
 pub mod password_key;
 pub(crate) mod pin;

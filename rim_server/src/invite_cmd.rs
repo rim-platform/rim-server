@@ -10,9 +10,9 @@
 //! ```
 //!
 //! `create` prints the signup link (`<public url>/join/<token>`) on its first line; the token is
-//! shown once and only its hash is stored. With `--email` the invite is bound to that address:
-//! a key signup gives the account that address, and a password signup must give it. Exit code
-//! 0 on success, 1 on any error, 2 on a usage error.
+//! shown once and only its hash is stored. With `--email` the invite is bound to that address,
+//! and the signup gives the account that address. Exit code 0 on success, 1 on any error, 2 on
+//! a usage error.
 
 use std::fmt::Write as _;
 

@@ -30,7 +30,7 @@ pub struct SeedInstanceInviteOpts {
 /// for the given raw token and return its id.
 ///
 /// Hashes `raw_token` with SHA-256 before inserting.  The caller must supply
-/// `raw_token` when submitting the `signupWithInvite` GraphQL mutation.
+/// `raw_token` when submitting the `signupWithKey` GraphQL mutation.
 ///
 /// # Panics
 /// Panics if the database insert fails.

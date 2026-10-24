@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use rim_core::auth::model::NewSession;
 use rim_core::auth::repository::SessionRepository;
-use rim_core::user::model::{NewUser, UserId};
+use rim_core::user::model::{NewUser, NewUserKeyIdentity, UserId};
 use rim_core::user::repository::UserRepository;
 use rim_infra_db::sea_orm_impl::session::SeaOrmSessionRepository;
 use rim_infra_db::sea_orm_impl::user::SeaOrmUserRepository;
@@ -331,10 +331,12 @@ async fn an_operator_blocking_an_account_in_the_app_closes_its_websocket() {
     let opal = SeaOrmUserRepository::new(w.node.db.clone().into())
         .create_user(NewUser {
             username: "opal".to_string(),
-            password: Some("$argon2id$v=invalid$test_only".to_string()),
             email: Some("opal@test.example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: Some(NewUserKeyIdentity {
+                principal_id: "rimp1_opal".to_string(),
+                identity_key: "ed25519:opal".to_string(),
+            }),
         })
         .await
         .expect("operator account");
@@ -394,10 +396,12 @@ async fn a_join_requests_person_hears_of_it_on_the_direct_space_and_the_owner_on
     let person = SeaOrmUserRepository::new(world.node.db.clone().into())
         .create_user(NewUser {
             username: "pat".to_string(),
-            password: Some("$argon2id$v=invalid$test_only".to_string()),
             email: Some("pat@test.example.com".to_string()),
             display_name: None,
-            key_identity: None,
+            key_identity: Some(NewUserKeyIdentity {
+                principal_id: "rimp1_pat".to_string(),
+                identity_key: "ed25519:pat".to_string(),
+            }),
         })
         .await
         .expect("user");

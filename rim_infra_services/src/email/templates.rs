@@ -27,39 +27,6 @@ pub fn escape_html(input: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-/// Password-reset email. `link` is the full, already-built reset URL (or bare token if
-/// `public_base_url` was unset — see `password_reset.rs`).
-///
-/// # Examples
-/// ```
-/// use rim_infra_services::email::templates::password_reset;
-/// let msg = password_reset("user@example.com", "https://rim.example.com/reset-password/abc123");
-/// assert_eq!(msg.to, "user@example.com");
-/// assert!(msg.body_text.contains("https://rim.example.com/reset-password/abc123"));
-/// ```
-pub fn password_reset(to: &str, link: &str) -> EmailMessage {
-    let subject = "Reset your RIM password".to_string();
-    let body_text = format!(
-        "We received a request to reset your RIM password.\n\n\
-         Reset your password: {link}\n\n\
-         This link expires in 1 hour. If you didn't request this, you can safely ignore this \
-         email — your password will not be changed."
-    );
-    let body_html = Some(format!(
-        "<p>We received a request to reset your RIM password.</p>\
-         <p><a href=\"{link}\">Reset your password</a></p>\
-         <p>This link expires in 1 hour. If you didn't request this, you can safely ignore this \
-         email — your password will not be changed.</p>"
-    ));
-
-    EmailMessage {
-        to: to.to_string(),
-        subject,
-        body_text,
-        body_html,
-    }
-}
-
 /// Workspace invite email. `link` is the full join URL (or bare token
 /// if `public_base_url` was unset).
 ///
@@ -188,23 +155,6 @@ pub fn notification_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn password_reset_includes_link_and_expiry_note() {
-        let msg = password_reset(
-            "user@example.com",
-            "https://rim.example.com/reset-password/tok",
-        );
-        assert_eq!(msg.to, "user@example.com");
-        assert!(!msg.subject.is_empty());
-        assert!(
-            msg.body_text
-                .contains("https://rim.example.com/reset-password/tok")
-        );
-        assert!(msg.body_text.contains("1 hour"));
-        let html = msg.body_html.expect("html part expected");
-        assert!(html.contains("https://rim.example.com/reset-password/tok"));
-    }
 
     #[test]
     fn invite_includes_link() {

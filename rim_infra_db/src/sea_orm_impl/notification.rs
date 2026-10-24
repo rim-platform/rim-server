@@ -488,7 +488,7 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         let daily_cutoff: DateTimeWithTimeZone = daily_cutoff.into();
         // `pending` aggregates unread, un-emailed rows; `last` is the newest `emailed_at` (the
         // previous digest) per user and workspace. The cutoff is the frequency's interval.
-        // Users without an email address (key-only accounts) are never candidates. Reaction
+        // Users without an email address are never candidates. Reaction
         // notifications never count: digests list messages only.
         // Rows of conversations hidden by the request inbox wait until they are accepted.
         let rows = self

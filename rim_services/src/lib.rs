@@ -33,7 +33,6 @@ pub mod notification;
 pub mod notification_preference;
 // pub: rim_infra_services implements it, rim_api and rim_server's CLI call it.
 pub mod operator;
-pub mod password_reset;
 pub mod pin;
 pub mod pipeline;
 pub mod presence;

@@ -119,7 +119,6 @@ mod tests {
         User {
             id,
             username: format!("u{}", &id.to_string()[..8]),
-            password_hash: Some(String::new()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             last_login_at: None,

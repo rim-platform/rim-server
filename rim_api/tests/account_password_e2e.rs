@@ -464,7 +464,7 @@ async fn a_reset_signed_by_the_recovery_key_replaces_the_password_and_ends_every
 async fn someone_from_another_server_signs_in_directly_without_a_password() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
-    let guest = ctx.enrolled(&schema, "guest", 8).await;
+    let guest = ctx.enrolled("guest", 8).await;
     ctx.conn
         .execute_unprepared(&format!(
             "UPDATE \"user\" SET kind = 'remote' WHERE id = '{}'",

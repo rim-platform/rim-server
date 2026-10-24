@@ -125,15 +125,6 @@ pub struct CreateInviteResultDto {
 }
 
 #[derive(Debug, Clone)]
-pub struct AcceptInviteResultDto {
-    pub user_id: UserId,
-    pub server_id: ServerId,
-    pub session: AuthSessionDto,
-    pub session_token: String,
-    pub csrf_token: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct JoinServerByInviteResultDto {
     pub server_id: ServerId,
 }
@@ -151,7 +142,7 @@ pub struct RequestAuthResultDto {
     pub secret_hash: Option<String>,
 }
 
-/// Result of any signup path (instance invite, workspace invite, open).
+/// Result of a key signup, open or with an instance or workspace invite.
 ///
 /// `server_id` is `Some` only when a workspace invite was used. The server's default workspace,
 /// which every signup joins when one is set, is not reported here.
