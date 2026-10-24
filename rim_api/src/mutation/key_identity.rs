@@ -3,7 +3,8 @@ use rim_services::Actor;
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, IssueKeyChallengeCmd, LoginWithKeyCmd,
-    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SignupWithKeyCmd,
+    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SessionKeepChoice,
+    SignupWithKeyCmd,
 };
 use rim_services::key_auth::service::KeyAuthService;
 
@@ -44,17 +45,30 @@ impl KeyIdentityMutations {
     /// `UNAUTHENTICATED`, as for a wrong proof. An account of this server without a password
     /// signs in with the key alone and gets `mustSetPassword`: its session may only set a
     /// password, sign out and read `me`. Accounts of other servers sign in with the key alone.
+    ///
+    /// `keepSignedIn` ("Keep me signed in") sets persistent cookies. Unticked, the cookies last
+    /// until the browser closes and the session answers only requests that carry
+    /// `sessionSecret` (returned here) in the `X-RIM-Session-Secret` header; plain file
+    /// downloads, `reloadSession` and `logout` excepted. A kept session of a client that holds
+    /// its own keep key (`keepKeyHeld`, the desktop app) gets no `keepKey`; a web client's kept
+    /// session gets the keep key the server holds for it.
     async fn login_with_key(
         &self,
         ctx: &Context<'_>,
         proof: SignedStatementInput,
         password_ticket: Option<String>,
+        keep_signed_in: bool,
+        keep_key_held: bool,
     ) -> Result<LoginPayload> {
         let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
         let res = svc
             .login_with_key(LoginWithKeyCmd {
                 proof: proof.into(),
                 password_ticket,
+                keep: SessionKeepChoice {
+                    keep_signed_in,
+                    keep_key_held,
+                },
                 remote_ip: crate::auth_context::remote_ip(ctx),
             })
             .await
@@ -64,6 +78,7 @@ impl KeyIdentityMutations {
             intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
                 csrf_token: res.csrf_token.clone(),
+                kept: res.keys.kept,
             });
         }
 
@@ -71,6 +86,8 @@ impl KeyIdentityMutations {
             user_id: ID(res.user_id.to_string()),
             csrf_token: res.csrf_token,
             must_set_password: res.must_set_password,
+            session_secret: res.keys.session_secret,
+            keep_key: res.keys.keep_key.as_deref().map(encode_bytes),
         })
     }
 
@@ -213,6 +230,10 @@ impl KeyIdentityMutations {
                 remote_ip: crate::auth_context::remote_ip(ctx),
                 terms_accepted_url: input.accepted_terms_url,
                 confirmed_minimum_age: input.confirmed_minimum_age,
+                keep: SessionKeepChoice {
+                    keep_signed_in: input.keep_signed_in,
+                    keep_key_held: input.keep_key_held,
+                },
             })
             .await
             .map_err(map_service_error)?;
@@ -221,6 +242,7 @@ impl KeyIdentityMutations {
             intent.set(AuthIntent::SetSession {
                 session_token: res.session_token,
                 csrf_token: res.csrf_token.clone(),
+                kept: res.keys.kept,
             });
         }
 
@@ -229,6 +251,8 @@ impl KeyIdentityMutations {
             server_id: res.server_id.map(|id| ID(id.to_string())),
             csrf_token: res.csrf_token,
             server_share: res.server_share.as_deref().map(encode_bytes),
+            session_secret: res.keys.session_secret,
+            keep_key: res.keys.keep_key.as_deref().map(encode_bytes),
         })
     }
 }

@@ -2,6 +2,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use getrandom::fill;
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 /// Generate a session token: `rim_sess_` and 32 random bytes, base64url-nopad.
 pub fn generate_session_token() -> String {
@@ -24,6 +25,18 @@ pub fn generate_challenge_nonce() -> String {
 /// It is a bearer capability, so only its SHA-256 is ever persisted.
 pub fn generate_link_id() -> String {
     random_b64url::<16>("device link id")
+}
+
+/// Generate a session secret: 32 random bytes, base64url-nopad, no prefix. An unkept session
+/// requires it with every request besides its cookie; only its SHA-256 ([`hash_token`]) is
+/// persisted.
+pub fn generate_session_secret() -> String {
+    random_b64url::<32>("session secret")
+}
+
+/// Whether `secret` hashes ([`hash_token`]) to `secret_hash`, compared in constant time.
+pub fn session_secret_matches(secret: &str, secret_hash: &str) -> bool {
+    bool::from(hash_token(secret).as_bytes().ct_eq(secret_hash.as_bytes()))
 }
 
 /// The prefix of a workspace's public join link token, which tells it apart from an invite token.
@@ -124,6 +137,17 @@ mod tests {
         assert_eq!(id.len(), 22);
         assert_eq!(URL_SAFE_NO_PAD.decode(&id).map(|b| b.len()), Ok(16));
         assert_ne!(id, generate_link_id());
+    }
+
+    #[test]
+    fn a_session_secret_is_32_random_bytes_matching_only_its_own_hash() {
+        let secret = generate_session_secret();
+        assert_eq!(URL_SAFE_NO_PAD.decode(&secret).map(|b| b.len()), Ok(32));
+        let hash = hash_token(&secret);
+        assert!(session_secret_matches(&secret, &hash));
+        assert!(!session_secret_matches(&generate_session_secret(), &hash));
+        assert!(!session_secret_matches(&secret, &hash[..63]));
+        assert!(!session_secret_matches("", &hash));
     }
 
     #[test]

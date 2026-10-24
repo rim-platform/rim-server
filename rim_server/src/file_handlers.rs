@@ -17,7 +17,7 @@ use rim_services::moderation::service::ModerationService;
 use rim_services::storage::service::StorageService;
 use sha2::{Digest, Sha256};
 
-use crate::graphql_support::{extract_auth, validate_csrf_header};
+use crate::graphql_support::{extract_auth, extract_auth_without_secret, validate_csrf_header};
 
 /// Map a ServiceError to an HTTP response for REST endpoints.
 ///
@@ -123,10 +123,26 @@ pub(crate) fn require_csrf(req: &HttpRequest) -> Result<(), HttpResponse> {
         .map_err(|msg| HttpResponse::Forbidden().json(serde_json::json!({"error": msg})))
 }
 
-/// Require an authenticated user from the session cookie. Returns user_id, or 401 without a
-/// session and 403 for a session that must set a password first.
+/// Require an authenticated user from the session cookie, and for an unkept session its secret
+/// in the `X-RIM-Session-Secret` header. Returns user_id, or 401 without a session and 403 for
+/// a session that must set a password first.
 pub(crate) async fn require_auth(
     req: &HttpRequest,
+) -> Result<rim_core::user::model::UserId, HttpResponse> {
+    authenticated_user(req, true).await
+}
+
+/// [`require_auth`] for a plain GET download, which an `<img>` or a link makes without
+/// headers: the session cookie alone, without an unkept session's secret.
+pub(crate) async fn require_download_auth(
+    req: &HttpRequest,
+) -> Result<rim_core::user::model::UserId, HttpResponse> {
+    authenticated_user(req, false).await
+}
+
+async fn authenticated_user(
+    req: &HttpRequest,
+    with_secret: bool,
 ) -> Result<rim_core::user::model::UserId, HttpResponse> {
     let authenticator = req
         .app_data::<web::Data<Arc<dyn RequestAuthenticator>>>()
@@ -137,12 +153,14 @@ pub(crate) async fn require_auth(
             .json(serde_json::json!({"error": "auth not configured"}))
     })?;
 
-    let auth = extract_auth(req, authenticator.as_ref())
-        .await
-        .map_err(|_| {
-            HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "auth check failed"}))
-        })?;
+    let auth = if with_secret {
+        extract_auth(req, authenticator.as_ref()).await
+    } else {
+        extract_auth_without_secret(req, authenticator.as_ref()).await
+    };
+    let auth = auth.map_err(|_| {
+        HttpResponse::InternalServerError().json(serde_json::json!({"error": "auth check failed"}))
+    })?;
 
     if auth.must_set_password {
         return Err(
@@ -361,7 +379,7 @@ pub async fn handle_file_download(
     if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Avatars) {
         return resp;
     }
-    if let Err(resp) = require_auth(&req).await {
+    if let Err(resp) = require_download_auth(&req).await {
         return resp;
     }
     file_download_as(&path.into_inner(), storage_backend.get_ref().as_ref()).await
@@ -423,7 +441,7 @@ pub async fn handle_attachment_download(
     if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Attachments) {
         return resp;
     }
-    let user_id = match require_auth(&req).await {
+    let user_id = match require_download_auth(&req).await {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -531,7 +549,7 @@ pub async fn handle_report_attachment_download(
     moderation_service: web::Data<Arc<dyn ModerationService>>,
     storage_backend: web::Data<Arc<dyn StorageBackend>>,
 ) -> HttpResponse {
-    let user_id = match require_auth(&req).await {
+    let user_id = match require_download_auth(&req).await {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -708,7 +726,7 @@ mod tests {
     fn authenticator(user_id: UserId) -> MockRequestAuthenticator {
         let mut auth = MockRequestAuthenticator::new();
         auth.expect_authenticate_session_token()
-            .returning(move |token| {
+            .returning(move |token, _| {
                 let known = token == Some(SESSION);
                 Box::pin(async move {
                     Ok(if known {
@@ -718,6 +736,7 @@ mod tests {
                             device_key_id: None,
                             expires_at: None,
                             must_set_password: false,
+                            secret_hash: None,
                         }
                     } else {
                         RequestAuthResultDto::default()

@@ -28,6 +28,15 @@ impl Socket {
 
     /// [`Socket::connect`], or the HTTP status the upgrade was refused with.
     pub async fn open(origin: &str, session_token: &str) -> Result<Self, u16> {
+        let mut socket = Self::upgrade(origin, session_token).await?;
+        socket.send(json!({ "type": "connection_init" })).await;
+        assert_eq!(socket.receive().await["type"], "connection_ack");
+        Ok(socket)
+    }
+
+    /// Upgrades on `origin`'s `/api/ws` with `session_token` as the session cookie and sends
+    /// nothing, or answers the HTTP status the upgrade was refused with.
+    pub async fn upgrade(origin: &str, session_token: &str) -> Result<Self, u16> {
         let host = origin.trim_start_matches("http://");
         let mut stream = TcpStream::connect(host).await.expect("connect");
         let handshake = format!(
@@ -52,10 +61,7 @@ impl Socket {
         if status != 101 {
             return Err(status);
         }
-        let mut socket = Self(Framed::new(stream, Codec::new().client_mode()));
-        socket.send(json!({ "type": "connection_init" })).await;
-        assert_eq!(socket.receive().await["type"], "connection_ack");
-        Ok(socket)
+        Ok(Self(Framed::new(stream, Codec::new().client_mode())))
     }
 
     /// Sends `subscribe` for `query` under `id`.
@@ -167,7 +173,8 @@ impl Socket {
             .expect("send a frame header");
     }
 
-    async fn send(&mut self, message: Value) {
+    /// Sends `message` as one text message.
+    pub async fn send(&mut self, message: Value) {
         self.0
             .send(Message::Text(message.to_string().into()))
             .await

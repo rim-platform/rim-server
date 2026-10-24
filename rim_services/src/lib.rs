@@ -46,6 +46,8 @@ pub mod remote_workspace;
 pub mod s2s;
 pub mod server;
 pub mod server_member;
+// pub: rim_infra_services implements it, rim_api and rim_server use it.
+pub mod session_key;
 // pub: rim_infra_services ends sessions through it, rim_api and rim_server watch them.
 pub mod session_revocation;
 pub mod storage;

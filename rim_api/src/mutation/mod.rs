@@ -44,6 +44,7 @@ pub(crate) mod profile;
 pub(crate) mod public_join_link;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
+pub(crate) mod session_key;
 pub(crate) mod workspace;
 pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
@@ -131,4 +132,5 @@ pub(crate) struct MutationGroup9(
     invite::WorkspaceInviteMutations,
     public_join_link::PublicJoinLinkMutations,
     account_password::AccountPasswordMutations,
+    session_key::SessionKeyMutations,
 );

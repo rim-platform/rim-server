@@ -41,7 +41,7 @@ use support::identity::{signed_login, statement};
 const ENDPOINT: &str = "http://localhost:8080/api";
 
 const LOGIN_WITH_KEY: &str = r#"
-mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof) { userId } }"#;
+mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof, keepSignedIn: true, keepKeyHeld: true) { userId } }"#;
 const ADD_DEVICE: &str = r#"
 mutation Add($certificate: SignedStatementInput!) { addDeviceKey(certificate: $certificate) { deviceId } }"#;
 const KEY_LOG: &str = r#"

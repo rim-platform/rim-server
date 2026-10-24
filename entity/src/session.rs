@@ -17,6 +17,11 @@ pub struct Model {
     pub ip: Option<String>,
     pub device_key_id: Option<Uuid>,
     pub must_set_password: bool,
+    pub kept: bool,
+    pub secret_hash: Option<String>,
+    pub keep_key_sealed: Option<Vec<u8>>,
+    pub reload_key_sealed: Option<Vec<u8>>,
+    pub ws_closed_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

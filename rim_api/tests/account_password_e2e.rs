@@ -251,6 +251,50 @@ async fn with_ticket(
         .await
 }
 
+/// A password sign-in chooses what its session keeps: unticked, a session secret and
+/// browser-session cookies; ticked on the web, a keep key; ticked on the desktop, neither.
+#[tokio::test]
+async fn a_key_login_hands_out_the_secret_or_keep_key_it_chose() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::Open).await;
+    let ada = sign_up(&schema, "ada", 14).await;
+    for (keep_signed_in, keep_key_held) in [(false, false), (true, false), (true, true)] {
+        let login = password_login(&schema, &ada.state.principal_id, TEST_PASSWORD)
+            .await
+            .expect("start")
+            .expect("right password");
+        let proof =
+            support::identity::signed_login(&schema, &ada.device, &ada.state, ada.device_id).await;
+        let mut variables = login.variables(statement(&proof));
+        variables["keepSignedIn"] = json!(keep_signed_in);
+        variables["keepKeyHeld"] = json!(keep_key_held);
+        let intent = Arc::new(AuthIntentCtx::default());
+        let body = exec_ok(
+            &schema,
+            signed_out(LOGIN_WITH_PASSWORD, variables).data(Arc::clone(&intent)),
+        )
+        .await;
+        let answer = &body["loginWithKey"];
+        let Some(AuthIntent::SetSession { kept, .. }) = intent.take() else {
+            panic!("loginWithKey must set a session");
+        };
+        assert_eq!(kept, keep_signed_in);
+        let secret = answer["sessionSecret"].as_str();
+        let keep_key = answer["keepKey"].as_str();
+        match (keep_signed_in, keep_key_held) {
+            (false, _) => {
+                assert_eq!(secret.map(|s| unb64(s).len()), Some(32));
+                assert!(keep_key.is_none());
+            }
+            (true, false) => {
+                assert!(secret.is_none());
+                assert_eq!(keep_key.map(|k| unb64(k).len()), Some(32));
+            }
+            (true, true) => assert!(secret.is_none() && keep_key.is_none()),
+        }
+    }
+}
+
 #[tokio::test]
 async fn an_expired_ticket_is_refused() {
     let ctx = TestCtx::new().await;
@@ -562,7 +606,10 @@ async fn as_session(
 ) -> Request {
     let auth = provider
         .request_authenticator()
-        .authenticate_session_token(Some(session_token))
+        .authenticate_session_token(
+            Some(session_token),
+            rim_services::auth::dto::SessionSecret::NotRequired,
+        )
         .await
         .expect("authenticate");
     anonymous_request(query, variables).data(

@@ -9,7 +9,7 @@ use sea_orm::{
 use crate::DbHandle;
 
 use crate::error::map_db_err;
-use rim_core::auth::model::{NewSession, Session, SessionId};
+use rim_core::auth::model::{NewSession, Session, SessionId, SessionKeep};
 use rim_core::auth::repository::SessionRepository;
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::repository::error::RepoResult;
@@ -201,5 +201,97 @@ impl SessionRepository for SeaOrmSessionRepository {
             .await
             .map_err(map_db_err)?;
         Ok(res.rows_affected)
+    }
+
+    async fn set_keep(&self, id: SessionId, keep: SessionKeep) -> RepoResult<()> {
+        let (kept, secret_hash, keep_key_sealed) = match keep {
+            SessionKeep::Kept { keep_key_sealed } => (true, None, keep_key_sealed),
+            SessionKeep::Unkept { secret_hash } => (false, Some(secret_hash), None),
+        };
+        session::Entity::update_many()
+            .col_expr(session::Column::Kept, Expr::value(kept))
+            .col_expr(session::Column::SecretHash, Expr::value(secret_hash))
+            .col_expr(session::Column::KeepKeySealed, Expr::value(keep_key_sealed))
+            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(())
+    }
+
+    async fn set_reload_key(&self, id: SessionId, reload_key_sealed: Vec<u8>) -> RepoResult<bool> {
+        let res = session::Entity::update_many()
+            .col_expr(
+                session::Column::ReloadKeySealed,
+                Expr::value(Some(reload_key_sealed)),
+            )
+            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
+            .filter(session::Column::Kept.eq(false))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected > 0)
+    }
+
+    async fn take_reload_key(
+        &self,
+        id: SessionId,
+        next_sealed: Vec<u8>,
+        now: DateTime<Utc>,
+        closed_since: DateTime<Utc>,
+    ) -> RepoResult<Option<Vec<u8>>> {
+        // The row lock of the inner select makes two concurrent calls take the key once.
+        let row = self
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"UPDATE session s
+                   SET reload_key_sealed = $2, ws_closed_at = NULL
+                   FROM (SELECT id, reload_key_sealed FROM session WHERE id = $1 FOR UPDATE) old
+                   WHERE s.id = old.id
+                     AND s.kept = false
+                     AND s.revoked_at IS NULL
+                     AND s.expires_at > $3
+                     AND s.ws_closed_at > $4
+                     AND s.ws_closed_at <= $3
+                     AND old.reload_key_sealed IS NOT NULL
+                   RETURNING old.reload_key_sealed"#,
+                vec![
+                    sea_orm::Value::Uuid(Some(id.into())),
+                    next_sealed.into(),
+                    now.into(),
+                    closed_since.into(),
+                ],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        row.map(|row| row.try_get::<Vec<u8>>("", "reload_key_sealed"))
+            .transpose()
+            .map_err(map_db_err)
+    }
+
+    async fn socket_opened(&self, id: SessionId) -> RepoResult<()> {
+        session::Entity::update_many()
+            .col_expr(
+                session::Column::WsClosedAt,
+                Expr::value(Option::<DateTime<Utc>>::None),
+            )
+            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
+            .filter(session::Column::Kept.eq(false))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(())
+    }
+
+    async fn socket_closed(&self, id: SessionId, at: DateTime<Utc>) -> RepoResult<()> {
+        session::Entity::update_many()
+            .col_expr(session::Column::WsClosedAt, Expr::value(Some(at)))
+            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
+            .filter(session::Column::Kept.eq(false))
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(())
     }
 }

@@ -1,13 +1,29 @@
 use async_trait::async_trait;
 
-use rim_auth::session_token::hash_token;
-use rim_core::auth::model::SessionId;
+use rim_auth::session_token::{hash_token, session_secret_matches};
+use rim_core::auth::model::{Session, SessionId};
 use rim_services::ServiceResult;
-use rim_services::auth::dto::RequestAuthResultDto;
+use rim_services::auth::dto::{RequestAuthResultDto, SessionSecret};
 use rim_services::auth::service::RequestAuthenticator;
 
 use crate::RequestAuthRepos;
 use crate::clock::Clock;
+
+/// Whether `secret` admits a request of `session`: always for a kept session; for an unkept one
+/// only when the request needs no secret or presents the one whose hash the session holds.
+fn secret_admits(session: &Session, secret: &SessionSecret) -> bool {
+    if session.kept {
+        return true;
+    }
+    let Some(secret_hash) = session.secret_hash.as_deref() else {
+        return false;
+    };
+    match secret {
+        SessionSecret::NotRequired => true,
+        SessionSecret::Presented(Some(presented)) => session_secret_matches(presented, secret_hash),
+        SessionSecret::Presented(None) => false,
+    }
+}
 
 #[derive(Clone)]
 pub struct DefaultRequestAuthenticator {
@@ -36,6 +52,7 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
     async fn authenticate_session_token(
         &self,
         session_token: Option<&str>,
+        secret: SessionSecret,
     ) -> ServiceResult<RequestAuthResultDto> {
         let Some(session_token) = session_token else {
             return Ok(RequestAuthResultDto::default());
@@ -55,6 +72,10 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
         if !session.is_live(self.clock.now()) {
             return Ok(RequestAuthResultDto::default());
         }
+        if !secret_admits(&session, &secret) {
+            tracing::debug!(session_id = %session.id, "unkept session without its secret");
+            return Ok(RequestAuthResultDto::default());
+        }
 
         // Best-effort: update last_seen_at for activity tracking.
         if let Err(error) = self.repos.session_repo.touch_last_seen_at(session.id).await {
@@ -67,6 +88,11 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
             device_key_id: session.device_key_id,
             expires_at: Some(session.expires_at),
             must_set_password: session.must_set_password,
+            secret_hash: if session.kept {
+                None
+            } else {
+                session.secret_hash
+            },
         })
     }
 
@@ -110,6 +136,11 @@ mod tests {
             async fn require_password(&self, id: SessionId) -> RepoResult<()>;
             async fn clear_password_requirement(&self, user_id: UserId) -> RepoResult<u64>;
             async fn delete_ended(&self, now: chrono::DateTime<chrono::Utc>) -> RepoResult<u64>;
+            async fn set_keep(&self, id: SessionId, keep: rim_core::auth::model::SessionKeep) -> RepoResult<()>;
+            async fn set_reload_key(&self, id: SessionId, reload_key_sealed: Vec<u8>) -> RepoResult<bool>;
+            async fn take_reload_key(&self, id: SessionId, next_sealed: Vec<u8>, now: chrono::DateTime<chrono::Utc>, closed_since: chrono::DateTime<chrono::Utc>) -> RepoResult<Option<Vec<u8>>>;
+            async fn socket_opened(&self, id: SessionId) -> RepoResult<()>;
+            async fn socket_closed(&self, id: SessionId, at: chrono::DateTime<chrono::Utc>) -> RepoResult<()>;
         }
     }
 
@@ -132,6 +163,11 @@ mod tests {
             ip: None,
             device_key_id: None,
             must_set_password: false,
+            kept: true,
+            secret_hash: None,
+            keep_key_sealed: None,
+            reload_key_sealed: None,
+            ws_closed_at: None,
         }
     }
 
@@ -141,7 +177,10 @@ mod tests {
         repo.expect_get_by_token_hash().never();
         let svc = service(repo);
 
-        let result = svc.authenticate_session_token(None).await.unwrap();
+        let result = svc
+            .authenticate_session_token(None, SessionSecret::Presented(None))
+            .await
+            .unwrap();
 
         assert_eq!(result.user_id, None);
         assert_eq!(result.session_id, None);
@@ -160,7 +199,7 @@ mod tests {
         let svc = service(repo);
 
         let err = svc
-            .authenticate_session_token(Some("session-token"))
+            .authenticate_session_token(Some("session-token"), SessionSecret::Presented(None))
             .await
             .unwrap_err();
 
@@ -182,7 +221,7 @@ mod tests {
         let svc = service(repo);
 
         let result = svc
-            .authenticate_session_token(Some("session-token"))
+            .authenticate_session_token(Some("session-token"), SessionSecret::Presented(None))
             .await
             .unwrap();
 
@@ -203,12 +242,66 @@ mod tests {
         let svc = service(repo);
 
         let result = svc
-            .authenticate_session_token(Some("session-token"))
+            .authenticate_session_token(Some("session-token"), SessionSecret::Presented(None))
             .await
             .unwrap();
 
         assert_eq!(result.user_id, None);
         assert_eq!(result.session_id, None);
+    }
+
+    /// An unkept session admits a request presenting its secret, or needing none; a missing or
+    /// wrong secret leaves the request anonymous. A kept session needs no secret.
+    #[tokio::test]
+    async fn an_unkept_session_requires_its_secret_unless_none_is_required() {
+        let secret = rim_auth::session_token::generate_session_secret();
+        let mut unkept = active_session();
+        unkept.kept = false;
+        unkept.secret_hash = Some(hash_token(&secret));
+        let cases = [
+            (
+                unkept.clone(),
+                SessionSecret::Presented(Some(secret.clone())),
+                true,
+            ),
+            (
+                unkept.clone(),
+                SessionSecret::Presented(Some("wrong".to_string())),
+                false,
+            ),
+            (unkept.clone(), SessionSecret::Presented(None), false),
+            (unkept.clone(), SessionSecret::NotRequired, true),
+            (active_session(), SessionSecret::Presented(None), true),
+        ];
+        for (session, presented, admitted) in cases {
+            let expected_hash = (!session.kept).then(|| hash_token(&secret));
+            let mut repo = MockSessionRepository::new();
+            repo.expect_get_by_token_hash()
+                .return_once(move |_| Ok(Some(session)));
+            repo.expect_touch_last_seen_at().returning(|_| Ok(()));
+            let result = service(repo)
+                .authenticate_session_token(Some("session-token"), presented.clone())
+                .await
+                .unwrap();
+            assert_eq!(result.user_id.is_some(), admitted, "{presented:?}");
+            if admitted {
+                assert_eq!(result.secret_hash, expected_hash);
+            }
+        }
+
+        let mut no_hash = active_session();
+        no_hash.kept = false;
+        let mut repo = MockSessionRepository::new();
+        repo.expect_get_by_token_hash()
+            .return_once(move |_| Ok(Some(no_hash)));
+        let result = service(repo)
+            .authenticate_session_token(Some("session-token"), SessionSecret::NotRequired)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.user_id, None,
+            "an unkept session without a hash admits nothing"
+        );
     }
 
     /// A session is live until it is revoked or its expiry is reached, read on the injected

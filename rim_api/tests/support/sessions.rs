@@ -63,7 +63,10 @@ pub async fn with_session(
 ) -> Request {
     let auth = provider
         .request_authenticator()
-        .authenticate_session_token(Some(session_token))
+        .authenticate_session_token(
+            Some(session_token),
+            rim_services::auth::dto::SessionSecret::NotRequired,
+        )
         .await
         .expect("authenticate");
     Request::new(query).data(AuthActorCtx::new(auth.user_id, auth.session_id))

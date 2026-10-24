@@ -20,7 +20,7 @@ use rim_services::auth::command::{
 use rim_services::auth::dto::{
     AcceptInviteResultDto, AuthSessionDto, CreateInviteResultDto, InviteDto, InvitePageCursor,
     InviteTokenPreviewDto, InviteTokenType, JoinServerByInviteResultDto, LoginResultDto,
-    SignupResultDto, WorkspaceInvitePreviewDto,
+    SessionKeysDto, SignupResultDto, WorkspaceInvitePreviewDto,
 };
 use rim_services::auth::service::AuthService;
 use rim_services::auth::terms::{accepted_terms, confirmed_minimum_age};
@@ -556,6 +556,7 @@ impl DefaultAuthService {
             session_token: raw_token,
             csrf_token: csrf,
             must_set_password: false,
+            keys: SessionKeysDto::kept(),
         })
     }
 
@@ -1253,6 +1254,7 @@ impl AuthService for DefaultAuthService {
             session_token: raw_sess_token,
             csrf_token: csrf,
             server_share: None,
+            keys: SessionKeysDto::kept(),
         })
     }
 
@@ -1347,6 +1349,7 @@ impl AuthService for DefaultAuthService {
             session_token: raw_sess_token,
             csrf_token: csrf,
             server_share: None,
+            keys: SessionKeysDto::kept(),
         })
     }
 

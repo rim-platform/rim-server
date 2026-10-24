@@ -1,12 +1,12 @@
 //! The server's password key: the key file that holds the OPAQUE server setup and the share
-//! key, and the sealing of account server shares and keep keys under it, so a database dump
-//! alone opens neither.
+//! key, and the sealing of account server shares, keep keys and reload keys under it, so a
+//! database dump alone opens none of them.
 //!
 //! The key file is
 //! `{"v":1,"opaqueSetup":"<base64url, 128 bytes>","shareKey":"<base64url, 32 bytes>","createdAt":"…"}`,
 //! mode 0600. A sealed value is a 24-byte random nonce followed by the XChaCha20-Poly1305
-//! ciphertext, with the owner's id as associated data: the user id for a server share, the
-//! session id for a keep key.
+//! ciphertext, with the owner's id as associated data: the user id for a server share,
+//! `keep:` and the session id for a keep key, `reload:` and the session id for a reload key.
 
 use std::fs;
 use std::path::Path;
@@ -39,6 +39,8 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 /// Associated data that tells a sealed keep key from a sealed server share.
 const KEEP_DOMAIN: &[u8] = b"keep:";
+/// Associated data that tells a sealed reload key from a sealed keep key or server share.
+const RELOAD_DOMAIN: &[u8] = b"reload:";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -57,7 +59,7 @@ impl Drop for KeyFile {
 }
 
 /// The OPAQUE server setup account passwords are registered and checked with, and the key
-/// server shares and keep keys are sealed under. The share key is wiped from memory when the
+/// server shares, keep keys and reload keys are sealed under. The share key is wiped from memory when the
 /// last copy is dropped.
 #[derive(Clone)]
 pub struct PasswordKey {
@@ -145,8 +147,8 @@ impl PasswordKey {
         self.open(uuid::Uuid::from(user_id).as_bytes(), sealed)
     }
 
-    fn keep_aad(session_id: SessionId) -> Vec<u8> {
-        let mut aad = KEEP_DOMAIN.to_vec();
+    fn session_aad(domain: &[u8], session_id: SessionId) -> Vec<u8> {
+        let mut aad = domain.to_vec();
         aad.extend_from_slice(uuid::Uuid::from(session_id).as_bytes());
         aad
     }
@@ -156,13 +158,27 @@ impl PasswordKey {
     /// # Errors
     /// When the OS random generator or the cipher fails.
     pub fn seal_keep(&self, session_id: SessionId, keep_key: &[u8]) -> anyhow::Result<Vec<u8>> {
-        self.seal(&Self::keep_aad(session_id), keep_key)
+        self.seal(&Self::session_aad(KEEP_DOMAIN, session_id), keep_key)
     }
 
     /// The keep key `sealed` holds for `session_id`; `None` when it was sealed under another
     /// key or for another session, or is damaged.
     pub fn open_keep(&self, session_id: SessionId, sealed: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
-        self.open(&Self::keep_aad(session_id), sealed)
+        self.open(&Self::session_aad(KEEP_DOMAIN, session_id), sealed)
+    }
+
+    /// The reload key `reload_key` sealed for `session_id`.
+    ///
+    /// # Errors
+    /// When the OS random generator or the cipher fails.
+    pub fn seal_reload(&self, session_id: SessionId, reload_key: &[u8]) -> anyhow::Result<Vec<u8>> {
+        self.seal(&Self::session_aad(RELOAD_DOMAIN, session_id), reload_key)
+    }
+
+    /// The reload key `sealed` holds for `session_id`; `None` when it was sealed under another
+    /// key or for another session, or is damaged.
+    pub fn open_reload(&self, session_id: SessionId, sealed: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+        self.open(&Self::session_aad(RELOAD_DOMAIN, session_id), sealed)
     }
 }
 
@@ -302,6 +318,23 @@ mod tests {
         assert!(key.open_keep(SessionId::new(), &sealed).is_none());
         let same_id = UserId::from(uuid::Uuid::from(session));
         assert!(key.open_share(same_id, &sealed).is_none());
+    }
+
+    #[test]
+    fn a_sealed_reload_key_opens_only_for_its_session_and_never_as_a_keep_key() {
+        let key = PasswordKey::generate().unwrap();
+        let session = SessionId::new();
+        let sealed = key.seal_reload(session, &[5; 32]).unwrap();
+        assert_eq!(
+            key.open_reload(session, &sealed)
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(&[5u8; 32][..])
+        );
+        assert!(key.open_reload(SessionId::new(), &sealed).is_none());
+        assert!(key.open_keep(session, &sealed).is_none());
+        let keep = key.seal_keep(session, &[5; 32]).unwrap();
+        assert!(key.open_reload(session, &keep).is_none());
     }
 
     #[tokio::test]

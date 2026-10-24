@@ -354,3 +354,119 @@ async fn a_session_limited_to_setting_a_password_is_lifted_with_its_account() {
             .must_set_password
     );
 }
+
+/// A new session of a fresh user, as a sign-in stores it.
+async fn new_session(
+    ctx: &support::TestCtx,
+    repo: &SeaOrmSessionRepository,
+    name: &str,
+) -> rim_core::auth::model::Session {
+    let user = ctx.create_user(name).await;
+    repo.create_session(NewSession {
+        user_id: user.id,
+        token_hash: format!("th-{name}"),
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        user_agent: None,
+        ip: None,
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_new_session_is_kept_until_its_keep_choice_is_recorded() {
+    use rim_core::auth::model::SessionKeep;
+
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmSessionRepository::new(ctx.db.clone());
+    let s = new_session(&ctx, &repo, "keeper").await;
+    assert!(s.kept && s.secret_hash.is_none() && s.keep_key_sealed.is_none());
+
+    repo.set_keep(
+        s.id,
+        SessionKeep::Kept {
+            keep_key_sealed: Some(vec![1, 2, 3]),
+        },
+    )
+    .await
+    .unwrap();
+    let kept = repo.get_by_id(s.id).await.unwrap().unwrap();
+    assert!(kept.kept);
+    assert_eq!(kept.keep_key_sealed, Some(vec![1, 2, 3]));
+    // A kept session takes no reload key and records no WebSocket.
+    assert!(!repo.set_reload_key(s.id, vec![9]).await.unwrap());
+    repo.socket_closed(s.id, chrono::Utc::now()).await.unwrap();
+    assert!(
+        repo.get_by_id(s.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .ws_closed_at
+            .is_none()
+    );
+
+    repo.set_keep(
+        s.id,
+        SessionKeep::Unkept {
+            secret_hash: "hash".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let unkept = repo.get_by_id(s.id).await.unwrap().unwrap();
+    assert!(!unkept.kept);
+    assert_eq!(unkept.secret_hash.as_deref(), Some("hash"));
+    assert!(unkept.keep_key_sealed.is_none());
+}
+
+#[tokio::test]
+async fn a_reload_key_is_taken_once_per_closing_within_the_window_and_never_while_open() {
+    use rim_core::auth::model::SessionKeep;
+
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmSessionRepository::new(ctx.db.clone());
+    let s = new_session(&ctx, &repo, "reloader").await;
+    repo.set_keep(
+        s.id,
+        SessionKeep::Unkept {
+            secret_hash: "hash".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let now = chrono::Utc::now();
+    let window = chrono::Duration::seconds(60);
+    let take = |next: Vec<u8>, at: chrono::DateTime<chrono::Utc>| {
+        let repo = &repo;
+        async move {
+            repo.take_reload_key(s.id, next, at, at - window)
+                .await
+                .unwrap()
+        }
+    };
+
+    // No reload key yet, and no WebSocket closed yet.
+    repo.socket_closed(s.id, now).await.unwrap();
+    assert_eq!(take(vec![1], now).await, None);
+    assert!(repo.set_reload_key(s.id, vec![1]).await.unwrap());
+    repo.socket_opened(s.id).await.unwrap();
+    assert_eq!(take(vec![2], now).await, None, "a WebSocket is open");
+
+    repo.socket_closed(s.id, now - chrono::Duration::seconds(10))
+        .await
+        .unwrap();
+    assert_eq!(take(vec![2], now).await, Some(vec![1]));
+    let after = repo.get_by_id(s.id).await.unwrap().unwrap();
+    assert_eq!(after.reload_key_sealed, Some(vec![2]));
+    assert!(after.ws_closed_at.is_none());
+    assert_eq!(take(vec![3], now).await, None, "taken once per closing");
+
+    repo.socket_closed(s.id, now - chrono::Duration::seconds(61))
+        .await
+        .unwrap();
+    assert_eq!(take(vec![3], now).await, None, "the window is over");
+
+    repo.socket_closed(s.id, now).await.unwrap();
+    repo.revoke_session(s.id).await.unwrap();
+    assert_eq!(take(vec![3], now).await, None, "the session ended");
+}

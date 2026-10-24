@@ -31,6 +31,7 @@ pub(crate) mod public_join_link;
 pub(crate) mod relay;
 pub(crate) mod remote_workspace;
 pub(crate) mod server_info;
+pub(crate) mod session_key;
 pub(crate) mod thread;
 pub(crate) mod user;
 pub(crate) mod workspace;
@@ -136,6 +137,7 @@ pub use server_info::{
     API_VERSION, AuditRetention, InstancePolicy, ServerFeatureInfo, ServerFeatureState, ServerInfo,
     ServerLimits,
 };
+pub use session_key::ReloadSessionPayload;
 pub use thread::Thread;
 pub use user::{AvatarUrl, PresenceStatus, User, UserPresenceGql};
 pub use workspace::{

@@ -138,6 +138,7 @@ pub struct DefaultAppServiceProvider {
         Arc<dyn rim_services::public_join_link::service::PublicJoinLinkService>,
     account_password_service:
         Arc<dyn rim_services::account_password::service::AccountPasswordService>,
+    session_key_service: Arc<dyn rim_services::session_key::service::SessionKeyService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -477,6 +478,11 @@ impl DefaultAppServiceProvider {
         let request_authenticator: Arc<dyn RequestAuthenticator> = Arc::new(
             crate::request_auth::DefaultRequestAuthenticator::new(repos.for_request_auth()),
         );
+        let session_key_service: Arc<dyn rim_services::session_key::service::SessionKeyService> =
+            Arc::new(crate::session_key::DefaultSessionKeyService::new(
+                repos.for_request_auth(),
+                federation.password_key.clone(),
+            ));
         let link_preview =
             crate::link_preview::DefaultLinkPreviewService::new(repos.for_link_preview())
                 .with_feature_gate(Arc::clone(&feature_gate));
@@ -630,6 +636,7 @@ impl DefaultAppServiceProvider {
             default_workspace_service,
             public_join_link_service,
             account_password_service,
+            session_key_service,
         }
     }
 
@@ -791,5 +798,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::account_password::service::AccountPasswordService> {
         Arc::clone(&self.account_password_service)
+    }
+
+    fn session_key_service(
+        &self,
+    ) -> Arc<dyn rim_services::session_key::service::SessionKeyService> {
+        Arc::clone(&self.session_key_service)
     }
 }

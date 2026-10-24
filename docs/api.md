@@ -9,12 +9,13 @@ server version it talks to. The GraphQL types and fields themselves are in the s
 ## Endpoints
 
 Everything except `/metrics` is served on `RIM_SERVER_HOST:RIM_SERVER_PORT`. "Session" means
-the route needs the session cookie; "CSRF" means it also needs the `X-CSRF-Token` header (see
-"Sessions and CSRF").
+the route needs the session cookie; "with its secret" that a session signed in without "Keep
+me signed in" also needs its secret in the `X-RIM-Session-Secret` header; "CSRF" means it also
+needs the `X-CSRF-Token` header (see "Sessions and CSRF").
 
 | Method | Path | Needs | What it does |
 |---|---|---|---|
-| `POST` | `/api` | Session for most fields; CSRF on mutations | GraphQL. The body is one GraphQL request or a JSON array of them (a batch). |
+| `POST` | `/api` | Session (with its secret) for most fields; CSRF on mutations | GraphQL. The body is one GraphQL request or a JSON array of them (a batch). |
 | `GET` | `/api` | Nothing | The GraphiQL explorer, only when `RIM_ENABLE_GRAPHIQL=true`. |
 | `GET` | `/api/ws` | Session | GraphQL subscriptions over a WebSocket. |
 | `GET` | `/api/sdl` | Nothing | The schema in SDL, as `text/plain`. |
@@ -22,14 +23,14 @@ the route needs the session cookie; "CSRF" means it also needs the `X-CSRF-Token
 | `GET` | `/healthz` | Nothing | Liveness. |
 | `GET` | `/readyz` | Nothing | Readiness. |
 | `GET` | `/metrics` | Nothing | Prometheus metrics, on a separate listener. |
-| `POST` | `/api/files/upload` | Session, CSRF | Upload the bytes of an attachment. |
-| `POST` | `/api/files/avatar` | Session, CSRF | Upload the caller's avatar. |
+| `POST` | `/api/files/upload` | Session (with its secret), CSRF | Upload the bytes of an attachment. |
+| `POST` | `/api/files/avatar` | Session (with its secret), CSRF | Upload the caller's avatar. |
 | `GET` | `/api/files/{path}` | Session | Download a stored avatar. |
 | `GET` | `/api/attachments/{id}/download` | Session | Download an attachment. |
-| `POST` | `/api/plugin-bundles/{server_id}` | Session, CSRF | Upload a web plugin bundle to a workspace. |
+| `POST` | `/api/plugin-bundles/{server_id}` | Session (with its secret), CSRF | Upload a web plugin bundle to a workspace. |
 | `GET` | `/api/plugin-bundles/{server_id}/{sha256}` | Session | Download a web plugin bundle. |
 | `GET` | `/api/reports/{report_id}/attachments/{blob_sha256}` | Session | A reported encrypted attachment, for moderators. |
-| `GET`, `POST` | `/api/remote/{host_server_id}/{tail}` | Session; CSRF on `POST` | A request to a space hosted on another server, through this relay. |
+| `GET`, `POST` | `/api/remote/{host_server_id}/{tail}` | Session (with its secret); CSRF on `POST` | A request to a space hosted on another server, through this relay. |
 | any | `/s2s/v1/...` | A server signature | The server-to-server API; not for clients. |
 
 ### GraphQL: `POST /api`
@@ -90,6 +91,12 @@ nothing, and completes; send those to `POST /api`. The subscription roots are `w
 `relayStream`; the schema describes both. A `TypingStarted` event, sent for direct conversations
 only, names the typing user by `user_id`, `username` and `display_name`, which is `null` when
 they have none.
+
+A session signed in without "Keep me signed in" opens its connection with the cookie alone,
+and its first message must be `connection_init` with the session secret as
+`payload.sessionSecret`. Any other first message, or a wrong secret, closes the connection with
+code `4401` and reason `session secret required`. The server notes when such a session's last
+connection closed, for the reload window ("Keep me signed in" below).
 
 A connection lives no longer than the session it was opened with. When that session ends, the
 server ends every stream on the connection and closes it with code `4401` and reason
@@ -291,10 +298,54 @@ session of the account, and so does `enrollIdentityKey`, which binds the calling
 new device. Each also closes the WebSocket connections of the sessions it ends (see
 "Subscriptions").
 
-A session lasts `RIM_SESSION_TTL_DAYS` days (default 30) from sign-in: the cookie's `Max-Age`
-and the server-side expiry are both set from it, and using the session does not extend it. A
-missing, unknown, revoked or expired session cookie makes the request anonymous; a field that
-needs a session then answers `UNAUTHENTICATED`.
+A session lasts `RIM_SESSION_TTL_DAYS` days (default 30) from sign-in: the server-side expiry
+is set from it, and so is the cookie's `Max-Age` for a kept session ("Keep me signed in"
+below). Using the session does not extend it. A missing, unknown, revoked or expired session
+cookie makes the request anonymous; a field that needs a session then answers
+`UNAUTHENTICATED`.
+
+### Keep me signed in
+
+`loginWithKey` and `signupWithKey` take `keepSignedIn` and `keepKeyHeld` (both `Boolean!`).
+The other sign-ins (`login`, `signupWithInvite`) always keep their session.
+
+- **Kept** (`keepSignedIn: true`): both cookies carry `Max-Age`, and the session needs nothing
+  besides the cookie. For a web client (`keepKeyHeld: false`) the server makes a keep key, 32
+  random bytes, keeps it sealed under the password key and returns it as `keepKey`; the
+  client opens its data key with it. `query { sessionKeepKey }` returns it again for the same
+  session, for the web client at start. A client that holds its own keep key (`keepKeyHeld:
+  true`, the desktop app) gets none, and `sessionKeepKey` is `null` for it.
+- **Unkept** (`keepSignedIn: false`; `keepKeyHeld` is ignored): both cookies have no `Max-Age`,
+  so the browser drops them when it closes. The sign-in returns `sessionSecret`, 32 random
+  bytes as unpadded base64url, of which the server keeps only the SHA-256. The client keeps it
+  in memory and sends it in the `X-RIM-Session-Secret` header of every request and in the
+  WebSocket's `connection_init`. A request with the cookie and without the right secret is
+  anonymous. Three kinds of request need no secret: a batch whose every operation is a
+  mutation of only `reloadSession` and `logout`, the WebSocket upgrade (the secret comes in
+  `connection_init`), and the plain `GET` downloads (`/api/files/...`,
+  `/api/attachments/{id}/download`, `/api/plugin-bundles/...`, `/api/reports/...`), which an
+  `<img>` tag or a link makes without headers. Those downloads therefore still answer to the
+  cookie alone.
+
+`keepKey` and `sessionSecret` travel in the clear, protected by TLS; each is `null` when the
+other case applies.
+
+**The reload window.** A tab of an unkept session that reloads loses the secret it held in
+memory. Before that, it seals what it keeps in `sessionStorage` under a reload key that only
+the server holds: `setReloadKey` (with the secret) makes a new one, stores it in place of the
+previous one and returns it, right after signing in and after each reload. After the reload
+the tab calls `reloadSession` with the cookie and the CSRF header but without the secret. It
+returns `{ reloadKey, nextReloadKey }`, the key the data is sealed under and a new one the
+server now holds in its place, only when:
+
+- the session is unkept and live, and holds a reload key;
+- its last WebSocket connection closed less than 60 seconds ago, and none opened since.
+
+The answer is given once: it clears the closing time, so a second call answers
+`UNAUTHENTICATED` until a connection of the session opens and closes again. Every refusal is
+`UNAUTHENTICATED`. `setReloadKey` and `reloadSession` answer `UNAUTHENTICATED` for a kept
+session. Signing out or any other end of the session ends its keep key and reload key with
+it.
 
 ### Handing over or deleting a workspace
 
@@ -391,9 +442,9 @@ with 400 on every route under `/api`. The allowed origins are:
   `http://tauri.localhost` and `https://tauri.localhost`.
 
 Origins compare without case and without a default port. The browser may send `Content-Type`,
-`Authorization`, `X-CSRF-Token` and `X-Request-Id`, with credentials, on `GET`, `POST` and
-`OPTIONS`; a preflight is cached for an hour, and the browser may read the `Retry-After` header
-of an answer. The discovery document, the probes and `/s2s/v1/...` are outside this check.
+`Authorization`, `X-CSRF-Token`, `X-Request-Id` and `X-RIM-Session-Secret`, with credentials, on
+`GET`, `POST` and `OPTIONS`; a preflight is cached for an hour, and the browser may read the
+`Retry-After` header of an answer. The discovery document, the probes and `/s2s/v1/...` are outside this check.
 
 ## Limits
 

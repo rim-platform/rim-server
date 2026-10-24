@@ -205,6 +205,10 @@ pub struct SignupWithKeyInput {
     pub accepted_terms_url: Option<String>,
     /// The minimum age the person confirmed reaching, as for `signupWithInvite`.
     pub confirmed_minimum_age: Option<i32>,
+    /// "Keep me signed in", as for `loginWithKey`.
+    pub keep_signed_in: bool,
+    /// The client holds its own keep key, as for `loginWithKey`.
+    pub keep_key_held: bool,
 }
 
 #[derive(InputObject, Clone, Debug)]

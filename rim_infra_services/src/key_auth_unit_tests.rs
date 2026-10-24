@@ -11,7 +11,7 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use rim_auth::session_token::hash_token;
     use rim_core::auth::model::{InstanceInvite, InstanceInviteId, Invite, InviteId};
-    use rim_core::auth::model::{NewSession, Session, SessionId};
+    use rim_core::auth::model::{NewSession, Session, SessionId, SessionKeep};
     use rim_core::auth::repository::SessionRepository;
     use rim_core::auth::repository::{MockInstanceInviteRepository, MockInviteRepository};
     use rim_core::conversation::repository::MockConversationRepository;
@@ -40,7 +40,7 @@ mod tests {
     use rim_services::key_auth::command::{
         AddDeviceKeyCmd, EnrollIdentityKeyCmd, GetKeyLogQuery, GetMyKeyIdentityQuery,
         IssueKeyChallengeCmd, LoginWithKeyCmd, PublishProfileCardCmd, RevokeDeviceKeyCmd,
-        RotateIdentityKeyCmd, SignedPayload, SignupWithKeyCmd,
+        RotateIdentityKeyCmd, SessionKeepChoice, SignedPayload, SignupWithKeyCmd,
     };
     use rim_services::key_auth::service::KeyAuthService;
     use rim_services::session_revocation::{SessionRevocations, SessionWatch, WatchedSession};
@@ -428,6 +428,11 @@ mod tests {
                 ip: new.ip,
                 device_key_id: None,
                 must_set_password: false,
+                kept: true,
+                secret_hash: None,
+                keep_key_sealed: None,
+                reload_key_sealed: None,
+                ws_closed_at: None,
             };
             self.0
                 .lock()
@@ -531,7 +536,52 @@ mod tests {
             s.sessions.retain(|(session, _)| session.is_live(now));
             Ok((before - s.sessions.len()) as u64)
         }
+
+        async fn set_keep(&self, id: SessionId, keep: SessionKeep) -> RepoResult<()> {
+            let mut s = self.0.lock().unwrap();
+            for (session, _) in s.sessions.iter_mut().filter(|(s, _)| s.id == id) {
+                match keep.clone() {
+                    SessionKeep::Kept { keep_key_sealed } => {
+                        session.kept = true;
+                        session.keep_key_sealed = keep_key_sealed;
+                    }
+                    SessionKeep::Unkept { secret_hash } => {
+                        session.kept = false;
+                        session.secret_hash = Some(secret_hash);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        async fn set_reload_key(&self, _id: SessionId, _sealed: Vec<u8>) -> RepoResult<bool> {
+            unimplemented!("key sign-in stores no reload key")
+        }
+
+        async fn take_reload_key(
+            &self,
+            _id: SessionId,
+            _next_sealed: Vec<u8>,
+            _now: DateTime<Utc>,
+            _closed_since: DateTime<Utc>,
+        ) -> RepoResult<Option<Vec<u8>>> {
+            unimplemented!("key sign-in takes no reload key")
+        }
+
+        async fn socket_opened(&self, _id: SessionId) -> RepoResult<()> {
+            unimplemented!("key sign-in opens no WebSocket")
+        }
+
+        async fn socket_closed(&self, _id: SessionId, _at: DateTime<Utc>) -> RepoResult<()> {
+            unimplemented!("key sign-in opens no WebSocket")
+        }
     }
+
+    /// A kept session whose client holds its own keep key: the server stores no key.
+    const DESKTOP_KEPT: SessionKeepChoice = SessionKeepChoice {
+        keep_signed_in: true,
+        keep_key_held: true,
+    };
 
     // ── Harness ───────────────────────────────────────────────────────────────────────────
 
@@ -962,6 +1012,7 @@ mod tests {
                 .login_with_key(LoginWithKeyCmd {
                     proof: payload(proof),
                     password_ticket: None,
+                    keep: DESKTOP_KEPT,
                     remote_ip: IP.to_string(),
                 })
                 .await?;
@@ -985,6 +1036,16 @@ mod tests {
             e: &Enrolled,
             ticket: Option<String>,
         ) -> Result<LoginResultDto, ServiceError> {
+            self.login_keeping(e, ticket, DESKTOP_KEPT).await
+        }
+
+        /// [`Harness::login_with_ticket`] with the keep choice `keep`.
+        async fn login_keeping(
+            &self,
+            e: &Enrolled,
+            ticket: Option<String>,
+            keep: SessionKeepChoice,
+        ) -> Result<LoginResultDto, ServiceError> {
             let challenge = self
                 .svc
                 .issue_challenge(IssueKeyChallengeCmd {
@@ -1003,9 +1064,21 @@ mod tests {
                 .login_with_key(LoginWithKeyCmd {
                     proof: payload(proof),
                     password_ticket: ticket,
+                    keep,
                     remote_ip: IP.to_string(),
                 })
                 .await
+        }
+
+        fn stored_session(&self, id: SessionId) -> Session {
+            self.state
+                .lock()
+                .unwrap()
+                .sessions
+                .iter()
+                .find(|(s, _)| s.id == id)
+                .map(|(s, _)| s.clone())
+                .expect("a stored session")
         }
 
         fn session_device(&self, id: SessionId) -> Option<DeviceKeyId> {
@@ -1041,6 +1114,51 @@ mod tests {
                 device_key_id: device.or(session.device_key_id),
             })
         }
+    }
+
+    // ── Keep me signed in ─────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_key_login_keeps_the_session_as_chosen() {
+        let h = harness();
+        let e = h.enroll(1).await;
+
+        let unkept = SessionKeepChoice {
+            keep_signed_in: false,
+            keep_key_held: false,
+        };
+        let res = h.login_keeping(&e, None, unkept).await.unwrap();
+        let secret = res.keys.session_secret.clone().expect("a session secret");
+        assert!(!res.keys.kept && res.keys.keep_key.is_none());
+        let stored = h.stored_session(res.session.session_id);
+        assert!(!stored.kept);
+        assert_eq!(
+            stored.secret_hash,
+            Some(rim_auth::session_token::hash_token(&secret))
+        );
+
+        let web = SessionKeepChoice {
+            keep_signed_in: true,
+            keep_key_held: false,
+        };
+        let res = h.login_keeping(&e, None, web).await.unwrap();
+        let keep_key = res.keys.keep_key.clone().expect("a keep key");
+        assert!(res.keys.kept && res.keys.session_secret.is_none());
+        let stored = h.stored_session(res.session.session_id);
+        assert!(stored.kept && stored.secret_hash.is_none());
+        let sealed = stored.keep_key_sealed.expect("sealed keep key");
+        assert_eq!(
+            TEST_PASSWORD_KEY
+                .open_keep(res.session.session_id, &sealed)
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(keep_key.as_slice())
+        );
+
+        let res = h.login_with_ticket(&e, None).await.unwrap();
+        assert_eq!(res.keys, rim_services::auth::dto::SessionKeysDto::kept());
+        let stored = h.stored_session(res.session.session_id);
+        assert!(stored.kept && stored.keep_key_sealed.is_none());
     }
 
     // ── Enrollment ────────────────────────────────────────────────────────────────────────
@@ -1395,6 +1513,7 @@ mod tests {
         let cmd = || LoginWithKeyCmd {
             proof: proof.clone(),
             password_ticket: None,
+            keep: DESKTOP_KEPT,
             remote_ip: IP.to_string(),
         };
         assert!(h.svc.login_with_key(cmd()).await.is_ok());
@@ -1414,6 +1533,7 @@ mod tests {
             .login_with_key(LoginWithKeyCmd {
                 proof,
                 password_ticket: None,
+                keep: DESKTOP_KEPT,
                 remote_ip: IP.to_string(),
             })
             .await
@@ -1454,6 +1574,7 @@ mod tests {
             .login_with_key(LoginWithKeyCmd {
                 proof: payload(proof),
                 password_ticket: None,
+                keep: DESKTOP_KEPT,
                 remote_ip: IP.to_string(),
             })
             .await
@@ -1682,6 +1803,7 @@ mod tests {
         let cmd = |proof: &SignedPayload| LoginWithKeyCmd {
             proof: proof.clone(),
             password_ticket: None,
+            keep: DESKTOP_KEPT,
             remote_ip: IP.to_string(),
         };
         let err = h.svc.login_with_key(cmd(&unknown)).await.unwrap_err();
@@ -2251,6 +2373,7 @@ mod tests {
         token: Option<SignupToken>,
     ) -> SignupWithKeyCmd {
         SignupWithKeyCmd {
+            keep: DESKTOP_KEPT,
             username: username.to_string(),
             display_name: None,
             key_log: p.key_log.clone(),

@@ -12,7 +12,7 @@ mod tests {
     use rim_auth::session_token::hash_token;
     use rim_core::account_password::model::PasswordLoginId;
     use rim_core::account_password::repository::AccountPasswordRepository;
-    use rim_core::auth::model::{NewSession, Session, SessionId};
+    use rim_core::auth::model::{NewSession, Session, SessionId, SessionKeep};
     use rim_core::auth::repository::SessionRepository;
     use rim_core::host::model::UserKind;
     use rim_core::host::repository::MockHostRepository;
@@ -165,6 +165,11 @@ mod tests {
                 ip: None,
                 device_key_id: None,
                 must_set_password: false,
+                kept: true,
+                secret_hash: None,
+                keep_key_sealed: None,
+                reload_key_sealed: None,
+                ws_closed_at: None,
             };
             self.0.lock().unwrap().push(session.clone());
             Ok(session)
@@ -247,6 +252,32 @@ mod tests {
 
         async fn delete_ended(&self, _now: DateTime<Utc>) -> RepoResult<u64> {
             Ok(0)
+        }
+
+        async fn set_keep(&self, _id: SessionId, _keep: SessionKeep) -> RepoResult<()> {
+            unimplemented!("the password service keeps no session")
+        }
+
+        async fn set_reload_key(&self, _id: SessionId, _sealed: Vec<u8>) -> RepoResult<bool> {
+            unimplemented!("the password service stores no reload key")
+        }
+
+        async fn take_reload_key(
+            &self,
+            _id: SessionId,
+            _next_sealed: Vec<u8>,
+            _now: DateTime<Utc>,
+            _closed_since: DateTime<Utc>,
+        ) -> RepoResult<Option<Vec<u8>>> {
+            unimplemented!("the password service takes no reload key")
+        }
+
+        async fn socket_opened(&self, _id: SessionId) -> RepoResult<()> {
+            unimplemented!("the password service opens no WebSocket")
+        }
+
+        async fn socket_closed(&self, _id: SessionId, _at: DateTime<Utc>) -> RepoResult<()> {
+            unimplemented!("the password service opens no WebSocket")
         }
     }
 

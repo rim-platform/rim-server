@@ -5,6 +5,9 @@ pub enum AuthIntent {
     SetSession {
         session_token: String,
         csrf_token: String,
+        /// "Keep me signed in": persistent cookies. Otherwise browser-session cookies, which
+        /// the browser drops when it closes.
+        kept: bool,
     },
     ClearSession,
 }

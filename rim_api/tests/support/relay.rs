@@ -33,7 +33,9 @@ pub const RESET: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor,
      server RESTART IDENTITY CASCADE";
 
 pub const SIGNUP: &str = r#"
-mutation Signup($input: SignupWithKeyInput!) { signupWithKey(input: $input) { userId } }"#;
+mutation Signup($input: SignupWithKeyInput!) {
+  signupWithKey(input: $input) { userId csrfToken sessionSecret keepKey }
+}"#;
 pub const CHALLENGE: &str = "mutation { keyLoginChallenge { challengeId nonce } }";
 pub const PUBLISH: &str = r#"
 mutation Publish($card: SignedStatementInput!) { publishProfileCard(card: $card) { version } }"#;
@@ -445,6 +447,27 @@ pub async fn key_signup(
     keys: &Keys,
     extra: Value,
 ) -> (Value, std::collections::HashMap<String, String>) {
+    let (body, set_cookies) = key_signup_raw(http, node, name, keys, extra).await;
+    let mut cookies = std::collections::HashMap::new();
+    for text in set_cookies {
+        if let Some((name, rest)) = text.split_once('=') {
+            cookies.insert(
+                name.to_string(),
+                rest.split(';').next().unwrap_or_default().to_string(),
+            );
+        }
+    }
+    (body, cookies)
+}
+
+/// [`key_signup`], answering the `Set-Cookie` headers whole, attributes included.
+pub async fn key_signup_raw(
+    http: &reqwest::Client,
+    node: &Node,
+    name: &str,
+    keys: &Keys,
+    extra: Value,
+) -> (Value, Vec<String>) {
     let cert = keys
         .identity
         .device_cert(&keys.state, keys.device_id, &keys.device_key, "Desktop");
@@ -457,6 +480,8 @@ pub async fn key_signup(
         "device": statement(&cert),
         "proof": statement(&proof),
         "passwordRegistration": password_registration,
+        "keepSignedIn": true,
+        "keepKeyHeld": true,
     });
     for (field, value) in extra.as_object().into_iter().flatten() {
         input[field] = value.clone();
@@ -467,16 +492,12 @@ pub async fn key_signup(
         .send()
         .await
         .expect("signup");
-    let mut cookies = std::collections::HashMap::new();
-    for value in response.headers().get_all("set-cookie") {
-        let text = value.to_str().expect("cookie");
-        if let Some((name, rest)) = text.split_once('=') {
-            cookies.insert(
-                name.to_string(),
-                rest.split(';').next().unwrap_or_default().to_string(),
-            );
-        }
-    }
+    let cookies = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().expect("cookie").to_string())
+        .collect();
     (response.json().await.expect("json"), cookies)
 }
 

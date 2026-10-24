@@ -25,6 +25,17 @@ pub struct Session {
     /// The session of a local account without a password: it may only set one, sign out and
     /// read who it is.
     pub must_set_password: bool,
+    /// "Keep me signed in": a persistent cookie and no session secret. An unkept session lives
+    /// in a browser-session cookie and requires its secret with every request.
+    pub kept: bool,
+    /// The SHA-256 hex of an unkept session's secret.
+    pub secret_hash: Option<String>,
+    /// The keep key of a kept web session, sealed under the server's password key.
+    pub keep_key_sealed: Option<Vec<u8>>,
+    /// The reload key of an unkept session, sealed under the server's password key.
+    pub reload_key_sealed: Option<Vec<u8>>,
+    /// When the session's last WebSocket closed; cleared when one opens and by a reload.
+    pub ws_closed_at: Option<DateTime<Utc>>,
 }
 
 impl Session {
@@ -32,6 +43,17 @@ impl Session {
     pub fn is_live(&self, now: DateTime<Utc>) -> bool {
         self.revoked_at.is_none() && self.expires_at > now
     }
+}
+
+/// What a new session keeps: chosen at sign-in with "Keep me signed in".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionKeep {
+    /// A persistent cookie, with the sealed keep key when the server holds one for a web
+    /// client.
+    Kept { keep_key_sealed: Option<Vec<u8>> },
+    /// A browser-session cookie and a secret every request carries, of which only the SHA-256
+    /// hex is stored.
+    Unkept { secret_hash: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

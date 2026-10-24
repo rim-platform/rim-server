@@ -66,6 +66,7 @@ impl AllowedOrigins {
                 "Authorization",
                 "x-csrf-token",
                 "x-request-id",
+                crate::graphql_support::SESSION_SECRET_HEADER,
             ])
             .expose_headers(vec!["Retry-After"])
             .supports_credentials()

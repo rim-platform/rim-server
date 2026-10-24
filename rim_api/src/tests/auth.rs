@@ -137,6 +137,7 @@ async fn mutation_login_sets_auth_intent_set_session() {
                 session_token: "rim_sess_test".to_string(),
                 csrf_token: "rim_csrf_test".to_string(),
                 must_set_password: false,
+                keys: rim_services::auth::dto::SessionKeysDto::kept(),
             })
         })
     });
@@ -160,7 +161,7 @@ async fn mutation_login_sets_auth_intent_set_session() {
     let intent = intent_ctx.take();
     assert!(matches!(
         intent,
-        Some(crate::auth_intent::AuthIntent::SetSession { .. })
+        Some(crate::auth_intent::AuthIntent::SetSession { kept: true, .. })
     ));
 }
 
@@ -256,6 +257,7 @@ async fn signup_passes_the_accepted_terms_to_the_service() {
                         session_token: "rim_sess_test".to_string(),
                         csrf_token: "rim_csrf_test".to_string(),
                         server_share: None,
+                        keys: rim_services::auth::dto::SessionKeysDto::kept(),
                     })
                 })
             });

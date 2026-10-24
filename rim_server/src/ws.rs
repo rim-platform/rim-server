@@ -13,11 +13,18 @@
 //! A client that starts subscriptions faster than [`SUBSCRIBE_RATE`] allows is disconnected
 //! with code `1008`, so subscribing and completing in a loop cannot churn streams faster than
 //! the rate.
+//!
+//! On a connection of an unkept session the first client message must be `connection_init`
+//! with the session's secret as `payload.sessionSecret`; any other first message closes the
+//! connection with [`SESSION_ENDED`]. Once the secret matched, the connection records that a
+//! WebSocket of the session is open, and when it ends, that one closed, which opens the
+//! session's reload window.
 
 use std::cell::Cell;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -39,8 +46,11 @@ use futures_util::Stream;
 use metrics::{Unit, describe_gauge, gauge};
 
 use rim_api::AppSchema;
+use rim_auth::session_token::session_secret_matches;
+use rim_core::auth::model::SessionId;
 use rim_infra_services::token_bucket::{BucketRate, TokenBucketLimiter};
 use rim_services::command::rate_limit::RateLimitDecision;
+use rim_services::session_key::service::SessionKeyService;
 use rim_services::session_revocation::SessionWatch;
 
 const CONNECTIONS: &str = "rim_websocket_connections";
@@ -74,6 +84,9 @@ impl Drop for ConnectionGuard {
 pub(crate) const SESSION_ENDED: u16 = 4401;
 /// The close reason sent with [`SESSION_ENDED`].
 const SESSION_ENDED_REASON: &str = "session ended";
+/// The close reason sent with [`SESSION_ENDED`] when an unkept session's first message is not
+/// a `connection_init` carrying its secret.
+const SECRET_REQUIRED_REASON: &str = "session secret required";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Longest single wait for a session's expiry; a later expiry is waited for in steps.
@@ -109,11 +122,45 @@ fn starts_subscription(message: &[u8]) -> bool {
         .map_or(true, |m| matches!(m.kind.as_str(), "subscribe" | "start"))
 }
 
+/// Whether `message` is a `connection_init` whose payload carries, as `sessionSecret`, the
+/// secret that hashes to `secret_hash`.
+fn init_carries_secret(message: &[u8], secret_hash: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Payload {
+        session_secret: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Init {
+        #[serde(rename = "type")]
+        kind: String,
+        payload: Option<Payload>,
+    }
+    serde_json::from_slice::<Init>(message).is_ok_and(|init| {
+        init.kind == "connection_init"
+            && init
+                .payload
+                .and_then(|p| p.session_secret)
+                .is_some_and(|secret| session_secret_matches(&secret, secret_hash))
+    })
+}
+
 /// What ends a connection besides the client: its session's revocation and expiry.
 pub(crate) struct SessionBound {
     /// Resolves when the session is revoked; `None` when no registry is wired.
     pub(crate) watch: Option<SessionWatch>,
     pub(crate) expires_at: Option<DateTime<Utc>>,
+    /// Set for an unkept session, whose secret the connection checks first.
+    pub(crate) unkept: Option<Unkept>,
+}
+
+/// The unkept session a connection runs under.
+pub(crate) struct Unkept {
+    /// The SHA-256 hex of the session's secret.
+    pub(crate) secret_hash: String,
+    pub(crate) session_id: SessionId,
+    /// Where the connection records that it opened and closed; `None` when none is wired.
+    pub(crate) session_keys: Option<Arc<dyn SessionKeyService>>,
 }
 
 /// Upgrade `request` to a GraphQL WebSocket connection running `schema` with `data`, ended by
@@ -139,11 +186,32 @@ where
         })
         .ok_or_else(|| actix_web::error::ErrorBadRequest("failed to parse graphql protocol"))?;
     let payload = FrameLimit::new(payload);
+    let (secret_hash, socket_record) = match session.unkept {
+        Some(Unkept {
+            secret_hash,
+            session_id,
+            session_keys,
+        }) => (
+            Some(secret_hash),
+            session_keys.map(|keys| SocketRecord {
+                session_id,
+                keys,
+                opened: None,
+            }),
+        ),
+        None => (None, None),
+    };
+    let session = SessionBound {
+        unkept: None,
+        ..session
+    };
     let connection = Connection {
         schema,
         data: Some(data),
         protocol,
         session: Some(session),
+        secret_hash,
+        socket_record,
         last_heartbeat: Instant::now(),
         messages: None,
         engine: None,
@@ -159,6 +227,14 @@ where
         .start()
 }
 
+/// Where a connection of an unkept session records that it opened and closed.
+struct SocketRecord {
+    session_id: SessionId,
+    keys: Arc<dyn SessionKeyService>,
+    /// The write recording the opening, once the secret matched; the closing waits for it.
+    opened: Option<actix_web::rt::task::JoinHandle<()>>,
+}
+
 struct Connection {
     schema: AppSchema,
     /// The connection data, handed to the engine when it starts.
@@ -166,6 +242,10 @@ struct Connection {
     protocol: WebSocketProtocols,
     /// Taken when the connection starts.
     session: Option<SessionBound>,
+    /// The hash of an unkept session's secret until the first client message matched it.
+    secret_hash: Option<String>,
+    /// Set for an unkept session when a service records its WebSocket openings and closings.
+    socket_record: Option<SocketRecord>,
     last_heartbeat: Instant,
     /// Client messages on their way to the engine.
     messages: Option<async_channel::Sender<Vec<u8>>>,
@@ -226,6 +306,37 @@ impl Connection {
         true
     }
 
+    /// Record that a WebSocket of the unkept session opened.
+    fn record_opened(&mut self) {
+        let Some(record) = self.socket_record.as_mut() else {
+            return;
+        };
+        let (keys, session_id) = (Arc::clone(&record.keys), record.session_id);
+        record.opened = Some(actix_web::rt::spawn(async move {
+            if let Err(error) = keys.socket_opened(session_id).await {
+                tracing::warn!(%error, %session_id, "could not record an opened WebSocket");
+            }
+        }));
+    }
+
+    /// Record, after the opening, that the WebSocket of the unkept session closed.
+    fn record_closed(&mut self) {
+        let Some(SocketRecord {
+            session_id,
+            keys,
+            opened: Some(opened),
+        }) = self.socket_record.take()
+        else {
+            return;
+        };
+        actix_web::rt::spawn(async move {
+            let _ = opened.await;
+            if let Err(error) = keys.socket_closed(session_id).await {
+                tracing::warn!(%error, %session_id, "could not record a closed WebSocket");
+            }
+        });
+    }
+
     /// End the session at `expires_at`, waiting at most [`MAX_EXPIRY_WAIT`] at a time.
     fn end_at(&self, expires_at: DateTime<Utc>, ctx: &mut WebsocketContext<Self>) {
         let left = (expires_at - Utc::now()).to_std().unwrap_or(Duration::ZERO);
@@ -272,7 +383,10 @@ impl Actor for Connection {
         self.engine = Some(ctx.spawn(engine));
         self.messages = Some(sender);
 
-        if let Some(SessionBound { watch, expires_at }) = self.session.take() {
+        if let Some(SessionBound {
+            watch, expires_at, ..
+        }) = self.session.take()
+        {
             if let Some(watch) = watch {
                 ctx.spawn(
                     watch
@@ -284,6 +398,10 @@ impl Actor for Connection {
                 self.end_at(expires_at, ctx);
             }
         }
+    }
+
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
+        self.record_closed();
     }
 }
 
@@ -333,12 +451,21 @@ impl StreamHandler<Result<Message, ProtocolError>> for Connection {
             }
             Message::Nop => None,
         };
-        let (Some(text), Some(sender)) = (text, self.messages.as_ref()) else {
+        let Some(text) = text.filter(|_| self.messages.is_some()) else {
             return;
         };
         if text.len() > MAX_MESSAGE_BYTES {
             return self.refuse_too_large(ctx);
         }
+        if let Some(secret_hash) = self.secret_hash.take() {
+            if !init_carries_secret(&text, &secret_hash) {
+                return self.end(CloseCode::Other(SESSION_ENDED), SECRET_REQUIRED_REASON, ctx);
+            }
+            self.record_opened();
+        }
+        let Some(sender) = self.messages.as_ref() else {
+            return;
+        };
         if starts_subscription(&text)
             && let RateLimitDecision::Limited { .. } = self.subscribes.check(&(), Instant::now())
         {
@@ -488,6 +615,7 @@ mod tests {
                 SessionBound {
                     watch: None,
                     expires_at: None,
+                    unkept: None,
                 },
                 &request,
                 futures_util::stream::pending(),
@@ -507,6 +635,8 @@ mod tests {
             data: Some(Data::default()),
             protocol: WebSocketProtocols::GraphQLWS,
             session: Some(session),
+            secret_hash: None,
+            socket_record: None,
             last_heartbeat: Instant::now(),
             messages: None,
             engine: None,
@@ -529,6 +659,7 @@ mod tests {
             let session = SessionBound {
                 watch: Some(SessionWatch::new(receiver, ())),
                 expires_at: None,
+                unkept: None,
             };
             let mut stream = Box::pin(WebsocketContext::create(
                 connection_for_test(session),
@@ -546,6 +677,38 @@ mod tests {
             drop(stream);
             assert!(handle.render().contains("rim_websocket_connections 0"));
         }
+    }
+
+    #[test]
+    fn only_a_connection_init_with_the_matching_secret_opens_an_unkept_sessions_connection() {
+        let secret = rim_auth::session_token::generate_session_secret();
+        let hash = rim_auth::session_token::hash_token(&secret);
+        let init = |payload: serde_json::Value| {
+            serde_json::to_vec(
+                &serde_json::json!({ "type": "connection_init", "payload": payload }),
+            )
+            .unwrap()
+        };
+        assert!(init_carries_secret(
+            &init(serde_json::json!({ "sessionSecret": secret })),
+            &hash
+        ));
+        assert!(!init_carries_secret(
+            &init(serde_json::json!({ "sessionSecret": "wrong" })),
+            &hash
+        ));
+        assert!(!init_carries_secret(&init(serde_json::json!({})), &hash));
+        assert!(!init_carries_secret(
+            br#"{"type":"connection_init"}"#,
+            &hash
+        ));
+        let subscribe = serde_json::to_vec(&serde_json::json!({
+            "type": "subscribe",
+            "payload": { "sessionSecret": secret },
+        }))
+        .unwrap();
+        assert!(!init_carries_secret(&subscribe, &hash));
+        assert!(!init_carries_secret(b"not json", &hash));
     }
 
     #[test]
@@ -609,6 +772,7 @@ mod tests {
             connection_for_test(SessionBound {
                 watch: None,
                 expires_at: None,
+                unkept: None,
             }),
             client,
         ));

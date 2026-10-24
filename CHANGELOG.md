@@ -41,6 +41,17 @@ tag `v<version>`, the version every crate in the workspace carries.
   `<RIM_DATA_DIR>/password-key.json`), created at the first start and checked by `/readyz`
   (`passwordKey`); back it up with the database, which the backup scripts do with the data
   directory. `docs/api.md` ("Account password").
+- **Upgrade:** "Keep me signed in". `loginWithKey` and `signupWithKey` require
+  `keepSignedIn: Boolean!` and `keepKeyHeld: Boolean!`, and `LoginPayload` and
+  `SignupWithInvitePayloadGql` gain `sessionSecret` and `keepKey`. A kept session gets
+  persistent cookies and, for a web client, a keep key, read again with the new query
+  `sessionKeepKey`. An unkept session gets browser-session cookies and a session secret that
+  every request carries in the new `X-RIM-Session-Secret` header and the WebSocket in its
+  `connection_init` payload (`sessionSecret`; otherwise closed with `4401`), except plain file
+  downloads, `logout` and the new `reloadSession`. `reloadSession` and `setReloadKey` (new,
+  with the type `ReloadSessionPayload`) let a reloaded tab take back its data within 60 seconds
+  of its WebSocket closing, once. Clients older than this release cannot sign in with a key or
+  sign up. `docs/api.md` ("Keep me signed in").
 - Public join links: a workspace's Owner can turn on one permanent link,
   `<server>/join/<token>` with a `rim_pjl_` token (off by default), that lets existing accounts
   of this server join (`DIRECT`) or ask to join (`REQUESTS`) as Member or Guest; it never
