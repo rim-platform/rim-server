@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
-use entity::message_attachment;
+use entity::{message, message_attachment};
 use rim_core::message::model::MessageId;
 use rim_core::message_attachment::model::{
     AttachmentUsage, MessageAttachment, MessageAttachmentId, NewMessageAttachment,
@@ -11,13 +13,12 @@ use rim_core::server::model::ServerId;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
-    Set, Statement,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseTransaction, DbBackend,
+    EntityTrait, FromQueryResult, QueryFilter, QuerySelect, Set, Statement,
 };
 
 use crate::DbHandle;
 use crate::error::map_db_err;
-use std::collections::HashMap;
 
 pub struct SeaOrmMessageAttachmentRepository {
     pub db: DbHandle,
@@ -26,6 +27,46 @@ pub struct SeaOrmMessageAttachmentRepository {
 impl SeaOrmMessageAttachmentRepository {
     pub fn new(db: DbHandle) -> Self {
         Self { db }
+    }
+}
+
+/// Locks a parent message before changing its attachment rows.
+async fn lock_message(txn: &DatabaseTransaction, id: Uuid) -> RepoResult<message::Model> {
+    message::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(txn)
+        .await
+        .map_err(map_db_err)?
+        .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))
+}
+
+/// Advances the locked message in its conversation's change feed without marking a text edit.
+async fn advance_message(txn: &DatabaseTransaction, parent: &message::Model) -> RepoResult<()> {
+    let next = txn
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "INSERT INTO message_change_seq AS s (conversation_id, last_version) VALUES ($1, 1) \
+         ON CONFLICT (conversation_id) DO UPDATE SET last_version = s.last_version + 1 \
+         RETURNING last_version",
+            [parent.conversation_id.into()],
+        ))
+        .await
+        .map_err(map_db_err)?
+        .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+    let version: i64 = next.try_get("", "last_version").map_err(map_db_err)?;
+    message::Entity::update_many()
+        .col_expr(message::Column::Version, Expr::value(version))
+        .filter(message::Column::Id.eq(parent.id))
+        .exec(txn)
+        .await
+        .map_err(map_db_err)?;
+    Ok(())
+}
+
+fn transaction_error(error: sea_orm::TransactionError<RepoError>) -> RepoError {
+    match error {
+        sea_orm::TransactionError::Connection(error) => map_db_err(error),
+        sea_orm::TransactionError::Transaction(error) => error,
     }
 }
 
@@ -66,7 +107,18 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             blob_sha256: Set(blob_sha256),
         };
 
-        let inserted = active.insert(&self.db).await.map_err(map_db_err)?;
+        let inserted = self
+            .db
+            .transaction(|txn| {
+                Box::pin(async move {
+                    let parent = lock_message(txn, message_id.into()).await?;
+                    let inserted = active.insert(txn).await.map_err(map_db_err)?;
+                    advance_message(txn, &parent).await?;
+                    Ok(inserted)
+                })
+            })
+            .await
+            .map_err(transaction_error)?;
         Ok(inserted.into())
     }
 
@@ -114,17 +166,26 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         storage_url: String,
         metadata: Option<serde_json::Value>,
     ) -> RepoResult<MessageAttachment> {
-        let model = message_attachment::Entity::find_by_id(id)
-            .one(&self.db)
+        let updated = self
+            .db
+            .transaction(|txn| {
+                Box::pin(async move {
+                    let model = message_attachment::Entity::find_by_id(id)
+                        .one(txn)
+                        .await
+                        .map_err(map_db_err)?
+                        .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+                    let parent = lock_message(txn, model.message_id).await?;
+                    let mut active: message_attachment::ActiveModel = model.into();
+                    active.storage_url = Set(storage_url);
+                    active.metadata = Set(metadata);
+                    let updated = active.update(txn).await.map_err(map_db_err)?;
+                    advance_message(txn, &parent).await?;
+                    Ok(updated)
+                })
+            })
             .await
-            .map_err(map_db_err)?
-            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
-
-        let mut active: message_attachment::ActiveModel = model.into();
-        active.storage_url = Set(storage_url);
-        active.metadata = Set(metadata);
-
-        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+            .map_err(transaction_error)?;
         Ok(updated.into())
     }
 
@@ -137,37 +198,61 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
         file_size: i64,
         metadata: Option<serde_json::Value>,
     ) -> RepoResult<Option<MessageAttachment>> {
-        // RETURNING keeps the update and the read-back one statement, so a caller never sees
-        // an error for an update that actually happened.
-        let updated = message_attachment::Entity::update_many()
-            .col_expr(
-                message_attachment::Column::StorageUrl,
-                Expr::value(storage_url),
-            )
-            .col_expr(message_attachment::Column::FileSize, Expr::value(file_size))
-            .col_expr(message_attachment::Column::Metadata, Expr::value(metadata))
-            .filter(message_attachment::Column::Id.eq(Uuid::from(id)))
-            .filter(message_attachment::Column::StorageUrl.eq(expected_storage_url))
-            .filter(message_attachment::Column::Id.gte(v7_lower_bound(reserved_since)))
-            .exec_with_returning(&self.db)
+        let updated = self
+            .db
+            .transaction(|txn| {
+                Box::pin(async move {
+                    let Some(model) = message_attachment::Entity::find_by_id(id)
+                        .one(txn)
+                        .await
+                        .map_err(map_db_err)?
+                    else {
+                        return Ok(None);
+                    };
+                    let parent = lock_message(txn, model.message_id).await?;
+                    let updated = message_attachment::Entity::update_many()
+                        .col_expr(
+                            message_attachment::Column::StorageUrl,
+                            Expr::value(storage_url),
+                        )
+                        .col_expr(message_attachment::Column::FileSize, Expr::value(file_size))
+                        .col_expr(message_attachment::Column::Metadata, Expr::value(metadata))
+                        .filter(message_attachment::Column::Id.eq(Uuid::from(id)))
+                        .filter(message_attachment::Column::StorageUrl.eq(expected_storage_url))
+                        .filter(message_attachment::Column::Id.gte(v7_lower_bound(reserved_since)))
+                        .exec_with_returning(txn)
+                        .await
+                        .map_err(map_db_err)?;
+                    let updated = updated.into_iter().next();
+                    if updated.is_some() {
+                        advance_message(txn, &parent).await?;
+                    }
+                    Ok(updated)
+                })
+            })
             .await
-            .map_err(map_db_err)?;
-        Ok(updated.into_iter().next().map(Into::into))
+            .map_err(transaction_error)?;
+        Ok(updated.map(Into::into))
     }
 
     async fn delete_attachment(&self, id: MessageAttachmentId) -> RepoResult<()> {
-        let model = message_attachment::Entity::find_by_id(id)
-            .one(&self.db)
+        self.db
+            .transaction(|txn| {
+                Box::pin(async move {
+                    let model = message_attachment::Entity::find_by_id(id)
+                        .one(txn)
+                        .await
+                        .map_err(map_db_err)?
+                        .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+                    let parent = lock_message(txn, model.message_id).await?;
+                    let active: message_attachment::ActiveModel = model.into();
+                    active.delete(txn).await.map_err(map_db_err)?;
+                    advance_message(txn, &parent).await?;
+                    Ok(())
+                })
+            })
             .await
-            .map_err(map_db_err)?;
-
-        let Some(model) = model else {
-            return Err(RepoError::new(RepoErrorKind::NotFound));
-        };
-
-        let active: message_attachment::ActiveModel = model.into();
-        active.delete(&self.db).await.map_err(map_db_err)?;
-        Ok(())
+            .map_err(transaction_error)
     }
 
     async fn find_ids_with_status_before(

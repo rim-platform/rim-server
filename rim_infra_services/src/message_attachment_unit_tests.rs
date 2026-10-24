@@ -867,7 +867,22 @@ mod tests {
 
     #[tokio::test]
     async fn create_finalize_and_delete_attachment_manage_message_state() {
-        use std::sync::Mutex;
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
+        use rim_services::message::{dto::MessageDto, service::MockMessageService};
+
+        #[derive(Default)]
+        struct Events(Mutex<Vec<WorkspaceEvent>>);
+        impl Broadcaster for Events {
+            fn broadcast(&self, event: WorkspaceEvent) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        let events = Arc::new(Events::default());
 
         let server_id = ServerId::new();
         let actor_id = UserId::new();
@@ -881,22 +896,26 @@ mod tests {
         let mut conversation_repo = MockConversationRepository::new();
         conversation_repo
             .expect_get_by_id()
-            .times(3)
+            .times(7)
             .returning(move |_id| Ok(Some(conversation(server_id, conversation_id))));
 
         let mut conversation_member_repo = MockConversationMemberRepository::new();
         conversation_member_repo
             .expect_is_member()
-            .times(3)
+            .times(4)
             .returning(move |_conversation_id, user_id| Ok(user_id == actor_id));
 
+        conversation_member_repo
+            .expect_list_member_ids()
+            .times(3)
+            .returning(move |_| Ok(vec![actor_id]));
         let msg_for_create = msg.clone();
         let msg_for_finalize = msg.clone();
         let msg_for_delete = msg.clone();
         let mut message_repo = MockMessageRepository::new();
         message_repo
             .expect_get_by_id()
-            .times(3)
+            .times(7)
             .returning(move |_id| {
                 let value = if _id == message_id {
                     Some(msg_for_create.clone())
@@ -950,13 +969,20 @@ mod tests {
             },
         );
 
+        let is_ready = Arc::new(AtomicBool::new(false));
+        let ready_for_get = Arc::clone(&is_ready);
         let captured_id_for_get = Arc::clone(&captured_id);
         message_attachment_repo
             .expect_get_by_id()
-            .times(2)
+            .times(3)
             .returning(move |_req_id| {
                 let att_id = captured_id_for_get.lock().unwrap().unwrap();
-                let (status, storage_url) = ("uploaded", format!("uploads/{att_id}/f.txt"));
+                let status = if ready_for_get.load(Ordering::SeqCst) {
+                    "ready"
+                } else {
+                    "uploaded"
+                };
+                let storage_url = format!("uploads/{att_id}/f.txt");
                 Ok(Some(MessageAttachment {
                     id: att_id,
                     message_id,
@@ -973,6 +999,7 @@ mod tests {
         message_attachment_repo
             .expect_update_attachment()
             .return_once(move |id, storage_url, metadata| {
+                is_ready.store(true, Ordering::SeqCst);
                 let att_id = captured_id_for_update.lock().unwrap().unwrap();
                 assert_eq!(id, att_id);
                 assert_eq!(
@@ -1006,7 +1033,7 @@ mod tests {
         let mut server_member_repo = MockServerMemberRepository::new();
         server_member_repo
             .expect_get_member_standing()
-            .times(3)
+            .times(4)
             .returning(|_sid, _uid| {
                 Ok(Some(rim_core::server_member::model::MemberStanding::new(
                     rim_core::server_member::model::ServerMemberRole::Member,
@@ -1021,6 +1048,32 @@ mod tests {
             .expect_get_quota_usage()
             .returning(|_| Box::pin(async { Ok(quota(0, 1_000)) }));
 
+        let mut messages = MockMessageService::new();
+        messages
+            .expect_get_message()
+            .times(3)
+            .returning(move |query| {
+                assert_eq!(query.actor.user_id, actor_id);
+                Box::pin(async move {
+                    Ok(MessageDto {
+                        id: message_id,
+                        server_id,
+                        conversation_id,
+                        author_id: actor_id,
+                        thread_id: None,
+                        root_thread_id: None,
+                        text: Some("hello".into()),
+                        has_attachments: true,
+                        attachments: vec![],
+                        parent_message_id: None,
+                        forwarded_from_message_id: None,
+                        thread_root_message_id: None,
+                        is_deleted: false,
+                        sent_at: chrono::Utc::now(),
+                        encryption: None,
+                    })
+                })
+            });
         let svc = DefaultMessageAttachmentService::new(
             AttachmentRepos {
                 conversation_repo: Arc::new(conversation_repo),
@@ -1030,7 +1083,8 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
             },
             Arc::new(storage),
-        );
+        )
+        .with_notifications(Observers::new(events.clone()), Arc::new(messages));
 
         let ticket = svc
             .create_attachment(CreateAttachmentCmd {
@@ -1058,6 +1112,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(finalized.status, AttachmentStatus::Ready);
+        let repeated = svc
+            .finalize_attachment(FinalizeAttachmentCmd {
+                actor: Actor::new(actor_id),
+                server_id,
+                attachment_id,
+            })
+            .await
+            .unwrap();
+        assert_eq!(repeated.status, AttachmentStatus::Ready);
 
         svc.delete_attachment(DeleteAttachmentCmd {
             actor: Actor::new(actor_id),
@@ -1066,6 +1129,16 @@ mod tests {
         })
         .await
         .unwrap();
+        let recorded = events.0.lock().unwrap();
+        assert_eq!(recorded.len(), 3);
+        assert!(
+            recorded
+                .iter()
+                .all(|event| matches!(event, WorkspaceEvent::MessageUpdated {
+            workspace_id, conversation_id: id, member_user_ids, message, ..
+        } if *workspace_id == server_id && *id == conversation_id
+            && member_user_ids == &vec![actor_id] && message.id == message_id))
+        );
     }
 
     #[tokio::test]

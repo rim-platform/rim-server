@@ -80,16 +80,6 @@ const MAX_UPLOAD_BYTES: u64 = rim_services::message_attachment::MAX_ATTACHMENT_B
 /// Maximum avatar size: 2 MB.
 const MAX_AVATAR_BYTES: u64 = 2 * 1024 * 1024;
 
-/// MIME types allowed for general file uploads.
-const ALLOWED_MIME_PREFIXES: &[&str] = &[
-    "image/",
-    "text/",
-    "application/pdf",
-    "application/json",
-    "application/zip",
-    "application/gzip",
-];
-
 /// The type of an encrypted conversation's blob. The service accepts it only for an attachment
 /// created with a `blobSha256`, and checks the bytes against it.
 const ENCRYPTED_BLOB_MIME: &str = "application/octet-stream";
@@ -98,11 +88,6 @@ const ENCRYPTED_BLOB_MIME: &str = "application/octet-stream";
 const ENCRYPTED_BLOB_FILENAME: &str = "encrypted.bin";
 
 use rim_core::util::sanitize_filename;
-
-fn is_mime_allowed(content_type: &str, allowed: &[&str]) -> bool {
-    let ct = content_type.to_lowercase();
-    allowed.iter().any(|prefix| ct.starts_with(prefix))
-}
 
 /// Refuse a route of a feature that is not enabled on this instance: 403 with the
 /// `FEATURE_DISABLED` code.
@@ -309,8 +294,10 @@ pub(crate) async fn upload_as(
         Err(resp) => return resp,
     };
 
-    if !is_mime_allowed(&upload.content_type, ALLOWED_MIME_PREFIXES)
-        && !is_mime_allowed(&upload.content_type, &[ENCRYPTED_BLOB_MIME])
+    if !rim_services::message_attachment::is_plaintext_content_type(&upload.content_type)
+        && !upload
+            .content_type
+            .eq_ignore_ascii_case(ENCRYPTED_BLOB_MIME)
     {
         return HttpResponse::UnsupportedMediaType()
             .json(serde_json::json!({"error": "file type not allowed"}));

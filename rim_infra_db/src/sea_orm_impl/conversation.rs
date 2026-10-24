@@ -17,8 +17,9 @@ use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Expr;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, JoinType, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect, QueryTrait, RelationTrait, Set,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait, JoinType,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, RelationTrait, Set,
+    Statement,
 };
 
 use crate::DbHandle;
@@ -50,6 +51,31 @@ impl SeaOrmConversationRepository {
             active.encrypted_at = Set(Some(now));
         }
         active
+    }
+
+    fn direct_between_users(
+        server_id: ServerId,
+        user_a: UserId,
+        user_b: UserId,
+    ) -> sea_orm::Select<conversation::Entity> {
+        let direct: entity::sea_orm_active_enums::ConversationType =
+            ConversationType::Direct.into();
+
+        let user_b_subquery = conversation_member::Entity::find()
+            .select_only()
+            .column(conversation_member::Column::ConversationId)
+            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_b.into()))
+            .into_query();
+
+        conversation::Entity::find()
+            .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .filter(conversation::Column::ConversationType.eq(direct))
+            .filter(conversation::Column::Id.in_subquery(user_b_subquery))
+            .join(
+                JoinType::InnerJoin,
+                conversation::Relation::ConversationMember.def(),
+            )
+            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_a.into()))
     }
 
     /// The conversations `user_id` is an active member of.
@@ -130,6 +156,36 @@ impl ConversationRepository for SeaOrmConversationRepository {
             .db
             .transaction::<_, conversation::Model, RepoError>(|txn| {
                 Box::pin(async move {
+                    if conv.conversation_type == ConversationType::Direct {
+                        let mut pair = members.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+                        pair.sort_unstable();
+                        pair.dedup();
+                        if pair.len() != 2 {
+                            return Err(RepoError::with_message(
+                                RepoErrorKind::InvalidData,
+                                "a direct conversation needs two distinct members",
+                            ));
+                        }
+                        let key = format!("dm:{}:{}:{}", conv.server_id, pair[0], pair[1]);
+                        txn.query_one_raw(Statement::from_sql_and_values(
+                            DbBackend::Postgres,
+                            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                            [key.into()],
+                        ))
+                        .await
+                        .map_err(map_db_err)?;
+                        if let Some(existing) = Self::direct_between_users(
+                            conv.server_id,
+                            pair[0].into(),
+                            pair[1].into(),
+                        )
+                        .one(txn)
+                        .await
+                        .map_err(map_db_err)?
+                        {
+                            return Ok(existing);
+                        }
+                    }
                     let active = Self::new_active_model(conv);
 
                     let inserted = active.insert(txn).await.map_err(map_db_err)?;
@@ -166,24 +222,7 @@ impl ConversationRepository for SeaOrmConversationRepository {
         user_a: UserId,
         user_b: UserId,
     ) -> RepoResult<Option<Conversation>> {
-        let direct: entity::sea_orm_active_enums::ConversationType =
-            ConversationType::Direct.into();
-
-        let user_b_subquery = conversation_member::Entity::find()
-            .select_only()
-            .column(conversation_member::Column::ConversationId)
-            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_b.into()))
-            .into_query();
-
-        let model = conversation::Entity::find()
-            .filter(conversation::Column::ServerId.eq::<Uuid>(server_id.into()))
-            .filter(conversation::Column::ConversationType.eq(direct))
-            .filter(conversation::Column::Id.in_subquery(user_b_subquery))
-            .join(
-                JoinType::InnerJoin,
-                conversation::Relation::ConversationMember.def(),
-            )
-            .filter(conversation_member::Column::UserId.eq::<Uuid>(user_a.into()))
+        let model = Self::direct_between_users(server_id, user_a, user_b)
             .one(&self.db)
             .await
             .map_err(map_db_err)?;
