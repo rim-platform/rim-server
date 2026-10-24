@@ -578,7 +578,7 @@ client computed a **provisional** id, `rimp0_` + base64url(SHA-256(
 
 This PR adds `User.principalId`. The mapping happens **once, in the client**:
 
-1. When the signed-in user's `principalId` turns non-null (after enrollment on this device, or
+1. When the signed-in user's `principalId` turns non-null (after the signup on this device, or
    on the first fetch on another device), the plugin host computes the account's old `rimp0_`
    id the same way as before and records `rimp0_… → rimp1_…` in its local store.
 2. It sends running plugins `rim.principal.changed` with the new principal, plus the old-to-new
@@ -586,7 +586,8 @@ This PR adds `User.principalId`. The mapping happens **once, in the client**:
    rewrite stored ids. It sends the mapping again after every handshake, so a plugin that was
    not running at the switch still gets it.
 3. Other people's ids map the same way when their `User.principalId` is first seen non-null. An
-   account that never enrolls keeps its `rimp0_` id.
+   account whose `principalId` stays null (a purged account that never had one) keeps its
+   `rimp0_` id.
 
 The desktop client does this; the server only exposes `principalId`.
 
@@ -598,46 +599,42 @@ which every client that offers recovery must read.
 
 - **Where keys live.** Every secret goes through the app's one OS keyring helper
   (`src-tauri/src/secret_store.rs`), one entry per principal: the device key, and on the device
-  that enrolled the identity, the identity key and, until the person confirms they saved the
+  that created the identity, the identity key and, until the person confirms they saved the
   recovery kit, the kit's entropy ("Recovery kit"). The identity key stays on that device until
   device linking can move it off; the device key alone signs in. Keys never reach the webview: it asks the
   Tauri side for a signed statement and sends that.
-- **Enrollment** (Settings > Security, signed in with a password): the app creates the identity,
-  recovery and device keys. The device key, the identity key and the kit's entropy are written
-  to the keyring **before** `enrollIdentityKey` is sent, so a crash in between never leaves an
-  enrolled account without its keys; keys whose principal the server never accepted are
-  removed. The recovery key itself is never stored. After the enrollment the app shows the
-  recovery kit ("Recovery kit") and publishes a profile card (display name, this server's URL,
-  the active devices). The server has ended every other session of the account.
-- **Key-only signup** (the join pages, where it is the form shown first, with the page's token if
-  it has one): the person picks a username, an optional display name and this device's name; the
-  app creates the keys as for enrollment and writes them, with the kit's entropy, to the
-  keyring **before** `signupWithKey` is sent; it shows the recovery kit once the signup
-  succeeds. When it fails, the app reads `keyLog` for the new principal: an empty log
-  means the server refused, so the keys are removed and the draft stays in memory, letting the
-  person retry with the same keys or discard them; a log that holds the
-  principal means an attempt whose answer was lost created the account, so the app writes the
-  draft's keys back if a failed attempt removed them and signs in with the device key (also when
-  the person discards the draft); with no answer the keys stay for a later sign-in. On success the
-  keys are confirmed and linked to the returned user id, the profile card is published, and the
-  app opens the account as after a password signup (a workspace invite whose answer was lost
-  opens the workspace its preview named). Unconfirmed keys whose principal has no key log on the
-  server (a signup or enrollment that never reached it) are removed when signing in with them
-  fails. Where the server allows password signup (`serverInfo.signupRequiresKeys` false), the
-  password form is a fallback behind "Create account with a password".
-- **Other sessions.** Enrollment ends the account's other sessions itself ("Enrollment", rule 4).
-  Account settings offers "Sign out other sessions" (`logoutOtherSessions`) for every account,
-  on the desktop and the web.
+- **Key-only signup** (the join pages, the only signup there is, with the page's token if it has
+  one): the person picks a username, an optional display name, this device's name and the
+  account password. The app creates the identity, recovery and device keys and registers the
+  password (`passwordRegistrationStart`, then `passwordRegistration` in the signup, "Account
+  password (OPAQUE)"). The device key, the identity key and the kit's entropy are written to the
+  keyring **before** `signupWithKey` is sent, so a crash in between never leaves an account
+  without its keys; the recovery key itself is never stored. There is no username and password
+  form, no signup without a key and no enrollment of a key on an existing account. Once the
+  signup succeeds the app shows the recovery kit ("Recovery kit"). When it fails, the app reads
+  `keyLog` for the new principal: an empty log means the server refused, so the keys are
+  removed and the draft stays in memory, letting the person retry with the same keys or discard
+  them; a log that holds the principal means an attempt whose answer was lost created the
+  account, so the app writes the draft's keys back if a failed attempt removed them and signs in
+  with the device key and the password (also when the person discards the draft); with no answer
+  the keys stay for a later sign-in. On success the keys are confirmed and linked to the
+  returned user id, the profile card (display name, this server's URL, the active devices) is
+  published, and the app opens the account (a workspace invite whose answer was lost opens the
+  workspace its preview named). Unconfirmed keys whose principal has no key log on the server
+  (a signup that never reached it) are removed when signing in with them fails.
+- **Other sessions.** Account settings offers "Sign out other sessions" (`logoutOtherSessions`)
+  for every account, on the desktop and the web.
 - **Audience.** The `host[:port]` of the GraphQL endpoint URL as written, lowercased, the same
   rule the server applies to `RIM_PUBLIC_BASE_URL`.
 - **Sign-in.** On a cold start whose session cookie is gone or refused, the app signs in with the
   device key of the account it was last signed in to. After an explicit sign-out it waits on the
-  sign-in screen, which offers "Sign in with this device" for every account this device holds a
-  key for on this server. A `FORBIDDEN` answer says the device was revoked; the
+  sign-in screen, which offers every account this device holds a key for on this server, each
+  signing in with the device key and the account password, besides linking this device and
+  recovering an account. A `FORBIDDEN` answer says the device was revoked; the
   sign-in screen then offers to remove that device's keys from this computer.
 - **Statement version.** The app writes version 2 (tagged keys and signatures) and reads both.
   Keys and signatures are opaque text outside the one module that signs and verifies, so a hybrid
-  algorithm is added there alone. A version 1 log (an identity enrolled by an older client) is
+  algorithm is added there alone. A version 1 log (an identity an older client created) is
   extended in version 2 by its next rotation.
 - **Identity rotation** keeps the recovery key and every device. The new identity key is stored as
   pending, with the `seq` its rotation creates, before `rotateIdentityKey` is sent. A verified log
@@ -659,28 +656,27 @@ which every client that offers recovery must read.
 - **Profile card.** Lists this server's URL as the one relay and the account's active devices. A
   device is listed only if its certificate verifies against the replayed log at its `keySeq`, so
   a server cannot add a key of its own to the card the identity key signs.
-- **Enrollment in flight.** While `enrollIdentityKey` has not answered, the server saying "not
-  enrolled" proves nothing, so nothing removes keys on that basis (closing Settings mid-way keeps
-  them; a later check removes them if the enrollment never landed).
 
 ### Web client
 
-The web app may create and hold an identity, not only be a linked device. It signs up
-with a key (`signupWithKey`) and enrolls a password account (`enrollIdentityKey`) as the desktop
-does, and follows the desktop's rules above except:
+The web app may create and hold an identity, not only be a linked device. It signs up with a key
+and a password (`signupWithKey`) as the desktop does, and follows the desktop's rules above
+except:
 
 - **Keys.** The identity key and the device key are WebCrypto Ed25519 keys generated with
   `extractable: false` and kept as `CryptoKey`s in IndexedDB, next to the account record
   (principal id, user id once known, server). Public keys are exported raw and tagged
   `ed25519:`. A browser without Ed25519 in WebCrypto cannot create an identity; there is no
-  fallback to extractable keys. The recovery key is derived from the kit's entropy only to name
+  fallback to extractable keys and no account without one. In place of the signup form it
+  shows "This browser can't create the keys an account needs. Use the desktop app or another
+  browser." The recovery key is derived from the kit's entropy only to name
   it in the inception, and is not kept.
 - **Storage.** Before it creates keys, the client requests persistent storage
   (`navigator.storage.persist()`) and handles a refusal: it tells the person the browser may
   clear this site's data, which would leave the recovery kit as the only way back, and goes on
   only if they accept. It writes the identity key, the device key, the account record and the
-  recovery entropy to IndexedDB **before** the signup or enrollment mutation is sent. A failed
-  write aborts the signup or enrollment before any request, so the server never holds a
+  recovery entropy to IndexedDB **before** the signup mutation is sent. A failed write aborts
+  the signup before any request, so the server never holds a
   principal whose keys the browser lacks.
 - **A linked device is access, not recovery.** Only the device holding the identity key links
   other devices (`device-linking-v1.md`), revokes them, rotates the identity key and publishes
@@ -694,9 +690,9 @@ does, and follows the desktop's rules above except:
 
 ### Recovery kit
 
-Shown after signup or enrollment, as text the person saves, not as a gate before the request
-is sent. The kit saved is the whole kit, account id included. Because the inception commits to
-the recovery key, the kit exists before the signup or enrollment is sent, so the client keeps
+Shown after signup, as text the person saves, not as a gate before the request is sent. The kit
+saved is the whole kit, account id included. Because the inception commits to the recovery key,
+the kit exists before the signup is sent, so the client keeps
 the kit's 16 entropy bytes next to the identity key (the keyring on the desktop, IndexedDB on
 the web) until the person confirms they saved the kit, then deletes them; until then it can
 show the kit again. Those bytes are the account's recovery secret, stored temporarily: they are
@@ -706,7 +702,7 @@ kit. Losing this browser's data can permanently remove your ability to manage th
 both versions, as a whole kit or as the bare secret alone (a 12-word phrase or a `RK1-` key),
 and tell them apart by content, not by the header line. Either way the secret is a 32-byte seed
 used as the Ed25519 recovery key (`SigningKey::from_bytes`); the key log's `recoveryKey` is its
-public key. Nothing is migrated: an account enrolled with a version 1 kit recovers with its
+public key. Nothing is migrated: an identity created with a version 1 kit recovers with its
 `RK1-` key.
 
 **Version 2, the recovery phrase.**
@@ -749,7 +745,7 @@ The recovery key is `RK1-` and the RFC 4648 base32 (uppercase, no padding) of th
 recovery seed followed by the first 3 bytes of `SHA-256("rim.recovery-kit.v1\0" || seed)`, in
 groups of 4 joined by `-`. Readers ignore case, spaces and `-`, read `0` as `O` and `1` as `I`,
 and refuse a key whose check bytes do not match. Version 2 replaced this format for new
-enrollments; readers keep accepting it. A text holds a version 1 key when a line other than the
+identities; readers keep accepting it. A text holds a version 1 key when a line other than the
 account id's has a word starting with `RK1`; a phrase never does.
 
 **Recovering** (signed out, every device lost): the app reads the kit, fetches `keyLog` for the
