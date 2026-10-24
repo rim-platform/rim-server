@@ -60,6 +60,16 @@
 # in the lockfile move to `hax-lib` 0.4 or later (through an `hpke-rs` or
 # `openmls_rust_crypto` release).
 #
+# RUSTSEC-2026-0387 — timing variability in `crypto-bigint` 0.5.5 operations meant to be
+# constant-time. It comes through `elliptic-curve` 0.13 (`p256`, `p384`, `k256`) of
+# `hpke-rs-rust-crypto` and `openmls_rust_crypto` 0.6, the OpenMLS provider of
+# `rim_infra_services/src/e2ee/openmls_wire.rs`. The server only decodes MLS framing and
+# validates key package signatures and hashes over public data; it never creates or loads a
+# group, never holds an elliptic-curve private key, and accepts only cipher suite 0x004f
+# (X-Wing with Ed25519), so no secret passes through those curves and a timing difference has
+# nothing to reveal. The fix, `crypto-bigint` 0.7, needs `elliptic-curve` 0.14, which no
+# `openmls_rust_crypto` release uses yet. Drop this once one does.
+#
 # The two unmaintained entries are listed so that `--deny unmaintained` can be switched on
 # without failing on them; CI runs `cargo audit --deny unsound` today.
 [advisories]
@@ -72,4 +82,5 @@ ignore = [
     "RUSTSEC-2026-0253",
     "RUSTSEC-2025-0057",
     "RUSTSEC-2026-0173",
+    "RUSTSEC-2026-0387",
 ]
