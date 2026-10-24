@@ -386,6 +386,8 @@ async fn the_credential_step_ends_sessions_and_revokes_devices_and_the_personal_
              VALUES (gen_random_uuid(), '{0}', 'login', '\\x04', now()); \
              INSERT INTO password_reset (id, user_id, expires_at) \
              VALUES (gen_random_uuid(), '{0}', now()); \
+             INSERT INTO password_ticket (token_hash, user_id, expires_at) \
+             VALUES ('t', '{0}', now()); \
              INSERT INTO macro (id, server_id, user_id, name) VALUES \
              ('0199d1a0-0000-7000-8000-00000000000a', '{1}', '{0}', 'used'), \
              (gen_random_uuid(), '{1}', '{0}', 'unused'); \
@@ -409,6 +411,7 @@ async fn the_credential_step_ends_sessions_and_revokes_devices_and_the_personal_
         "password_rewraps",
         "password_logins",
         "password_resets",
+        "password_tickets",
     ] {
         assert!(credentials.counts.contains(&(kind, 1)), "{kind}");
     }

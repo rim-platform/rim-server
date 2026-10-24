@@ -8,6 +8,8 @@ mod tests {
     use uuid::Uuid;
 
     use rim_auth::opaque::client::{Login, Registration};
+    use rim_auth::opaque::{LABEL_SERVER_SHARE, transport_open};
+    use rim_auth::session_token::hash_token;
     use rim_core::account_password::model::PasswordLoginId;
     use rim_core::account_password::repository::AccountPasswordRepository;
     use rim_core::auth::model::{NewSession, Session, SessionId};
@@ -25,9 +27,9 @@ mod tests {
     use rim_identity::testing::TestIdentity;
     use rim_identity::{KeyState, StatementVersion};
     use rim_services::account_password::dto::{
-        PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordLoginStartCmd,
-        PasswordRegistrationStartCmd, PasswordResetChallengeCmd, PasswordResetFinishCmd,
-        PasswordResetStartCmd, SetPasswordCmd, SetPasswordStartCmd,
+        PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordLoginFinishCmd,
+        PasswordLoginStartCmd, PasswordRegistrationStartCmd, PasswordResetChallengeCmd,
+        PasswordResetFinishCmd, PasswordResetStartCmd, SetPasswordCmd, SetPasswordStartCmd,
     };
     use rim_services::account_password::service::AccountPasswordService;
     use rim_services::key_auth::command::SignedPayload;
@@ -922,5 +924,127 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+    }
+
+    // ── Login finish ────────────────────────────────────────────────────
+
+    /// Start a login for `account` with `password` and finish it on the client; the login id
+    /// and the client's finalization and session key (garbage and `None` for a wrong password).
+    async fn client_login(
+        w: &World,
+        account: &Account,
+        password: &[u8],
+    ) -> (PasswordLoginId, Vec<u8>, Option<Vec<u8>>) {
+        let (flow, request) = Login::start(password);
+        let started = w
+            .svc
+            .login_start(PasswordLoginStartCmd {
+                principal_id: account.principal().to_string(),
+                request,
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap();
+        match flow.finish(&started.response) {
+            Some(done) => (started.login_id, done.finalization, Some(done.session_key)),
+            None => (started.login_id, vec![0; 64], None),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_finished_login_clears_the_tries_and_issues_a_ticket_and_the_sealed_share() {
+        let w = world();
+        let a = w.account_with_password(1, b"pw").await;
+        w.passwords
+            .insert_rewrap(a.user_id, b"older".to_vec(), Utc::now(), 3)
+            .await
+            .unwrap();
+        w.passwords
+            .insert_rewrap(a.user_id, b"newer".to_vec(), Utc::now(), 3)
+            .await
+            .unwrap();
+        w.login_start(a.principal()).await.unwrap();
+        let (login_id, finalization, session_key) = client_login(&w, &a, b"pw").await;
+        assert_eq!(w.tries(&a), 2);
+        let done = w
+            .svc
+            .login_finish(PasswordLoginFinishCmd {
+                login_id,
+                credential_finalization: finalization.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(w.tries(&a), 0);
+        assert_eq!(done.rewraps, vec![b"newer".to_vec(), b"older".to_vec()]);
+        let share = TEST_PASSWORD_KEY
+            .open_share(
+                a.user_id,
+                &w.passwords.state().passwords[&a.user_id].share_sealed,
+            )
+            .unwrap();
+        let opened = transport_open(
+            &session_key.unwrap(),
+            LABEL_SERVER_SHARE,
+            &done.server_share,
+        )
+        .expect("the share opens under the login's transport key");
+        assert_eq!(opened.as_slice(), share.as_slice());
+        let ticket = w.passwords.state().tickets[&hash_token(&done.ticket)];
+        assert_eq!(ticket.0, a.user_id);
+        assert!(ticket.1 > Utc::now() + Duration::seconds(100));
+        assert_eq!(done.ticket.len(), 43, "32 bytes, unpadded base64url");
+
+        // The login id works once.
+        let err = w
+            .svc
+            .login_finish(PasswordLoginFinishCmd {
+                login_id,
+                credential_finalization: finalization,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_expired_or_made_up_login_is_refused_without_a_ticket() {
+        let w = world();
+        let a = w.account_with_password(1, b"pw").await;
+        let finish = |login_id, credential_finalization| {
+            w.svc.login_finish(PasswordLoginFinishCmd {
+                login_id,
+                credential_finalization,
+            })
+        };
+
+        let (login_id, finalization, _) = client_login(&w, &a, b"wrong").await;
+        let err = finish(login_id, finalization).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+        assert_eq!(w.tries(&a), 1, "the try stays counted");
+
+        let (login_id, finalization, _) = client_login(&w, &a, b"pw").await;
+        w.advance(Duration::seconds(121));
+        let err = finish(login_id, finalization).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+
+        // The id an unknown principal gets names no login.
+        let stranger = TestIdentity::with_version(9, StatementVersion::V2);
+        let principal = KeyState::from_inception(&stranger.inception())
+            .unwrap()
+            .principal_id;
+        let (flow, request) = Login::start(b"pw");
+        let started = w
+            .svc
+            .login_start(PasswordLoginStartCmd {
+                principal_id: principal,
+                request,
+                remote_ip: IP.to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(flow.finish(&started.response).is_none());
+        let err = finish(started.login_id, vec![0; 64]).await.unwrap_err();
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+        assert!(w.passwords.state().tickets.is_empty());
     }
 }

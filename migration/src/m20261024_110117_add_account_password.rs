@@ -10,6 +10,8 @@ use sea_orm_migration::sea_orm::ConnectionTrait;
 ///   password until a reset with the recovery key.
 /// - `password_login`: the server's OPAQUE login state between the start and the finish of a
 ///   sign-in (`login`) or a password change (`change`), for 120 seconds; the finish deletes it.
+/// - `password_ticket`: proof that a password login finished, which the key sign-in that
+///   follows consumes: the SHA-256 hex of the ticket, the account, and an expiry 120 seconds out.
 /// - `password_rewrap`: the previous unlock key sealed under the new one, written by each
 ///   password change; the newest three per account are kept.
 /// - `password_reset`: a reset proved with the recovery key, between its start and its finish.
@@ -42,6 +44,12 @@ const UP_SQL: &[&str] = &[
     expires_at timestamptz NOT NULL
 )"#,
     "CREATE INDEX idx_password_login_expires ON password_login (expires_at)",
+    r#"CREATE TABLE password_ticket (
+    token_hash text PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES "user" (id) ON DELETE CASCADE,
+    expires_at timestamptz NOT NULL
+)"#,
+    "CREATE INDEX idx_password_ticket_expires ON password_ticket (expires_at)",
     r#"CREATE TABLE password_rewrap (
     id uuid PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES "user" (id) ON DELETE CASCADE,
@@ -82,6 +90,7 @@ const DOWN_SQL: &[&str] = &[
     "ALTER TABLE session DROP COLUMN kept",
     "DROP TABLE password_reset",
     "DROP TABLE password_rewrap",
+    "DROP TABLE password_ticket",
     "DROP TABLE password_login",
     "DROP TABLE account_password",
 ];

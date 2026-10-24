@@ -51,11 +51,7 @@ mod tests {
     use crate::registration_rate_limiter::RegistrationRateLimiter;
     use crate::session_revocation::InProcessSessionRevocations;
     use crate::signup::SignupRepos;
-    use rim_auth::opaque::client::Login;
-    use rim_auth::opaque::{LABEL_SERVER_SHARE, server_login_start, transport_open};
-    use rim_core::account_password::model::{PasswordLogin, PasswordLoginId, PasswordLoginPurpose};
     use rim_services::auth::dto::LoginResultDto;
-    use rim_services::key_auth::command::PasswordLoginProof;
 
     const AUDIENCE: &str = "rim.example.com";
     /// This server's id, also accepted as an audience.
@@ -965,7 +961,7 @@ mod tests {
                 .svc
                 .login_with_key(LoginWithKeyCmd {
                     proof: payload(proof),
-                    password: None,
+                    password_ticket: None,
                     remote_ip: IP.to_string(),
                 })
                 .await?;
@@ -973,14 +969,22 @@ mod tests {
             Ok(res.session.session_id)
         }
 
-        /// Sign in with a fresh challenge and, when `password` is given, a password login the
-        /// server started for it, as `passwordLoginStart` does. Returns the result and the
-        /// client's OPAQUE session key.
-        async fn login_with_password(
+        /// A ticket for `user_id`, as `passwordLoginFinish` issues one, expiring at `expires_at`.
+        fn ticket(&self, user_id: UserId, expires_at: DateTime<Utc>) -> String {
+            let ticket = format!("ticket-{}", Uuid::now_v7());
+            self.passwords
+                .state()
+                .tickets
+                .insert(hash_token(&ticket), (user_id, expires_at));
+            ticket
+        }
+
+        /// Sign in as `e` with a fresh challenge and `ticket`.
+        async fn login_with_ticket(
             &self,
             e: &Enrolled,
-            password: Option<&[u8]>,
-        ) -> Result<(LoginResultDto, Option<Vec<u8>>), ServiceError> {
+            ticket: Option<String>,
+        ) -> Result<LoginResultDto, ServiceError> {
             let challenge = self
                 .svc
                 .issue_challenge(IssueKeyChallengeCmd {
@@ -995,58 +999,13 @@ mod tests {
                 &challenge.nonce,
                 AUDIENCE,
             );
-            let mut session_key = None;
-            let password = match password {
-                Some(password) => {
-                    let record = self
-                        .passwords
-                        .state()
-                        .passwords
-                        .get(&e.user_id)
-                        .map(|p| p.registration.clone());
-                    let (flow, request) = Login::start(password);
-                    let started = server_login_start(
-                        TEST_PASSWORD_KEY.setup(),
-                        record.as_deref(),
-                        &request,
-                        e.state.principal_id.as_bytes(),
-                    )
-                    .unwrap();
-                    let login_id = PasswordLoginId::new();
-                    self.passwords.state().logins.insert(
-                        login_id,
-                        PasswordLogin {
-                            id: login_id,
-                            user_id: Some(e.user_id),
-                            purpose: PasswordLoginPurpose::Login,
-                            state: started.state.to_vec(),
-                            expires_at: Utc::now() + Duration::seconds(120),
-                        },
-                    );
-                    // A wrong password fails on the client; the server then gets garbage.
-                    let finalization = match flow.finish(&started.response) {
-                        Some(done) => {
-                            session_key = Some(done.session_key);
-                            done.finalization
-                        }
-                        None => vec![0; 64],
-                    };
-                    Some(PasswordLoginProof {
-                        login_id,
-                        credential_finalization: finalization,
-                    })
-                }
-                None => None,
-            };
-            let res = self
-                .svc
+            self.svc
                 .login_with_key(LoginWithKeyCmd {
                     proof: payload(proof),
-                    password,
+                    password_ticket: ticket,
                     remote_ip: IP.to_string(),
                 })
-                .await?;
-            Ok((res, session_key))
+                .await
         }
 
         fn session_device(&self, id: SessionId) -> Option<DeviceKeyId> {
@@ -1435,7 +1394,7 @@ mod tests {
         ));
         let cmd = || LoginWithKeyCmd {
             proof: proof.clone(),
-            password: None,
+            password_ticket: None,
             remote_ip: IP.to_string(),
         };
         assert!(h.svc.login_with_key(cmd()).await.is_ok());
@@ -1454,7 +1413,7 @@ mod tests {
             .svc
             .login_with_key(LoginWithKeyCmd {
                 proof,
-                password: None,
+                password_ticket: None,
                 remote_ip: IP.to_string(),
             })
             .await
@@ -1494,7 +1453,7 @@ mod tests {
             .svc
             .login_with_key(LoginWithKeyCmd {
                 proof: payload(proof),
-                password: None,
+                password_ticket: None,
                 remote_ip: IP.to_string(),
             })
             .await
@@ -1722,7 +1681,7 @@ mod tests {
         ));
         let cmd = |proof: &SignedPayload| LoginWithKeyCmd {
             proof: proof.clone(),
-            password: None,
+            password_ticket: None,
             remote_ip: IP.to_string(),
         };
         let err = h.svc.login_with_key(cmd(&unknown)).await.unwrap_err();
@@ -2380,11 +2339,8 @@ mod tests {
             device_id: p.device_id,
             device: p.device,
         };
-        let (login, session_key) = h.login_with_password(&enrolled, Some(b"pw")).await.unwrap();
-        let sealed = login.server_share.expect("sealed share");
-        let opened = transport_open(&session_key.unwrap(), LABEL_SERVER_SHARE, &sealed)
-            .expect("the share opens under the transport key");
-        assert_eq!(opened.as_slice(), share.as_slice());
+        let ticket = h.ticket(enrolled.user_id, Utc::now() + Duration::seconds(120));
+        let login = h.login_with_ticket(&enrolled, Some(ticket)).await.unwrap();
         assert!(!login.must_set_password);
         let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
         assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 1);
@@ -3480,52 +3436,40 @@ mod tests {
         .unwrap();
     }
 
-    /// A local account with a password signs in only with the password proved too: without
-    /// the login, or with a wrong password, the answer is the one a wrong proof gets.
+    /// A local account with a password signs in only with a ticket from a finished password
+    /// login: one of its own, unexpired and unused. Every other case answers what a wrong proof
+    /// gets.
     #[tokio::test]
-    async fn a_local_account_with_a_password_needs_it_to_sign_in() {
+    async fn a_local_account_with_a_password_needs_a_ticket_to_sign_in() {
         let h = harness();
         let e = h.enroll(1).await;
+        let other = h.enroll(2).await;
         with_password(&h, &e, b"right").await;
+        with_password(&h, &other, b"right").await;
+        let later = Utc::now() + Duration::seconds(120);
 
-        let err = h
-            .login_with_password(&e, None)
-            .await
-            .expect_err("no password");
-        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
-        let err = h
-            .login_with_password(&e, Some(b"wrong"))
-            .await
-            .expect_err("wrong password");
-        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
-        // A login state is used once, whatever the outcome.
-        assert!(h.passwords.state().logins.is_empty());
+        let refused = [
+            None,
+            Some("never-issued".to_string()),
+            Some(h.ticket(e.user_id, Utc::now() - Duration::seconds(1))),
+            Some(h.ticket(other.user_id, later)),
+        ];
+        for ticket in refused {
+            let err = h
+                .login_with_ticket(&e, ticket.clone())
+                .await
+                .expect_err("refused");
+            assert!(
+                matches!(err, ServiceError::Unauthenticated),
+                "{ticket:?}: {err:?}"
+            );
+        }
 
-        h.passwords
-            .state()
-            .passwords
-            .get_mut(&e.user_id)
-            .unwrap()
-            .failed_attempts = 4;
-        let h_rewraps = vec![vec![1u8; 60], vec![2u8; 60]];
-        h.passwords
-            .state()
-            .rewraps
-            .insert(e.user_id, h_rewraps.clone());
-        let (res, session_key) = h.login_with_password(&e, Some(b"right")).await.unwrap();
-        assert!(session_key.is_some());
-        assert!(res.server_share.is_some());
-        assert_eq!(
-            res.rewraps,
-            vec![h_rewraps[1].clone(), h_rewraps[0].clone()]
-        );
+        let ticket = h.ticket(e.user_id, later);
+        let res = h.login_with_ticket(&e, Some(ticket.clone())).await.unwrap();
+        assert_eq!(res.user_id, e.user_id);
         assert!(!res.must_set_password);
-        assert_eq!(
-            h.passwords.state().passwords[&e.user_id].failed_attempts,
-            0,
-            "a success clears the tries"
-        );
-        let session = h
+        let flagged = h
             .state
             .lock()
             .unwrap()
@@ -3533,71 +3477,21 @@ mod tests {
             .iter()
             .find(|(s, _)| s.id == res.session.session_id)
             .map(|(s, _)| s.must_set_password);
-        assert_eq!(session, Some(false));
-    }
-
-    /// A login state started for one account does not sign another in.
-    #[tokio::test]
-    async fn a_password_login_of_another_account_is_refused() {
-        let h = harness();
-        let a = h.enroll(1).await;
-        let b = h.enroll(2).await;
-        with_password(&h, &a, b"pw").await;
-        with_password(&h, &b, b"pw").await;
-        let (res, _) = h.login_with_password(&a, Some(b"pw")).await.unwrap();
-        assert_eq!(res.user_id, a.user_id);
-        // `b`'s proof with a login state recorded for `a`.
-        let stolen = PasswordLoginId::new();
-        let (flow, request) = Login::start(b"pw");
-        let record = h.passwords.state().passwords[&a.user_id]
-            .registration
-            .clone();
-        let started = server_login_start(
-            TEST_PASSWORD_KEY.setup(),
-            Some(&record),
-            &request,
-            a.state.principal_id.as_bytes(),
-        )
-        .unwrap();
-        h.passwords.state().logins.insert(
-            stolen,
-            PasswordLogin {
-                id: stolen,
-                user_id: Some(a.user_id),
-                purpose: PasswordLoginPurpose::Login,
-                state: started.state.to_vec(),
-                expires_at: Utc::now() + Duration::seconds(120),
-            },
-        );
-        let done = flow.finish(&started.response).unwrap();
-        let challenge = h
-            .svc
-            .issue_challenge(IssueKeyChallengeCmd {
-                remote_ip: IP.to_string(),
-            })
-            .await
-            .unwrap();
-        let proof = device_login(
-            &b.device,
-            &b.state,
-            b.device_id,
-            challenge.challenge_id.into(),
-            &challenge.nonce,
-            AUDIENCE,
-        );
+        assert_eq!(flagged, Some(false));
+        // A ticket signs in once.
         let err = h
-            .svc
-            .login_with_key(LoginWithKeyCmd {
-                proof: payload(proof),
-                password: Some(PasswordLoginProof {
-                    login_id: stolen,
-                    credential_finalization: done.finalization,
-                }),
-                remote_ip: IP.to_string(),
-            })
+            .login_with_ticket(&e, Some(ticket))
             .await
-            .expect_err("another account's login");
+            .expect_err("used twice");
         assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+        // The other account's ticket was not spent by the refused attempt.
+        assert!(
+            h.passwords
+                .state()
+                .tickets
+                .values()
+                .any(|(owner, _)| *owner == other.user_id)
+        );
     }
 
     /// A local account without a password signs in with its key alone, and its session may
@@ -3606,9 +3500,8 @@ mod tests {
     async fn a_local_account_without_a_password_must_set_one() {
         let h = harness();
         let e = h.enroll(1).await;
-        let (res, _) = h.login_with_password(&e, None).await.unwrap();
+        let res = h.login_with_ticket(&e, None).await.unwrap();
         assert!(res.must_set_password);
-        assert!(res.server_share.is_none());
         let flagged = h
             .state
             .lock()
@@ -3626,8 +3519,7 @@ mod tests {
     async fn a_remote_user_signs_in_with_the_key_alone() {
         let h = remote_harness(IdentityRefresh::Unreachable);
         let e = h.enroll(1).await;
-        let (res, _) = h.login_with_password(&e, None).await.unwrap();
+        let res = h.login_with_ticket(&e, None).await.unwrap();
         assert!(!res.must_set_password);
-        assert!(res.server_share.is_none());
     }
 }

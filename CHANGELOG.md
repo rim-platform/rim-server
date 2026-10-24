@@ -26,9 +26,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - **Upgrade:** account passwords, checked with OPAQUE (`docs/specs/key-identity-v1.md`,
   "Account password (OPAQUE)"). `signupWithKey` requires `passwordRegistration` (from the new
   `passwordRegistrationStart`) and answers `serverShare`; an account of this server with a
-  password signs in only with `loginWithKey(proof, loginId, credentialFinalization)` after the
-  new `passwordLoginStart`, and `LoginPayload` gains `serverShare`, `rewraps` and
-  `mustSetPassword`. Clients older than this release can no longer sign up, and cannot sign in
+  password signs in only with `loginWithKey(proof, passwordTicket)`, the ticket coming from the
+  new `passwordLoginStart` and `passwordLoginFinish` (which also answers the sealed server share
+  and the rewraps), and `LoginPayload` gains `mustSetPassword`. Clients older than this release can no longer sign up, and cannot sign in
   to accounts that have a password. Every login start counts as a try: three are free, then
   waits from one minute to twelve hours (`RATE_LIMITED`), and the 10th locks the password
   (`PASSWORD_LOCKED`, a new error code) until a reset with the recovery key

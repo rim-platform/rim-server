@@ -484,6 +484,10 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                         "DELETE FROM password_login WHERE user_id = $1",
                     ),
                     (
+                        "password_tickets",
+                        "DELETE FROM password_ticket WHERE user_id = $1",
+                    ),
+                    (
                         "password_rewraps",
                         "DELETE FROM password_rewrap WHERE user_id = $1",
                     ),

@@ -3,8 +3,7 @@ use rim_services::Actor;
 use rim_services::auth::dto::RegistrationMode;
 use rim_services::key_auth::command::{
     AddDeviceKeyCmd, EnrollIdentityKeyCmd, IssueKeyChallengeCmd, LoginWithKeyCmd,
-    PasswordLoginProof, PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd,
-    SignupWithKeyCmd,
+    PublishProfileCardCmd, RevokeDeviceKeyCmd, RotateIdentityKeyCmd, SignupWithKeyCmd,
 };
 use rim_services::key_auth::service::KeyAuthService;
 
@@ -39,37 +38,23 @@ impl KeyIdentityMutations {
     /// Sign in with a `login` statement signed by an enrolled device key. Sets the same session
     /// cookie as `login`.
     ///
-    /// An account of this server with a password also proves it: `loginId` from
-    /// `passwordLoginStart` and the OPAQUE `credentialFinalization`. Without them, or with a
-    /// wrong password, the answer is `UNAUTHENTICATED`, as for a wrong proof. The payload then
-    /// carries the account's server share, sealed under the login's transport key, and its
-    /// rewraps. An account of this server without a password signs in with the key alone and
-    /// gets `mustSetPassword`: its session may only set a password, sign out and read `me`.
-    /// Accounts of other servers sign in with the key alone.
+    /// An account of this server with a password also brings `passwordTicket`, from
+    /// `passwordLoginFinish`: single use, valid for 120 seconds, and only for that account.
+    /// Without one, or with one that is used, expired or another account's, the answer is
+    /// `UNAUTHENTICATED`, as for a wrong proof. An account of this server without a password
+    /// signs in with the key alone and gets `mustSetPassword`: its session may only set a
+    /// password, sign out and read `me`. Accounts of other servers sign in with the key alone.
     async fn login_with_key(
         &self,
         ctx: &Context<'_>,
         proof: SignedStatementInput,
-        login_id: Option<ID>,
-        credential_finalization: Option<String>,
+        password_ticket: Option<String>,
     ) -> Result<LoginPayload> {
         let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
-        let password = match (login_id, credential_finalization) {
-            (Some(login_id), Some(finalization)) => Some(PasswordLoginProof {
-                login_id: crate::ids::parse_uuid_id(&login_id)?,
-                credential_finalization: decode_bytes(&finalization, "credentialFinalization")?,
-            }),
-            (None, None) => None,
-            _ => {
-                return Err(map_service_error(rim_services::ServiceError::Validation(
-                    "give loginId and credentialFinalization together".to_string(),
-                )));
-            }
-        };
         let res = svc
             .login_with_key(LoginWithKeyCmd {
                 proof: proof.into(),
-                password,
+                password_ticket,
                 remote_ip: crate::auth_context::remote_ip(ctx),
             })
             .await
@@ -85,8 +70,6 @@ impl KeyIdentityMutations {
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
             csrf_token: res.csrf_token,
-            server_share: res.server_share,
-            rewraps: res.rewraps.iter().map(|r| encode_bytes(r)).collect(),
             must_set_password: res.must_set_password,
         })
     }

@@ -1,10 +1,10 @@
 //! The password of local accounts, checked with OPAQUE.
 //!
 //! [`DefaultAccountPasswordService`] answers the password roots that stand on their own:
-//! registration before a signup, the login start, change, reset with the recovery key, and
-//! setting a first password. The steps that run inside the key sign-in and the key-only signup
-//! (finishing a login, storing the password a signup registered) are the functions of this
-//! module that take a repository, so `key_auth` runs them inside its own transaction.
+//! registration before a signup, the login start and finish, change, reset with the recovery
+//! key, and setting a first password. A finished login issues a single-use ticket that the key
+//! sign-in consumes. Storing the password a signup registered is a function of this module that
+//! takes a repository, so `key_auth` runs it inside the signup's transaction.
 //!
 //! The server never sees the password. It stores the OPAQUE registration record and the
 //! account's server share sealed under the password key, counts every login start as a wrong
@@ -20,10 +20,10 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use rim_auth::opaque::{
-    SESSION_KEY_LEN, server_login_finish, server_login_start, server_registration_finish,
-    server_registration_start,
+    LABEL_SERVER_SHARE, SESSION_KEY_LEN, server_login_finish, server_login_start,
+    server_registration_finish, server_registration_start, transport_seal,
 };
-use rim_auth::session_token::generate_challenge_nonce;
+use rim_auth::session_token::{generate_challenge_nonce, generate_token, hash_token};
 use rim_core::account_password::model::{
     AccountPassword, AttemptSchedule, AttemptStart, PasswordLogin, PasswordLoginId,
     PasswordLoginPurpose, PasswordReset, PasswordResetId,
@@ -41,10 +41,11 @@ use rim_identity::{KeyState, SignedStatement, UnverifiedPasswordReset, is_princi
 use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::account_password::dto::{
     KEPT_REWRAPS, MAX_PASSWORD_MESSAGE_LEN, PASSWORD_STEP_TTL_SECONDS, PasswordChangeFinishCmd,
-    PasswordChangeStartCmd, PasswordChangeStartDto, PasswordChangedDto, PasswordLoginStartCmd,
-    PasswordLoginStartDto, PasswordRegistrationStartCmd, PasswordResetChallengeCmd,
-    PasswordResetFinishCmd, PasswordResetStartCmd, PasswordResetStartDto, SetPasswordCmd,
-    SetPasswordDto, SetPasswordStartCmd,
+    PasswordChangeStartCmd, PasswordChangeStartDto, PasswordChangedDto, PasswordLoginFinishCmd,
+    PasswordLoginFinishDto, PasswordLoginStartCmd, PasswordLoginStartDto,
+    PasswordRegistrationStartCmd, PasswordResetChallengeCmd, PasswordResetFinishCmd,
+    PasswordResetStartCmd, PasswordResetStartDto, SetPasswordCmd, SetPasswordDto,
+    SetPasswordStartCmd,
 };
 use rim_services::account_password::service::AccountPasswordService;
 use rim_services::command::rate_limit::RateLimitDecision;
@@ -163,26 +164,38 @@ pub(crate) fn open_share(
         })
 }
 
-/// Take the login state `login_id` for `user_id` and `purpose`, and check the client's
-/// `finalization` against it. Returns the session key. The state is deleted whatever the
-/// outcome.
+/// Take the login state `login_id` for `purpose`, of `user_id` when one is given, and return
+/// its account. The state is deleted whatever the outcome.
 ///
 /// # Errors
-/// `Unauthenticated` when the state is unknown, expired, another account's or for another
-/// purpose, or the finalization does not verify.
-pub(crate) async fn finish_login(
+/// `Unauthenticated` when the state is unknown, expired, of no account or another one, or for
+/// another purpose.
+async fn take_login(
     repo: &dyn AccountPasswordRepository,
-    user_id: UserId,
+    user_id: Option<UserId>,
     login_id: PasswordLoginId,
     purpose: PasswordLoginPurpose,
-    finalization: &[u8],
     now: DateTime<Utc>,
-) -> ServiceResult<Zeroizing<[u8; SESSION_KEY_LEN]>> {
+) -> ServiceResult<(UserId, PasswordLogin)> {
     let login = repo
         .take_login(login_id)
         .await?
-        .filter(|l| l.user_id == Some(user_id) && l.purpose == purpose && l.expires_at > now)
+        .filter(|l| l.purpose == purpose && l.expires_at > now)
         .ok_or(ServiceError::Unauthenticated)?;
+    match login.user_id {
+        Some(owner) if user_id.is_none_or(|u| u == owner) => Ok((owner, login)),
+        _ => Err(ServiceError::Unauthenticated),
+    }
+}
+
+/// The session key once the client's `finalization` verifies against `login`.
+///
+/// # Errors
+/// `Unauthenticated` when it is malformed or does not verify: a wrong password.
+fn verify_finalization(
+    login: &PasswordLogin,
+    finalization: &[u8],
+) -> ServiceResult<Zeroizing<[u8; SESSION_KEY_LEN]>> {
     if finalization.is_empty() || finalization.len() > MAX_PASSWORD_MESSAGE_LEN {
         return Err(ServiceError::Unauthenticated);
     }
@@ -455,6 +468,18 @@ impl DefaultAccountPasswordService {
         Ok(id)
     }
 
+    /// Log a wrong password for `user_id` with the tries counted so far.
+    async fn audit_failure(&self, user_id: UserId, purpose: &str) -> ServiceResult<()> {
+        let tries = self
+            .repos
+            .password_repo
+            .get(user_id)
+            .await?
+            .map_or(0, |p| p.failed_attempts);
+        audit_login_failure(user_id, tries, purpose);
+        Ok(())
+    }
+
     /// Whether a reset statement's `audience` names this server.
     fn audience_accepted(&self, audience: &str) -> bool {
         self.accepted_audiences
@@ -608,6 +633,65 @@ impl AccountPasswordService for DefaultAccountPasswordService {
         }
     }
 
+    #[instrument(name = "account_password.login_finish", skip_all)]
+    async fn login_finish(
+        &self,
+        cmd: PasswordLoginFinishCmd,
+    ) -> ServiceResult<PasswordLoginFinishDto> {
+        let now = self.clock.now();
+        let (user_id, login) = take_login(
+            self.repos.password_repo.as_ref(),
+            None,
+            cmd.login_id,
+            PasswordLoginPurpose::Login,
+            now,
+        )
+        .await?;
+        let session_key = match verify_finalization(&login, &cmd.credential_finalization) {
+            Ok(key) => key,
+            Err(e) => {
+                self.audit_failure(user_id, "login").await?;
+                return Err(e);
+            }
+        };
+        let key = self.key()?;
+        let password = self
+            .repos
+            .password_repo
+            .get(user_id)
+            .await?
+            .ok_or(ServiceError::Unauthenticated)?;
+        let share = open_share(key, &password)?;
+        let server_share = transport_seal(session_key.as_slice(), LABEL_SERVER_SHARE, &share)
+            .map_err(ServiceError::internal)?;
+        let ticket = generate_token("");
+        self.repos
+            .password_repo
+            .clear_attempts(user_id, now)
+            .await?;
+        self.repos
+            .password_repo
+            .insert_ticket(
+                &hash_token(&ticket),
+                user_id,
+                now + Duration::seconds(PASSWORD_STEP_TTL_SECONDS),
+                now,
+            )
+            .await?;
+        let rewraps = self.repos.password_repo.list_rewraps(user_id).await?;
+        info!(
+            target: "audit",
+            event = "password_login_success",
+            user_id = %user_id,
+            "a password verified; a sign-in ticket was issued"
+        );
+        Ok(PasswordLoginFinishDto {
+            ticket,
+            server_share,
+            rewraps,
+        })
+    }
+
     #[instrument(name = "account_password.change_start", skip_all, fields(actor_id = %cmd.actor.user_id))]
     async fn change_start(
         &self,
@@ -654,25 +738,16 @@ impl AccountPasswordService for DefaultAccountPasswordService {
         let now = self.clock.now();
         let record = registration_record(&cmd.registration_upload)?;
         check_message(&cmd.rewrap, "rewrap")?;
-        let verified = finish_login(
+        let (_, login) = take_login(
             self.repos.password_repo.as_ref(),
-            user_id,
+            Some(user_id),
             cmd.login_id,
             PasswordLoginPurpose::Change,
-            &cmd.credential_finalization,
             now,
         )
-        .await;
-        if let Err(e) = verified {
-            if matches!(e, ServiceError::Unauthenticated) {
-                let tries = self
-                    .repos
-                    .password_repo
-                    .get(user_id)
-                    .await?
-                    .map_or(0, |p| p.failed_attempts);
-                audit_login_failure(user_id, tries, "change");
-            }
+        .await?;
+        if let Err(e) = verify_finalization(&login, &cmd.credential_finalization) {
+            self.audit_failure(user_id, "change").await?;
             return Err(e);
         }
 

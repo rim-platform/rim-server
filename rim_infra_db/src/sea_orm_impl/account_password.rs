@@ -303,6 +303,42 @@ impl AccountPasswordRepository for SeaOrmAccountPasswordRepository {
         .transpose()
     }
 
+    async fn insert_ticket(
+        &self,
+        token_hash: &str,
+        user_id: UserId,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> RepoResult<()> {
+        self.execute(
+            "DELETE FROM password_ticket WHERE expires_at <= $1",
+            vec![utc(now)],
+        )
+        .await?;
+        self.execute(
+            "INSERT INTO password_ticket (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
+            vec![token_hash.into(), uuid(user_id), utc(expires_at)],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn consume_ticket(
+        &self,
+        token_hash: &str,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool> {
+        let deleted = self
+            .execute(
+                "DELETE FROM password_ticket WHERE token_hash = $1 AND user_id = $2 \
+                 AND expires_at > $3",
+                vec![token_hash.into(), uuid(user_id), utc(now)],
+            )
+            .await?;
+        Ok(deleted > 0)
+    }
+
     async fn insert_rewrap(
         &self,
         user_id: UserId,

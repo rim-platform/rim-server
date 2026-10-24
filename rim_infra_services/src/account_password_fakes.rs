@@ -41,6 +41,8 @@ pub(crate) struct PasswordState {
     /// Newest last.
     pub(crate) rewraps: HashMap<UserId, Vec<Vec<u8>>>,
     pub(crate) resets: HashMap<PasswordResetId, PasswordReset>,
+    /// By token hash: the account and the expiry.
+    pub(crate) tickets: HashMap<String, (UserId, DateTime<Utc>)>,
 }
 
 /// Account passwords in memory, with the counting rules of the database implementation.
@@ -158,6 +160,38 @@ impl AccountPasswordRepository for FakePasswords {
 
     async fn take_login(&self, id: PasswordLoginId) -> RepoResult<Option<PasswordLogin>> {
         Ok(self.state().logins.remove(&id))
+    }
+
+    async fn insert_ticket(
+        &self,
+        token_hash: &str,
+        user_id: UserId,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> RepoResult<()> {
+        let mut state = self.state();
+        state.tickets.retain(|_, (_, at)| *at > now);
+        state
+            .tickets
+            .insert(token_hash.to_string(), (user_id, expires_at));
+        Ok(())
+    }
+
+    async fn consume_ticket(
+        &self,
+        token_hash: &str,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool> {
+        let mut state = self.state();
+        let valid = state
+            .tickets
+            .get(token_hash)
+            .is_some_and(|(owner, at)| *owner == user_id && *at > now);
+        if valid {
+            state.tickets.remove(token_hash);
+        }
+        Ok(valid)
     }
 
     async fn insert_rewrap(

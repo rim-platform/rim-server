@@ -1,4 +1,3 @@
-use rim_core::account_password::model::PasswordLoginId;
 use rim_core::auth::model::SessionId;
 
 use crate::Actor;
@@ -19,20 +18,13 @@ pub struct IssueKeyChallengeCmd {
     pub remote_ip: String,
 }
 
-/// The second half of a password login a key sign-in brings: the login state the server
-/// started, and the client's OPAQUE `CredentialFinalization`.
-#[derive(Debug, Clone)]
-pub struct PasswordLoginProof {
-    pub login_id: PasswordLoginId,
-    pub credential_finalization: Vec<u8>,
-}
-
 #[derive(Debug, Clone)]
 pub struct LoginWithKeyCmd {
     /// A `login` statement signed by a device key.
     pub proof: SignedPayload,
-    /// Required for a local account with a password; ignored otherwise.
-    pub password: Option<PasswordLoginProof>,
+    /// The ticket `passwordLoginFinish` answered. Required for a local account with a
+    /// password; ignored otherwise.
+    pub password_ticket: Option<String>,
     pub remote_ip: String,
 }
 

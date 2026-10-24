@@ -82,11 +82,6 @@ pub struct LoginResultDto {
     pub session: AuthSessionDto,
     pub session_token: String,
     pub csrf_token: String,
-    /// After a password login: the account's server share, sealed under the transport key for
-    /// "server share", as unpadded base64url. `None` otherwise.
-    pub server_share: Option<String>,
-    /// After a password login: the account's rewraps, newest first.
-    pub rewraps: Vec<Vec<u8>>,
     /// The session may only set a password: the local account has none.
     pub must_set_password: bool,
 }

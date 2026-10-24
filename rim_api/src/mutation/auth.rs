@@ -36,8 +36,6 @@ impl AuthMutations {
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
             csrf_token: res.csrf_token,
-            server_share: None,
-            rewraps: Vec::new(),
             must_set_password: false,
         })
     }
@@ -139,11 +137,6 @@ pub struct LoginPayload {
     /// The new session's CSRF token, the value of the `rim_csrf` cookie. A client that cannot
     /// read that cookie keeps it in memory and sends it in the `X-CSRF-Token` header.
     pub csrf_token: String,
-    /// After a password login: the account's server share, AES-256-GCM sealed under the
-    /// login's transport key for "server share", as unpadded base64url. `null` otherwise.
-    pub server_share: Option<String>,
-    /// After a password login: the account's rewraps, newest first, unpadded base64url.
-    pub rewraps: Vec<String>,
     /// The account has no password: this session may only set one (`setPassword`), sign out
     /// and read `me`; everything else answers `FORBIDDEN`.
     pub must_set_password: bool,

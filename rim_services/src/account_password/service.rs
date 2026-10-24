@@ -5,14 +5,15 @@ use mockall::automock;
 use crate::ServiceResult;
 use crate::account_password::dto::{
     PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordChangeStartDto, PasswordChangedDto,
-    PasswordLoginStartCmd, PasswordLoginStartDto, PasswordRegistrationStartCmd,
-    PasswordResetChallengeCmd, PasswordResetFinishCmd, PasswordResetStartCmd,
-    PasswordResetStartDto, SetPasswordCmd, SetPasswordDto, SetPasswordStartCmd,
+    PasswordLoginFinishCmd, PasswordLoginFinishDto, PasswordLoginStartCmd, PasswordLoginStartDto,
+    PasswordRegistrationStartCmd, PasswordResetChallengeCmd, PasswordResetFinishCmd,
+    PasswordResetStartCmd, PasswordResetStartDto, SetPasswordCmd, SetPasswordDto,
+    SetPasswordStartCmd,
 };
 use crate::key_auth::dto::KeyChallengeDto;
 
 /// The password of local accounts, checked with OPAQUE: registering it before a signup,
-/// starting a login that `loginWithKey` finishes, changing it, resetting it with the recovery
+/// running a login whose ticket `loginWithKey` consumes, changing it, resetting it with the recovery
 /// key, and setting it for an account that has none.
 ///
 /// Every login start counts as a wrong try until a login finishes: tries 1 to 3 are free, the
@@ -41,6 +42,19 @@ pub trait AccountPasswordService: Send + Sync {
     /// - `Validation` for a malformed principal id or request.
     async fn login_start(&self, cmd: PasswordLoginStartCmd)
     -> ServiceResult<PasswordLoginStartDto>;
+
+    /// Check the client's finalization against a login started with [`Self::login_start`].
+    /// On success clear the tries and answer a single-use ticket for `loginWithKey`, valid for
+    /// 120 seconds, the server share sealed under the login's transport key, and the rewraps.
+    /// The login state is used once, whatever the outcome.
+    ///
+    /// # Errors
+    /// `Unauthenticated` when the login is unknown, expired or not a sign-in, or the password is
+    /// wrong.
+    async fn login_finish(
+        &self,
+        cmd: PasswordLoginFinishCmd,
+    ) -> ServiceResult<PasswordLoginFinishDto>;
 
     /// Prove the current password and answer the new one's registration. Counts as a try.
     ///

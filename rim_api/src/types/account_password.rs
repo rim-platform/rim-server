@@ -6,8 +6,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use rim_services::ServiceError;
 use rim_services::account_password::dto::{
-    PasswordChangeStartDto, PasswordChangedDto, PasswordLoginStartDto, PasswordResetStartDto,
-    SetPasswordDto,
+    PasswordChangeStartDto, PasswordChangedDto, PasswordLoginFinishDto, PasswordLoginStartDto,
+    PasswordResetStartDto, SetPasswordDto,
 };
 
 use crate::errors::map_service_error;
@@ -32,7 +32,7 @@ pub(crate) fn decode_bytes(value: &str, field: &str) -> Result<Vec<u8>> {
 /// The server's answer to `passwordLoginStart`.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct PasswordLoginStart {
-    /// Pass to `loginWithKey` with the credential finalization. Valid for 120 seconds.
+    /// Pass to `passwordLoginFinish` with the credential finalization. Valid for 120 seconds.
     pub login_id: ID,
     /// The OPAQUE `CredentialResponse`.
     pub response: String,
@@ -43,6 +43,29 @@ impl From<PasswordLoginStartDto> for PasswordLoginStart {
         Self {
             login_id: ID(value.login_id.to_string()),
             response: encode_bytes(&value.response),
+        }
+    }
+}
+
+/// A finished password login.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct PasswordLoginFinish {
+    /// Pass to `loginWithKey` as `passwordTicket`: single use, valid for 120 seconds, for this
+    /// account only.
+    pub ticket: String,
+    /// The account's server share, AES-256-GCM sealed under the login's transport key for
+    /// "server share": unpadded base64url of the 12-byte nonce, the ciphertext and the tag.
+    pub server_share: String,
+    /// The account's rewraps, newest first.
+    pub rewraps: Vec<String>,
+}
+
+impl From<PasswordLoginFinishDto> for PasswordLoginFinish {
+    fn from(value: PasswordLoginFinishDto) -> Self {
+        Self {
+            ticket: value.ticket,
+            server_share: value.server_share,
+            rewraps: value.rewraps.iter().map(|r| encode_bytes(r)).collect(),
         }
     }
 }

@@ -207,3 +207,35 @@ async fn a_reset_is_taken_once() {
     );
     assert_eq!(repo.take_reset(reset.id).await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn a_ticket_is_consumed_once_only_by_its_account_before_it_expires() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmAccountPasswordRepository::new(ctx.db.clone());
+    let ada = ctx.create_user("ada").await;
+    let bob = ctx.create_user("bob").await;
+    let now = Utc::now().trunc_subsecs(6);
+    let later = now + Duration::seconds(120);
+    repo.insert_ticket(
+        "expired",
+        ada.id,
+        now - Duration::seconds(1),
+        now - Duration::minutes(5),
+    )
+    .await
+    .unwrap();
+    repo.insert_ticket("live", ada.id, later, now)
+        .await
+        .unwrap();
+    // Inserting deleted the expired ticket.
+    assert!(
+        !repo
+            .consume_ticket("expired", ada.id, now - Duration::minutes(5))
+            .await
+            .unwrap()
+    );
+    assert!(!repo.consume_ticket("live", bob.id, now).await.unwrap());
+    assert!(!repo.consume_ticket("live", ada.id, later).await.unwrap());
+    assert!(repo.consume_ticket("live", ada.id, now).await.unwrap());
+    assert!(!repo.consume_ticket("live", ada.id, now).await.unwrap());
+}

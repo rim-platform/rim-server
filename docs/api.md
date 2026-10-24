@@ -227,8 +227,8 @@ reports `https`. These mutations set it, and need no session or CSRF header:
 - **Key login.** `keyLoginChallenge` returns `{ challengeId, nonce, expiresAt }`. The client
   signs a `login` statement over the nonce with its device key and calls `loginWithKey(proof)`.
   The session is bound to that device. An account of this server with a password also proves
-  it: `passwordLoginStart` first, then `loginWithKey(proof, loginId, credentialFinalization)`
-  ("Account password" below). `specs/key-identity-v1.md` ("Challenge login") has the
+  it first: `passwordLoginStart` and `passwordLoginFinish`, whose ticket goes to
+  `loginWithKey(proof, passwordTicket)` ("Account password" below). `specs/key-identity-v1.md` ("Challenge login") has the
   statement, the audiences and the limits.
 - **Key signup.** `signupWithKey` creates the account with its password
   (`passwordRegistration`, after `passwordRegistrationStart`) and signs it in. An instance
@@ -368,7 +368,7 @@ The header is required on:
 Queries and subscriptions never need it. The mutations used before a session exists are exempt:
 `login`, `logout`, `signupWithInvite`, `requestPasswordReset`, `resetPassword`,
 `keyLoginChallenge`, `loginWithKey`, `signupWithKey`, `passwordRegistrationStart`,
-`passwordLoginStart`, `passwordResetChallenge`, `passwordResetStart`, `passwordResetFinish`,
+`passwordLoginStart`, `passwordLoginFinish`, `passwordResetChallenge`, `passwordResetStart`, `passwordResetFinish`,
 `sendDeviceLinkOffer` and `applyRemoteRevocation`. `rotateIdentityKey` and `cancelDeviceLink` are exempt only when the
 request carries no session cookie. A request is exempt only when every root field of its
 mutation is, counting the fields of named and inline fragments at any depth and fields under
@@ -771,7 +771,8 @@ must use the suite of the spec byte for byte.
 | `passwordRegistrationStart(principalId, request): String!` | none | Answers the `RegistrationRequest` of a principal no account here holds, before `signupWithKey`. `CONFLICT` for a principal an account of this server holds. |
 | `signupWithKey(input)` | none | Takes `passwordRegistration`, the `RegistrationUpload`, and answers `serverShare`, the account's new server share, in the clear. |
 | `passwordLoginStart(principalId, request): PasswordLoginStart!` | none | Counts a try and answers `{ loginId, response }`. A principal without a password here gets an answer of the same shape that no password finishes. |
-| `loginWithKey(proof, loginId, credentialFinalization): LoginPayload!` | none | For an account with a password, requires both password fields; without them, or with a wrong password, `UNAUTHENTICATED`. Answers `serverShare` (sealed under the login's transport key), `rewraps` and `mustSetPassword`. |
+| `passwordLoginFinish(loginId, credentialFinalization): PasswordLoginFinish!` | none | Checks the password, clears the tries and answers `{ ticket, serverShare, rewraps }`: a single-use ticket valid for 120 seconds, the server share sealed under the login's transport key, and the rewraps, newest first. A wrong password or an unknown, used or expired login is `UNAUTHENTICATED`. |
+| `loginWithKey(proof, passwordTicket): LoginPayload!` | none | For an account with a password, requires a ticket of that account, unexpired and unused, consumed with the new session; otherwise `UNAUTHENTICATED`. Answers `mustSetPassword`. |
 | `passwordChangeStart(credentialRequest, registrationRequest): PasswordChangeStart!` | yes | Counts a try; answers `{ loginId, credentialResponse, registrationResponse }`. `NOT_FOUND` without a password. |
 | `passwordChangeFinish(loginId, credentialFinalization, registrationUpload, rewrap): PasswordChanged!` | yes | Replaces the password, keeps the server share, stores the rewrap (the newest three are kept) and ends every other session of the account. `UNAUTHENTICATED` for a wrong current password. |
 | `passwordResetChallenge(principalId): KeyLoginChallenge!` | none | A challenge for a `password-reset` statement, valid 120 seconds, single use. |
@@ -779,9 +780,10 @@ must use the suite of the spec byte for byte.
 | `passwordResetFinish(resetId, registrationUpload): Boolean!` | none | Replaces the password, keeps the server share, deletes the rewraps, clears the tries and the lock, and ends every session of the account. |
 | `setPasswordStart(registrationRequest): String!`, `setPassword(registrationUpload): SetPasswordPayload!` | the account's | Registers a first password for an account that has none and lifts `mustSetPassword` from its sessions; `setPassword` answers the new `serverShare`. `CONFLICT` when the account has a password. |
 
-**Sign-in.** The client starts the password login, signs the `login` statement over a
-`keyLoginChallenge`, and sends both to `loginWithKey`. The login id is valid for 120 seconds and
-once, whatever the outcome. An account of this server without a password (one that enrolled a
+**Sign-in.** The client runs the password login first (`passwordLoginStart`, then
+`passwordLoginFinish`), opens what it keeps at rest with the server share, signs the `login`
+statement over a `keyLoginChallenge`, and sends it with the ticket to `loginWithKey`. The login
+id and the ticket are each valid for 120 seconds and once. An account of this server without a password (one that enrolled a
 key before passwords existed) signs in with the key alone and gets `mustSetPassword: true`: its
 session answers `FORBIDDEN` "set a password first" to every root but `setPasswordStart`,
 `setPassword`, `logout` and `me`, and to the WebSocket, uploads, downloads and the routes to

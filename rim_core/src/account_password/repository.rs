@@ -61,6 +61,25 @@ pub trait AccountPasswordRepository: Send + Sync {
     /// Delete the login state `id` and return it, expired or not; `None` when there is none.
     async fn take_login(&self, id: PasswordLoginId) -> RepoResult<Option<PasswordLogin>>;
 
+    /// Store a ticket, by the SHA-256 hex of its token, that lets `user_id` finish a key sign-in
+    /// until `expires_at`, after deleting the tickets that expired before `now`.
+    async fn insert_ticket(
+        &self,
+        token_hash: &str,
+        user_id: UserId,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> RepoResult<()>;
+
+    /// Delete the ticket whose token hashes to `token_hash` when it belongs to `user_id` and has
+    /// not expired at `now`. Returns whether it did.
+    async fn consume_ticket(
+        &self,
+        token_hash: &str,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> RepoResult<bool>;
+
     /// Store `rewrap` for the account at `now` and keep only its newest `keep` rewraps.
     async fn insert_rewrap(
         &self,

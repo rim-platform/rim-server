@@ -64,6 +64,7 @@ const CSRF_EXEMPT_MUTATIONS: &[&str] = &[
     // run before there is a session.
     "passwordRegistrationStart",
     "passwordLoginStart",
+    "passwordLoginFinish",
     "passwordResetChallenge",
     "passwordResetStart",
     "passwordResetFinish",

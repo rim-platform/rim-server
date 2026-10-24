@@ -13,9 +13,7 @@ use rim_identity::testing::{SigningKey, TestIdentity, device_login, signing_key}
 use rim_identity::{KeyState, SignedStatement, StatementVersion};
 
 use super::graphql::{Caller, anonymous_request, exec_ok};
-use super::password::{
-    LOGIN_WITH_PASSWORD, PasswordLogin, TEST_PASSWORD, b64, login, registration,
-};
+use super::password::{LOGIN_WITH_PASSWORD, PasswordLogin, TEST_PASSWORD, login, registration};
 use super::{KEY_LOGIN_AUDIENCE, TestCtx};
 
 const ENROLL: &str = r#"
@@ -159,9 +157,9 @@ pub async fn signup_input(
 }
 
 /// Sign in on `device` (id `device_id`, under the key log head `state`) with a fresh proof
-/// and, when `password` is given, a password login for it. Returns the answer, or the refusal
-/// of the password login's start, and the password login, whose session key opens the server
-/// share.
+/// and, when `password` is given and right, the ticket of a password login. Returns the
+/// answer, or the refusal of a password login step, and the password login, whose session key
+/// opens the server share it answered.
 pub async fn key_login(
     schema: &AppSchema,
     device: &SigningKey,
@@ -179,11 +177,6 @@ pub async fn key_login(
     let proof = signed_login(schema, device, state, device_id).await;
     let variables = match &password_login {
         Some(login) => login.variables(statement(&proof)),
-        None if password.is_some() => json!({
-            "proof": statement(&proof),
-            "loginId": Uuid::new_v4().to_string(),
-            "credentialFinalization": b64(&[0; 64]),
-        }),
         None => json!({ "proof": statement(&proof) }),
     };
     (

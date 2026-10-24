@@ -8,7 +8,8 @@ use crate::key_auth::command::SignedPayload;
 /// How many rewraps the server keeps per account.
 pub const KEPT_REWRAPS: u32 = 3;
 
-/// How long a login state, a password reset and a reset challenge stay valid, in seconds.
+/// How long a login state, a login ticket, a password reset and a reset challenge stay valid,
+/// in seconds.
 pub const PASSWORD_STEP_TTL_SECONDS: i64 = 120;
 
 /// Longest OPAQUE message or rewrap the server reads, in bytes.
@@ -40,6 +41,26 @@ pub struct PasswordLoginStartDto {
     pub login_id: PasswordLoginId,
     /// The OPAQUE `CredentialResponse`.
     pub response: Vec<u8>,
+}
+
+/// Finish a password login started with `passwordLoginStart`.
+#[derive(Debug, Clone)]
+pub struct PasswordLoginFinishCmd {
+    pub login_id: PasswordLoginId,
+    /// The OPAQUE `CredentialFinalization`.
+    pub credential_finalization: Vec<u8>,
+}
+
+/// What a finished password login returns.
+#[derive(Debug, Clone)]
+pub struct PasswordLoginFinishDto {
+    /// The single-use ticket `loginWithKey` takes as `passwordTicket`, unpadded base64url.
+    pub ticket: String,
+    /// The account's server share, sealed under the transport key for "server share", as
+    /// unpadded base64url.
+    pub server_share: String,
+    /// The account's rewraps, newest first.
+    pub rewraps: Vec<Vec<u8>>,
 }
 
 /// Start changing the signed-in account's password: prove the current one and register the

@@ -2,7 +2,7 @@ use async_graphql::*;
 use rim_core::account_password::model::{PasswordLoginId, PasswordResetId};
 use rim_services::Actor;
 use rim_services::account_password::dto::{
-    PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordLoginStartCmd,
+    PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordLoginFinishCmd, PasswordLoginStartCmd,
     PasswordRegistrationStartCmd, PasswordResetChallengeCmd, PasswordResetFinishCmd,
     PasswordResetStartCmd, SetPasswordCmd, SetPasswordStartCmd,
 };
@@ -15,8 +15,8 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::account_password::{decode_bytes, encode_bytes};
 use crate::types::{
-    KeyLoginChallenge, PasswordChangeStart, PasswordChanged, PasswordLoginStart,
-    PasswordResetStart, SetPasswordPayload, SignedStatementInput,
+    KeyLoginChallenge, PasswordChangeStart, PasswordChanged, PasswordLoginFinish,
+    PasswordLoginStart, PasswordResetStart, SetPasswordPayload, SignedStatementInput,
 };
 
 #[derive(Default)]
@@ -45,7 +45,7 @@ impl AccountPasswordMutations {
         .map_err(map_service_error)
     }
 
-    /// Start a password login, before `loginWithKey`: the OPAQUE `CredentialRequest` for
+    /// Start a password login, before `passwordLoginFinish`: the OPAQUE `CredentialRequest` for
     /// `principalId`. Every start counts as a wrong try until a login finishes: tries 1 to 3
     /// are free, the 4th to the 9th make the next one wait (`RATE_LIMITED` with
     /// `retryAfterSeconds`), and the 10th locks the password (`PASSWORD_LOCKED`) until a reset
@@ -62,6 +62,30 @@ impl AccountPasswordMutations {
             principal_id,
             request: decode_bytes(&request, "request")?,
             remote_ip: remote_ip(ctx),
+        })
+        .await
+        .map(Into::into)
+        .map_err(map_service_error)
+    }
+
+    /// Finish a password login with the OPAQUE `CredentialFinalization`. On success the tries
+    /// are cleared, and the answer carries a single-use ticket for `loginWithKey` (valid for
+    /// 120 seconds), the account's server share sealed under the login's transport key, and its
+    /// rewraps. The login id is used once, whatever the outcome. No session needed. Every
+    /// refusal is `UNAUTHENTICATED`: an unknown, used or expired login, or a wrong password.
+    async fn password_login_finish(
+        &self,
+        ctx: &Context<'_>,
+        login_id: ID,
+        credential_finalization: String,
+    ) -> Result<PasswordLoginFinish> {
+        let svc = ctx.data::<std::sync::Arc<dyn AccountPasswordService>>()?;
+        svc.login_finish(PasswordLoginFinishCmd {
+            login_id: parse_uuid_id::<PasswordLoginId>(&login_id)?,
+            credential_finalization: decode_bytes(
+                &credential_finalization,
+                "credentialFinalization",
+            )?,
         })
         .await
         .map(Into::into)

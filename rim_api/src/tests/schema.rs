@@ -592,7 +592,8 @@ fn account_password_sdl_matches_the_contract() {
         "declineJoinRequest(serverId: ID!, requestId: ID!): JoinRequest! \
          passwordRegistrationStart(principalId: String!, request: String!): String! \
          passwordLoginStart(principalId: String!, request: String!): PasswordLoginStart! \
-         passwordChangeStart(credentialRequest: String!, registrationRequest: String!): \
+         passwordLoginFinish(loginId: ID!, credentialFinalization: String!): \
+         PasswordLoginFinish! passwordChangeStart(credentialRequest: String!, registrationRequest: String!): \
          PasswordChangeStart! passwordChangeFinish(loginId: ID!, credentialFinalization: String!, \
          registrationUpload: String!, rewrap: String!): PasswordChanged! \
          passwordResetChallenge(principalId: String!): KeyLoginChallenge! \
@@ -600,10 +601,9 @@ fn account_password_sdl_matches_the_contract() {
          PasswordResetStart! passwordResetFinish(resetId: ID!, registrationUpload: String!): \
          Boolean! setPasswordStart(registrationRequest: String!): String! \
          setPassword(registrationUpload: String!): SetPasswordPayload! }",
-        "loginWithKey(proof: SignedStatementInput!, loginId: ID, credentialFinalization: \
-         String): LoginPayload!",
-        "type LoginPayload { userId: ID! csrfToken: String! serverShare: String rewraps: \
-         [String!]! mustSetPassword: Boolean! }",
+        "loginWithKey(proof: SignedStatementInput!, passwordTicket: String): LoginPayload!",
+        "type LoginPayload { userId: ID! csrfToken: String! mustSetPassword: Boolean! }",
+        "type PasswordLoginFinish { ticket: String! serverShare: String! rewraps: [String!]! }",
         "type SignupWithInvitePayloadGql { userId: ID! serverId: ID csrfToken: String! \
          serverShare: String }",
         "proof: SignedStatementInput! passwordRegistration: String! instanceInviteToken: String",

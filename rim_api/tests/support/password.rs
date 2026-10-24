@@ -31,11 +31,18 @@ mutation Start($request: String!) { setPasswordStart(registrationRequest: $reque
 pub const SET_PASSWORD: &str = r#"
 mutation Set($upload: String!) { setPassword(registrationUpload: $upload) { serverShare } }"#;
 
-/// `loginWithKey` with the password fields, answering everything the payload carries.
+pub const LOGIN_FINISH: &str = r#"
+mutation Finish($loginId: ID!, $credentialFinalization: String!) {
+  passwordLoginFinish(loginId: $loginId, credentialFinalization: $credentialFinalization) {
+    ticket serverShare rewraps
+  }
+}"#;
+
+/// `loginWithKey` with an optional password ticket.
 pub const LOGIN_WITH_PASSWORD: &str = r#"
-mutation Login($proof: SignedStatementInput!, $loginId: ID, $credentialFinalization: String) {
-  loginWithKey(proof: $proof, loginId: $loginId, credentialFinalization: $credentialFinalization) {
-    userId csrfToken serverShare rewraps mustSetPassword
+mutation Login($proof: SignedStatementInput!, $passwordTicket: String) {
+  loginWithKey(proof: $proof, passwordTicket: $passwordTicket) {
+    userId csrfToken mustSetPassword
   }
 }"#;
 
@@ -47,22 +54,33 @@ pub fn unb64(text: &str) -> Vec<u8> {
     URL_SAFE_NO_PAD.decode(text).expect("base64url")
 }
 
-/// A password login the client finished: the variables `loginWithKey` takes, and the session
-/// key that opens what it returns.
+/// A password login that finished: the ticket `loginWithKey` takes, what
+/// `passwordLoginFinish` answered, and the client's session key, which opens the share.
 pub struct PasswordLogin {
-    pub login_id: String,
-    pub finalization: String,
+    pub ticket: String,
+    /// The server share, sealed under the login's transport key.
+    pub server_share: String,
+    pub rewraps: Value,
     pub session_key: Vec<u8>,
 }
 
 impl PasswordLogin {
-    /// The `loginWithKey` variables for `proof` with this login.
+    /// The `loginWithKey` variables for `proof` with this login's ticket.
     pub fn variables(&self, proof: Value) -> Value {
-        json!({
-            "proof": proof,
-            "loginId": self.login_id,
-            "credentialFinalization": self.finalization,
-        })
+        json!({ "proof": proof, "passwordTicket": self.ticket })
+    }
+}
+
+/// The started login and the `passwordLoginFinish` answer as a [`PasswordLogin`].
+fn finished(finish: &Value, session_key: Vec<u8>) -> PasswordLogin {
+    PasswordLogin {
+        ticket: finish["ticket"].as_str().expect("ticket").to_string(),
+        server_share: finish["serverShare"]
+            .as_str()
+            .expect("serverShare")
+            .to_string(),
+        rewraps: finish["rewraps"].clone(),
+        session_key,
     }
 }
 
@@ -85,9 +103,9 @@ pub async fn registration(schema: &AppSchema, principal_id: &str, password: &[u8
     b64(&flow.finish(&response).expect("registration").0)
 }
 
-/// Start a password login for `principal_id` through `schema` and finish it on the client;
-/// `Ok(None)` when the password is wrong (the client cannot finish), and the server's answer
-/// when it refused the start.
+/// Run a password login for `principal_id` through `schema`: start it, finish it on the
+/// client, and finish it on the server. `Ok(None)` when the password is wrong (the client
+/// cannot finish), and the server's answer when it refused a step.
 pub async fn login(
     schema: &AppSchema,
     principal_id: &str,
@@ -108,11 +126,23 @@ pub async fn login(
     let Some(done) = flow.finish(&unb64(started["response"].as_str().expect("response"))) else {
         return Ok(None);
     };
-    Ok(Some(PasswordLogin {
-        login_id: started["loginId"].as_str().expect("loginId").to_string(),
-        finalization: b64(&done.finalization),
-        session_key: done.session_key,
-    }))
+    let response = schema
+        .execute(signed_out(
+            LOGIN_FINISH,
+            json!({
+                "loginId": started["loginId"],
+                "credentialFinalization": b64(&done.finalization),
+            }),
+        ))
+        .await;
+    if !response.errors.is_empty() {
+        return Err(response);
+    }
+    let data = response.data.into_json().expect("json");
+    Ok(Some(finished(
+        &data["passwordLoginFinish"],
+        done.session_key,
+    )))
 }
 
 /// POST `query` with `variables` to `origin`'s `/api` and return the JSON answer.
@@ -148,7 +178,7 @@ pub async fn registration_over_http(
     b64(&flow.finish(&unb64(response)).expect("registration").0)
 }
 
-/// [`login`] against the server at `origin`.
+/// [`login`] against the server at `origin`; `None` when the password is wrong.
 pub async fn login_over_http(
     http: &reqwest::Client,
     origin: &str,
@@ -169,9 +199,17 @@ pub async fn login_over_http(
             .as_str()
             .unwrap_or_else(|| panic!("passwordLoginStart: {body}")),
     ))?;
-    Some(PasswordLogin {
-        login_id: started["loginId"].as_str().expect("loginId").to_string(),
-        finalization: b64(&done.finalization),
-        session_key: done.session_key,
-    })
+    let body = post(
+        http,
+        origin,
+        LOGIN_FINISH,
+        json!({
+            "loginId": started["loginId"],
+            "credentialFinalization": b64(&done.finalization),
+        }),
+    )
+    .await;
+    let finish = &body["data"]["passwordLoginFinish"];
+    assert!(finish.is_object(), "passwordLoginFinish: {body}");
+    Some(finished(finish, done.session_key))
 }

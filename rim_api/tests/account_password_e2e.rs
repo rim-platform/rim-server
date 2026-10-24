@@ -32,7 +32,8 @@ use sea_orm::ConnectionTrait;
 use support::graphql::{Caller, anonymous_request, exec_err_code, exec_ok};
 use support::identity::{SIGNUP_WITH_KEY, key_login, signed_out, signup_input, statement};
 use support::password::{
-    LOGIN_WITH_PASSWORD, SET_PASSWORD, SET_PASSWORD_START, TEST_PASSWORD, b64, unb64,
+    LOGIN_FINISH, LOGIN_START, LOGIN_WITH_PASSWORD, SET_PASSWORD, SET_PASSWORD_START,
+    TEST_PASSWORD, b64, login as password_login, unb64,
 };
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
 
@@ -174,13 +175,10 @@ async fn signup_with_a_password_then_sign_in_returns_the_same_share() {
     let answer = &body["loginWithKey"];
     assert_eq!(answer["userId"], json!(ada.user_id));
     assert_eq!(answer["mustSetPassword"], json!(false));
-    assert_eq!(answer["rewraps"], json!([]));
-    let share = transport_open(
-        &login.expect("password login").session_key,
-        LABEL_SERVER_SHARE,
-        answer["serverShare"].as_str().expect("serverShare"),
-    )
-    .expect("the share opens under the login's transport key");
+    let login = login.expect("password login");
+    assert_eq!(login.rewraps, json!([]));
+    let share = transport_open(&login.session_key, LABEL_SERVER_SHARE, &login.server_share)
+        .expect("the share opens under the login's transport key");
     assert_eq!(share.as_slice(), ada.server_share.as_slice());
 }
 
@@ -194,25 +192,81 @@ async fn key_login_alone_or_with_a_wrong_password_is_refused_for_an_account_with
         code(&ada.login(&schema, Some(b"wrong password")).await),
         "UNAUTHENTICATED"
     );
-    // Only one of the two password fields is a validation error.
-    let proof =
-        support::identity::signed_login(&schema, &ada.device, &ada.state, ada.device_id).await;
+    // A wrong finalization gets no ticket.
+    let (_, request) = Login::start(TEST_PASSWORD);
+    let started = exec_ok(
+        &schema,
+        signed_out(
+            LOGIN_START,
+            json!({ "principalId": ada.state.principal_id, "request": b64(&request) }),
+        ),
+    )
+    .await;
     assert_eq!(
         exec_err_code(
             &schema,
             signed_out(
-                LOGIN_WITH_PASSWORD,
-                json!({ "proof": statement(&proof), "loginId": Uuid::new_v4().to_string() }),
+                LOGIN_FINISH,
+                json!({
+                    "loginId": started["passwordLoginStart"]["loginId"],
+                    "credentialFinalization": b64(&[0; 64]),
+                }),
             ),
         )
         .await,
-        "VALIDATION"
+        "UNAUTHENTICATED"
     );
-    assert!(
-        ada.login(&schema, Some(TEST_PASSWORD))
-            .await
-            .errors
-            .is_empty()
+
+    // A ticket signs in once, and only its own account.
+    let bob = sign_up(&schema, "bob", 12).await;
+    let login = password_login(&schema, &ada.state.principal_id, TEST_PASSWORD)
+        .await
+        .expect("start")
+        .expect("right password");
+    assert_eq!(
+        code(&with_ticket(&schema, &bob, &login).await),
+        "UNAUTHENTICATED"
+    );
+    assert!(with_ticket(&schema, &ada, &login).await.errors.is_empty());
+    assert_eq!(
+        code(&with_ticket(&schema, &ada, &login).await),
+        "UNAUTHENTICATED"
+    );
+}
+
+/// `loginWithKey` for `account` with a fresh proof and `login`'s ticket.
+async fn with_ticket(
+    schema: &AppSchema,
+    account: &SignedUp,
+    login: &support::password::PasswordLogin,
+) -> async_graphql::Response {
+    let proof =
+        support::identity::signed_login(schema, &account.device, &account.state, account.device_id)
+            .await;
+    schema
+        .execute(signed_out(
+            LOGIN_WITH_PASSWORD,
+            login.variables(statement(&proof)),
+        ))
+        .await
+}
+
+#[tokio::test]
+async fn an_expired_ticket_is_refused() {
+    let ctx = TestCtx::new().await;
+    let schema = ctx.build_schema(RegistrationMode::Open).await;
+    let ada = sign_up(&schema, "ada", 13).await;
+    let login = password_login(&schema, &ada.state.principal_id, TEST_PASSWORD)
+        .await
+        .expect("start")
+        .expect("right password");
+    ctx.conn
+        .execute_unprepared("UPDATE password_ticket SET expires_at = now() - interval '1 second'")
+        .await
+        .expect("expire the ticket");
+    assert_eq!(
+        code(&with_ticket(&schema, &ada, &login).await),
+        "UNAUTHENTICATED"
     );
 }
 
@@ -358,14 +412,11 @@ async fn a_change_refuses_the_old_password_afterwards_and_hands_out_the_rewrap()
         Some(b"new password"),
     )
     .await;
-    let body = data(response);
-    assert_eq!(body["loginWithKey"]["rewraps"], json!([b64(&[7; 60])]));
-    let share = transport_open(
-        &login.expect("login").session_key,
-        LABEL_SERVER_SHARE,
-        body["loginWithKey"]["serverShare"].as_str().expect("share"),
-    )
-    .expect("opens");
+    data(response);
+    let login = login.expect("login");
+    assert_eq!(login.rewraps, json!([b64(&[7; 60])]));
+    let share =
+        transport_open(&login.session_key, LABEL_SERVER_SHARE, &login.server_share).expect("opens");
     assert_eq!(
         share.as_slice(),
         ada.server_share.as_slice(),
@@ -455,14 +506,11 @@ async fn a_reset_signed_by_the_recovery_key_replaces_the_password_and_ends_every
         Some(b"after reset"),
     )
     .await;
-    let body = data(response);
-    assert_eq!(body["loginWithKey"]["rewraps"], json!([]), "rewraps go");
-    let share = transport_open(
-        &login.expect("login").session_key,
-        LABEL_SERVER_SHARE,
-        body["loginWithKey"]["serverShare"].as_str().expect("share"),
-    )
-    .expect("opens");
+    data(response);
+    let login = login.expect("login");
+    assert_eq!(login.rewraps, json!([]), "rewraps go");
+    let share =
+        transport_open(&login.session_key, LABEL_SERVER_SHARE, &login.server_share).expect("opens");
     assert_eq!(share.as_slice(), ada.server_share.as_slice());
 
     // A statement signed by the identity key does not reset.
@@ -546,7 +594,6 @@ async fn an_account_without_a_password_signs_in_with_its_key_and_may_only_set_on
     )
     .await;
     assert_eq!(body["loginWithKey"]["mustSetPassword"], json!(true));
-    assert!(body["loginWithKey"]["serverShare"].is_null());
     let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
         panic!("loginWithKey must set a session");
     };
@@ -633,7 +680,6 @@ async fn someone_from_another_server_signs_in_directly_without_a_password() {
         key_login(&schema, &guest.device, &guest.state, guest.device_id, None).await;
     let body = data(response);
     assert_eq!(body["loginWithKey"]["mustSetPassword"], json!(false));
-    assert!(body["loginWithKey"]["serverShare"].is_null());
 }
 
 #[tokio::test]
