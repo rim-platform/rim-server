@@ -1,6 +1,6 @@
-//! The client side of the account password for the e2e suites: OPAQUE registration and login
-//! through the GraphQL roots, against a schema or a running server, with the cheap
-//! key-stretching setting.
+//! The client side of the account password for the e2e suites: OPAQUE registration, login and
+//! the reset with the recovery key through the GraphQL roots, against a schema or a running
+//! server, with the cheap key-stretching setting.
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -8,9 +8,12 @@ use rim_auth::opaque::client::{Login, Registration};
 use serde_json::{Value, json};
 
 use rim_api::AppSchema;
+use rim_identity::KeyState;
+use rim_identity::testing::TestIdentity;
 
+use super::KEY_LOGIN_AUDIENCE;
 use super::graphql::exec_ok;
-use super::identity::signed_out;
+use super::identity::{signed_out, statement};
 
 /// The password every account the suites sign up with gets.
 pub const TEST_PASSWORD: &[u8] = b"correct horse battery staple";
@@ -25,11 +28,22 @@ mutation Start($principalId: String!, $request: String!) {
   passwordLoginStart(principalId: $principalId, request: $request) { loginId response }
 }"#;
 
-pub const SET_PASSWORD_START: &str = r#"
-mutation Start($request: String!) { setPasswordStart(registrationRequest: $request) }"#;
+pub const RESET_CHALLENGE: &str = r#"
+mutation Challenge($principalId: String!) {
+  passwordResetChallenge(principalId: $principalId) { challengeId nonce }
+}"#;
 
-pub const SET_PASSWORD: &str = r#"
-mutation Set($upload: String!) { setPassword(registrationUpload: $upload) { serverShare } }"#;
+pub const RESET_START: &str = r#"
+mutation Start($statement: SignedStatementInput!, $registrationRequest: String!) {
+  passwordResetStart(statement: $statement, registrationRequest: $registrationRequest) {
+    resetId registrationResponse
+  }
+}"#;
+
+pub const RESET_FINISH: &str = r#"
+mutation Finish($resetId: ID!, $registrationUpload: String!) {
+  passwordResetFinish(resetId: $resetId, registrationUpload: $registrationUpload)
+}"#;
 
 pub const LOGIN_FINISH: &str = r#"
 mutation Finish($loginId: ID!, $credentialFinalization: String!) {
@@ -45,7 +59,7 @@ mutation Login($proof: SignedStatementInput!, $passwordTicket: String,
                $keepSignedIn: Boolean! = true, $keepKeyHeld: Boolean! = true) {
   loginWithKey(proof: $proof, passwordTicket: $passwordTicket,
                keepSignedIn: $keepSignedIn, keepKeyHeld: $keepKeyHeld) {
-    userId csrfToken mustSetPassword sessionSecret keepKey
+    userId csrfToken sessionSecret keepKey
   }
 }"#;
 
@@ -146,6 +160,64 @@ pub async fn login(
         &data["passwordLoginFinish"],
         done.session_key,
     )))
+}
+
+/// Reset the password of the holder of `state` to `new` through `schema`, with a statement
+/// signed by `identity`'s recovery key. A reset gives an account without a password one.
+pub async fn reset_password(
+    schema: &AppSchema,
+    identity: &TestIdentity,
+    state: &KeyState,
+    new: &[u8],
+) {
+    let challenge = exec_ok(
+        schema,
+        signed_out(
+            RESET_CHALLENGE,
+            json!({ "principalId": state.principal_id }),
+        ),
+    )
+    .await;
+    let challenge = &challenge["passwordResetChallenge"];
+    let statement_signed = identity.password_reset(
+        state,
+        challenge["challengeId"]
+            .as_str()
+            .expect("challengeId")
+            .parse()
+            .expect("uuid"),
+        challenge["nonce"].as_str().expect("nonce"),
+        KEY_LOGIN_AUDIENCE,
+    );
+    let (registration, request) = Registration::start(new);
+    let started = exec_ok(
+        schema,
+        signed_out(
+            RESET_START,
+            json!({
+                "statement": statement(&statement_signed),
+                "registrationRequest": b64(&request),
+            }),
+        ),
+    )
+    .await;
+    let started = &started["passwordResetStart"];
+    let (upload, _) = registration
+        .finish(&unb64(
+            started["registrationResponse"]
+                .as_str()
+                .expect("registrationResponse"),
+        ))
+        .expect("upload");
+    let done = exec_ok(
+        schema,
+        signed_out(
+            RESET_FINISH,
+            json!({ "resetId": started["resetId"], "registrationUpload": b64(&upload) }),
+        ),
+    )
+    .await;
+    assert_eq!(done["passwordResetFinish"], json!(true));
 }
 
 /// POST `query` with `variables` to `origin`'s `/api` and return the JSON answer.

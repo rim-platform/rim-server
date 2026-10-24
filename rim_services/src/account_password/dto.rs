@@ -130,29 +130,6 @@ pub struct PasswordResetFinishCmd {
     pub registration_upload: Vec<u8>,
 }
 
-/// Start setting a password for a signed-in account that has none.
-#[derive(Debug, Clone)]
-pub struct SetPasswordStartCmd {
-    pub actor: Actor,
-    /// The OPAQUE `RegistrationRequest`.
-    pub request: Vec<u8>,
-}
-
-/// Finish setting a password for a signed-in account that has none.
-#[derive(Debug, Clone)]
-pub struct SetPasswordCmd {
-    pub actor: Actor,
-    /// The OPAQUE `RegistrationUpload`.
-    pub upload: Vec<u8>,
-}
-
-/// What setting a password returns: the account's new server share, in the clear, for the
-/// device to derive its unlock key.
-#[derive(Debug, Clone)]
-pub struct SetPasswordDto {
-    pub server_share: Vec<u8>,
-}
-
 /// When a password change took effect.
 #[derive(Debug, Clone)]
 pub struct PasswordChangedDto {

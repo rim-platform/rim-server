@@ -28,15 +28,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   `passwordRegistrationStart`) and answers `serverShare`; an account of this server with a
   password signs in only with `loginWithKey(proof, passwordTicket)`, the ticket coming from the
   new `passwordLoginStart` and `passwordLoginFinish` (which also answers the sealed server share
-  and the rewraps), and `LoginPayload` gains `mustSetPassword`. Clients older than this release can no longer sign up, and cannot sign in
+  and the rewraps). Clients older than this release can no longer sign up, and cannot sign in
   to accounts that have a password. Every login start counts as a try: three are free, then
   waits from one minute to twelve hours (`RATE_LIMITED`), and the 10th locks the password
   (`PASSWORD_LOCKED`, a new error code) until a reset with the recovery key
   (`passwordResetChallenge`, `passwordResetStart`, `passwordResetFinish`, and a new
-  `password-reset` statement). New roots `passwordChangeStart`, `passwordChangeFinish`,
-  `setPasswordStart` and `setPassword`; an account without a password signs in with its key
-  and may only set one (`FORBIDDEN` "set a password first" elsewhere). People from other
-  servers sign in at a host with the key alone. The OPAQUE setup and the key the server shares
+  `password-reset` statement). New roots `passwordChangeStart` and `passwordChangeFinish`; an
+  account of this server without a password does not sign in. People from other servers sign
+  in at a host with the key alone. The OPAQUE setup and the key the server shares
   are sealed under live in the new password key file, `RIM_PASSWORD_KEY_FILE` (default
   `<RIM_DATA_DIR>/password-key.json`), created at the first start and checked by `/readyz`
   (`passwordKey`); back it up with the database, which the backup scripts do with the data

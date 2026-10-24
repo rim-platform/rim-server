@@ -41,7 +41,7 @@ pub(crate) mod workspace_state;
 pub use account::{AccountDeletionSchedule, RequestAccountDeletionInput};
 pub use account_password::{
     PasswordChangeStart, PasswordChanged, PasswordLoginFinish, PasswordLoginStart,
-    PasswordResetStart, SetPasswordPayload,
+    PasswordResetStart,
 };
 pub use attachment::{Attachment, AttachmentStatusEnum, UploadTicket};
 pub use audit::{

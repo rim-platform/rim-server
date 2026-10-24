@@ -555,7 +555,6 @@ impl DefaultAuthService {
             session: Self::to_session_dto(&sess),
             session_token: raw_token,
             csrf_token: csrf,
-            must_set_password: false,
             keys: SessionKeysDto::kept(),
         })
     }

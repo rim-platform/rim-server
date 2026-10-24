@@ -266,7 +266,6 @@ mod tests {
                             session_id: Some(SessionId::new()),
                             device_key_id: None,
                             expires_at: None,
-                            must_set_password: false,
                             secret_hash: None,
                         }
                     } else {

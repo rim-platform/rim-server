@@ -165,8 +165,6 @@ pub struct DefaultKeyAuthService {
 enum PasswordCheck {
     /// Someone from another server: their password lives at home.
     NotNeeded,
-    /// A local account without a password: it signs in and must set one.
-    MustSet,
     /// A local account with a password: the ticket with this token hash must be consumed.
     Ticket(String),
 }
@@ -333,13 +331,12 @@ impl DefaultKeyAuthService {
         })
     }
 
-    /// What the password of a key sign-in requires. An account of this server with a password
-    /// must bring a ticket from `passwordLoginFinish`, consumed inside the session transaction;
-    /// one without a password signs in with its key alone and must set one. Accounts of other
-    /// servers keep their password at home.
+    /// What the password of a key sign-in requires. An account of this server must bring a
+    /// ticket from `passwordLoginFinish`, consumed inside the session transaction. Accounts of
+    /// other servers keep their password at home.
     ///
     /// # Errors
-    /// `Unauthenticated` when the account has a password and no ticket came.
+    /// `Unauthenticated` when the account has no password record, or when no ticket came.
     async fn check_password(
         &self,
         user_id: UserId,
@@ -356,7 +353,14 @@ impl DefaultKeyAuthService {
             .await?
             .is_none()
         {
-            return Ok(PasswordCheck::MustSet);
+            info!(
+                target: "audit",
+                event = "key_login_failure",
+                reason = "password_record_missing",
+                user_id = %user_id,
+                "key login refused: the account has no password record"
+            );
+            return Err(ServiceError::Unauthenticated);
         }
         match ticket {
             Some(ticket) => Ok(PasswordCheck::Ticket(hash_token(ticket))),
@@ -381,7 +385,6 @@ impl DefaultKeyAuthService {
         let check = self
             .check_password(user_id, remote, cmd.password_ticket.as_deref())
             .await?;
-        let must_set_password = matches!(check, PasswordCheck::MustSet);
 
         // A revocation (or recovery) commits under the user row lock. Taking the same lock and
         // reading the device again means a revocation that raced the checks above either ends
@@ -450,7 +453,6 @@ impl DefaultKeyAuthService {
                     return Err(ServiceError::Unauthenticated);
                 }
             }
-            PasswordCheck::MustSet => repos.session_repo.require_password(session.id).await?,
             PasswordCheck::NotNeeded => {}
         }
         Self::commit(scope).await?;
@@ -460,7 +462,6 @@ impl DefaultKeyAuthService {
             event = "key_login_success",
             remote,
             password = matches!(check, PasswordCheck::Ticket(_)),
-            must_set_password,
             kept = keys.kept,
             user_id = %user_id,
             device_id = %device.device_id,
@@ -477,7 +478,6 @@ impl DefaultKeyAuthService {
             },
             session_token: raw_token,
             csrf_token,
-            must_set_password,
             keys,
         })
     }

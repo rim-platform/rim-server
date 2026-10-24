@@ -124,8 +124,7 @@ pub(crate) fn require_csrf(req: &HttpRequest) -> Result<(), HttpResponse> {
 }
 
 /// Require an authenticated user from the session cookie, and for an unkept session its secret
-/// in the `X-RIM-Session-Secret` header. Returns user_id, or 401 without a session and 403 for
-/// a session that must set a password first.
+/// in the `X-RIM-Session-Secret` header. Returns user_id, or 401 without a session.
 pub(crate) async fn require_auth(
     req: &HttpRequest,
 ) -> Result<rim_core::user::model::UserId, HttpResponse> {
@@ -162,11 +161,6 @@ async fn authenticated_user(
         HttpResponse::InternalServerError().json(serde_json::json!({"error": "auth check failed"}))
     })?;
 
-    if auth.must_set_password {
-        return Err(
-            HttpResponse::Forbidden().json(serde_json::json!({"error": "set a password first"}))
-        );
-    }
     auth.user_id.ok_or_else(|| {
         HttpResponse::Unauthorized().json(serde_json::json!({"error": "authentication required"}))
     })
@@ -735,7 +729,6 @@ mod tests {
                             session_id: Some(SessionId::new()),
                             device_key_id: None,
                             expires_at: None,
-                            must_set_password: false,
                             secret_hash: None,
                         }
                     } else {

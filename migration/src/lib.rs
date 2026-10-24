@@ -125,6 +125,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261023_191039_add_public_join_link::Migration),
             Box::new(m20261023_211807_add_remote_join_requests::Migration),
             Box::new(m20261024_110117_add_account_password::Migration),
+            Box::new(m20261024_163804_drop_session_must_set_password::Migration),
         ]
     }
 }
@@ -237,3 +238,4 @@ mod m20261022_062917_add_conversation_member_invited_by;
 mod m20261023_191039_add_public_join_link;
 mod m20261023_211807_add_remote_join_requests;
 mod m20261024_110117_add_account_password;
+mod m20261024_163804_drop_session_must_set_password;

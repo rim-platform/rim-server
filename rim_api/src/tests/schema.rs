@@ -601,12 +601,11 @@ fn account_password_sdl_matches_the_contract() {
          passwordResetChallenge(principalId: String!): KeyLoginChallenge! \
          passwordResetStart(statement: SignedStatementInput!, registrationRequest: String!): \
          PasswordResetStart! passwordResetFinish(resetId: ID!, registrationUpload: String!): \
-         Boolean! setPasswordStart(registrationRequest: String!): String! \
-         setPassword(registrationUpload: String!): SetPasswordPayload! setReloadKey",
+         Boolean! setReloadKey",
         "loginWithKey(proof: SignedStatementInput!, passwordTicket: String, keepSignedIn: \
          Boolean!, keepKeyHeld: Boolean!): LoginPayload!",
-        "type LoginPayload { userId: ID! csrfToken: String! mustSetPassword: Boolean! \
-         sessionSecret: String keepKey: String }",
+        "type LoginPayload { userId: ID! csrfToken: String! sessionSecret: String keepKey: \
+         String }",
         "type PasswordLoginFinish { ticket: String! serverShare: String! rewraps: [String!]! }",
         "type SignupWithInvitePayloadGql { userId: ID! serverId: ID csrfToken: String! \
          serverShare: String sessionSecret: String keepKey: String }",
@@ -616,7 +615,6 @@ fn account_password_sdl_matches_the_contract() {
          registrationResponse: String! }",
         "type PasswordChanged { changedAt: DateTime! }",
         "type PasswordResetStart { resetId: ID! registrationResponse: String! }",
-        "type SetPasswordPayload { serverShare: String! }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }
@@ -628,8 +626,8 @@ fn account_password_sdl_matches_the_contract() {
 fn session_key_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
-        "setPassword(registrationUpload: String!): SetPasswordPayload! setReloadKey: String! \
-         reloadSession: ReloadSessionPayload! }",
+        "passwordResetFinish(resetId: ID!, registrationUpload: String!): Boolean! setReloadKey: \
+         String! reloadSession: ReloadSessionPayload! }",
         "myJoinRequests: [JoinRequest!]! sessionKeepKey: String }",
         "type ReloadSessionPayload { reloadKey: String! nextReloadKey: String! }",
         "confirmedMinimumAge: Int keepSignedIn: Boolean! keepKeyHeld: Boolean! }",

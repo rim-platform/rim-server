@@ -8,14 +8,19 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use async_graphql::Request;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use chrono::Utc;
+use rim_api::AppSchema;
 use rim_api::auth_context::RemoteIp;
+use rim_api::auth_intent::{AuthIntent, AuthIntentCtx};
 use rim_auth::opaque::client::Registration;
 use rim_auth::password::hash_password;
+use rim_auth::session_token::hash_token;
 use rim_core::auth::repository::{InstanceInviteRepository, SessionRepository};
 use rim_core::server::repository::ServerRepository;
 use rim_core::user::model::{NewUser, UserId};
@@ -36,7 +41,10 @@ use support::identity::{
     Enrolled, SIGNUP_WITH_KEY, key_login, signed_login, signed_out, signup_input, statement,
     tampered,
 };
-use support::password::{REGISTRATION_START, TEST_PASSWORD, b64, registration};
+use support::password::{
+    LOGIN_WITH_PASSWORD, REGISTRATION_START, TEST_PASSWORD, b64, login as password_login_steps,
+    registration, reset_password,
+};
 use support::registration::seed_operator_invite;
 use support::{KEY_LOGIN_AUDIENCE, TestCtx};
 
@@ -207,8 +215,24 @@ async fn enroll_login_revoke(version: StatementVersion) {
         assert_eq!(data["keyLog"], json!([]));
     }
 
-    // Challenge login.
-    let login = |challenge: &Value| {
+    let data = exec_ok(&schema, caller.request(MY_KEY_IDENTITY, json!({}))).await;
+    assert_eq!(
+        data["myKeyIdentity"]["devices"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    // A reset with the recovery key gives the account a password, and ends the enrolling
+    // session.
+    reset_password(&schema, &id, &state, TEST_PASSWORD).await;
+    let enrolling = SeaOrmSessionRepository::new(ctx.db.clone())
+        .get_by_id(caller.session_id)
+        .await
+        .expect("get session")
+        .expect("session");
+    assert!(enrolling.revoked_at.is_some());
+
+    // Challenge login with the device key and the password.
+    let login = |challenge: &Value, ticket: &str| {
         let proof = device_login(
             &device,
             &state,
@@ -221,45 +245,86 @@ async fn enroll_login_revoke(version: StatementVersion) {
             challenge["nonce"].as_str().expect("nonce"),
             KEY_LOGIN_AUDIENCE,
         );
-        anonymous_request(LOGIN_WITH_KEY, json!({ "proof": statement(&proof) }))
-            .data(RemoteIp::new("198.51.100.1"))
+        anonymous_request(
+            LOGIN_WITH_PASSWORD,
+            json!({ "proof": statement(&proof), "passwordTicket": ticket }),
+        )
+        .data(RemoteIp::new("198.51.100.1"))
     };
     let challenge = exec_ok(&schema, anonymous_request(CHALLENGE, json!({}))).await;
-    let data = exec_ok(&schema, login(&challenge["keyLoginChallenge"])).await;
+    let intent = Arc::new(AuthIntentCtx::default());
+    let data = exec_ok(
+        &schema,
+        login(
+            &challenge["keyLoginChallenge"],
+            &password_ticket(&schema, &state).await,
+        )
+        .data(Arc::clone(&intent)),
+    )
+    .await;
     assert_eq!(data["loginWithKey"]["userId"], json!(user.id.to_string()));
+    let Some(AuthIntent::SetSession { session_token, .. }) = intent.take() else {
+        panic!("loginWithKey must set a session");
+    };
+    let signed_in = Caller {
+        user_id: user.id,
+        session_id: SeaOrmSessionRepository::new(ctx.db.clone())
+            .get_by_token_hash(&hash_token(&session_token))
+            .await
+            .expect("get session")
+            .expect("session")
+            .id,
+    };
     // The same challenge cannot be used twice.
     assert_eq!(
-        exec_err_code(&schema, login(&challenge["keyLoginChallenge"])).await,
+        exec_err_code(
+            &schema,
+            login(
+                &challenge["keyLoginChallenge"],
+                &password_ticket(&schema, &state).await,
+            ),
+        )
+        .await,
         "UNAUTHENTICATED"
     );
 
-    let data = exec_ok(&schema, caller.request(MY_KEY_IDENTITY, json!({}))).await;
-    assert_eq!(
-        data["myKeyIdentity"]["devices"].as_array().map(Vec::len),
-        Some(1)
-    );
-
-    // Revoke the device with the identity key: its sessions end, the enrolling one included.
+    // Revoke the device with the identity key: its sessions end.
     let revocation = id.revoke_device(&state, device_id);
     let data = exec_ok(
         &schema,
-        caller.request(REVOKE, json!({ "revocation": statement(&revocation) })),
+        signed_in.request(REVOKE, json!({ "revocation": statement(&revocation) })),
     )
     .await;
     assert!(data["revokeDeviceKey"]["revokedAt"].is_string());
-    let enrolling = SeaOrmSessionRepository::new(ctx.db.clone())
-        .get_by_id(caller.session_id)
+    let session = SeaOrmSessionRepository::new(ctx.db.clone())
+        .get_by_id(signed_in.session_id)
         .await
         .expect("get session")
         .expect("session");
-    assert!(enrolling.revoked_at.is_some());
+    assert!(session.revoked_at.is_some());
 
     // A revoked device's valid proof is refused.
     let challenge = exec_ok(&schema, anonymous_request(CHALLENGE, json!({}))).await;
     assert_eq!(
-        exec_err_code(&schema, login(&challenge["keyLoginChallenge"])).await,
+        exec_err_code(
+            &schema,
+            login(
+                &challenge["keyLoginChallenge"],
+                &password_ticket(&schema, &state).await,
+            ),
+        )
+        .await,
         "FORBIDDEN"
     );
+}
+
+/// A ticket from a password login of the holder of `state` with [`TEST_PASSWORD`].
+async fn password_ticket(schema: &AppSchema, state: &KeyState) -> String {
+    password_login_steps(schema, &state.principal_id, TEST_PASSWORD)
+        .await
+        .expect("password login")
+        .expect("the password opens")
+        .ticket
 }
 
 /// `myKeyIdentity` is empty for an account without a key.
@@ -453,16 +518,25 @@ async fn rotation_keeps_devices_and_recovery_replaces_them() {
         .expect("session");
     assert!(session.revoked_at.is_some());
 
-    let login =
-        |proof: &SignedStatement| signed_out(LOGIN_WITH_KEY, json!({ "proof": statement(proof) }));
+    let login = |proof: &SignedStatement, ticket: String| {
+        signed_out(
+            LOGIN_WITH_PASSWORD,
+            json!({ "proof": statement(proof), "passwordTicket": ticket }),
+        )
+    };
     let proof = signed_login(&schema, &phone, &recovered, phone_id).await;
-    let data = exec_ok(&schema, login(&proof)).await;
+    let ticket = password_ticket(&schema, &recovered).await;
+    let data = exec_ok(&schema, login(&proof, ticket)).await;
     assert_eq!(
         data["loginWithKey"]["userId"],
         json!(ada.user.id.to_string())
     );
     let proof = signed_login(&schema, &ada.device, &recovered, ada.device_id).await;
-    assert_eq!(exec_err_code(&schema, login(&proof)).await, "FORBIDDEN");
+    let ticket = password_ticket(&schema, &recovered).await;
+    assert_eq!(
+        exec_err_code(&schema, login(&proof, ticket)).await,
+        "FORBIDDEN"
+    );
 }
 
 /// `signupWithKey` with `input`, from a fixed address.

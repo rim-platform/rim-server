@@ -9,6 +9,7 @@ mod tests {
 
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use rim_auth::opaque::client::Login;
     use rim_auth::session_token::hash_token;
     use rim_core::auth::model::{InstanceInvite, InstanceInviteId, Invite, InviteId};
     use rim_core::auth::model::{NewSession, Session, SessionId, SessionKeep};
@@ -32,6 +33,8 @@ mod tests {
         SigningKey, TestIdentity, device_login, device_self_revoke, signing_key,
     };
     use rim_identity::{KeyState, PublicKey, SignedStatement, StatementVersion};
+    use rim_services::account_password::dto::{PasswordLoginFinishCmd, PasswordLoginStartCmd};
+    use rim_services::account_password::service::AccountPasswordService;
     use rim_services::auth::command::SignupToken;
     use rim_services::auth::dto::RegistrationMode;
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
@@ -46,7 +49,10 @@ mod tests {
     use rim_services::session_revocation::{SessionRevocations, SessionWatch, WatchedSession};
     use rim_services::{Actor, ServiceError};
 
-    use crate::account_password_fakes::{FakePasswords, TEST_PASSWORD_KEY, registration_upload};
+    use crate::account_password::{AccountPasswordRepos, DefaultAccountPasswordService};
+    use crate::account_password_fakes::{
+        FakePasswords, TEST_PASSWORD, TEST_PASSWORD_KEY, registration_upload, store_password,
+    };
     use crate::key_auth::{DefaultKeyAuthService, KeyAuthRepos};
     use crate::registration_rate_limiter::RegistrationRateLimiter;
     use crate::session_revocation::InProcessSessionRevocations;
@@ -427,7 +433,6 @@ mod tests {
                 user_agent: new.user_agent,
                 ip: new.ip,
                 device_key_id: None,
-                must_set_password: false,
                 kept: true,
                 secret_hash: None,
                 keep_key_sealed: None,
@@ -444,28 +449,6 @@ mod tests {
 
         async fn touch_last_seen_at(&self, _id: SessionId) -> RepoResult<()> {
             Ok(())
-        }
-
-        async fn require_password(&self, id: SessionId) -> RepoResult<()> {
-            let mut s = self.0.lock().unwrap();
-            for (session, _) in s.sessions.iter_mut().filter(|(s, _)| s.id == id) {
-                session.must_set_password = true;
-            }
-            Ok(())
-        }
-
-        async fn clear_password_requirement(&self, user_id: UserId) -> RepoResult<u64> {
-            let mut s = self.0.lock().unwrap();
-            let mut n = 0;
-            for (session, _) in s
-                .sessions
-                .iter_mut()
-                .filter(|(s, _)| s.user_id == user_id && s.must_set_password)
-            {
-                session.must_set_password = false;
-                n += 1;
-            }
-            Ok(n)
         }
 
         async fn revoke_session(&self, id: SessionId) -> RepoResult<()> {
@@ -590,6 +573,11 @@ mod tests {
         svc: DefaultKeyAuthService,
         revocations: Arc<InProcessSessionRevocations>,
         passwords: FakePasswords,
+        /// The password service over the same store, which issues the tickets a key sign-in of
+        /// a local account consumes.
+        password_svc: DefaultAccountPasswordService,
+        /// Whether the accounts are this server's: they get a password and sign in with it.
+        local: bool,
     }
 
     fn user_row(s: &State, id: UserId) -> User {
@@ -751,16 +739,33 @@ mod tests {
     ) -> Harness {
         let state: Shared = Arc::default();
         let passwords = FakePasswords::default();
+        let host_repo: Arc<rim_core::host::repository::MockHostRepository> = Arc::new(host_repo);
         let repos = KeyAuthRepos {
             user_repo: Arc::new(user_repo(&state)),
             session_repo: Arc::new(FakeSessions(Arc::clone(&state))),
             key_identity_repo: Arc::new(FakeKeys(Arc::clone(&state))),
             key_challenge_repo: Arc::new(FakeChallenges(Arc::clone(&state))),
             signup,
-            host_repo: Arc::new(host_repo),
+            host_repo: Arc::clone(&host_repo) as _,
             relay_abuse_repo: Arc::new(operator_blocks(&state)),
             account_password_repo: Arc::new(passwords.clone()),
         };
+        let password_svc = DefaultAccountPasswordService::new(
+            AccountPasswordRepos {
+                password_repo: Arc::new(passwords.clone()),
+                user_repo: Arc::new(user_repo(&state)),
+                key_identity_repo: Arc::new(FakeKeys(Arc::clone(&state))),
+                key_challenge_repo: Arc::new(FakeChallenges(Arc::clone(&state))),
+                session_repo: Arc::new(FakeSessions(Arc::clone(&state))),
+                host_repo,
+            },
+            Some(TEST_PASSWORD_KEY.clone()),
+            vec![AUDIENCE.to_string()],
+        )
+        .with_rate_limiters(
+            RegistrationRateLimiter::new(3600, 1000),
+            RegistrationRateLimiter::new(3600, 1000),
+        );
         let svc = DefaultKeyAuthService::new(
             repos,
             None,
@@ -781,6 +786,8 @@ mod tests {
             svc,
             revocations,
             passwords,
+            password_svc,
+            local: true,
         }
     }
 
@@ -829,6 +836,7 @@ mod tests {
             .returning(move |_, _| Box::pin(async move { Ok(refresh) }));
         Harness {
             svc: h.svc.with_host_service(Arc::new(host_service)),
+            local: false,
             ..h
         }
     }
@@ -840,7 +848,8 @@ mod tests {
         }
     }
 
-    /// A user with a password session (`session`), enrolled with `id` and a first device.
+    /// A user with a password session (`session`), enrolled with `id` and a first device. A
+    /// local one also has the OPAQUE password [`TEST_PASSWORD`].
     struct Enrolled {
         user_id: UserId,
         session: SessionId,
@@ -946,7 +955,8 @@ mod tests {
         }
 
         /// Enroll `user_id` from its password session `session` with the identity from `seed`
-        /// and a first device, every statement written at `version`.
+        /// and a first device, every statement written at `version`. A local account then gets
+        /// the OPAQUE password [`TEST_PASSWORD`].
         async fn enroll_from(
             &self,
             user_id: UserId,
@@ -976,6 +986,9 @@ mod tests {
                 dto.principal_id.as_deref(),
                 Some(state.principal_id.as_str())
             );
+            if self.local {
+                store_password(&self.passwords, &state.principal_id, user_id, TEST_PASSWORD).await;
+            }
             Enrolled {
                 user_id,
                 session,
@@ -986,6 +999,42 @@ mod tests {
             }
         }
 
+        /// A ticket from a finished password login of `e` with [`TEST_PASSWORD`], as
+        /// `passwordLoginFinish` issues it.
+        async fn password_ticket(&self, e: &Enrolled) -> String {
+            self.try_password_ticket(e)
+                .await
+                .expect("the password opens")
+        }
+
+        /// [`Harness::password_ticket`], or `None` when no password of this server opens for
+        /// `e`'s principal.
+        async fn try_password_ticket(&self, e: &Enrolled) -> Option<String> {
+            let (flow, request) = Login::start(TEST_PASSWORD);
+            let started = self
+                .password_svc
+                .login_start(PasswordLoginStartCmd {
+                    principal_id: e.state.principal_id.clone(),
+                    request,
+                    remote_ip: IP.to_string(),
+                })
+                .await
+                .expect("password login start");
+            let finished = flow.finish(&started.response)?;
+            let done = self
+                .password_svc
+                .login_finish(PasswordLoginFinishCmd {
+                    login_id: started.login_id,
+                    credential_finalization: finished.finalization,
+                })
+                .await
+                .expect("password login finish");
+            Some(done.ticket)
+        }
+
+        /// Sign in as `e` with `device_id` and `device` over a fresh challenge naming
+        /// `audience`. A local account brings a ticket from its password login, when the
+        /// password opens for `e`'s principal.
         async fn login(
             &self,
             e: &Enrolled,
@@ -993,6 +1042,11 @@ mod tests {
             device: &SigningKey,
             audience: &str,
         ) -> Result<SessionId, ServiceError> {
+            let password_ticket = if self.local {
+                self.try_password_ticket(e).await
+            } else {
+                None
+            };
             let challenge = self
                 .svc
                 .issue_challenge(IssueKeyChallengeCmd {
@@ -1011,7 +1065,7 @@ mod tests {
                 .svc
                 .login_with_key(LoginWithKeyCmd {
                     proof: payload(proof),
-                    password_ticket: None,
+                    password_ticket,
                     keep: DESKTOP_KEPT,
                     remote_ip: IP.to_string(),
                 })
@@ -1127,7 +1181,10 @@ mod tests {
             keep_signed_in: false,
             keep_key_held: false,
         };
-        let res = h.login_keeping(&e, None, unkept).await.unwrap();
+        let res = h
+            .login_keeping(&e, Some(h.password_ticket(&e).await), unkept)
+            .await
+            .unwrap();
         let secret = res.keys.session_secret.clone().expect("a session secret");
         assert!(!res.keys.kept && res.keys.keep_key.is_none());
         let stored = h.stored_session(res.session.session_id);
@@ -1141,7 +1198,10 @@ mod tests {
             keep_signed_in: true,
             keep_key_held: false,
         };
-        let res = h.login_keeping(&e, None, web).await.unwrap();
+        let res = h
+            .login_keeping(&e, Some(h.password_ticket(&e).await), web)
+            .await
+            .unwrap();
         let keep_key = res.keys.keep_key.clone().expect("a keep key");
         assert!(res.keys.kept && res.keys.session_secret.is_none());
         let stored = h.stored_session(res.session.session_id);
@@ -1155,7 +1215,10 @@ mod tests {
             Some(keep_key.as_slice())
         );
 
-        let res = h.login_with_ticket(&e, None).await.unwrap();
+        let res = h
+            .login_with_ticket(&e, Some(h.password_ticket(&e).await))
+            .await
+            .unwrap();
         assert_eq!(res.keys, rim_services::auth::dto::SessionKeysDto::kept());
         let stored = h.stored_session(res.session.session_id);
         assert!(stored.kept && stored.keep_key_sealed.is_none());
@@ -1495,6 +1558,7 @@ mod tests {
     async fn key_login_challenge_is_single_use() {
         let h = harness();
         let e = h.enroll(1).await;
+        let ticket = h.password_ticket(&e).await;
         let challenge = h
             .svc
             .issue_challenge(IssueKeyChallengeCmd {
@@ -1512,7 +1576,7 @@ mod tests {
         ));
         let cmd = || LoginWithKeyCmd {
             proof: proof.clone(),
-            password_ticket: None,
+            password_ticket: Some(ticket.clone()),
             keep: DESKTOP_KEPT,
             remote_ip: IP.to_string(),
         };
@@ -1525,6 +1589,7 @@ mod tests {
     async fn key_login_refuses_a_proof_over_a_join_challenge() {
         let h = harness();
         let e = h.enroll(1).await;
+        let ticket = h.password_ticket(&e).await;
         let proof = h
             .join_proof(&e.device, &e.state, e.device_id, "rims1_relay")
             .await;
@@ -1532,7 +1597,7 @@ mod tests {
             .svc
             .login_with_key(LoginWithKeyCmd {
                 proof,
-                password_ticket: None,
+                password_ticket: Some(ticket),
                 keep: DESKTOP_KEPT,
                 remote_ip: IP.to_string(),
             })
@@ -1554,6 +1619,7 @@ mod tests {
     async fn key_login_with_a_wrong_nonce_fails() {
         let h = harness();
         let e = h.enroll(1).await;
+        let ticket = h.password_ticket(&e).await;
         let challenge = h
             .svc
             .issue_challenge(IssueKeyChallengeCmd {
@@ -1573,7 +1639,7 @@ mod tests {
             .svc
             .login_with_key(LoginWithKeyCmd {
                 proof: payload(proof),
-                password_ticket: None,
+                password_ticket: Some(ticket),
                 keep: DESKTOP_KEPT,
                 remote_ip: IP.to_string(),
             })
@@ -1775,6 +1841,7 @@ mod tests {
     async fn revocation_is_disclosed_only_after_the_challenge_and_audience() {
         let h = harness();
         let e = h.enroll(1).await;
+        let ticket = h.password_ticket(&e).await;
         let revocation = e.id.revoke_device(&e.state, e.device_id);
         h.svc
             .revoke_device(RevokeDeviceKeyCmd {
@@ -1802,7 +1869,7 @@ mod tests {
         ));
         let cmd = |proof: &SignedPayload| LoginWithKeyCmd {
             proof: proof.clone(),
-            password_ticket: None,
+            password_ticket: Some(ticket.clone()),
             keep: DESKTOP_KEPT,
             remote_ip: IP.to_string(),
         };
@@ -2463,8 +2530,7 @@ mod tests {
             device: p.device,
         };
         let ticket = h.ticket(enrolled.user_id, Utc::now() + Duration::seconds(120));
-        let login = h.login_with_ticket(&enrolled, Some(ticket)).await.unwrap();
-        assert!(!login.must_set_password);
+        h.login_with_ticket(&enrolled, Some(ticket)).await.unwrap();
         let got = crate::metrics::test_support::Recorded::snapshot(&snapshotter);
         assert_eq!(got.counter(crate::metrics::REGISTRATIONS, &[]), 1);
     }
@@ -3108,13 +3174,11 @@ mod tests {
             Arc::new(Recording::default()),
         );
         Harness {
-            state: h.state,
             svc: h
                 .svc
                 .with_server_id(A8_RELAY.to_string())
                 .with_quotas(quotas),
-            revocations: h.revocations,
-            passwords: h.passwords,
+            ..h
         }
     }
 
@@ -3170,10 +3234,8 @@ mod tests {
             Arc::new(Recording::default()),
         );
         let other = Harness {
-            state: other.state,
             svc: other.svc.with_server_id(SERVER_ID.to_string()),
-            revocations: other.revocations,
-            passwords: other.passwords,
+            ..other
         };
         let q = other.present(1).await;
         let err = other
@@ -3444,13 +3506,11 @@ mod tests {
             let events = Arc::new(Recording::default());
             let h = signup_harness(signup, Arc::clone(&events) as Arc<dyn Broadcaster>);
             let h = Harness {
-                state: h.state,
                 svc: h
                     .svc
                     .with_server_id(A8_RELAY.to_string())
                     .with_default_workspace(Some(default)),
-                revocations: h.revocations,
-                passwords: h.passwords,
+                ..h
             };
             let p = h.present(1).await;
             let cmd = match path {
@@ -3541,24 +3601,6 @@ mod tests {
         }
     }
 
-    /// Give `e` the password `password`, as a signup would.
-    async fn with_password(h: &Harness, e: &Enrolled, password: &[u8]) {
-        let record = crate::account_password::registration_record(&registration_upload(
-            &e.state.principal_id,
-            password,
-        ))
-        .unwrap();
-        crate::account_password::store_new_password(
-            &h.passwords,
-            &TEST_PASSWORD_KEY,
-            e.user_id,
-            record,
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-    }
-
     /// A local account with a password signs in only with a ticket from a finished password
     /// login: one of its own, unexpired and unused. Every other case answers what a wrong proof
     /// gets.
@@ -3567,8 +3609,6 @@ mod tests {
         let h = harness();
         let e = h.enroll(1).await;
         let other = h.enroll(2).await;
-        with_password(&h, &e, b"right").await;
-        with_password(&h, &other, b"right").await;
         let later = Utc::now() + Duration::seconds(120);
 
         let refused = [
@@ -3591,16 +3631,6 @@ mod tests {
         let ticket = h.ticket(e.user_id, later);
         let res = h.login_with_ticket(&e, Some(ticket.clone())).await.unwrap();
         assert_eq!(res.user_id, e.user_id);
-        assert!(!res.must_set_password);
-        let flagged = h
-            .state
-            .lock()
-            .unwrap()
-            .sessions
-            .iter()
-            .find(|(s, _)| s.id == res.session.session_id)
-            .map(|(s, _)| s.must_set_password);
-        assert_eq!(flagged, Some(false));
         // A ticket signs in once.
         let err = h
             .login_with_ticket(&e, Some(ticket))
@@ -3617,23 +3647,28 @@ mod tests {
         );
     }
 
-    /// A local account without a password signs in with its key alone, and its session may
-    /// only set one.
+    /// A local account without a password record does not sign in, even with a ticket.
     #[tokio::test]
-    async fn a_local_account_without_a_password_must_set_one() {
+    async fn a_local_account_without_a_password_record_cannot_sign_in() {
         let h = harness();
         let e = h.enroll(1).await;
-        let res = h.login_with_ticket(&e, None).await.unwrap();
-        assert!(res.must_set_password);
-        let flagged = h
+        let ticket = h.ticket(e.user_id, Utc::now() + Duration::seconds(120));
+        h.passwords.state().passwords.remove(&e.user_id);
+        let err = h
+            .login_with_ticket(&e, Some(ticket))
+            .await
+            .expect_err("refused");
+        assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
+        // The session that enrolled stays the account's only one.
+        let sessions = h
             .state
             .lock()
             .unwrap()
             .sessions
             .iter()
-            .find(|(s, _)| s.id == res.session.session_id)
-            .map(|(s, _)| s.must_set_password);
-        assert_eq!(flagged, Some(true));
+            .filter(|(s, _)| s.user_id == e.user_id)
+            .count();
+        assert_eq!(sessions, 1);
     }
 
     /// Someone from another server signs in directly with the key alone: their password lives
@@ -3643,6 +3678,6 @@ mod tests {
         let h = remote_harness(IdentityRefresh::Unreachable);
         let e = h.enroll(1).await;
         let res = h.login_with_ticket(&e, None).await.unwrap();
-        assert!(!res.must_set_password);
+        assert_eq!(res.user_id, e.user_id);
     }
 }

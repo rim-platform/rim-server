@@ -1026,7 +1026,6 @@ pub(crate) mod tests {
                 user_agent: new.user_agent,
                 ip: new.ip,
                 device_key_id: None,
-                must_set_password: false,
                 kept: true,
                 secret_hash: None,
                 keep_key_sealed: None,

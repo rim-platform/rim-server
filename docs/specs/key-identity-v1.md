@@ -323,20 +323,20 @@ unless an email-bound invite gives one (rule 1).
 1. `keyLoginChallenge` (no session) returns `{ challengeId, nonce, expiresAt }`: 32 random bytes,
    valid for **120 seconds**, single use. At most 60 challenges per IP per 5 minutes.
 2. The client signs a login proof with its device key and calls `loginWithKey(proof)`, with
-   `passwordTicket` for an account of this server that has a password. The ticket comes from
+   `passwordTicket` for an account of this server. The ticket comes from
    `passwordLoginFinish`, which runs first, so the client holds the server share, and with it
    the keys it keeps at rest, before it signs ("Account password (OPAQUE)").
 3. The server finds the account by `principalId` and the device by `deviceId`, verifies the
    signature with that device's key, checks the audience against its accepted audiences, and
    claims the challenge atomically (a login challenge, unused, unexpired, same nonce).
-4. A local account with a password needs a ticket. Without one the answer is `UNAUTHENTICATED`,
-   as for a wrong proof. A local account without a password signs in with the key alone and
-   its session gets `mustSetPassword`. Someone from another server signs in with the key alone.
+4. A local account needs a ticket. Without one, or for an account without a password record,
+   the answer is `UNAUTHENTICATED`, as for a wrong proof. Someone from another server signs in
+   with the key alone.
 5. On success it locks the user row, reads the device again (a revocation that committed in the
    meantime refuses the login), consumes the ticket in the same transaction as the session (it
    must be this account's, unexpired and unused; otherwise `UNAUTHENTICATED`), creates a session
    bound to the device, records the device's `lastUsedAt`, and sets the same session and CSRF
-   cookies as `login`. The payload carries `mustSetPassword`.
+   cookies as `login`.
 6. Every refusal is `UNAUTHENTICATED` with no detail, except a valid proof from a **revoked**
    device, which is `FORBIDDEN` so the client can tell the person to link the device again. A
    proof is valid here only when it passes every check of step 3: revocation is looked at after
@@ -410,7 +410,6 @@ never interleave.
 | `profile_card` | One row per user, the newest card as signed |
 | `key_challenge` | Nonce, expiry, `used_at`, `purpose` (`login`, `password_reset`, or `join` with the relay's server id in `relay_server_id`); expired rows are deleted when new challenges are issued |
 | `session.device_key_id` | The device a session belongs to; null for password sessions not bound to a device |
-| `session.must_set_password` | The session of a local account without a password, which may only set one |
 | `account_password` | Per local account: the OPAQUE registration record, the server share sealed under the password key, `failed_attempts`, `next_attempt_at`, `locked_at` |
 | `password_login` | The server's OPAQUE login state between start and finish (`login` or `change`), 120 seconds; the finish deletes it |
 | `password_ticket` | A finished password login's ticket, by the SHA-256 hex of its token, with the account and a 120-second expiry; the key sign-in consumes it |
@@ -453,7 +452,7 @@ type Query {
 type Mutation {
   keyLoginChallenge: KeyLoginChallenge!
   loginWithKey(proof: SignedStatementInput!, passwordTicket: String): LoginPayload!
-  # LoginPayload { userId csrfToken mustSetPassword }
+  # LoginPayload { userId csrfToken sessionSecret keepKey }
   enrollIdentityKey(input: EnrollIdentityKeyInput!): KeyIdentity!   # ends the account's other sessions
   signupWithKey(input: SignupWithKeyInput!): SignupWithInvitePayloadGql!   # { userId, serverId, serverShare }
   addDeviceKey(certificate: SignedStatementInput!): DeviceKey!
@@ -515,8 +514,7 @@ suite.
   `<label>` `"server share"` (and later `"keep key"`, `"session secret"`). The value is
   AES-256-GCM sealed under T with a random 12-byte nonce and no associated data, sent as
   unpadded base64url of `nonce ‖ ciphertext ‖ tag`. At a signup or a reset there is no K_s:
-  `signupWithKey` and `setPassword` return S in the clear, over TLS, to the account's own new
-  session.
+  `signupWithKey` returns S in the clear, over TLS, to the account's own new session.
 - The client derives its unlock key from E and S:
   `UK = HKDF-SHA256(ikm = E ‖ S, salt = "rim.unlock.v1", info = principal id)`. A rewrap a change
   leaves is `AES-256-GCM(UK_new, nonce, UK_old, aad = "rim.uk-rewrap.v1|<principal id>")`; the
@@ -601,25 +599,17 @@ and ends every other session of the account. It answers `{ changedAt }`.
    answers `{ resetId, registrationResponse }`; the reset is valid for 120 seconds, once.
 4. `passwordResetFinish(resetId, registrationUpload)`, no session: replaces the record (or
    stores the first one, with a new S, for an account without a password), keeps S, deletes the
-   rewraps, clears the tries and the lock, lifts `mustSetPassword`, and ends every session of the
-   account. It answers `true`. Other devices' wraps of their data key no longer open, since E
-   changed: each asks once for the recovery phrase, or starts empty.
-
-### An account without a password
-
-A local key account made before passwords existed has none. It signs in with the key alone, and
-the session is marked `must_set_password`: every root but `setPasswordStart`, `setPassword`,
-`logout` and `me` answers `FORBIDDEN` "set a password first", and so do the WebSocket, uploads,
-downloads and the routes to other servers. `setPasswordStart(registrationRequest)` and
-`setPassword(registrationUpload)` register a password with a new S, return S in the clear, and
-lift the mark from the account's sessions. `CONFLICT` once the account has a password.
+   rewraps, clears the tries and the lock, and ends every session of the account. It answers
+   `true`. Other devices' wraps of their data key no longer open, since E changed: each asks
+   once for the recovery phrase, or starts empty.
 
 ### Audit
 
 `password_set`, `password_changed`, `password_reset`, `password_login_success`,
 `password_login_failure` (with the count), `password_locked`, and `key_login_failure` with
-reason `password_missing` or `password_ticket_invalid`, all with `target: "audit"` and ids only:
-never a password, E, S, K_s, a ticket, a key or an OPAQUE message.
+reason `password_record_missing`, `password_missing` or `password_ticket_invalid`, all with
+`target: "audit"` and ids only: never a password, E, S, K_s, a ticket, a key or an OPAQUE
+message.
 
 ## Plugin principal ids: `rimp0_` to `rimp1_`
 

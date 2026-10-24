@@ -134,9 +134,6 @@ async fn forward(
             "authentication required",
         );
     };
-    if auth.must_set_password {
-        return error(StatusCode::FORBIDDEN, "forbidden", "set a password first");
-    }
     let (host, tail) = path.into_inner();
     if !rim_s2s::is_server_id(&host) {
         return error(StatusCode::NOT_FOUND, "not_found", "not a server id");

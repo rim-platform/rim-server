@@ -246,7 +246,6 @@ mod tests {
             user_agent: None,
             ip: None,
             device_key_id: None,
-            must_set_password: false,
             kept,
             secret_hash: None,
             keep_key_sealed: None,

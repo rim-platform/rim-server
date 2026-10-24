@@ -37,11 +37,10 @@ use support::graphql::{
     exec_ok,
 };
 use support::identity::{signed_login, statement};
+use support::password::{LOGIN_WITH_PASSWORD, TEST_PASSWORD, login as password_login};
 
 const ENDPOINT: &str = "http://localhost:8080/api";
 
-const LOGIN_WITH_KEY: &str = r#"
-mutation Login($proof: SignedStatementInput!) { loginWithKey(proof: $proof, keepSignedIn: true, keepKeyHeld: true) { userId } }"#;
 const ADD_DEVICE: &str = r#"
 mutation Add($certificate: SignedStatementInput!) { addDeviceKey(certificate: $certificate) { deviceId } }"#;
 const KEY_LOG: &str = r#"
@@ -261,12 +260,16 @@ async fn a_new_device_links_signs_in_and_completes() {
         .expect("certificate verifies");
     assert_eq!(cert.principal_id, principal_id);
 
-    // New device: sign in with its own key.
+    // New device: sign in with its own key and the account's password.
+    let password = password_login(&schema, &principal_id, TEST_PASSWORD)
+        .await
+        .expect("password login")
+        .expect("the password opens");
     let proof = signed_login(&schema, &new_device, &served, offer.device_id).await;
     let intent = Arc::new(AuthIntentCtx::default());
     let login = anonymous(
-        LOGIN_WITH_KEY,
-        json!({ "proof": statement(&proof) }),
+        LOGIN_WITH_PASSWORD,
+        password.variables(statement(&proof)),
         "198.51.100.20",
     )
     .data(Arc::clone(&intent));

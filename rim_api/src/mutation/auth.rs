@@ -37,14 +37,13 @@ impl AuthMutations {
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
             csrf_token: res.csrf_token,
-            must_set_password: false,
             session_secret: None,
             keep_key: None,
         })
     }
 
     async fn logout(&self, ctx: &Context<'_>) -> Result<bool> {
-        let actor = crate::auth_context::require_actor_before_password(ctx)?;
+        let actor = crate::auth_context::require_actor(ctx)?;
         let session_id = require_session_id(ctx)?;
 
         let auth = ctx.data::<std::sync::Arc<dyn AuthService>>()?;
@@ -140,9 +139,6 @@ pub struct LoginPayload {
     /// The new session's CSRF token, the value of the `rim_csrf` cookie. A client that cannot
     /// read that cookie keeps it in memory and sends it in the `X-CSRF-Token` header.
     pub csrf_token: String,
-    /// The account has no password: this session may only set one (`setPassword`), sign out
-    /// and read `me`; everything else answers `FORBIDDEN`.
-    pub must_set_password: bool,
     /// After `loginWithKey` without `keepSignedIn`: the session secret, unpadded base64url, in
     /// the clear. The client keeps it in memory only and sends it in the
     /// `X-RIM-Session-Secret` header of every request and in the WebSocket's
