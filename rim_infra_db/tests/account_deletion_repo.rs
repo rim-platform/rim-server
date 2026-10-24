@@ -378,6 +378,16 @@ async fn the_credential_step_ends_sessions_and_revokes_devices_and_the_personal_
              gen_random_uuid(), 'ed25519:k', 'laptop', 'p', 's', 0, decode(repeat('00', 32), 'hex')); \
              INSERT INTO key_log_entry (user_id, seq, entry_type, payload, signature) \
              VALUES ('{0}', 0, 'inception', 'p', 's'); \
+             INSERT INTO account_password (user_id, registration, share_sealed) \
+             VALUES ('{0}', '\\x01', '\\x02'); \
+             INSERT INTO password_rewrap (id, user_id, rewrap) \
+             VALUES (gen_random_uuid(), '{0}', '\\x03'); \
+             INSERT INTO password_login (id, user_id, purpose, state, expires_at) \
+             VALUES (gen_random_uuid(), '{0}', 'login', '\\x04', now()); \
+             INSERT INTO password_reset (id, user_id, expires_at) \
+             VALUES (gen_random_uuid(), '{0}', now()); \
+             INSERT INTO password_ticket (token_hash, user_id, expires_at) \
+             VALUES ('t', '{0}', now()); \
              INSERT INTO macro (id, server_id, user_id, name) VALUES \
              ('0199d1a0-0000-7000-8000-00000000000a', '{1}', '{0}', 'used'), \
              (gen_random_uuid(), '{1}', '{0}', 'unused'); \
@@ -396,6 +406,15 @@ async fn the_credential_step_ends_sessions_and_revokes_devices_and_the_personal_
     assert!(credentials.counts.contains(&("sessions", 1)));
     assert!(credentials.counts.contains(&("devices_revoked", 1)));
     assert!(credentials.counts.contains(&("key_log_entries", 1)));
+    for kind in [
+        "account_password",
+        "password_rewraps",
+        "password_logins",
+        "password_resets",
+        "password_tickets",
+    ] {
+        assert!(credentials.counts.contains(&(kind, 1)), "{kind}");
+    }
     assert_eq!(
         count(
             &ctx,

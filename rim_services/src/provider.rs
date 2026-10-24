@@ -86,4 +86,9 @@ pub trait AppServiceProvider: Send + Sync {
     fn public_join_link_service(
         &self,
     ) -> Arc<dyn crate::public_join_link::service::PublicJoinLinkService>;
+    /// The password of local accounts: registration, login start, change, reset and setting
+    /// a first one.
+    fn account_password_service(
+        &self,
+    ) -> Arc<dyn crate::account_password::service::AccountPasswordService>;
 }

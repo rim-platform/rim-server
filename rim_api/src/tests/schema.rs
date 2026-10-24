@@ -555,7 +555,8 @@ fn public_join_link_sdl_matches_the_contract() {
          PublicJoinLink! joinByPublicLink(token: String!, message: String): \
          JoinByPublicLinkPayload! withdrawJoinRequest(requestId: ID!): JoinRequest! \
          acceptJoinRequest(serverId: ID!, requestId: ID!): JoinRequest! \
-         declineJoinRequest(serverId: ID!, requestId: ID!): JoinRequest! }",
+         declineJoinRequest(serverId: ID!, requestId: ID!): JoinRequest! \
+         passwordRegistrationStart(",
         "type PublicJoinLink { serverId: ID! enabled: Boolean! mode: PublicJoinLinkMode! role: \
          ServerMemberRoleGql! allowRemote: Boolean! enabledAt: DateTime issuedAt: DateTime \
          issuedById: ID token: String url: String joinsLastDay: Int! joinsLastWeek: Int! \
@@ -577,6 +578,41 @@ fn public_join_link_sdl_matches_the_contract() {
         "enum JoinByPublicLinkOutcome { JOINED REQUESTED }",
         "input JoinRequestCursorInput { createdAt: DateTime! requestId: ID! }",
         "type JoinRequestCursorOutput { createdAt: DateTime! requestId: ID! }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
+/// The account password roots, appended after the public join link roots, the password fields
+/// of key sign-in and signup, and their types.
+#[test]
+fn account_password_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "declineJoinRequest(serverId: ID!, requestId: ID!): JoinRequest! \
+         passwordRegistrationStart(principalId: String!, request: String!): String! \
+         passwordLoginStart(principalId: String!, request: String!): PasswordLoginStart! \
+         passwordLoginFinish(loginId: ID!, credentialFinalization: String!): \
+         PasswordLoginFinish! passwordChangeStart(credentialRequest: String!, registrationRequest: String!): \
+         PasswordChangeStart! passwordChangeFinish(loginId: ID!, credentialFinalization: String!, \
+         registrationUpload: String!, rewrap: String!): PasswordChanged! \
+         passwordResetChallenge(principalId: String!): KeyLoginChallenge! \
+         passwordResetStart(statement: SignedStatementInput!, registrationRequest: String!): \
+         PasswordResetStart! passwordResetFinish(resetId: ID!, registrationUpload: String!): \
+         Boolean! setPasswordStart(registrationRequest: String!): String! \
+         setPassword(registrationUpload: String!): SetPasswordPayload! }",
+        "loginWithKey(proof: SignedStatementInput!, passwordTicket: String): LoginPayload!",
+        "type LoginPayload { userId: ID! csrfToken: String! mustSetPassword: Boolean! }",
+        "type PasswordLoginFinish { ticket: String! serverShare: String! rewraps: [String!]! }",
+        "type SignupWithInvitePayloadGql { userId: ID! serverId: ID csrfToken: String! \
+         serverShare: String }",
+        "proof: SignedStatementInput! passwordRegistration: String! instanceInviteToken: String",
+        "type PasswordLoginStart { loginId: ID! response: String! }",
+        "type PasswordChangeStart { loginId: ID! credentialResponse: String! \
+         registrationResponse: String! }",
+        "type PasswordChanged { changedAt: DateTime! }",
+        "type PasswordResetStart { resetId: ID! registrationResponse: String! }",
+        "type SetPasswordPayload { serverShare: String! }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }

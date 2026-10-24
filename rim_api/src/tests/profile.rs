@@ -296,3 +296,35 @@ async fn update_my_profile_lets_a_local_user_set_a_display_name() {
         serde_json::json!("Ada")
     );
 }
+
+/// A session that must set a password first reads `me` and nothing else.
+#[tokio::test]
+async fn a_session_that_must_set_a_password_reads_me_and_is_refused_elsewhere() {
+    let actor = UserId::new();
+    let mut user = MockUserService::new();
+    user.expect_get_me().returning(move |_q| {
+        Box::pin(async move {
+            let mut dto = test_user_dto();
+            dto.id = actor;
+            Ok(dto)
+        })
+    });
+    let schema = schema_with_user_mock(user);
+    let limited = |query: &str| {
+        Request::new(query).data(
+            AuthActorCtx::new(Some(actor), Some(SessionId::new())).with_must_set_password(true),
+        )
+    };
+
+    let res = schema.execute(limited("query { me { id } }")).await;
+    assert_no_errors(&res);
+    let res = schema
+        .execute(limited("query { myKeyIdentity { principalId } }"))
+        .await;
+    let error = res.errors.first().expect("refused");
+    assert_eq!(error.message, "set a password first");
+    assert_eq!(
+        error.extensions.as_ref().and_then(|e| e.get("code")),
+        Some(&async_graphql::Value::from("FORBIDDEN"))
+    );
+}

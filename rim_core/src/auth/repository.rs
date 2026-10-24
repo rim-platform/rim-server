@@ -48,6 +48,11 @@ pub trait SessionRepository: Send + Sync {
     async fn bind_device(&self, id: SessionId, device_key_id: DeviceKeyId) -> RepoResult<()>;
     /// Revoke every active session of a device. Returns how many were revoked.
     async fn revoke_all_for_device(&self, device_key_id: DeviceKeyId) -> RepoResult<u64>;
+    /// Limit the session to setting a password ([`Session::must_set_password`]).
+    async fn require_password(&self, id: SessionId) -> RepoResult<()>;
+    /// Lift the limit from every session of `user_id` once the account has a password. Returns
+    /// how many sessions had it.
+    async fn clear_password_requirement(&self, user_id: UserId) -> RepoResult<u64>;
     /// Delete the sessions that sign nobody in at `now`: revoked ones and those whose expiry
     /// is reached. Returns how many were deleted.
     async fn delete_ended(&self, now: chrono::DateTime<chrono::Utc>) -> RepoResult<u64>;

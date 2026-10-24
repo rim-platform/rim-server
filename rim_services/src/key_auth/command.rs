@@ -22,6 +22,9 @@ pub struct IssueKeyChallengeCmd {
 pub struct LoginWithKeyCmd {
     /// A `login` statement signed by a device key.
     pub proof: SignedPayload,
+    /// The ticket `passwordLoginFinish` answered. Required for a local account with a
+    /// password; ignored otherwise.
+    pub password_ticket: Option<String>,
     pub remote_ip: String,
 }
 
@@ -39,7 +42,7 @@ pub struct EnrollIdentityKeyCmd {
     pub proof: SignedPayload,
 }
 
-/// Create an account from a key identity alone: no password, no email.
+/// Create an account from a key identity and a password, with no email.
 #[derive(Debug, Clone)]
 pub struct SignupWithKeyCmd {
     pub username: String,
@@ -51,6 +54,9 @@ pub struct SignupWithKeyCmd {
     pub device: SignedPayload,
     /// A `login` statement signed by that device over a fresh challenge from this server.
     pub proof: SignedPayload,
+    /// The OPAQUE `RegistrationUpload` of the account's password, registered for this
+    /// principal with `passwordRegistrationStart`.
+    pub password_registration: Vec<u8>,
     /// The deployment's mode: invite-only requires `token`, open refuses one, pow takes
     /// `token` or `proof_of_work`.
     pub registration_mode: RegistrationMode,

@@ -16,6 +16,8 @@ pub mod identity;
 pub mod mls;
 #[allow(dead_code)] // Only the server-to-server tests start servers.
 pub mod nodes;
+#[allow(dead_code)] // Only the suites that sign up or sign in with a key use the password client.
+pub mod password;
 #[allow(dead_code)] // Not every test binary that includes `support` uses the registration seeders.
 pub mod registration;
 #[allow(dead_code)] // Only the relay tests sign people up on two servers.
@@ -54,6 +56,12 @@ use rim_services::events::{NoopBroadcaster, Observers};
 use rim_services::provider::AppServiceProvider;
 
 static MIGRATED: OnceLock<()> = OnceLock::new();
+
+/// The password key of every in-process schema of a test binary.
+pub static PASSWORD_KEY: std::sync::LazyLock<rim_infra_services::password_key::PasswordKey> =
+    std::sync::LazyLock::new(|| {
+        rim_infra_services::password_key::PasswordKey::generate().expect("password key")
+    });
 
 /// A well-formed id that names nothing.
 #[allow(dead_code)]
@@ -580,7 +588,7 @@ pub async fn build_test_schema(
 }
 
 /// The schema over `service_provider`, wired with the observers it was built with.
-fn schema_for(
+pub fn schema_for(
     service_provider: std::sync::Arc<dyn AppServiceProvider>,
     observers: Observers,
     registration_mode: rim_services::auth::dto::RegistrationMode,
@@ -711,6 +719,9 @@ fn test_provider(
     if hooks.link_base.is_none() {
         hooks.link_base = Some(LINK_BASE.to_string());
     }
+    if hooks.password_key.is_none() {
+        hooks.password_key = Some(PASSWORD_KEY.clone());
+    }
 
     // Wire up all repos.
     let repos = AppRepos {
@@ -829,6 +840,11 @@ fn test_provider(
         ),
         public_join_link_repo: Arc::new(
             rim_infra_db::sea_orm_impl::public_join_link::SeaOrmPublicJoinLinkRepository::new(
+                db.clone(),
+            ),
+        ),
+        account_password_repo: Arc::new(
+            rim_infra_db::sea_orm_impl::account_password::SeaOrmAccountPasswordRepository::new(
                 db.clone(),
             ),
         ),

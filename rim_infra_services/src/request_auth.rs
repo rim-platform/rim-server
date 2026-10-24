@@ -66,6 +66,7 @@ impl RequestAuthenticator for DefaultRequestAuthenticator {
             session_id: Some(session.id),
             device_key_id: session.device_key_id,
             expires_at: Some(session.expires_at),
+            must_set_password: session.must_set_password,
         })
     }
 
@@ -106,6 +107,8 @@ mod tests {
             async fn revoke_all_for_user_except(&self, user_id: UserId, keep: SessionId) -> RepoResult<u64>;
             async fn bind_device(&self, id: SessionId, device_key_id: DeviceKeyId) -> RepoResult<()>;
             async fn revoke_all_for_device(&self, device_key_id: DeviceKeyId) -> RepoResult<u64>;
+            async fn require_password(&self, id: SessionId) -> RepoResult<()>;
+            async fn clear_password_requirement(&self, user_id: UserId) -> RepoResult<u64>;
             async fn delete_ended(&self, now: chrono::DateTime<chrono::Utc>) -> RepoResult<u64>;
         }
     }
@@ -128,6 +131,7 @@ mod tests {
             user_agent: None,
             ip: None,
             device_key_id: None,
+            must_set_password: false,
         }
     }
 

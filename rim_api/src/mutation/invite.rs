@@ -211,6 +211,7 @@ impl InviteMutations {
             user_id: ID(user_id.to_string()),
             server_id: server_id.map(|id| ID(id.to_string())),
             csrf_token,
+            server_share: None,
         })
     }
 }

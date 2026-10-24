@@ -87,6 +87,7 @@ relay still answers.
 | Server recovery key | offline only, "The server recovery key" | its own copies |
 | Franking keys | `/data/franking-key.json` | with every dump |
 | Link key | `/data/link-key.json`, which public join link tokens are sealed under | with every dump |
+| Password key | `/data/password-key.json`: the OPAQUE setup account passwords are checked with, and the key their server shares are sealed under; without it every account resets its password with its recovery phrase | with every dump |
 | Workspace content: channels, their messages, members | the database | nightly backup, "Backups" |
 | Uploads (avatars, attachments in channels) | `/data/uploads` in volume `rim-relay_rim_data` | with every dump |
 | Audit files | `/data/audit.<YYYY-MM-DD>.log`, one per day, and every audit event on stdout too (`docs/operations/audit-retention.md`) | with every dump |
@@ -184,6 +185,14 @@ when it cannot be read, and the server refuses to start when it is missing while
 stored: restore it from the backup. Without it the links still work, but no Owner can read
 theirs again, and a new token is the only way to get one. Back it up with everything else in
 `/data`.
+
+### The password key file
+
+`/data/password-key.json` holds the OPAQUE setup account passwords are checked with and the key
+the accounts' server shares are sealed under. The first start creates it; `/readyz` reports
+`passwordKey` failed when it cannot be read, and the server refuses to start when it is missing
+while passwords are stored: restore it from the backup. Without it every account resets its
+password with its recovery phrase. Back it up with everything else in `/data`.
 
 ## The default workspace
 

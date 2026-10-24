@@ -123,7 +123,8 @@ pub(crate) fn require_csrf(req: &HttpRequest) -> Result<(), HttpResponse> {
         .map_err(|msg| HttpResponse::Forbidden().json(serde_json::json!({"error": msg})))
 }
 
-/// Require an authenticated user from the session cookie. Returns user_id or 401.
+/// Require an authenticated user from the session cookie. Returns user_id, or 401 without a
+/// session and 403 for a session that must set a password first.
 pub(crate) async fn require_auth(
     req: &HttpRequest,
 ) -> Result<rim_core::user::model::UserId, HttpResponse> {
@@ -143,6 +144,11 @@ pub(crate) async fn require_auth(
                 .json(serde_json::json!({"error": "auth check failed"}))
         })?;
 
+    if auth.must_set_password {
+        return Err(
+            HttpResponse::Forbidden().json(serde_json::json!({"error": "set a password first"}))
+        );
+    }
     auth.user_id.ok_or_else(|| {
         HttpResponse::Unauthorized().json(serde_json::json!({"error": "authentication required"}))
     })
@@ -711,6 +717,7 @@ mod tests {
                             session_id: Some(SessionId::new()),
                             device_key_id: None,
                             expires_at: None,
+                            must_set_password: false,
                         }
                     } else {
                         RequestAuthResultDto::default()

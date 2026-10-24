@@ -88,6 +88,9 @@ pub struct FederationHooks {
     /// What public join links start with, `<link base>/join/<token>`; `None` gives
     /// `http://localhost`.
     pub link_base: Option<String>,
+    /// The OPAQUE setup and share key account passwords use; `None` leaves every password
+    /// root, and with it signup and the sign-in of an account with a password, unavailable.
+    pub password_key: Option<crate::password_key::PasswordKey>,
 }
 
 #[derive(Clone)]
@@ -133,6 +136,8 @@ pub struct DefaultAppServiceProvider {
     default_workspace_service: Arc<dyn DefaultWorkspaceService>,
     public_join_link_service:
         Arc<dyn rim_services::public_join_link::service::PublicJoinLinkService>,
+    account_password_service:
+        Arc<dyn rim_services::account_password::service::AccountPasswordService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -201,9 +206,24 @@ impl DefaultAppServiceProvider {
             repos.for_key_auth(),
             Some(db.clone()),
             session_ttl,
-            key_login_audiences,
+            key_login_audiences.clone(),
             observers.clone(),
             signup_rate_limiter,
+        )
+        .with_password_key(federation.password_key.clone());
+        // Shares the key sign-in's per-IP failure budget, so password and key guesses from one
+        // address count together.
+        let account_password_service: Arc<
+            dyn rim_services::account_password::service::AccountPasswordService,
+        > = Arc::new(
+            crate::account_password::DefaultAccountPasswordService::new(
+                repos.for_account_password(),
+                federation.password_key.clone(),
+                key_login_audiences,
+            )
+            .with_database(db.clone())
+            .with_failure_rate_limiter(key_auth.failure_rate_limiter())
+            .with_session_revocations(Arc::clone(&session_revocations)),
         );
         if let Some(relay) = &federation.relay_service {
             key_auth = key_auth.with_relay_service(Arc::clone(relay));
@@ -609,6 +629,7 @@ impl DefaultAppServiceProvider {
             dm_policy_service,
             default_workspace_service,
             public_join_link_service,
+            account_password_service,
         }
     }
 
@@ -764,5 +785,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::public_join_link::service::PublicJoinLinkService> {
         Arc::clone(&self.public_join_link_service)
+    }
+
+    fn account_password_service(
+        &self,
+    ) -> Arc<dyn rim_services::account_password::service::AccountPasswordService> {
+        Arc::clone(&self.account_password_service)
     }
 }

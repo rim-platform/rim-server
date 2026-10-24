@@ -66,6 +66,7 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
                 "serverKey": { "status": "ok" },
                 "frankingKey": { "status": "ok" },
                 "linkKey": { "status": "ok" },
+                "passwordKey": { "status": "ok" },
             },
         })
     );
@@ -121,7 +122,13 @@ async fn health_readiness_and_server_info_answer_without_a_session() {
         body["checks"]["frankingKey"],
         json!({ "status": "fail", "reason": "not readable" })
     );
-    for check in ["database", "migrations", "serverKey", "linkKey"] {
+    for check in [
+        "database",
+        "migrations",
+        "serverKey",
+        "linkKey",
+        "passwordKey",
+    ] {
         assert_eq!(body["checks"][check]["status"], "ok", "{check}");
     }
 

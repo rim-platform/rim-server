@@ -75,6 +75,8 @@ USER rim
 #   RIM_FRANKING_KEY_FILE — Franking key file (default: $RIM_DATA_DIR/franking-key.json)
 #   RIM_LINK_KEY_FILE     — Key public join links are sealed under (default:
 #                           $RIM_DATA_DIR/link-key.json)
+#   RIM_PASSWORD_KEY_FILE — OPAQUE setup and share key of account passwords (default:
+#                           $RIM_DATA_DIR/password-key.json)
 #   RIM_PUBLIC_BASE_URL   — https origin; turns server-to-server traffic on. This or
 #                           RIM_KEY_LOGIN_AUDIENCES is required: the server binds 0.0.0.0 and
 #                           refuses to start without an audience for key logins

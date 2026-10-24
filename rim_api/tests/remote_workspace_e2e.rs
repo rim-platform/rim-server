@@ -46,6 +46,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use support::nodes::{Node, databases_with, start};
+use support::password::{TEST_PASSWORD, registration_over_http};
 use support::unknown_id;
 
 /// Everything these tests touch, emptied on both databases first.
@@ -397,6 +398,8 @@ async fn sign_up(node: &Node, name: &str, seed: u8) -> Person {
         challenge["nonce"].as_str().expect("nonce"),
         &node.id(),
     );
+    let password_registration =
+        registration_over_http(&http, &node.origin, &state.principal_id, TEST_PASSWORD).await;
     let response = http
         .post(format!("{}/api", node.origin))
         .json(&json!({ "query": SIGNUP, "variables": { "input": {
@@ -404,6 +407,7 @@ async fn sign_up(node: &Node, name: &str, seed: u8) -> Person {
             "keyLog": [statement(&inception)],
             "device": statement(&cert),
             "proof": statement(&proof),
+            "passwordRegistration": password_registration,
         } } }))
         .send()
         .await

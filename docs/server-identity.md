@@ -121,6 +121,23 @@ start when the file is missing but public links are stored: restore it from a ba
 with the server key; the database without it still answers the links, but no Owner can read
 theirs again until they issue a new one.
 
+## The password key file
+
+Account passwords are checked with OPAQUE, and each account's server share is sealed, under the
+**password key** (`docs/specs/key-identity-v1.md`, "Account password (OPAQUE)"):
+
+| What | Where |
+|---|---|
+| Password key | `RIM_PASSWORD_KEY_FILE`, default `<RIM_DATA_DIR>/password-key.json` |
+
+The file is `{"v":1,"opaqueSetup":"<base64url, 128 bytes>","shareKey":"<base64url, 32 bytes>","createdAt":"…"}`,
+mode `0600`; the server refuses a file the group or others can read. The first start creates
+it, and `/readyz` reports `passwordKey`. The server refuses to start when the file is missing
+but passwords are stored: restore it from a backup. Back it up with the database. Without it no
+password verifies and no server share opens, so every account resets its password with its
+recovery phrase. Whoever holds the file and the database can try passwords offline, each try
+costing an Argon2id run.
+
 ## Key login audiences
 
 A device's login proof names the server it is meant for (`host[:port]`), so a proof sent to one

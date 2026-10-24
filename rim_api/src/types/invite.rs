@@ -105,6 +105,9 @@ pub struct SignupWithInvitePayloadGql {
     /// The new session's CSRF token, the value of the `rim_csrf` cookie. A client that cannot
     /// read that cookie keeps it in memory and sends it in the `X-CSRF-Token` header.
     pub csrf_token: String,
+    /// After `signupWithKey`: the new account's server share, unpadded base64url, in the
+    /// clear. `null` for the other signups.
+    pub server_share: Option<String>,
 }
 
 // ── Workspace invites ──────────────────────────────────────────────────────

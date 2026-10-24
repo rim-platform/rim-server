@@ -12,6 +12,7 @@ use crate::auth_intent::{AuthIntent, AuthIntentCtx};
 use crate::errors::map_service_error;
 use crate::mutation::auth::LoginPayload;
 use crate::mutation::invite::registration_token;
+use crate::types::account_password::{decode_bytes, encode_bytes};
 use crate::types::{
     DeviceKey, EnrollIdentityKeyInput, KeyIdentity, KeyLoginChallenge, ProfileCard,
     RotateIdentityKeyInput, SignedStatementInput, SignupWithInvitePayloadGql, SignupWithKeyInput,
@@ -36,15 +37,24 @@ impl KeyIdentityMutations {
 
     /// Sign in with a `login` statement signed by an enrolled device key. Sets the same session
     /// cookie as `login`.
+    ///
+    /// An account of this server with a password also brings `passwordTicket`, from
+    /// `passwordLoginFinish`: single use, valid for 120 seconds, and only for that account.
+    /// Without one, or with one that is used, expired or another account's, the answer is
+    /// `UNAUTHENTICATED`, as for a wrong proof. An account of this server without a password
+    /// signs in with the key alone and gets `mustSetPassword`: its session may only set a
+    /// password, sign out and read `me`. Accounts of other servers sign in with the key alone.
     async fn login_with_key(
         &self,
         ctx: &Context<'_>,
         proof: SignedStatementInput,
+        password_ticket: Option<String>,
     ) -> Result<LoginPayload> {
         let svc = ctx.data::<std::sync::Arc<dyn KeyAuthService>>()?;
         let res = svc
             .login_with_key(LoginWithKeyCmd {
                 proof: proof.into(),
+                password_ticket,
                 remote_ip: crate::auth_context::remote_ip(ctx),
             })
             .await
@@ -60,6 +70,7 @@ impl KeyIdentityMutations {
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
             csrf_token: res.csrf_token,
+            must_set_password: res.must_set_password,
         })
     }
 
@@ -162,12 +173,13 @@ impl KeyIdentityMutations {
         Ok(dto.into())
     }
 
-    /// Create an account from a key identity alone, with no password. The registration mode
+    /// Create an account from a key identity and a password: `passwordRegistration` is the
+    /// OPAQUE `RegistrationUpload` registered with `passwordRegistrationStart`. The registration mode
     /// applies as for `signupWithInvite` (exactly one token in invite-only mode, none in open
     /// mode). An instance invite bound to an email address gives the account that address
     /// (`EMAIL_TAKEN` when another account has it); otherwise the account has no email. Signs
     /// the new account in on the device that signed up, setting the same session and CSRF
-    /// cookies as `signupWithInvite`.
+    /// cookies as `signupWithInvite`, and returns the account's new server share in the clear.
     async fn signup_with_key(
         &self,
         ctx: &Context<'_>,
@@ -185,6 +197,8 @@ impl KeyIdentityMutations {
             input.workspace_invite_token,
             input.proof_of_work,
         )?;
+        let password_registration =
+            decode_bytes(&input.password_registration, "passwordRegistration")?;
         let res = svc
             .signup_with_key(SignupWithKeyCmd {
                 username: input.username,
@@ -192,6 +206,7 @@ impl KeyIdentityMutations {
                 key_log: input.key_log.into_iter().map(Into::into).collect(),
                 device: input.device.into(),
                 proof: input.proof.into(),
+                password_registration,
                 registration_mode: mode.as_ref().clone(),
                 token,
                 proof_of_work,
@@ -213,6 +228,7 @@ impl KeyIdentityMutations {
             user_id: ID(res.user_id.to_string()),
             server_id: res.server_id.map(|id| ID(id.to_string())),
             csrf_token: res.csrf_token,
+            server_share: res.server_share.as_deref().map(encode_bytes),
         })
     }
 }

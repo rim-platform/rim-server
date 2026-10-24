@@ -226,13 +226,16 @@ read in `CHANGELOG.md` first, and the rollback.
 | File | What |
 |---|---|
 | `rim.dump` | `pg_dump -Fc` of the database, checked to read back |
-| `rim-data.tgz` | the `rim_data` volume: server key, franking keys, the link key (`link-key.json`), uploads, the audit files and audit exports |
+| `rim-data.tgz` | the `rim_data` volume: server key, franking keys, the link key (`link-key.json`), the password key (`password-key.json`), uploads, the audit files and audit exports |
 | `env` | `deploy/.env` |
 | `MANIFEST`, `SHA256SUMS` | project, time, server version, checksums |
 
 The recovery key file is never in it; the script warns while it is still on the host. The
 database and the data volume are one set: the server key file must match the key log in the
 database, and the server refuses to start on a mixed set. Never restore one without the other.
+The password key belongs to the same set: the server refuses to start when it is missing while
+the database holds account passwords, and without it every account resets its password with its
+recovery phrase.
 
 With `RIM_BACKUP_AGE_RECIPIENT` set (an `age1…` recipient or a file of recipients), the archive
 is encrypted with [age](https://age-encryption.org) to `….tar.age` and nothing unencrypted is

@@ -226,11 +226,14 @@ reports `https`. These mutations set it, and need no session or CSRF header:
 
 - **Key login.** `keyLoginChallenge` returns `{ challengeId, nonce, expiresAt }`. The client
   signs a `login` statement over the nonce with its device key and calls `loginWithKey(proof)`.
-  The session is bound to that device. `specs/key-identity-v1.md` ("Challenge login") has the
+  The session is bound to that device. An account of this server with a password also proves
+  it first: `passwordLoginStart` and `passwordLoginFinish`, whose ticket goes to
+  `loginWithKey(proof, passwordTicket)` ("Account password" below). `specs/key-identity-v1.md` ("Challenge login") has the
   statement, the audiences and the limits.
-- **Key-only signup.** `signupWithKey` creates the account and signs it in. An instance invite
-  bound to an email address gives the account that address (`EMAIL_TAKEN` when another account
-  has it); otherwise the account has no email.
+- **Key signup.** `signupWithKey` creates the account with its password
+  (`passwordRegistration`, after `passwordRegistrationStart`) and signs it in. An instance
+  invite bound to an email address gives the account that address (`EMAIL_TAKEN` when another
+  account has it); otherwise the account has no email.
 - **Password login.** `login(input: { username, password })`. The username is matched without
   regard to case, since usernames are stored lowercase. An account without a password, such as a
   key-only account or one that enrolled an identity key, cannot sign in this way.
@@ -364,8 +367,9 @@ The header is required on:
 
 Queries and subscriptions never need it. The mutations used before a session exists are exempt:
 `login`, `logout`, `signupWithInvite`, `requestPasswordReset`, `resetPassword`,
-`keyLoginChallenge`, `loginWithKey`, `signupWithKey`, `sendDeviceLinkOffer` and
-`applyRemoteRevocation`. `rotateIdentityKey` and `cancelDeviceLink` are exempt only when the
+`keyLoginChallenge`, `loginWithKey`, `signupWithKey`, `passwordRegistrationStart`,
+`passwordLoginStart`, `passwordLoginFinish`, `passwordResetChallenge`, `passwordResetStart`, `passwordResetFinish`,
+`sendDeviceLinkOffer` and `applyRemoteRevocation`. `rotateIdentityKey` and `cancelDeviceLink` are exempt only when the
 request carries no session cookie. A request is exempt only when every root field of its
 mutation is, counting the fields of named and inline fragments at any depth and fields under
 `@skip` or `@include` whatever their condition.
@@ -404,6 +408,7 @@ a number above 0, so a private server limits nothing but the batch size.
 | `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
 | `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
+| none (fixed) | Account password tries: every `passwordLoginStart` and `passwordChangeStart` counts against the account until a login finishes. Tries 1 to 3 are free; the 4th makes the next wait 1 minute, the 5th 5 minutes, the 6th 15 minutes, the 7th 1 hour, the 8th 4 hours, the 9th 12 hours; the 10th locks the password until a reset with the recovery key. Each `passwordLoginStart` also counts against the address, sharing the 20 failed key sign-ins per 15 minutes. | `RATE_LIMITED` with `retryAfterSeconds` during a wait; `PASSWORD_LOCKED` once locked |
 | none (fixed) | Failed public join link lookups and joins (`publicJoinLinkPreview`, `joinByPublicLink` with an invalid link) per client address, and those a relay makes for its users (`remoteJoinChallenge`, `joinRemoteWorkspace` with a link) per relay server id: 20 within ten minutes cut the address or relay off for an hour. Successful lookups do not count. | `RATE_LIMITED` with `retryAfterSeconds` on every link lookup and join from the address or relay, valid links included |
 
 The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the first
@@ -519,7 +524,7 @@ on the message.
 | Code | Meaning | Extra extensions |
 |---|---|---|
 | `UNAUTHENTICATED` | No valid session, or a sign-in attempt that failed. | |
-| `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation, a password signup on a server whose signups need a key. | |
+| `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation, a password signup on a server whose signups need a key, and every root but `setPasswordStart`, `setPassword`, `logout` and `me` for a session that must set a password first ("set a password first"). | |
 | `NOT_FOUND` | The object does not exist, or is hidden from the caller (`messaging.md` says where). Every invalid public join link answers it with the same message, "not found". | |
 | `VALIDATION` | The input is malformed or out of range, or the feature does not exist in the direct space; the message says what. | |
 | `CONFLICT` | The change conflicts with the current state; the message says how. | |
@@ -536,6 +541,7 @@ on the message.
 | `MLS_COMMIT_REQUIRED` | An encrypted message needs a Commit first. | `reason`: `pendingRemovals` or `noGroup` |
 | `FEATURE_DISABLED` | The feature is off or unavailable on this instance; `serverInfo.features` says why. | `feature` |
 | `REGISTRATION_FULL` | The server holds as many accounts as it accepts (`RIM_LIMIT_ACCOUNTS`) and takes no new one. The message says so and points to running a server or signing up on another one. | |
+| `PASSWORD_LOCKED` | The account's password locked after ten tries without a success; only a reset with the recovery phrase (`passwordResetStart`) opens it. | |
 | `UPSTREAM_UNAVAILABLE` | Another server this request needed could not be reached or gave no verified answer. | `hostServerId` (or null), `origin` when known |
 | `UNAVAILABLE` | A dependency of the server is unavailable. | |
 | `TIMEOUT` | A dependency of the server timed out. | |
@@ -752,3 +758,37 @@ the ones above, plus:
 
 The decision on a remote person's request reaches them as a `JoinRequestDecided` relay item;
 `myJoinRequests` lists only the requests filed on the server answering it.
+
+### Account password
+
+Every account of this server has a password besides its device keys, checked with OPAQUE
+(RFC 9807; `specs/key-identity-v1.md`, "Account password"). The server never sees the
+password. Every OPAQUE message travels as an unpadded base64url string, and the client library
+must use the suite of the spec byte for byte.
+
+| Root | Session | Does |
+|---|---|---|
+| `passwordRegistrationStart(principalId, request): String!` | none | Answers the `RegistrationRequest` of a principal no account here holds, before `signupWithKey`. `CONFLICT` for a principal an account of this server holds. |
+| `signupWithKey(input)` | none | Takes `passwordRegistration`, the `RegistrationUpload`, and answers `serverShare`, the account's new server share, in the clear. |
+| `passwordLoginStart(principalId, request): PasswordLoginStart!` | none | Counts a try and answers `{ loginId, response }`. A principal without a password here gets an answer of the same shape that no password finishes. |
+| `passwordLoginFinish(loginId, credentialFinalization): PasswordLoginFinish!` | none | Checks the password, clears the tries and answers `{ ticket, serverShare, rewraps }`: a single-use ticket valid for 120 seconds, the server share sealed under the login's transport key, and the rewraps, newest first. A wrong password or an unknown, used or expired login is `UNAUTHENTICATED`. |
+| `loginWithKey(proof, passwordTicket): LoginPayload!` | none | For an account with a password, requires a ticket of that account, unexpired and unused, consumed with the new session; otherwise `UNAUTHENTICATED`. Answers `mustSetPassword`. |
+| `passwordChangeStart(credentialRequest, registrationRequest): PasswordChangeStart!` | yes | Counts a try; answers `{ loginId, credentialResponse, registrationResponse }`. `NOT_FOUND` without a password. |
+| `passwordChangeFinish(loginId, credentialFinalization, registrationUpload, rewrap): PasswordChanged!` | yes | Replaces the password, keeps the server share, stores the rewrap (the newest three are kept) and ends every other session of the account. `UNAUTHENTICATED` for a wrong current password. |
+| `passwordResetChallenge(principalId): KeyLoginChallenge!` | none | A challenge for a `password-reset` statement, valid 120 seconds, single use. |
+| `passwordResetStart(statement, registrationRequest): PasswordResetStart!` | none | Verifies the statement against the recovery key of the account's key log head and answers `{ resetId, registrationResponse }`. Every refusal is `UNAUTHENTICATED`. |
+| `passwordResetFinish(resetId, registrationUpload): Boolean!` | none | Replaces the password, keeps the server share, deletes the rewraps, clears the tries and the lock, and ends every session of the account. |
+| `setPasswordStart(registrationRequest): String!`, `setPassword(registrationUpload): SetPasswordPayload!` | the account's | Registers a first password for an account that has none and lifts `mustSetPassword` from its sessions; `setPassword` answers the new `serverShare`. `CONFLICT` when the account has a password. |
+
+**Sign-in.** The client runs the password login first (`passwordLoginStart`, then
+`passwordLoginFinish`), opens what it keeps at rest with the server share, signs the `login`
+statement over a `keyLoginChallenge`, and sends it with the ticket to `loginWithKey`. The login
+id and the ticket are each valid for 120 seconds and once. An account of this server without a password (one that enrolled a
+key before passwords existed) signs in with the key alone and gets `mustSetPassword: true`: its
+session answers `FORBIDDEN` "set a password first" to every root but `setPasswordStart`,
+`setPassword`, `logout` and `me`, and to the WebSocket, uploads, downloads and the routes to
+other servers. A person from another server signs in at a host with the key alone; their
+password lives at their own server.
+
+**Tries.** See "Limits". A wrong password is `UNAUTHENTICATED`, a wait `RATE_LIMITED` with
+`retryAfterSeconds`, and a locked password `PASSWORD_LOCKED`.

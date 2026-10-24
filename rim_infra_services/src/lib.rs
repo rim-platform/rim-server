@@ -2,6 +2,7 @@ pub(crate) mod account_cap;
 /// Public for `rim_server`, whose composition root runs the hourly purge and whose
 /// `account purge` command runs it once.
 pub mod account_deletion;
+pub(crate) mod account_password;
 pub(crate) mod audit;
 #[cfg(test)]
 mod audit_capture;
@@ -72,6 +73,8 @@ pub(crate) mod outbound;
 /// Public for `rim_server`, whose composition root sizes the hasher from its configuration.
 pub mod password_hashing;
 pub(crate) mod password_reset;
+// pub: rim_server loads the key file at boot and hands the key to the provider.
+pub mod password_key;
 pub(crate) mod pin;
 pub(crate) mod pipeline;
 pub(crate) mod plugin_bundle;
@@ -125,6 +128,12 @@ mod auth_unit_tests;
 
 #[cfg(test)]
 mod public_join_link_unit_tests;
+
+#[cfg(test)]
+mod account_password_fakes;
+
+#[cfg(test)]
+mod account_password_unit_tests;
 
 #[cfg(test)]
 mod conversation_unit_tests;

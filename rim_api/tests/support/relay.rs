@@ -21,6 +21,9 @@ use uuid::Uuid;
 
 use super::mls::{MlsDevice, content};
 use super::nodes::{Node, databases_with, start};
+use super::password::{
+    LOGIN_WITH_PASSWORD, TEST_PASSWORD, login_over_http, registration_over_http,
+};
 
 /// Everything a cross-relay test touches, emptied on both databases first.
 pub const RESET: &str = "TRUNCATE TABLE server_key_log_entry, server_descriptor, peer_key_log_entry, \
@@ -414,6 +417,25 @@ pub async fn login_proof(http: &reqwest::Client, node: &Node, keys: &Keys) -> Si
     )
 }
 
+/// Sign in on `node` with the seed's device key and [`TEST_PASSWORD`]. Returns the answer.
+pub async fn password_key_login(http: &reqwest::Client, node: &Node, keys: &Keys) -> Value {
+    let login = login_over_http(http, &node.origin, &keys.state.principal_id, TEST_PASSWORD)
+        .await
+        .expect("the password logs in");
+    let proof = login_proof(http, node, keys).await;
+    http.post(format!("{}/api", node.origin))
+        .json(&json!({
+            "query": LOGIN_WITH_PASSWORD,
+            "variables": login.variables(statement(&proof)),
+        }))
+        .send()
+        .await
+        .expect("login")
+        .json()
+        .await
+        .expect("json")
+}
+
 /// Run `signupWithKey` for the seed on `node`, with `extra` input fields (a token or a
 /// proof-of-work). Returns the answer and the cookies it set.
 pub async fn key_signup(
@@ -427,11 +449,14 @@ pub async fn key_signup(
         .identity
         .device_cert(&keys.state, keys.device_id, &keys.device_key, "Desktop");
     let proof = login_proof(http, node, keys).await;
+    let password_registration =
+        registration_over_http(http, &node.origin, &keys.state.principal_id, TEST_PASSWORD).await;
     let mut input = json!({
         "username": name,
         "keyLog": [statement(&keys.identity.inception())],
         "device": statement(&cert),
         "proof": statement(&proof),
+        "passwordRegistration": password_registration,
     });
     for (field, value) in extra.as_object().into_iter().flatten() {
         input[field] = value.clone();

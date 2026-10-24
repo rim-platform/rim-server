@@ -596,6 +596,13 @@ impl AppServiceProvider for TestAppServiceProvider {
         // No resolver test here calls it, so an unprimed mock is enough.
         Arc::new(rim_services::public_join_link::service::MockPublicJoinLinkService::new())
     }
+
+    fn account_password_service(
+        &self,
+    ) -> Arc<dyn rim_services::account_password::service::AccountPasswordService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::account_password::service::MockAccountPasswordService::new())
+    }
 }
 
 /// `request` on an instance where `disabled` are switched off: request data takes precedence

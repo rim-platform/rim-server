@@ -476,6 +476,26 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                     ),
                     ("device_links", "DELETE FROM device_link WHERE user_id = $1"),
                     (
+                        "account_password",
+                        "DELETE FROM account_password WHERE user_id = $1",
+                    ),
+                    (
+                        "password_logins",
+                        "DELETE FROM password_login WHERE user_id = $1",
+                    ),
+                    (
+                        "password_tickets",
+                        "DELETE FROM password_ticket WHERE user_id = $1",
+                    ),
+                    (
+                        "password_rewraps",
+                        "DELETE FROM password_rewrap WHERE user_id = $1",
+                    ),
+                    (
+                        "password_resets",
+                        "DELETE FROM password_reset WHERE user_id = $1",
+                    ),
+                    (
                         "key_packages",
                         "DELETE FROM mls_key_package WHERE user_id = $1",
                     ),

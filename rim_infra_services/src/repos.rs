@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use rim_core::account_password::repository::AccountPasswordRepository;
 use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository, SessionRepository};
 use rim_core::capability::repository::CapabilityRegistryRepository;
 use rim_core::channel_lens::repository::ChannelLensRepository;
@@ -80,6 +81,7 @@ pub struct AppRepos {
     pub dm_policy_repo: Arc<dyn DmPolicyRepository>,
     pub default_workspace_repo: Arc<dyn DefaultWorkspaceRepository>,
     pub public_join_link_repo: Arc<dyn PublicJoinLinkRepository>,
+    pub account_password_repo: Arc<dyn AccountPasswordRepository>,
 }
 
 #[derive(Clone)]
@@ -376,6 +378,18 @@ impl AppRepos {
             signup: self.for_auth().signup_repos(),
             host_repo: Arc::clone(&self.host_repo),
             relay_abuse_repo: Arc::clone(&self.relay_abuse_repo),
+            account_password_repo: Arc::clone(&self.account_password_repo),
+        }
+    }
+
+    pub fn for_account_password(&self) -> crate::account_password::AccountPasswordRepos {
+        crate::account_password::AccountPasswordRepos {
+            password_repo: Arc::clone(&self.account_password_repo),
+            user_repo: Arc::clone(&self.user_repo),
+            key_identity_repo: Arc::clone(&self.key_identity_repo),
+            key_challenge_repo: Arc::clone(&self.key_challenge_repo),
+            session_repo: Arc::clone(&self.session_repo),
+            host_repo: Arc::clone(&self.host_repo),
         }
     }
 
@@ -759,6 +773,11 @@ impl AppRepos {
             ),
             public_join_link_repo: Arc::new(
                 sea_orm_impl::public_join_link::SeaOrmPublicJoinLinkRepository::new(handle.clone()),
+            ),
+            account_password_repo: Arc::new(
+                sea_orm_impl::account_password::SeaOrmAccountPasswordRepository::new(
+                    handle.clone(),
+                ),
             ),
         }
     }

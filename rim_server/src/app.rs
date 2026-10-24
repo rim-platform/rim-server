@@ -598,6 +598,14 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     .await
     .map_err(|e| io_error("link key")(format!("{e:#}")))?;
     tracing::info!(path = %link_key_file.display(), "link key loaded");
+    let password_key_file = config.password_key_file();
+    let password_key = rim_infra_services::password_key::load_or_create(
+        &password_key_file,
+        repos.account_password_repo.as_ref(),
+    )
+    .await
+    .map_err(|e| io_error("password key")(format!("{e:#}")))?;
+    tracing::info!(path = %password_key_file.display(), "password key loaded");
     key_login_audiences.push(s2s.state.identity.current().server_id().to_string());
     tracing::info!(
         audiences = ?key_login_audiences,
@@ -631,6 +639,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
             minimum_age: instance_policy.minimum_age,
             link_key: Some(link_key),
             link_base: Some(crate::invite_cmd::base_url(config, None)),
+            password_key: Some(password_key),
         },
         Arc::clone(&feature_gate),
         instance_limits,

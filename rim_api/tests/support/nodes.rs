@@ -171,6 +171,15 @@ pub async fn start(database_url: &str, tweak: impl FnOnce(&mut RIMConfig)) -> No
         ..Default::default()
     };
     tweak(&mut config);
+    // A new data directory gets a new password key, under which the passwords earlier tests
+    // stored do not verify; the server refuses to start over them.
+    let conn = pool(database_url, 1).await;
+    conn.execute_unprepared(
+        "TRUNCATE TABLE account_password, password_login, password_rewrap, password_reset",
+    )
+    .await
+    .expect("clear the account passwords");
+    conn.close().await.expect("close");
     let running = rim_server::server::serve(&config, listener)
         .await
         .expect("serve");

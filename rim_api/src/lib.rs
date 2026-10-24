@@ -137,6 +137,7 @@ pub fn build_schema(
         .data(service_provider.instance_operator_service())
         .data(service_provider.dm_policy_service())
         .data(service_provider.public_join_link_service())
+        .data(service_provider.account_password_service())
         .data(service_provider.default_workspace_service())
         .data(presence_manager)
         .data(typing_tracker)
