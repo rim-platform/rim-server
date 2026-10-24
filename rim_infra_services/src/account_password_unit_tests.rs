@@ -29,17 +29,14 @@ mod tests {
     use rim_services::account_password::dto::{
         PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordLoginFinishCmd,
         PasswordLoginStartCmd, PasswordRegistrationStartCmd, PasswordResetChallengeCmd,
-        PasswordResetFinishCmd, PasswordResetStartCmd, SetPasswordCmd, SetPasswordStartCmd,
+        PasswordResetFinishCmd, PasswordResetStartCmd,
     };
     use rim_services::account_password::service::AccountPasswordService;
     use rim_services::key_auth::command::SignedPayload;
     use rim_services::{Actor, ServiceError};
 
-    use crate::account_password::{
-        AccountPasswordRepos, DefaultAccountPasswordService, registration_record,
-        store_new_password,
-    };
-    use crate::account_password_fakes::{FakePasswords, TEST_PASSWORD_KEY, registration_upload};
+    use crate::account_password::{AccountPasswordRepos, DefaultAccountPasswordService};
+    use crate::account_password_fakes::{FakePasswords, TEST_PASSWORD_KEY, store_password};
     use crate::clock::Clock;
     use crate::registration_rate_limiter::RegistrationRateLimiter;
 
@@ -128,14 +125,6 @@ mod tests {
                 .map(|s| s.id)
                 .collect()
         }
-
-        fn flagged(&self, id: SessionId) -> bool {
-            self.0
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|s| s.id == id && s.must_set_password)
-        }
     }
 
     #[async_trait]
@@ -164,7 +153,6 @@ mod tests {
                 user_agent: None,
                 ip: None,
                 device_key_id: None,
-                must_set_password: false,
                 kept: true,
                 secret_hash: None,
                 keep_key_sealed: None,
@@ -226,28 +214,6 @@ mod tests {
 
         async fn revoke_all_for_device(&self, _device: DeviceKeyId) -> RepoResult<u64> {
             Ok(0)
-        }
-
-        async fn require_password(&self, id: SessionId) -> RepoResult<()> {
-            for s in self.0.lock().unwrap().iter_mut().filter(|s| s.id == id) {
-                s.must_set_password = true;
-            }
-            Ok(())
-        }
-
-        async fn clear_password_requirement(&self, user_id: UserId) -> RepoResult<u64> {
-            let mut n = 0;
-            for s in self
-                .0
-                .lock()
-                .unwrap()
-                .iter_mut()
-                .filter(|s| s.user_id == user_id && s.must_set_password)
-            {
-                s.must_set_password = false;
-                n += 1;
-            }
-            Ok(n)
         }
 
         async fn delete_ended(&self, _now: DateTime<Utc>) -> RepoResult<u64> {
@@ -421,17 +387,13 @@ mod tests {
         /// An account with the password `password`, as a signup leaves it.
         async fn account_with_password(&self, seed: u8, password: &[u8]) -> Account {
             let account = self.account(seed);
-            let record =
-                registration_record(&registration_upload(account.principal(), password)).unwrap();
-            store_new_password(
+            store_password(
                 &self.passwords,
-                &TEST_PASSWORD_KEY,
+                account.principal(),
                 account.user_id,
-                record,
-                Utc::now(),
+                password,
             )
-            .await
-            .unwrap();
+            .await;
             account
         }
 
@@ -895,66 +857,6 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ServiceError::Unauthenticated), "{err:?}");
         assert!(w.password_works(&a, b"pw").await);
-    }
-
-    #[tokio::test]
-    async fn a_reset_gives_an_account_without_a_password_one() {
-        let w = world();
-        let a = w.account(1);
-        let statement = w.reset_statement(&a, false).await;
-        w.reset(statement, b"first").await.unwrap();
-        assert!(w.password_works(&a, b"first").await);
-    }
-
-    // ── Setting a first password ────────────────────────────────────────
-
-    #[tokio::test]
-    async fn setting_a_first_password_lifts_the_limit_and_a_second_is_refused() {
-        let w = world();
-        let a = w.account(1);
-        let session = w.session(&a).await;
-        w.sessions.require_password(session).await.unwrap();
-        let (registration, request) = Registration::start(b"pw");
-        let response = w
-            .svc
-            .set_password_start(SetPasswordStartCmd {
-                actor: a.actor(),
-                request,
-            })
-            .await
-            .unwrap();
-        let (upload, _) = registration.finish(&response).unwrap();
-        let set = w
-            .svc
-            .set_password(SetPasswordCmd {
-                actor: a.actor(),
-                upload: upload.clone(),
-            })
-            .await
-            .unwrap();
-        assert_eq!(set.server_share.len(), 32);
-        assert!(!w.sessions.flagged(session));
-        assert!(w.password_works(&a, b"pw").await);
-
-        let (_, request) = Registration::start(b"other");
-        let err = w
-            .svc
-            .set_password_start(SetPasswordStartCmd {
-                actor: a.actor(),
-                request,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
-        let err = w
-            .svc
-            .set_password(SetPasswordCmd {
-                actor: a.actor(),
-                upload,
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
     }
 
     // ── Login finish ────────────────────────────────────────────────────

@@ -7,14 +7,13 @@ use crate::account_password::dto::{
     PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordChangeStartDto, PasswordChangedDto,
     PasswordLoginFinishCmd, PasswordLoginFinishDto, PasswordLoginStartCmd, PasswordLoginStartDto,
     PasswordRegistrationStartCmd, PasswordResetChallengeCmd, PasswordResetFinishCmd,
-    PasswordResetStartCmd, PasswordResetStartDto, SetPasswordCmd, SetPasswordDto,
-    SetPasswordStartCmd,
+    PasswordResetStartCmd, PasswordResetStartDto,
 };
 use crate::key_auth::dto::KeyChallengeDto;
 
 /// The password of local accounts, checked with OPAQUE: registering it before a signup,
-/// running a login whose ticket `loginWithKey` consumes, changing it, resetting it with the recovery
-/// key, and setting it for an account that has none.
+/// running a login whose ticket `loginWithKey` consumes, changing it, and resetting it with the
+/// recovery key.
 ///
 /// Every login start counts as a wrong try until a login finishes: tries 1 to 3 are free, the
 /// 4th to the 9th make the next one wait longer, and the 10th locks the password until a reset.
@@ -109,19 +108,4 @@ pub trait AccountPasswordService: Send + Sync {
     /// `Unauthenticated` when the reset is unknown, used or expired; `Validation` for a
     /// malformed upload.
     async fn reset_finish(&self, cmd: PasswordResetFinishCmd) -> ServiceResult<()>;
-
-    /// Answer the first message of a password registration for the signed-in account, which
-    /// has none.
-    ///
-    /// # Errors
-    /// `Conflict` when the account has a password; `Validation` for an account of another
-    /// server or without a key identity, or a malformed request.
-    async fn set_password_start(&self, cmd: SetPasswordStartCmd) -> ServiceResult<Vec<u8>>;
-
-    /// Store the signed-in account's first password with a new server share, and lift the
-    /// limit from its sessions.
-    ///
-    /// # Errors
-    /// As for [`Self::set_password_start`].
-    async fn set_password(&self, cmd: SetPasswordCmd) -> ServiceResult<SetPasswordDto>;
 }

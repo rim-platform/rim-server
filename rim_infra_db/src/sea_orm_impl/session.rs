@@ -128,27 +128,6 @@ impl SessionRepository for SeaOrmSessionRepository {
         Ok(())
     }
 
-    async fn require_password(&self, id: SessionId) -> RepoResult<()> {
-        session::Entity::update_many()
-            .col_expr(session::Column::MustSetPassword, Expr::value(true))
-            .filter(session::Column::Id.eq(sea_orm::Value::Uuid(Some(id.into()))))
-            .exec(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(())
-    }
-
-    async fn clear_password_requirement(&self, user_id: UserId) -> RepoResult<u64> {
-        let res = session::Entity::update_many()
-            .col_expr(session::Column::MustSetPassword, Expr::value(false))
-            .filter(session::Column::UserId.eq(sea_orm::prelude::Uuid::from(user_id)))
-            .filter(session::Column::MustSetPassword.eq(true))
-            .exec(&self.db)
-            .await
-            .map_err(map_db_err)?;
-        Ok(res.rows_affected)
-    }
-
     async fn revoke_all_for_device(&self, device_key_id: DeviceKeyId) -> RepoResult<u64> {
         let now: DateTime<Utc> = Utc::now();
         let res = session::Entity::update_many()

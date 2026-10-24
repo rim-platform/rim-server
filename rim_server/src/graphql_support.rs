@@ -614,7 +614,6 @@ fragment Inner on Mutation {
                         session_id: Some(session_id),
                         device_key_id: None,
                         expires_at: None,
-                        must_set_password: false,
                         secret_hash: None,
                     })
                 })

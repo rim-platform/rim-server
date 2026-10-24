@@ -48,8 +48,7 @@ checked with strict Ed25519 ([key identity](specs/key-identity-v1.md)).
   password key file `<RIM_DATA_DIR>/password-key.json` (`RIM_PASSWORD_KEY_FILE`), which also
   seals the shares, which `/readyz` checks and which the backups hold; without it every account
   resets its password with its recovery phrase. An account of this server without a password
-  signs in with its key alone and may only set one. People from other servers keep their
-  password at their own server.
+  does not sign in. People from other servers keep their password at their own server.
 - **Keep me signed in.** A key sign-in chooses it. A kept session has persistent cookies; for
   a web client the server also holds a keep key for it, sealed under the password key file,
   which opens the client's data key at start. An unkept session has browser-session cookies and

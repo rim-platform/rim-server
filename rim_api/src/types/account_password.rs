@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use rim_services::ServiceError;
 use rim_services::account_password::dto::{
     PasswordChangeStartDto, PasswordChangedDto, PasswordLoginFinishDto, PasswordLoginStartDto,
-    PasswordResetStartDto, SetPasswordDto,
+    PasswordResetStartDto,
 };
 
 use crate::errors::map_service_error;
@@ -119,21 +119,6 @@ impl From<PasswordResetStartDto> for PasswordResetStart {
         Self {
             reset_id: ID(value.reset_id.to_string()),
             registration_response: encode_bytes(&value.registration_response),
-        }
-    }
-}
-
-/// What `setPassword` returns.
-#[derive(SimpleObject, Clone, Debug)]
-pub struct SetPasswordPayload {
-    /// The account's new server share, in the clear.
-    pub server_share: String,
-}
-
-impl From<SetPasswordDto> for SetPasswordPayload {
-    fn from(value: SetPasswordDto) -> Self {
-        Self {
-            server_share: encode_bytes(&value.server_share),
         }
     }
 }

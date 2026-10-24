@@ -575,7 +575,7 @@ on the message.
 | Code | Meaning | Extra extensions |
 |---|---|---|
 | `UNAUTHENTICATED` | No valid session, or a sign-in attempt that failed. | |
-| `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation, a password signup on a server whose signups need a key, and every root but `setPasswordStart`, `setPassword`, `logout` and `me` for a session that must set a password first ("set a password first"). | |
+| `FORBIDDEN` | The caller may not do this. Also: a session not bound to a device asking for device-only data, a relay-only field on a server that is not a relay, a remote member's account mutation, and a password signup on a server whose signups need a key. | |
 | `NOT_FOUND` | The object does not exist, or is hidden from the caller (`messaging.md` says where). Every invalid public join link answers it with the same message, "not found". | |
 | `VALIDATION` | The input is malformed or out of range, or the feature does not exist in the direct space; the message says what. | |
 | `CONFLICT` | The change conflicts with the current state; the message says how. | |
@@ -823,23 +823,20 @@ must use the suite of the spec byte for byte.
 | `signupWithKey(input)` | none | Takes `passwordRegistration`, the `RegistrationUpload`, and answers `serverShare`, the account's new server share, in the clear. |
 | `passwordLoginStart(principalId, request): PasswordLoginStart!` | none | Counts a try and answers `{ loginId, response }`. A principal without a password here gets an answer of the same shape that no password finishes. |
 | `passwordLoginFinish(loginId, credentialFinalization): PasswordLoginFinish!` | none | Checks the password, clears the tries and answers `{ ticket, serverShare, rewraps }`: a single-use ticket valid for 120 seconds, the server share sealed under the login's transport key, and the rewraps, newest first. A wrong password or an unknown, used or expired login is `UNAUTHENTICATED`. |
-| `loginWithKey(proof, passwordTicket): LoginPayload!` | none | For an account with a password, requires a ticket of that account, unexpired and unused, consumed with the new session; otherwise `UNAUTHENTICATED`. Answers `mustSetPassword`. |
+| `loginWithKey(proof, passwordTicket): LoginPayload!` | none | For an account of this server, requires a ticket of that account, unexpired and unused, consumed with the new session; otherwise `UNAUTHENTICATED`. |
 | `passwordChangeStart(credentialRequest, registrationRequest): PasswordChangeStart!` | yes | Counts a try; answers `{ loginId, credentialResponse, registrationResponse }`. `NOT_FOUND` without a password. |
 | `passwordChangeFinish(loginId, credentialFinalization, registrationUpload, rewrap): PasswordChanged!` | yes | Replaces the password, keeps the server share, stores the rewrap (the newest three are kept) and ends every other session of the account. `UNAUTHENTICATED` for a wrong current password. |
 | `passwordResetChallenge(principalId): KeyLoginChallenge!` | none | A challenge for a `password-reset` statement, valid 120 seconds, single use. |
 | `passwordResetStart(statement, registrationRequest): PasswordResetStart!` | none | Verifies the statement against the recovery key of the account's key log head and answers `{ resetId, registrationResponse }`. Every refusal is `UNAUTHENTICATED`. |
 | `passwordResetFinish(resetId, registrationUpload): Boolean!` | none | Replaces the password, keeps the server share, deletes the rewraps, clears the tries and the lock, and ends every session of the account. |
-| `setPasswordStart(registrationRequest): String!`, `setPassword(registrationUpload): SetPasswordPayload!` | the account's | Registers a first password for an account that has none and lifts `mustSetPassword` from its sessions; `setPassword` answers the new `serverShare`. `CONFLICT` when the account has a password. |
 
 **Sign-in.** The client runs the password login first (`passwordLoginStart`, then
 `passwordLoginFinish`), opens what it keeps at rest with the server share, signs the `login`
 statement over a `keyLoginChallenge`, and sends it with the ticket to `loginWithKey`. The login
-id and the ticket are each valid for 120 seconds and once. An account of this server without a password (one that enrolled a
-key before passwords existed) signs in with the key alone and gets `mustSetPassword: true`: its
-session answers `FORBIDDEN` "set a password first" to every root but `setPasswordStart`,
-`setPassword`, `logout` and `me`, and to the WebSocket, uploads, downloads and the routes to
-other servers. A person from another server signs in at a host with the key alone; their
-password lives at their own server.
+id and the ticket are each valid for 120 seconds and once. An account of this server without a
+password does not sign in: `loginWithKey` answers `UNAUTHENTICATED`, as for a wrong proof. A
+person from another server signs in at a host with the key alone; their password lives at
+their own server.
 
 **Tries.** See "Limits". A wrong password is `UNAUTHENTICATED`, a wait `RATE_LIMITED` with
 `retryAfterSeconds`, and a locked password `PASSWORD_LOCKED`.

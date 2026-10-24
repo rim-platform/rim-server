@@ -4,19 +4,17 @@ use rim_services::Actor;
 use rim_services::account_password::dto::{
     PasswordChangeFinishCmd, PasswordChangeStartCmd, PasswordLoginFinishCmd, PasswordLoginStartCmd,
     PasswordRegistrationStartCmd, PasswordResetChallengeCmd, PasswordResetFinishCmd,
-    PasswordResetStartCmd, SetPasswordCmd, SetPasswordStartCmd,
+    PasswordResetStartCmd,
 };
 use rim_services::account_password::service::AccountPasswordService;
 
-use crate::auth_context::{
-    remote_ip, require_actor, require_actor_before_password, require_session_id,
-};
+use crate::auth_context::{remote_ip, require_actor, require_session_id};
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::account_password::{decode_bytes, encode_bytes};
 use crate::types::{
     KeyLoginChallenge, PasswordChangeStart, PasswordChanged, PasswordLoginFinish,
-    PasswordLoginStart, PasswordResetStart, SetPasswordPayload, SignedStatementInput,
+    PasswordLoginStart, PasswordResetStart, SignedStatementInput,
 };
 
 #[derive(Default)]
@@ -200,44 +198,6 @@ impl AccountPasswordMutations {
         })
         .await
         .map(|()| true)
-        .map_err(map_service_error)
-    }
-
-    /// Start setting a password for the signed-in account, which has none (a session with
-    /// `mustSetPassword`): the OPAQUE `RegistrationRequest`, answered with the
-    /// `RegistrationResponse`. `CONFLICT` when the account has a password.
-    async fn set_password_start(
-        &self,
-        ctx: &Context<'_>,
-        registration_request: String,
-    ) -> Result<String> {
-        let actor = require_actor_before_password(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn AccountPasswordService>>()?;
-        svc.set_password_start(SetPasswordStartCmd {
-            actor: Actor::new(actor),
-            request: decode_bytes(&registration_request, "registrationRequest")?,
-        })
-        .await
-        .map(|response| encode_bytes(&response))
-        .map_err(map_service_error)
-    }
-
-    /// Finish setting a password for the signed-in account with the `RegistrationUpload`.
-    /// Lifts the limit from the account's sessions and returns its new server share.
-    /// `CONFLICT` when the account has a password.
-    async fn set_password(
-        &self,
-        ctx: &Context<'_>,
-        registration_upload: String,
-    ) -> Result<SetPasswordPayload> {
-        let actor = require_actor_before_password(ctx)?;
-        let svc = ctx.data::<std::sync::Arc<dyn AccountPasswordService>>()?;
-        svc.set_password(SetPasswordCmd {
-            actor: Actor::new(actor),
-            upload: decode_bytes(&registration_upload, "registrationUpload")?,
-        })
-        .await
-        .map(Into::into)
         .map_err(map_service_error)
     }
 }

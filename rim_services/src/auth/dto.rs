@@ -82,8 +82,6 @@ pub struct LoginResultDto {
     pub session: AuthSessionDto,
     pub session_token: String,
     pub csrf_token: String,
-    /// The session may only set a password: the local account has none.
-    pub must_set_password: bool,
     /// What the new session keeps and hands the client.
     pub keys: SessionKeysDto,
 }
@@ -148,8 +146,6 @@ pub struct RequestAuthResultDto {
     pub device_key_id: Option<rim_core::key_identity::model::DeviceKeyId>,
     /// When the session expires.
     pub expires_at: Option<DateTime<Utc>>,
-    /// The session may only set a password: its local account has none.
-    pub must_set_password: bool,
     /// The SHA-256 hex of the secret of an unkept session; `None` for a kept one. The
     /// WebSocket checks its `connection_init` against it.
     pub secret_hash: Option<String>,

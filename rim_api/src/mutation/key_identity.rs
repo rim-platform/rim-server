@@ -39,12 +39,11 @@ impl KeyIdentityMutations {
     /// Sign in with a `login` statement signed by an enrolled device key. Sets the same session
     /// cookie as `login`.
     ///
-    /// An account of this server with a password also brings `passwordTicket`, from
-    /// `passwordLoginFinish`: single use, valid for 120 seconds, and only for that account.
-    /// Without one, or with one that is used, expired or another account's, the answer is
-    /// `UNAUTHENTICATED`, as for a wrong proof. An account of this server without a password
-    /// signs in with the key alone and gets `mustSetPassword`: its session may only set a
-    /// password, sign out and read `me`. Accounts of other servers sign in with the key alone.
+    /// An account of this server also brings `passwordTicket`, from `passwordLoginFinish`:
+    /// single use, valid for 120 seconds, and only for that account. Without one, with one that
+    /// is used, expired or another account's, or for an account without a password, the answer
+    /// is `UNAUTHENTICATED`, as for a wrong proof. Accounts of other servers sign in with the
+    /// key alone.
     ///
     /// `keepSignedIn` ("Keep me signed in") sets persistent cookies. Unticked, the cookies last
     /// until the browser closes and the session answers only requests that carry
@@ -85,7 +84,6 @@ impl KeyIdentityMutations {
         Ok(LoginPayload {
             user_id: ID(res.user_id.to_string()),
             csrf_token: res.csrf_token,
-            must_set_password: res.must_set_password,
             session_secret: res.keys.session_secret,
             keep_key: res.keys.keep_key.as_deref().map(encode_bytes),
         })

@@ -4,7 +4,7 @@ use rim_services::operator::InstanceOperatorService;
 use rim_services::user::command::GetMeQuery;
 use rim_services::user::service::UserService;
 
-use crate::auth_context::require_actor_before_password;
+use crate::auth_context::require_actor;
 use crate::types::User;
 
 #[derive(Default)]
@@ -13,7 +13,7 @@ pub(crate) struct ProfileQueries;
 #[Object]
 impl ProfileQueries {
     async fn me(&self, ctx: &Context<'_>) -> Result<User> {
-        let actor = require_actor_before_password(ctx)?;
+        let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn UserService>>()?;
 
         let dto = svc

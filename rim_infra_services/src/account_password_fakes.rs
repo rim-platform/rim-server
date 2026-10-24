@@ -17,6 +17,7 @@ use rim_core::account_password::repository::AccountPasswordRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use rim_core::user::model::UserId;
 
+use crate::account_password::{registration_record, store_new_password};
 use crate::password_key::PasswordKey;
 
 /// One password key for every unit test.
@@ -31,6 +32,27 @@ pub(crate) fn registration_upload(principal_id: &str, password: &[u8]) -> Vec<u8
         server_registration_start(TEST_PASSWORD_KEY.setup(), &request, principal_id.as_bytes())
             .expect("registration response");
     flow.finish(&response).expect("registration upload").0
+}
+
+/// The password of the accounts the unit tests sign in with.
+pub(crate) const TEST_PASSWORD: &[u8] = b"correct horse battery staple";
+
+/// Give `user_id`, holder of `principal_id`, the password `password` with a new server share,
+/// as a signup leaves it.
+///
+/// # Panics
+/// When the account already has a password.
+pub(crate) async fn store_password(
+    repo: &FakePasswords,
+    principal_id: &str,
+    user_id: UserId,
+    password: &[u8],
+) {
+    let record = registration_record(&registration_upload(principal_id, password))
+        .expect("registration record");
+    store_new_password(repo, &TEST_PASSWORD_KEY, user_id, record, Utc::now())
+        .await
+        .expect("store the password");
 }
 
 /// What [`FakePasswords`] stores.

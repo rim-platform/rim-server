@@ -1,9 +1,8 @@
 //! The password of local accounts, checked with OPAQUE.
 //!
 //! [`DefaultAccountPasswordService`] answers the password roots that stand on their own:
-//! registration before a signup, the login start and finish, change, reset with the recovery
-//! key, and setting a first password. A finished login issues a single-use ticket that the key
-//! sign-in consumes. Storing the password a signup registered is a function of this module that
+//! registration before a signup, the login start and finish, change, and reset with the
+//! recovery key. A finished login issues a single-use ticket that the key sign-in consumes. Storing the password a signup registered is a function of this module that
 //! takes a repository, so `key_auth` runs it inside the signup's transaction.
 //!
 //! The server never sees the password. It stores the OPAQUE registration record and the
@@ -44,8 +43,7 @@ use rim_services::account_password::dto::{
     PasswordChangeStartCmd, PasswordChangeStartDto, PasswordChangedDto, PasswordLoginFinishCmd,
     PasswordLoginFinishDto, PasswordLoginStartCmd, PasswordLoginStartDto,
     PasswordRegistrationStartCmd, PasswordResetChallengeCmd, PasswordResetFinishCmd,
-    PasswordResetStartCmd, PasswordResetStartDto, SetPasswordCmd, SetPasswordDto,
-    SetPasswordStartCmd,
+    PasswordResetStartCmd, PasswordResetStartDto,
 };
 use rim_services::account_password::service::AccountPasswordService;
 use rim_services::command::rate_limit::RateLimitDecision;
@@ -854,10 +852,6 @@ impl AccountPasswordService for DefaultAccountPasswordService {
             store_new_password(repos.password_repo.as_ref(), key, user_id, record, now).await?;
         }
         let rewraps = repos.password_repo.delete_rewraps(user_id).await?;
-        repos
-            .session_repo
-            .clear_password_requirement(user_id)
-            .await?;
         let ended_sessions = repos.session_repo.revoke_all_for_user(user_id).await?;
         Self::commit(scope).await?;
         self.session_revocations.revoke_user(user_id);
@@ -871,52 +865,5 @@ impl AccountPasswordService for DefaultAccountPasswordService {
             "password reset with the recovery key; every session ended"
         );
         Ok(())
-    }
-
-    #[instrument(name = "account_password.set_password_start", skip_all, fields(actor_id = %cmd.actor.user_id))]
-    async fn set_password_start(&self, cmd: SetPasswordStartCmd) -> ServiceResult<Vec<u8>> {
-        check_message(&cmd.request, "request")?;
-        let principal_id = self.own_principal(cmd.actor.user_id).await?;
-        if self
-            .repos
-            .password_repo
-            .get(cmd.actor.user_id)
-            .await?
-            .is_some()
-        {
-            return Err(ServiceError::Conflict(
-                "this account already has a password".to_string(),
-            ));
-        }
-        server_registration_start(self.key()?.setup(), &cmd.request, principal_id.as_bytes())
-            .map_err(|_| malformed("request"))
-    }
-
-    #[instrument(name = "account_password.set_password", skip_all, fields(actor_id = %cmd.actor.user_id))]
-    async fn set_password(&self, cmd: SetPasswordCmd) -> ServiceResult<SetPasswordDto> {
-        let user_id = cmd.actor.user_id;
-        let now = self.clock.now();
-        let record = registration_record(&cmd.upload)?;
-        self.own_principal(user_id).await?;
-        let key = self.key()?;
-
-        let (scope, repos) = self.begin().await?;
-        let share =
-            store_new_password(repos.password_repo.as_ref(), key, user_id, record, now).await?;
-        let lifted = repos
-            .session_repo
-            .clear_password_requirement(user_id)
-            .await?;
-        Self::commit(scope).await?;
-        info!(
-            target: "audit",
-            event = "password_set",
-            user_id = %user_id,
-            lifted_sessions = lifted,
-            "password set for an account that had none"
-        );
-        Ok(SetPasswordDto {
-            server_share: share.to_vec(),
-        })
     }
 }

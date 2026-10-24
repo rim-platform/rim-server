@@ -325,8 +325,7 @@ async fn graphql_handler(
             return response;
         }
         let actor_ctx = AuthActorCtx::new(auth.user_id, auth.session_id)
-            .with_device_key_id(auth.device_key_id)
-            .with_must_set_password(auth.must_set_password);
+            .with_device_key_id(auth.device_key_id);
         let actor_user_id = actor_ctx.actor().map(|u| u.to_string());
 
         // The client address for the rate-limiting resolvers (e.g. previewInviteToken): the
@@ -439,10 +438,6 @@ async fn graphql_ws_handler(
             "authentication required",
         ));
     };
-    // A session that must set a password first runs no subscription.
-    if auth.must_set_password {
-        return Err(actix_web::error::ErrorForbidden("set a password first"));
-    }
 
     let actor_ctx =
         AuthActorCtx::new(Some(actor), Some(session_id)).with_device_key_id(auth.device_key_id);
