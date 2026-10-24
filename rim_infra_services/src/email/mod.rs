@@ -63,25 +63,22 @@ pub trait EmailSender: Send + Sync {
 mod tests {
     use super::*;
 
-    /// Regression guard: `body_text`/`body_html` can carry a raw, usable reset/invite token
-    /// embedded in a link — `Debug` must never print them.
+    /// Regression guard: `body_text`/`body_html` can carry a raw, usable invite token embedded
+    /// in a link — `Debug` must never print them.
     #[test]
     fn debug_redacts_bodies_but_keeps_to_and_subject() {
         let msg = EmailMessage {
             to: "user@example.com".to_string(),
-            subject: "Reset your RIM password".to_string(),
-            body_text:
-                "Reset your password: https://rim.example.com/reset-password/rim_rst_secrettoken"
-                    .to_string(),
+            subject: "You're invited to RIM".to_string(),
+            body_text: "Join: https://rim.example.com/join/rim_inv_secrettoken".to_string(),
             body_html: Some(
-                "<a href=\"https://rim.example.com/reset-password/rim_rst_secrettoken\">Reset</a>"
-                    .to_string(),
+                "<a href=\"https://rim.example.com/join/rim_inv_secrettoken\">Join</a>".to_string(),
             ),
         };
         let debug_str = format!("{msg:?}");
         assert!(debug_str.contains("user@example.com"));
-        assert!(debug_str.contains("Reset your RIM password"));
-        assert!(!debug_str.contains("rim_rst_secrettoken"));
+        assert!(debug_str.contains("You're invited to RIM"));
+        assert!(!debug_str.contains("rim_inv_secrettoken"));
         assert!(debug_str.contains("[REDACTED]"));
     }
 

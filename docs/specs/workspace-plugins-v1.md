@@ -14,8 +14,8 @@ registry whose entries carry manifests signed by their publisher._
 2. A publisher is a person: their identity key (key-identity-v1, version 2) signs, with context
    `rim.plugin-manifest.v1\0`, a payload embedding the exact `rim-plugin.json` text and binding the
    version and the bundle's SHA-256 and size (or a git commit and tree hash).
-3. The server verifies against the publisher's key log (its own copy when the publisher is enrolled
-   here, else one the submitter supplies, as for `enrollIdentityKey`). Every client verifies again
+3. The server verifies against the publisher's key log (its own copy when the publisher has an
+   account here, else one the submitter supplies). Every client verifies again
    before consent; the server is never trusted for the signature.
 4. A statement stays valid across identity rotations; a later recovery rotation invalidates it.
 5. Owners and Moderators manage entries; Members and Guests read. `workspacePlugins`,

@@ -43,27 +43,27 @@ const REGISTRATION_FULL: &str = "{ serverInfo { registrationFull } }";
 /// The ways an account comes to exist here, each refused at the cap.
 #[derive(Debug, Clone, Copy)]
 enum Path {
-    KeyInstanceInvite,
-    KeyWorkspaceInvite,
-    KeyOpen,
-    KeyAdoptsRemote,
+    InstanceInvite,
+    WorkspaceInvite,
+    Open,
+    AdoptsRemote,
 }
 
 impl Path {
     fn mode(self) -> RegistrationMode {
         match self {
-            Self::KeyInstanceInvite | Self::KeyWorkspaceInvite => RegistrationMode::InviteOnly,
-            Self::KeyOpen | Self::KeyAdoptsRemote => RegistrationMode::Open,
+            Self::InstanceInvite | Self::WorkspaceInvite => RegistrationMode::InviteOnly,
+            Self::Open | Self::AdoptsRemote => RegistrationMode::Open,
         }
     }
 
     /// The identity seed of a path; its device's seed is ten more.
     fn seed(self) -> u8 {
         match self {
-            Self::KeyInstanceInvite => 31,
-            Self::KeyOpen => 32,
-            Self::KeyAdoptsRemote => 33,
-            Self::KeyWorkspaceInvite => 34,
+            Self::InstanceInvite => 31,
+            Self::Open => 32,
+            Self::AdoptsRemote => 33,
+            Self::WorkspaceInvite => 34,
         }
     }
 
@@ -80,22 +80,22 @@ impl Path {
                 .data(RemoteIp::new("198.51.100.8"))
         };
         match self {
-            Self::KeyWorkspaceInvite => {
+            Self::WorkspaceInvite => {
                 key(
                     "cap_key_workspace",
                     json!({ "workspaceInviteToken": "rim_cap_workspace" }),
                 )
                 .await
             }
-            Self::KeyInstanceInvite => {
+            Self::InstanceInvite => {
                 key(
                     "cap_key_invite",
                     json!({ "instanceInviteToken": "rim_cap_key_instance" }),
                 )
                 .await
             }
-            Self::KeyOpen => key("cap_key_open", json!({})).await,
-            Self::KeyAdoptsRemote => key("cap_adopted", json!({})).await,
+            Self::Open => key("cap_key_open", json!({})).await,
+            Self::AdoptsRemote => key("cap_adopted", json!({})).await,
         }
     }
 }
@@ -149,7 +149,7 @@ async fn every_signup_path_is_refused_at_the_cap_and_admitted_with_one_place_mor
         vec![uuid::Uuid::from(gone.id).into()],
     )
     .await;
-    let remote = Path::KeyAdoptsRemote.identity();
+    let remote = Path::AdoptsRemote.identity();
     let remote_state = KeyState::from_inception(&remote.inception()).expect("inception");
     let remote_id = SeaOrmHostRepository::new(ctx.db.clone())
         .create_remote_user(NewRemoteUser {
@@ -172,10 +172,10 @@ async fn every_signup_path_is_refused_at_the_cap_and_admitted_with_one_place_mor
     );
 
     for path in [
-        Path::KeyInstanceInvite,
-        Path::KeyWorkspaceInvite,
-        Path::KeyOpen,
-        Path::KeyAdoptsRemote,
+        Path::InstanceInvite,
+        Path::WorkspaceInvite,
+        Path::Open,
+        Path::AdoptsRemote,
     ] {
         let count = local_accounts(&ctx).await;
         let capped = |accounts| {

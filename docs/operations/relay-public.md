@@ -504,9 +504,9 @@ or a backup of `/data` was exposed.
 ### A database leak
 
 What a dump holds: accounts and who invited them, key logs, devices and cards (public anyway),
-session token hashes, password hashes of the few password accounts, contacts, DM requests and
-their senders' cards, queued host events (plaintext channel events are readable, DMs are
-MLS-encrypted), abuse reports, blocked emails. No private key: the server and franking keys are
+session token hashes, OPAQUE password records (no guessing without the password key file),
+contacts, DM requests and their senders' cards, queued host events (plaintext channel events are
+readable, DMs are MLS-encrypted), abuse reports, blocked emails. No private key: the server and franking keys are
 files in `/data`.
 
 1. End every session: `rim-sql -c 'UPDATE session SET revoked_at = now() WHERE revoked_at IS NULL'`.

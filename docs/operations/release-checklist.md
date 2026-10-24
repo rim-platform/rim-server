@@ -39,9 +39,6 @@ release is announced (section 9). Later releases keep the order as written.
       - Probation: `RIM_PROBATION_HOURS`, `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
 
       `deploy/.env.example`, "Request limits" and "Instance limits", says what each one limits.
-- [ ] `RIM_SIGNUP_REQUIRE_KEYS` stays on (the default) in the deployment's `deploy/.env`, and the
-      packaged desktop client and the web client both sign up with a key against it. A
-      deployment that sets it to `false` says why here.
 - [ ] The packaged desktop client and the web client are run by hand against the HTTPS
       deployment being released, and every finding is fixed or filed as an issue.
 - [ ] The upgrade, rollback and restore drill of section 4 ran for this release, with its date

@@ -9,16 +9,17 @@ _Algorithm agility: statement format version 2 tags every key and signature with
 payload caps fit hybrid post-quantum keys, and the server indexes device keys by a hash.
 Version 1 statements stay valid. See "Algorithms and statement versions"._
 
-_Key-only signup: `signupWithKey` creates an account from a key
-identity alone, with no password and no email unless an email-bound invite gives one, so
-`user.password_hash` and `user.email` are nullable. See "Key-only signup"._
+_Key-only signup: `signupWithKey` creates an account from a key identity and an account
+password, with no email unless an email-bound invite gives one, so `user.email` is nullable.
+See "Key-only signup"._
 
 _Account password: a local account also has a password, checked with OPAQUE and proved at every
 sign-in together with the device key; the recovery key resets it. See "Account password
 (OPAQUE)"._
 
-_Keys by default: `RIM_SIGNUP_REQUIRE_KEYS` (on unless `false`) refuses every password signup,
-and the desktop and web clients both sign up with a key. See "Signup policy"._
+_One kind of account (amended 2026-10-24): the accounts with a username and an Argon2
+password, their email reset and the enrollment of a key on such an account are gone. Every
+local account signs up with a key identity and an account password._
 
 ## Scope
 
@@ -26,13 +27,9 @@ and the desktop and web clients both sign up with a key. See "Signup policy"._
   has no database, HTTP or GraphQL code, so the Tauri client and later the relay can reuse it.
 - **Storage**: key columns on the existing `user` row, plus `key_log_entry`, `device_key`,
   `profile_card` and `key_challenge` tables, and `session.device_key_id`.
-- **`KeyAuthService`** with GraphQL mutations to enroll a key on an existing account, add and
-  revoke devices, rotate or recover the identity key, publish a profile card, and sign in with a
-  device key through a single-use challenge. Key login issues the same session cookie as
-  password login.
-- **Password sign-in and password reset are refused** for an account once it has enrolled a
-  key.
-- **Password signup is refused** while `RIM_SIGNUP_REQUIRE_KEYS` is on, which is the default.
+- **`KeyAuthService`** with GraphQL mutations to sign up with a key identity, add and revoke
+  devices, rotate or recover the identity key, publish a profile card, and sign in with a
+  device key and the account password through a single-use challenge.
 
 Defined elsewhere: device linking (`device-linking-v1.md`), plugin manifest signing
 (`workspace-plugins-v1.md`) and remote users (`server-to-server-v1.md`). The recovery phrase and
@@ -155,8 +152,8 @@ principalId = "rimp1_" + base64url(SHA-256("rim.principal.v1\0" || inception pay
 
 So the id commits to both the first identity key and the recovery key, survives every rotation,
 and cannot be derived for keys other than those in that exact inception. The log and
-certificates are public, so a server additionally requires proof that the enrolling device holds
-its key (see Enrollment) before it lets an account carry a principal id.
+certificates are public, so a server additionally requires proof that the signing-up device holds
+its key (see "Key-only signup") before it lets an account carry a principal id.
 
 Every later entry is a **rotation**:
 
@@ -234,89 +231,52 @@ the `host[:port]` the client connects to (lowercase is safest; servers compare i
 case-insensitively), so a server that receives a proof cannot relay it to another server.
 
 Each challenge serves one purpose. One from `keyLoginChallenge` is a login challenge, consumed by
-`loginWithKey`, `signupWithKey` or `enrollIdentityKey`. One a host issues for joining a workspace
-through a relay (`server-to-server-v1.md` §Joining) is a join challenge, bound to that relay and
-consumed only by its join; the three mutations refuse it, although the proof over it has the
+`loginWithKey` or `signupWithKey`. One a host issues for joining a workspace through a relay
+(`server-to-server-v1.md` §Joining) is a join challenge, bound to that relay and consumed only
+by its join; the two mutations refuse it, although the proof over it has the
 same format, so a relay never turns a person's join proof into a session.
 
 ## Server rules
-
-### Enrollment
-
-`enrollIdentityKey(input: { keyLog, device, proof })`, signed in with a password session:
-
-1. The whole log (at most 256 entries) is replayed and verified from the inception; the device
-   certificate must be signed by the head identity key.
-2. `proof` is a `login` statement (same format and context as for challenge login) signed by
-   the enrolling device's key over a fresh `keyLoginChallenge`, naming this log's principal id,
-   the certificate's device id and this server's audience. The challenge is consumed. Without
-   it, anyone who had seen a person's log and a device certificate (every server they use
-   holds them) could enroll that principal on another account elsewhere.
-3. The account must not have a principal id yet, and no other account on this server may have
-   this one (both `CONFLICT`).
-4. The server stores the log and the device, sets `user.principal_id` and `user.identity_key`,
-   binds **the enrolling session to the new device**, so revoking that device later ends it,
-   and **ends every other session of the account**, all in one transaction, then closes those
-   sessions' live connections. None of them is bound to a device at that moment, and the
-   password they signed in with no longer signs in (rule 5).
-5. From then on the password no longer signs in (`login` answers `UNAUTHENTICATED`, with the
-   same timing as a wrong password), `requestPasswordReset` sends nothing, and an outstanding
-   reset link is refused with `FORBIDDEN`. A `login` still checking the password while the
-   enrollment commits is refused the same way: it creates its session under the user row lock
-   the enrollment holds, after reading the account again.
-
-`logoutOtherSessions` stays for every account: it ends every session of the account but the
-caller's and answers how many.
-
-### Signup policy
-
-`RIM_SIGNUP_REQUIRE_KEYS` (boolean, default `true`) refuses every password signup:
-`signupWithInvite` answers `FORBIDDEN` (`password signup is turned off on this server; sign up
-with a key`) in every registration mode, whether it carries an instance invite, a workspace
-invite or no token, and spends nothing. `serverInfo.signupRequiresKeys` reports the setting, so
-a client offers only the key signup. `signupWithKey` is unaffected, and so is password sign-in:
-an existing password account that has not enrolled a key still signs in with `login`. `false`
-accepts password signups again. The registration modes, the proof-of-work of `pow` mode and the
-token rules are the same either way.
 
 ### Key-only signup
 
 `signupWithKey(input: { username, displayName, keyLog, device, proof, passwordRegistration,
 instanceInviteToken, workspaceInviteToken })`, no session needed, creates an account from a key
-identity and an account password ("Account password (OPAQUE)"): no password hash, and no email
-unless an email-bound invite gives one (rule 1).
+identity and an account password ("Account password (OPAQUE)"), with no email unless an
+email-bound invite gives one (rule 1).
 
-1. The registration mode applies as for `signupWithInvite`. In invite-only mode exactly one
-   token is required, checked and consumed as by the password signup of its kind: an instance
-   invite creates an account with no workspace (`serverId` null), a workspace invite also joins
-   its server. An instance invite bound to an email address gives the new account that
-   address; the signup names no address of its own. The address passes the checks of a password
-   signup: one an operator blocked is `VALIDATION` (`this email cannot sign up here`) and one
-   another account holds is `EMAIL_TAKEN`, and either refusal leaves the invite unspent. In open mode no token may be given, and the signup
-   counts against the same per-IP limit as an open password signup. A wrong number of tokens is
+1. The registration mode decides the token. In invite-only mode exactly one token is required,
+   checked before the transaction and consumed inside it: an instance invite creates an account
+   with no workspace (`serverId` null), a workspace invite also joins its server. In pow mode
+   the signup gives one token or a proof-of-work. An instance invite bound to an email address
+   gives the new account that address; the signup names no address of its own. An address an
+   operator blocked is `VALIDATION` (`this email cannot sign up here`) and one another account
+   holds is `EMAIL_TAKEN`, and either refusal leaves the invite unspent. In open mode no token
+   may be given, and the signup counts against a per-IP limit (20 per 10 minutes). A wrong
+   number of tokens is `VALIDATION`.
+2. The identity is verified: the whole log, at most 256 entries, replays from the inception;
+   the certificate is signed by the head identity key; the proof is a `login` statement (same
+   format and context as for challenge login) signed by that device's key over a fresh
+   `keyLoginChallenge`, naming this log's principal id, the certificate's device id and this
+   server's audience. The challenge is consumed. Without the proof, anyone who had seen a
+   person's log and a device certificate (every server they use holds them) could sign that
+   principal up elsewhere. No other account here may hold the principal id (`CONFLICT`). The
+   username is 3 to 32 ASCII letters, digits, `_` and `-`, not starting with `r_` or
+   `deleted-` and not reserved, stored trimmed and in lowercase, and must be free in any case
+   (`CONFLICT`); `displayName` follows the display name rules (invisible characters removed but
+   those emoji and scripts need, whitespace collapsed, at most 64 characters, not reserved;
+   `docs/api.md`) and defaults to the username.
+3. In one transaction the server creates the user with `email` null or the email-bound
+   invite's address, and `principal_id` and `identity_key` set, stores the log and the device,
+   consumes the token (or joins the server), stores the account password with a new server
+   share, and creates a session **bound to the device**, recording the device's `lastUsedAt`.
+   It answers `{ userId, serverId, serverShare }` (the share in the clear) and sets the session
+   and CSRF cookies. Of two signups racing for one principal, the unique index refuses the
+   second (`CONFLICT`). `passwordRegistration` that is not an OPAQUE `RegistrationUpload` is
    `VALIDATION`.
-2. The identity is verified as at enrollment (rules 1 and 2): the whole log, at most 256
-   entries, replays from the inception; the certificate is signed by the head identity key; the
-   proof is a `login` statement by that device over a fresh `keyLoginChallenge`, naming this
-   log's principal id, the certificate's device id and this server's audience. The challenge is
-   consumed. No other account here may hold the principal id (`CONFLICT`). The username follows
-   the password signup's rules and must be free (`CONFLICT`); `displayName` follows the display
-   name rules of every signup (invisible characters removed but those emoji and scripts need,
-   whitespace collapsed, at most 64 characters, not reserved; `docs/api.md`) and defaults to
-   the username.
-3. In one transaction the server creates the user with `password_hash` null, `email` null or
-   the email-bound invite's address, and `principal_id` and `identity_key` set, stores the log
-   and the device, consumes the token (or joins the server), stores the account password with a
-   new server share, and creates a session **bound to the device**, recording the device's
-   `lastUsedAt`. It answers `{ userId, serverId, serverShare }` (the share in the clear) and sets
-   the same session and CSRF cookies as `signupWithInvite`. Of two signups racing for one
-   principal, the unique index refuses the second (`CONFLICT`). `passwordRegistration` that is
-   not an OPAQUE `RegistrationUpload` is `VALIDATION`.
-4. A key account has no password hash. `login` answers `UNAUTHENTICATED` with the same timing as
-   a wrong password, `requestPasswordReset` sends nothing, and `resetPassword` is `FORBIDDEN`, as
-   for an enrolled account. Its account password is the OPAQUE one, which only works together
-   with a device key.
-5. Nothing emails an account without an email address: notification digests skip it.
+4. Nothing emails an account without an email address: notification digests skip it.
+
+`logoutOtherSessions` ends every session of the account but the caller's and answers how many.
 
 ### Challenge login
 
@@ -335,8 +295,8 @@ unless an email-bound invite gives one (rule 1).
 5. On success it locks the user row, reads the device again (a revocation that committed in the
    meantime refuses the login), consumes the ticket in the same transaction as the session (it
    must be this account's, unexpired and unused; otherwise `UNAUTHENTICATED`), creates a session
-   bound to the device, records the device's `lastUsedAt`, and sets the same session and CSRF
-   cookies as `login`.
+   bound to the device, records the device's `lastUsedAt`, and sets the session and CSRF
+   cookies.
 6. Every refusal is `UNAUTHENTICATED` with no detail, except a valid proof from a **revoked**
    device, which is `FORBIDDEN` so the client can tell the person to link the device again. A
    proof is valid here only when it passes every check of step 3: revocation is looked at after
@@ -371,14 +331,14 @@ mutation, because an identity rotation is accepted on the strength of that sessi
 
 - An **identity rotation** needs a session of that account. Devices stay enrolled. It is
   refused (`VALIDATION`, `a key log may have at most 256 entries`) when the log already has 256
-  entries, the same cap as at enrollment, so a log grown by identity rotations can always be
-  enrolled on another server.
+  entries, the same cap as at signup, so a log grown by identity rotations can always sign up on
+  another server.
 - A **recovery rotation** works **without a session** (the person lost every device). It must
   come with a certificate for a new device under the new identity key. The server appends the
   entry, **revokes every device and ends every session** of the account, then enrolls the new
   device, which can sign in right away. The 256-entry cap does not stop a recovery: being
   locked out of the account is worse than a log too long to carry elsewhere. A log that
-  recoveries took past 256 entries is refused by enrollment on other servers. Anonymous attempts
+  recoveries took past 256 entries is refused by a signup on other servers. Anonymous attempts
   count against the same per-IP failure limit as logins, whether they succeed or not. An anonymous rotation for a principal
   this server does not know is `UNAUTHENTICATED`; other refusals carry the validation reason,
   so they show whether a principal is enrolled here. That is not secret: `User.principalId` is
@@ -393,7 +353,7 @@ mutation, because an identity rotation is accepted on the strength of that sessi
   recovery entry, ending the person's direct sessions there and the delegations of those
   devices.
 
-Every write that depends on the log (enroll, add, revoke, rotate, publish) runs in one
+Every write that depends on the log (add, revoke, rotate, publish) runs in one
 transaction with the user row locked (`SELECT … FOR UPDATE`), so two of them for one account
 never interleave.
 
@@ -402,14 +362,14 @@ never interleave.
 | Where | What |
 |---|---|
 | `user.kind` | `local` (default) or `remote`; `remote` is a person whose relay is another server (`server-to-server-v1.md`) |
-| `user.principal_id`, `user.identity_key` | Null until enrollment, set together; `principal_id` unique; `identity_key` is the current identity key in tagged form |
-| `user.password_hash`, `user.email` | `password_hash` is null for a key-only account, and so is `email` unless an email-bound invite gave one. `CHECK (password_hash IS NOT NULL OR principal_id IS NOT NULL)`: a key-only account always has a principal. Migration `key_only_signup`'s `down` refuses to run while a row has either null |
+| `user.principal_id`, `user.identity_key` | Set together at signup; `principal_id` unique; `identity_key` is the current identity key in tagged form. `CHECK (principal_id IS NOT NULL OR deleted_at IS NOT NULL)`: a live account always has a principal. Migration `remove_password_accounts` dropped `user.password_hash` and refuses to run while a live account has no principal |
+| `user.email` | Null unless an email-bound invite gave one |
 | `user.home_relay` | The relay of a `remote` user (`server-to-server-v1.md`); null for local users |
 | `key_log_entry` | `(user_id, seq)` primary key, `entry_type` inception or rotate, payload, signature |
 | `device_key` | `public_key` in tagged form, `key_hash` = SHA-256 of that text (32 bytes), certificate as signed, `key_seq`, `added_at`, `last_used_at`, `revoked_at` and the signed revocation; unique `(user_id, device_id)` and `(user_id, key_hash)` |
 | `profile_card` | One row per user, the newest card as signed |
 | `key_challenge` | Nonce, expiry, `used_at`, `purpose` (`login`, `password_reset`, or `join` with the relay's server id in `relay_server_id`); expired rows are deleted when new challenges are issued |
-| `session.device_key_id` | The device a session belongs to; null for password sessions not bound to a device |
+| `session.device_key_id` | The device a session belongs to |
 | `account_password` | Per local account: the OPAQUE registration record, the server share sealed under the password key, `failed_attempts`, `next_attempt_at`, `locked_at` |
 | `password_login` | The server's OPAQUE login state between start and finish (`login` or `change`), 120 seconds; the finish deletes it |
 | `password_ticket` | A finished password login's ticket, by the SHA-256 hex of its token, with the account and a 120-second expiry; the key sign-in consumes it |
@@ -427,9 +387,8 @@ id move.
 ## GraphQL
 
 ```graphql
-type User { principalId: String … }            # null until the account enrolls a key; set at key-only signup
+type User { principalId: String … }            # set at signup; null only for a purged account that never had one
 type DeviceKey { publicKey: String … }         # tagged: "ed25519:…"
-type ServerInfo { signupRequiresKeys: Boolean! … }   # true: signupWithInvite is FORBIDDEN
 
 input SignedStatementInput { payload: String!  signature: String! }
 type SignedStatement { payload: String!  signature: String! }
@@ -453,8 +412,7 @@ type Mutation {
   keyLoginChallenge: KeyLoginChallenge!
   loginWithKey(proof: SignedStatementInput!, passwordTicket: String): LoginPayload!
   # LoginPayload { userId csrfToken sessionSecret keepKey }
-  enrollIdentityKey(input: EnrollIdentityKeyInput!): KeyIdentity!   # ends the account's other sessions
-  signupWithKey(input: SignupWithKeyInput!): SignupWithInvitePayloadGql!   # { userId, serverId, serverShare }
+  signupWithKey(input: SignupWithKeyInput!): SignupWithKeyPayload!   # { userId, serverId, serverShare }
   addDeviceKey(certificate: SignedStatementInput!): DeviceKey!
   revokeDeviceKey(revocation: SignedStatementInput!): DeviceKey!
   rotateIdentityKey(input: RotateIdentityKeyInput!): KeyIdentity!

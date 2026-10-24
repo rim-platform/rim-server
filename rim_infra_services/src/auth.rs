@@ -59,7 +59,7 @@ pub struct DefaultAuthService {
     invite_email_rate_limiter: Option<RegistrationRateLimiter>,
     /// Told of every session a logout ends, so the session's live connections close.
     session_revocations: std::sync::Arc<dyn SessionRevocations>,
-    /// The cap on local accounts the key signup checks.
+    /// The cap on local accounts `registrationFull` and the signup capacity check read.
     account_cap: AccountCap,
 }
 

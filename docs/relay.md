@@ -279,7 +279,7 @@ subscriptions lapsed. Every 5 seconds it sends revocations due for another attem
 (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
 `server` for an operator's), `relay.principal_unblocked`, `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
-`blocked_email_refused` (`action` `signup` or `login`), `relay.registration_pow`, `relay.left`, `key_identity_adopted`, `host.revocation_applied`,
+`blocked_email_refused` (`action` `signup`), `relay.registration_pow`, `relay.left`, `key_identity_adopted`, `host.revocation_applied`,
 `host.recovery_applied` and `host.identity_revocations_applied` (a recovery or revocations
 applied from a person's identity, with the sessions and delegations they ended); `host.remote_join` and
 `host.delegation_accepted` are also written to `command_audit_log` (initiator `s2s`).
@@ -302,8 +302,7 @@ SHA-256("rim.pow.v1\0" || this server's id || "\0" || inception payload || nonce
 
 starts with that many zero bits. The work is bound to this server and one principal, and
 checking it is one hash. Proof-of-work signups also count against the open-signup limit per IP
-and are audited as `relay.registration_pow`. Password signups take a token, as in invite-only
-mode. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
+and are audited as `relay.registration_pow`. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
 answers `POW`. A signup link from `rim_server invite create` lets a person in without the work;
 it needs no account or workspace, so it works with `RIM_ROLE=relay`.
 
@@ -319,15 +318,14 @@ counters are in memory, per node.
 **Blocking a principal.** `rim_server principal block <principalId> --reason <text>` stores the
 block in `relay_principal_block`, ends the sessions of the account holding the principal here
 and ignores its pending DM requests for every recipient. From then on, until `principal
-unblock`: its logins, signups and enrollments are refused (`FORBIDDEN`); deliveries to it are
+unblock`: its logins and signups are refused (`FORBIDDEN`); deliveries to it are
 refused as `unknown_principal` and its invites as `blocked`; its key packages are not handed
 out, and it claims none; `GET /s2s/v1/principals/<id>` answers `404`; forwarded requests it
 signs are refused with `403`. `principal list` shows the blocks.
 
 In the same transaction the command revokes the account's instance and workspace invites that
 still have uses left, adds its email (if it has one) to `blocked_email`, which refuses that
-address at signup (`VALIDATION`, "this email cannot sign up here") and at password login
-(`FORBIDDEN`), and records the reason as an abuse report, resolved by the block. Every account
+address at signup (`VALIDATION`, "this email cannot sign up here"), and records the reason as an abuse report, resolved by the block. Every account
 records the invite it signed up with and that invite's creator, so the command then lists the
 accounts the blocked one's invites created; `--cascade` blocks them too, recursively, each with
 the reason followed by "(invited by <username>)". An account without a key identity is blocked

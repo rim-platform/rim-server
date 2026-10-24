@@ -470,7 +470,7 @@ async fn open_signup_with_key_then_key_login_and_no_password() {
 }
 
 /// Invite-only mode with an operator's instance invite: the invite is spent and the account
-/// starts with no workspace, as for `signupWithInvite`.
+/// starts with no workspace.
 #[tokio::test]
 async fn invite_only_signup_with_key_and_operator_invite() {
     let ctx = TestCtx::new().await;

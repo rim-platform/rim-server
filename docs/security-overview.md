@@ -35,8 +35,8 @@ checked with strict Ed25519 ([key identity](specs/key-identity-v1.md)).
   join proof into a session at the host. A server bound to a public address refuses to
   start without an audience. Sessions are cookies whose tokens the server stores hashed, and a
   mutation made with a session needs a CSRF token.
-- **Passwords.** New accounts sign up with a key by default. Once an account has a key, its
-  old password no longer signs in and a password reset sends nothing.
+- **One kind of account.** Every local account signs up with a key and an account password;
+  there is no username and password sign-in and no reset by email.
 - **The account password.** A local account also has a password (a PIN or a passphrase),
   checked with OPAQUE ([key identity](specs/key-identity-v1.md), "Account password"): the
   server stores a record that checks the password without revealing it, and a sign-in needs the

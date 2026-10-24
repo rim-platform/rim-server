@@ -10,7 +10,7 @@ SMTP is not configured, which is how it already behaved.
 |---|---|---|
 | `attachments` | `POST /api/files/upload`, `GET /api/attachments/{id}/download` (and both when another relay forwards them) and the `createAttachment`, `finalizeAttachment` and `deleteAttachment` mutations | Stored files cost disk and backups, and some instances must not hold files at all. Messages work without them. |
 | `link_previews` | Fetching previews for links in new messages (no fetch is started while off, so the server makes no outbound request for them), and `Message.linkPreviews` (empty while off) | The server fetches URLs users post, which leaks the server's address to those sites and costs outbound traffic. |
-| `email` | Password reset mail, invite mail and notification digests | Some instances must not send mail at all. |
+| `email` | Invite mail and notification digests | Some instances must not send mail at all. |
 | `custom_emoji` | The `customEmojis` query and the `createCustomEmoji` and `deleteCustomEmoji` mutations | Uploaded images are content the operator moderates and stores. |
 | `workspace_plugins` | The `workspacePlugins` query, the `addWorkspacePlugin`, `updateWorkspacePlugin` and `removeWorkspacePlugin` mutations, and `POST`/`GET /api/plugin-bundles/…` (and the forwarded download) | Hosting plugin bundles distributes code to members' clients. Plugins a user installs locally on their client are not affected. |
 | `ai_commands` | `commandDiscover`, `commands(surface: AI)`, `executeCommand` and `executeMacro` with the `AGENT` initiator, and the agent-facing fields of `Command` (`nlDescription` is null, `intentSamples` empty and `aiCallable` false while off) | An instance may not want an AI agent driving its workspaces. |
@@ -35,7 +35,7 @@ Unavailable today:
 
 | Feature | When | What happens |
 |---|---|---|
-| `email` | `RIM_SMTP_HOST` or `RIM_SMTP_FROM` is not set | Mail is logged (recipient and subject) instead of sent, as before. Password reset still answers, so the token can be read from a development log. |
+| `email` | `RIM_SMTP_HOST` or `RIM_SMTP_FROM` is not set | Mail is logged (recipient and subject) instead of sent, as before. |
 
 A feature both disabled and unavailable is reported as `disabled`. Storage is always the local
 data directory, so `attachments`, `custom_emoji`, `workspace_plugins` and `avatars` are never
@@ -68,9 +68,8 @@ enabled again. While `attachments` is off, messages still list their attachments
 are refused. While `avatars` is off, every avatar URL reads as null, so clients show their
 placeholder; `updateMyProfile` without an `avatarUrl` still works.
 
-With `email` disabled, `requestPasswordReset` answers `FEATURE_DISABLED`, invite mail is not
-sent (the invite link is still returned to whoever created it), and the notification digest job
-does not run.
+With `email` disabled, invite mail is not sent (the invite link is still returned to whoever
+created it), and the notification digest job does not run.
 
 ## Link preview limits
 

@@ -407,20 +407,20 @@ delegation):
 | `kind`, `principal_id`, `identity_key` | `remote`; from the verified key log |
 | `username` | `r_` + the first 30 characters after `rimp1_`. From S5-1 on local signups refuse the `r_` prefix, so nobody squats a principal's name; existing local names are left alone |
 | `display_name` | The card's `displayName` cleaned by the display name rules of `docs/api.md` (invisible characters removed but those emoji and scripts need, whitespace runs made one space), cut to 64 characters, updated with each newer card; the `username` when nothing visible is left or the name is reserved here (`RIM_RESERVED_NAMES`) |
-| `password_hash`, `email` | Null (allowed: `principal_id` is set) |
+| `email` | Null |
 | `home_relay` | Server id of the relay that most recently presented a valid delegation for the user, else the first relay of their newest card that pins, else the relay that served their identity: one that speaks for them (7.4a) or one the host fetched it from. Null for local users |
 | `home_username`, `home_handle_domain` | The user's username at their home relay and its checked handle domain, set together ("Handles"); null while unknown and for local users |
 
 Key log, devices (with certificates and revocations) and card live in the existing
-`key_log_entry`, `device_key` and `profile_card` tables, as for an enrolled local user. A key-only
-signup for a principal held here as `remote` turns the row `local` and keeps its memberships.
+`key_log_entry`, `device_key` and `profile_card` tables, as for a local user. A key signup for a
+principal held here as `remote` turns the row `local` and keeps its memberships.
 Usernames stay unique across the table; rejected: a partial unique index on local users only,
-since login and member lookups assume one row per name.
+since member lookups assume one row per name.
 
 Remote users may not run mutations that change the account rather than a space (`FORBIDDEN`, `not
-available to remote members`): `login`, `logout`, `signup*`, `enrollIdentityKey`, `addDeviceKey`,
-`revokeDeviceKey`, `rotateIdentityKey`, `publishProfileCard`, `logoutOtherSessions`, password and
-email mutations, `createServer` and bot mutations. Identity changes arrive by `POST
+available to remote members`): `logout`, `loginWithKey`, `signupWithKey`, `addDeviceKey`,
+`revokeDeviceKey`, `rotateIdentityKey`, `publishProfileCard`, `logoutOtherSessions`,
+`createServer` and bot mutations. Identity changes arrive by `POST
 /identity` and `POST /revocations`.
 
 `updateMyProfile` sets what the host stores per member and the card does not carry: the avatar
@@ -879,8 +879,7 @@ relayStream                  ◄─── POST /s2s/v1/deliver         (events)
 2. The challenge has `keyLoginChallenge`'s shape (120 s, single use) and comes over S2S:
    `POST /s2s/v1/join/challenge {"inviteToken"}` → `{"challengeId","nonce","expiresAt","workspaceId"}`.
    It is a join challenge, bound to the relay that asked for it: H consumes it only in that
-   relay's `POST /s2s/v1/join`, and `loginWithKey`, `signupWithKey` and `enrollIdentityKey` refuse
-   it, as the join refuses a challenge from `keyLoginChallenge` or one issued to another relay.
+   relay's `POST /s2s/v1/join`, and `loginWithKey` and `signupWithKey` refuse it, as the join refuses a challenge from `keyLoginChallenge` or one issued to another relay.
    So the relay cannot redeem the person's proof as a session at H.
    The invite link carries no workspace id, and the delegation must name one, so H answers the
    workspace the invite names, checked as `previewInviteToken` checks it and not used
@@ -1108,8 +1107,7 @@ SHA-256("rim.pow.v1\0" || relay server id (ASCII) || "\0" || inception payload b
 starts with `powBits` zero bits (the descriptor's, from `RIM_REGISTRATION_POW_BITS`; 24 to start,
 about 16.7 million hashes on average). It binds the work to this relay and this principal; the
 server checks one hash before any signature; the open-signup per-IP limit applies too, and each
-such signup is audited as `relay.registration_pow`. Password signups take a token, as in
-invite-only mode; `registrationMode` answers `POW`. The check is `rim_s2s::pow`. Rejected: a
+such signup is audited as `relay.registration_pow`; `registrationMode` answers `POW`. The check is `rim_s2s::pow`. Rejected: a
 server-issued puzzle (a round trip and stored state for no gain) and memory-hard functions (no
 WebCrypto support).
 
@@ -1135,8 +1133,8 @@ members of its workspaces. Counters are in memory, per node.
 
 **Abuse hooks** (S5-6), each audited: `rim_server principal block <principalId> --reason …`,
 `principal unblock`, `principal list` (`relay_principal_block`): the account's sessions are ended
-and its pending DM requests ignored for every recipient; its logins, signups and enrollments are
-refused (`FORBIDDEN`), deliveries to it (`unknown_principal`) and its invites (`blocked`), key
+and its pending DM requests ignored for every recipient; its logins and signups are refused
+(`FORBIDDEN`), deliveries to it (`unknown_principal`) and its invites (`blocked`), key
 package claims for and by it, its identity (`404`) and forwarded requests it signs (`403`).
 `rim_server peer block|unblock <serverId>` ("Pinning a peer"; like `RIM_S2S_DENIED_PEERS` without
 a restart). `reportDmRequest` and the abuse address (`rim_server abuse-reports add`) feed

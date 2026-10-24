@@ -42,7 +42,7 @@ tag `v<version>`, the version every crate in the workspace carries.
   directory. `docs/api.md` ("Account password").
 - **Upgrade:** "Keep me signed in". `loginWithKey` and `signupWithKey` require
   `keepSignedIn: Boolean!` and `keepKeyHeld: Boolean!`, and `LoginPayload` and
-  `SignupWithInvitePayloadGql` gain `sessionSecret` and `keepKey`. A kept session gets
+  `SignupWithKeyPayload` gain `sessionSecret` and `keepKey`. A kept session gets
   persistent cookies and, for a web client, a keep key, read again with the new query
   `sessionKeepKey`. An unkept session gets browser-session cookies and a session secret that
   every request carries in the new `X-RIM-Session-Secret` header and the WebSocket in its
@@ -116,8 +116,7 @@ tag `v<version>`, the version every crate in the workspace carries.
   `abuseContact` in the signed server descriptor (`docs/specs/server-to-server-v1.md`) and as
   `serverInfo.abuseContact`.
 - `RIM_MINIMUM_AGE` (13 to 21): every signup confirms the person has reached that age.
-  `serverInfo.minimumAge` names it and `signupWithInvite` and `signupWithKey` take
-  `confirmedMinimumAge`; a signup without it answers `VALIDATION`. The account records only the
+  `serverInfo.minimumAge` names it and `signupWithKey` takes `confirmedMinimumAge`; a signup without it answers `VALIDATION`. The account records only the
   age confirmed. The migration adds a nullable `user.minimum_age_confirmed` column.
 - "Legal duties of an operator" in `docs/self-hosting.md`.
 - `RIM_WEB_DOMAIN` in `deploy/.env` serves the web client on a domain of its own with
@@ -180,8 +179,6 @@ tag `v<version>`, the version every crate in the workspace carries.
   client can edit a user command without asking for its steps again. `userCommand` answers null
   for a built-in id or a command that is not the caller's.
 
-- GraphQL `ServerInfo.signupRequiresKeys`: true when new accounts sign up with a key only and
-  `signupWithInvite` is refused, so a client offers only the key signup.
 - Invitations to encrypted conversations: an encrypted DM or group may now include members who
   have no device ready for encryption. They are listed in the new
   `Conversation.pendingMemberIds`, see the conversation but cannot read, send or be notified,
@@ -197,8 +194,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   `instanceBlockIp`, `instanceUnblockIp` do what the `abuse-reports`, `principal` and `ip`
   commands do; anyone else gets `FORBIDDEN`. Their audit lines now carry `actor_id`.
 
-- `LoginPayload.csrfToken` and `SignupWithInvitePayloadGql.csrfToken`: `login`, `loginWithKey`,
-  `signupWithInvite` and `signupWithKey` return the session's CSRF token, the value of the
+- `LoginPayload.csrfToken` and `SignupWithKeyPayload.csrfToken`: `loginWithKey` and
+  `signupWithKey` return the session's CSRF token, the value of the
   `rim_csrf` cookie, so a client that cannot read that cookie (a packaged desktop app talking to
   a server on another host) can send it in `X-CSRF-Token`.
 - `docs/operations/upgrade.md`: how to move a server to a new release and back.
@@ -224,8 +221,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   table.
 - `RIM_INSTANCE_NOTICE` and `RIM_TERMS_URL`: a short operator notice and the terms of service
   URL, served as GraphQL `ServerInfo.instanceNotice` and `ServerInfo.termsUrl`. With terms set,
-  `signupWithInvite` and `signupWithKey` require `acceptedTermsUrl` (a new optional field of
-  `SignupWithInviteInput` and `SignupWithKeyInput`) equal to the terms URL and answer
+  `signupWithKey` requires `acceptedTermsUrl` (a new optional field of `SignupWithKeyInput`)
+  equal to the terms URL and answers
   `VALIDATION` otherwise; the acceptance is stored on the account.
 - Instance limits, each off unless set: `RIM_LIMIT_WORKSPACES_PER_USER`,
   `RIM_LIMIT_MEMBERS_PER_WORKSPACE`, `RIM_LIMIT_CHANNELS_PER_WORKSPACE`,
@@ -262,14 +259,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   and that invite's creator (new nullable `user.created_by_invite_id` and
   `user.invited_by_user_id`). `rim_server principal block` now also revokes the account's
   invites that have uses left, blocks its email (the new `blocked_email` table: a signup with
-  it answers `VALIDATION` "this email cannot sign up here", a password login `FORBIDDEN`),
+  it answers `VALIDATION` "this email cannot sign up here"),
   records the reason as a resolved abuse report, and lists the accounts its invites created;
   `--cascade` blocks those too, recursively, in the same transaction. `principal unblock` also
   lifts the email block; sessions and invites stay ended. The new `principal show
   <principal-id>` prints the account, its inviter, its invite tree, its invites, its open
   reports and its block.
-- `RIM_RESERVED_NAMES`: comma-separated usernames and display names that `signupWithInvite`,
-  `signupWithKey` and `updateMyProfile` refuse with `VALIDATION` "this name is reserved",
+- `RIM_RESERVED_NAMES`: comma-separated usernames and display names that `signupWithKey` and
+  `updateMyProfile` refuse with `VALIDATION` "this name is reserved",
   compared after trimming, Unicode NFKC normalisation and lowercasing, and also followed by
   `-`, `_`, `.` or a space (`rim` reserves `rim-admin`, not `rimmer`). An account whose own
   username is reserved may still take a reserved display name. An empty entry stops the server
@@ -386,8 +383,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   `RIM_CADDYFILE=./Caddyfile.relay`. "A relay that hosts a workspace" in `deploy/README.md`
   describes the other choice.
 - **Upgrade:** usernames are stored lowercase and compared without regard to case. A signup
-  stores `Alice` as `alice` and refuses `aLiCe` once `alice` exists (`CONFLICT`); `login`,
-  `requestPasswordReset`, `requestAccountDeletion`, `from:@name` in message search and the
+  stores `Alice` as `alice` and refuses `aLiCe` once `alice` exists (`CONFLICT`);
+  `requestAccountDeletion`, `from:@name` in message search and the
   `rim_server operator` commands accept a username in any case. A migration adds a unique index
   on the lowercased username and fails while two accounts have usernames that differ only in
   case: find them with `SELECT lower(username) FROM "user" GROUP BY 1 HAVING count(*) > 1` and
@@ -405,22 +402,12 @@ tag `v<version>`, the version every crate in the workspace carries.
   package claims answer `403` to servers that are not partners, except a server hosting a
   workspace the person subscribed to (`server-to-server-v1.md`, "The request inbox").
 
-- **Upgrade:** password signups are refused by default. `RIM_SIGNUP_REQUIRE_KEYS` (default
-  `true`) makes `signupWithInvite` answer `FORBIDDEN` in every registration mode, so new
-  accounts sign up with `signupWithKey`; existing password accounts still sign in with
-  `login`. Set it to `false` in `deploy/.env` while your users run a client that cannot sign up
-  with a key.
 - `signupWithKey` accepts an instance invite bound to an email address and gives the new account
-  that address, refusing it like a password signup does when another account has it
-  (`EMAIL_TAKEN`) or an operator blocked it (`VALIDATION`); before, it refused such an invite. A
-  password signup with another address now answers "this invite admits only the email address
-  it was issued for".
-- `enrollIdentityKey` ends every other session of the account in the same transaction and
-  closes their WebSocket connections; before, other password sessions stayed valid until they
-  expired or were signed out.
+  that address, refusing it when another account has it (`EMAIL_TAKEN`) or an operator blocked
+  it (`VALIDATION`); before, it refused such an invite.
 - `key-identity-v1.md` and `device-linking-v1.md`: the web client may create and hold an
   identity, sign up with a key and link other devices; a browser-held identity is never backed
-  up, the recovery kit is shown after signup or enrollment and its entropy is kept until the
+  up, the recovery kit is shown after signup and its entropy is kept until the
   person confirms they saved it.
 - **Upgrade:** `deploy/compose.yml` runs the published images `ghcr.io/rim-platform/rim-server`
   and `ghcr.io/rim-platform/rim-web` at `RIM_VERSION` (default `latest`) instead of building
@@ -464,12 +451,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `editMessage` draws on the message budget (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`, and the
   probation rate for an account in probation) like a sent message, and answers `RATE_LIMITED`
   past it.
-- Display names from `signupWithInvite`, `signupWithKey` and `updateMyProfile` are stored
+- Display names from `signupWithKey` and `updateMyProfile` are stored
   without control, format and other default-ignorable characters (zero-width spaces, word
   joiners, soft hyphens, byte order marks, bidirectional overrides and isolates, variation
   selectors, Hangul fillers, tag characters), with whitespace runs made one space, and are at
-  most 64 characters after that for every path; the signups took up to 80 before
-  (`SignupWithKeyInput.displayName`, `signupWithInvite`'s `displayName`). What emoji and
+  most 64 characters after that for every path; the signup took up to 80 before
+  (`SignupWithKeyInput.displayName`). What emoji and
   scripts need stays: the zero-width joiner and non-joiner, an emoji presentation selector
   (`❤️`), the tags of the flags of Scotland, England and Wales, and the Mongolian variation
   selectors and vowel separator (`docs/api.md`). `RIM_RESERVED_NAMES` also refuses a reserved
@@ -480,6 +467,15 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Removed
 
+- Accounts with a username and password, and their email reset: every account signs up with a
+  key and a password. **Upgrade:** this release needs a fresh database (the migration refuses to
+  run while an account without a key exists); `RIM_SIGNUP_REQUIRE_KEYS` and
+  `RIM_PASSWORD_HASH_CONCURRENCY` are no longer read. Clients built before it cannot sign in.
+  Gone from GraphQL: `login` and `LoginInput`, `signupWithInvite` and `SignupWithInviteInput`,
+  `requestPasswordReset`, `resetPassword(token, newPassword)`, `enrollIdentityKey` and
+  `EnrollIdentityKeyInput`, and `ServerInfo.signupRequiresKeys`. `SignupWithInvitePayloadGql`
+  is renamed `SignupWithKeyPayload`. The migration drops the `password_reset_token` table and
+  `user.password_hash`, and requires a principal of every live account.
 - The dated records left `docs/`: the decision records, the manual test plans and their
   findings, and the `.env` history purge runbook. Git history keeps them. The nested resolver
   access reference moved to `docs/security/nested-resolver-access.md`.
@@ -562,7 +558,7 @@ tag `v<version>`, the version every crate in the workspace carries.
   workspace, with `FORBIDDEN` naming the command, before the service behind it runs; user command
   steps and pipe stages are checked the same way.
 - On a server with terms of service, every signup path refuses an account that did not accept
-  them, not only the `signupWithInvite` and `signupWithKey` resolvers.
+  them, not only the `signupWithKey` resolver.
 - `addContact` refuses the caller's own principal, and `createConversation` with `remoteMembers`
   naming only the caller answers "cannot create DM with yourself" instead of the group message.
 - `executeMacro` asks for one confirmation up front when a step needs one under the command
@@ -733,10 +729,6 @@ tag `v<version>`, the version every crate in the workspace carries.
   addresses that embed a private IPv4 address through NAT64 (`64:ff9b::/96`) or 6to4
   (`2002::/16`). Server-to-server requests now ignore proxy environment variables, as link
   previews did. `docs/specs/server-to-server-v1.md` lists the refused ranges.
-- Password hashing and verification (signups, password logins, password resets) run off the
-  request workers, at most `RIM_PASSWORD_HASH_CONCURRENCY` at once (default: the number of
-  CPUs, 1 to 64), so a burst of logins no longer stalls other requests. A request that waits
-  over 10 seconds for a turn answers `UNAVAILABLE`.
 - A WebSocket connection on `/api/ws` no longer outlives its session. When the session is
   signed out (`logout`, `logoutOtherSessions`), reset, revoked with its device, ended by an
   identity recovery, a requested account deletion, a block or the purge, or reaches its expiry,
@@ -755,12 +747,6 @@ tag `v<version>`, the version every crate in the workspace carries.
   pipeline fires or is suspended, and `PipelineGql.lastFiredAt` reads null for everyone else.
   Before, any member could build a pipeline with a text or author filter and learn from its
   firing when a private conversation they were not in received a matching message.
-- A password sign-in that finishes while the account's password is reset, a key is enrolled or
-  an operator bans the account no longer leaves a working session behind: its session either
-  ends with the others or is never created, the sign-in refused like a wrong password
-  (`UNAUTHENTICATED`) after a reset or an enrollment and with `FORBIDDEN` after a ban. Before,
-  a sign-in with the old password that was already being checked could create a session after
-  the reset or enrollment had ended all the others.
 - GraphQL a relay forwards for one of its users keeps this server's `RIM_API_MAX_BATCH` and
   `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`, the mutation budget counted per device of the remote
   user, with the same refusals as `/api`. Before, a forwarded batch ran with no batch cap and
@@ -821,7 +807,7 @@ tag `v<version>`, the version every crate in the workspace carries.
   devices (`server-to-server-v1.md` "Relay queues", "The request inbox", "Limits and audit").
 - A host keeps the challenges it issues for joining a workspace apart from login challenges.
   A join challenge is bound to the relay that asked for it and is accepted only by that relay's
-  join; `loginWithKey`, `signupWithKey` and `enrollIdentityKey` refuse it, and the join refuses a
+  join; `loginWithKey` and `signupWithKey` refuse it, and the join refuses a
   login challenge. Before, a relay could present the proof a person's device signed for joining
   to the host's `loginWithKey` and get a session there as that person. Clients and relays change
   nothing: the proof keeps its format (`server-to-server-v1.md` §Joining, `key-identity-v1.md`).
