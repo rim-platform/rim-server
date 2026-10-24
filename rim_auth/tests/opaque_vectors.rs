@@ -1,9 +1,11 @@
-//! Replays the OPAQUE known-answer vectors in `tests/vectors/opaque-v1.json`.
+//! Replays the OPAQUE known-answer vectors in `tests/vectors/opaque-v1.json`, which the client
+//! implementation keeps a byte-identical copy of.
 //!
-//! Every random draw comes from a ChaCha20 generator (`rand_chacha` 0.3) seeded with 32 copies
-//! of one byte, a fresh generator per step, so a client implementation that runs the same
-//! steps with the same seeds produces the same bytes. Run with `RIM_WRITE_OPAQUE_VECTORS=1` to
-//! write the file again from the current code.
+//! One ChaCha20 generator (`rand_chacha` 0.3) seeded with 32 bytes of 0x07 supplies every random
+//! draw, in this order: the server setup, the registration start, the registration finish, the
+//! login start, the server's login start and the login finish. The client runs the suite's own
+//! key-stretching parameters. `write_opaque_vectors`, ignored by default, writes the file again
+//! from the current code.
 
 use std::path::PathBuf;
 
@@ -18,90 +20,52 @@ use rand_core::SeedableRng;
 use serde::{Deserialize, Serialize};
 
 use rim_auth::opaque::{
-    CONTEXT, LABEL_SERVER_SHARE, RimOpaque, ServerSetup, server_login_finish,
-    server_login_start_with_rng, server_registration_finish, server_registration_start,
-    server_setup_bytes, server_setup_from_bytes, transport_key, transport_open, transport_seal,
+    CONTEXT, RimOpaque, ServerSetup, server_login_finish, server_login_start_with_rng,
+    server_registration_finish, server_registration_start, server_setup_bytes,
 };
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Seeds {
-    server_setup: u8,
-    registration_start: u8,
-    registration_finish: u8,
-    login_start: u8,
-    server_login_start: u8,
-    login_finish: u8,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Transport {
-    label: String,
-    key: String,
-    plaintext: String,
-    sealed: String,
-}
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Vectors {
-    description: String,
     suite: String,
-    context: String,
+    seed: String,
     password: String,
     credential_id: String,
-    seeds: Seeds,
     server_setup: String,
     registration_request: String,
     registration_response: String,
     registration_upload: String,
+    registration_export_key: String,
+    password_file: String,
     credential_request: String,
     credential_response: String,
     credential_finalization: String,
-    export_key: String,
-    session_key: String,
-    transport: Transport,
+    login_export_key: String,
+    client_session_key: String,
+    server_session_key: String,
 }
 
-const SEEDS: Seeds = Seeds {
-    server_setup: 1,
-    registration_start: 2,
-    registration_finish: 3,
-    login_start: 4,
-    server_login_start: 5,
-    login_finish: 6,
-};
-
+const SEED: [u8; 32] = [7; 32];
 const PASSWORD: &str = "correct horse battery staple";
-const CREDENTIAL_ID: &str = "rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0";
-
-fn rng(seed: u8) -> ChaCha20Rng {
-    ChaCha20Rng::from_seed([seed; 32])
-}
+const CREDENTIAL_ID: &str = "rimp1_vectortest";
 
 fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn unb64(text: &str) -> Vec<u8> {
-    URL_SAFE_NO_PAD.decode(text).expect("base64url")
 }
 
 fn path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/opaque-v1.json")
 }
 
-/// Run registration and login with the seeded generators and the suite's own key-stretching
-/// parameters. `sealed` is the transport sample to keep; a new one is made when `None`.
-fn compute(sealed: Option<String>) -> Vectors {
+/// One registration and one login with the seeded generator.
+fn compute() -> Vectors {
+    let mut rng = ChaCha20Rng::from_seed(SEED);
     let password = PASSWORD.as_bytes();
     let credential_id = CREDENTIAL_ID.as_bytes();
-    let setup = ServerSetup::new(&mut rng(SEEDS.server_setup));
 
+    let setup = ServerSetup::new(&mut rng);
     let registration =
-        ClientRegistration::<RimOpaque>::start(&mut rng(SEEDS.registration_start), password)
-            .expect("registration start");
+        ClientRegistration::<RimOpaque>::start(&mut rng, password).expect("registration start");
     let registration_request = registration.message.serialize().to_vec();
     let registration_response =
         server_registration_start(&setup, &registration_request, credential_id)
@@ -109,22 +73,21 @@ fn compute(sealed: Option<String>) -> Vectors {
     let registered = registration
         .state
         .finish(
-            &mut rng(SEEDS.registration_finish),
+            &mut rng,
             password,
             RegistrationResponse::deserialize(&registration_response).expect("response"),
             ClientRegistrationFinishParameters::default(),
         )
         .expect("registration finish");
     let registration_upload = registered.message.serialize().to_vec();
-    let record = server_registration_finish(&registration_upload).expect("record");
+    let password_file = server_registration_finish(&registration_upload).expect("password file");
 
-    let login = ClientLogin::<RimOpaque>::start(&mut rng(SEEDS.login_start), password)
-        .expect("login start");
+    let login = ClientLogin::<RimOpaque>::start(&mut rng, password).expect("login start");
     let credential_request = login.message.serialize().to_vec();
     let server = server_login_start_with_rng(
-        &mut rng(SEEDS.server_login_start),
+        &mut rng,
         &setup,
-        Some(&record),
+        Some(&password_file),
         &credential_request,
         credential_id,
     )
@@ -132,90 +95,59 @@ fn compute(sealed: Option<String>) -> Vectors {
     let logged_in = login
         .state
         .finish(
-            &mut rng(SEEDS.login_finish),
+            &mut rng,
             password,
             CredentialResponse::deserialize(&server.response).expect("credential response"),
             ClientLoginFinishParameters::new(Some(CONTEXT), Default::default(), None),
         )
         .expect("login finish");
-    assert_eq!(
-        logged_in.export_key, registered.export_key,
-        "registration and login yield one export key"
-    );
     let credential_finalization = logged_in.message.serialize().to_vec();
-    let server_key =
+    let server_session_key =
         server_login_finish(&server.state, &credential_finalization).expect("server login finish");
-    assert_eq!(server_key.as_slice(), logged_in.session_key.as_slice());
 
-    let session_key = logged_in.session_key.to_vec();
-    let plaintext = [0x5au8; 32];
-    let sealed = sealed.unwrap_or_else(|| {
-        transport_seal(&session_key, LABEL_SERVER_SHARE, &plaintext).expect("seal")
-    });
     Vectors {
-        description: "RIM OPAQUE v1: one registration and one login. Every random draw comes \
-                      from ChaCha20Rng (rand_chacha 0.3) seeded with 32 copies of the step's \
-                      seed byte, a fresh generator per step. Byte strings are unpadded base64url."
-            .to_string(),
-        suite: "OPRF ristretto255-SHA512, KE TripleDH ristretto255 SHA-512, KSF Argon2id \
-                m=65536 t=3 p=4 with a zero salt"
-            .to_string(),
-        context: String::from_utf8(CONTEXT.to_vec()).expect("utf8"),
+        suite: "rim-opaque-v1".to_string(),
+        seed: SEED.iter().map(|b| format!("{b:02x}")).collect(),
         password: PASSWORD.to_string(),
         credential_id: CREDENTIAL_ID.to_string(),
-        seeds: SEEDS,
         server_setup: b64(&server_setup_bytes(&setup)),
         registration_request: b64(&registration_request),
         registration_response: b64(&registration_response),
         registration_upload: b64(&registration_upload),
+        registration_export_key: b64(&registered.export_key),
+        password_file: b64(&password_file),
         credential_request: b64(&credential_request),
         credential_response: b64(&server.response),
         credential_finalization: b64(&credential_finalization),
-        export_key: b64(&registered.export_key),
-        session_key: b64(&session_key),
-        transport: Transport {
-            label: LABEL_SERVER_SHARE.to_string(),
-            key: b64(transport_key(&session_key, LABEL_SERVER_SHARE)
-                .expect("transport key")
-                .as_slice()),
-            plaintext: b64(&plaintext),
-            sealed,
-        },
+        login_export_key: b64(&logged_in.export_key),
+        client_session_key: b64(&logged_in.session_key),
+        server_session_key: b64(server_session_key.as_slice()),
     }
+}
+
+/// The file's text for `vectors`: pretty JSON with two-space indents and one final newline.
+fn text(vectors: &Vectors) -> String {
+    serde_json::to_string_pretty(vectors).expect("json") + "\n"
+}
+
+#[test]
+#[ignore = "writes tests/vectors/opaque-v1.json"]
+fn write_opaque_vectors() {
+    std::fs::write(path(), text(&compute())).expect("write the vector file");
 }
 
 #[test]
 fn opaque_vectors_replay() {
-    if std::env::var_os("RIM_WRITE_OPAQUE_VECTORS").is_some() {
-        let vectors = compute(None);
-        let text = serde_json::to_string_pretty(&vectors).expect("json") + "\n";
-        std::fs::write(path(), text).expect("write the vector file");
-        return;
-    }
-    let text = std::fs::read_to_string(path()).expect("read the vector file");
-    let stored: Vectors = serde_json::from_str(&text).expect("vector file");
-    let computed = compute(Some(stored.transport.sealed.clone()));
-    assert_eq!(computed, stored);
-
-    // The server-side helpers alone reproduce their parts from the stored bytes.
-    let setup = server_setup_from_bytes(&unb64(&stored.server_setup)).expect("setup");
+    let stored = std::fs::read_to_string(path()).expect("read the vector file");
+    let parsed: Vectors = serde_json::from_str(&stored).expect("vector file");
+    let computed = compute();
+    assert_eq!(computed, parsed);
     assert_eq!(
-        server_registration_start(
-            &setup,
-            &unb64(&stored.registration_request),
-            stored.credential_id.as_bytes()
-        )
-        .expect("registration start"),
-        unb64(&stored.registration_response)
+        text(&computed),
+        stored,
+        "the file is byte for byte what the code writes"
     );
-    let opened = transport_open(
-        &unb64(&stored.session_key),
-        &stored.transport.label,
-        &stored.transport.sealed,
-    )
-    .expect("the stored sample opens");
-    assert_eq!(
-        opened.as_slice(),
-        unb64(&stored.transport.plaintext).as_slice()
-    );
+    assert_eq!(computed.registration_export_key, computed.login_export_key);
+    assert_eq!(computed.client_session_key, computed.server_session_key);
+    assert_eq!(computed.registration_upload, computed.password_file);
 }
