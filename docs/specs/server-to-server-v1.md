@@ -128,7 +128,7 @@ The descriptor is signed by the head server key over `rim.server-descriptor.v1\0
 | `version` | 1 to 2³¹−1; readers keep only a higher one. Re-signed with `version + 1` on any change and after every rotation |
 | `roles` | Non-empty subset of `host`, `relay`, in that order |
 | `endpoints` | One origin in v1; `s2s` null while server-to-server traffic is off |
-| `s2sVersions` | `[1]`; a later version keeps serving the previous one (`ROADMAP.md`, "Releases and updates") |
+| `s2sVersions` | `[1]`; a later version keeps serving the previous one (`docs/architecture.md`, "Design Guardrails") |
 | `mlsCipherSuites` | What `uploadMlsKeyPackages` accepts |
 | `registration` | `mode` `invite`, `open` or `pow`; `powBits` only in `pow` mode |
 | `handleDomain` | The domain of the server's handles ("Handles"): a lowercase DNS name of at most 253 bytes, labels of 1 to 63 letters, digits and hyphens, no leading or trailing hyphen, no trailing dot. Optional: a descriptor without it declares no handles, and is still valid. Placed before `issuedAt` |
@@ -1464,7 +1464,7 @@ device keys move to hybrid.
   (`rim_mls` fixtures); a DM request accepted, ignored, blocked; a remote join; channel traffic both
   ways with host events verified by a test client; a gap and its reconciliation; revocation with
   acknowledgement; the direct login; a relay switch; the allow-list; `relay` and `host` refusals;
-  replayed and tampered requests. A two-server compose test in CI when CI is back (`ROADMAP.md`).
+  replayed and tampered requests. A two-server compose test in CI is not built yet.
 - **Clients (S5-3, S5-5).** Appendix A in the Tauri module and Vitest; pinning from an invite
   (current key, rotated key, fork); event verification and gaps; contacts by link and QR; a DM
   across relays on two desktops; the request inbox; a remote join; the direct fallback and its

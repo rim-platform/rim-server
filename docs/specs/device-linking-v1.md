@@ -261,7 +261,7 @@ correctness never depends on them.
 ## Storage
 
 A table, behind `DeviceLinkRepository` (rim_core), not an in-memory store. The two devices'
-requests may reach different nodes, and the roadmap guardrail forbids features that depend on
+requests may reach different nodes, and the design guardrails forbid features that depend on
 single-node semantics; `key_challenge` is a table for the same reason. The trait is the seam if a
 deployment ever wants another store. Migration `add_device_link` (generated with
 `sea migrate generate add_device_link`):

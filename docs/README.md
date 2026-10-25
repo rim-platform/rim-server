@@ -2,9 +2,9 @@
 
 ## Product
 
-- `vision.md`: what RIM is, for whom, and the product principles.
+- `vision.md`: what RIM is for, who it is for and who not, and the product principles.
 - `architecture.md`: layers, crates, the domain model, and what the backend and the client own.
-- `../ROADMAP.md`: direction, open decisions and the shipped-state ledger.
+- `../ROADMAP.md`: where it stands, what comes next and later, and what is not planned.
 
 ## Models
 

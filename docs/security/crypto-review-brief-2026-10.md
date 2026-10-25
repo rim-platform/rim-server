@@ -17,8 +17,8 @@ them against the release commits, not the commits in 1.1. These are fixed:
 The same two pull requests also change code behind other items (for example 3 to 6, 9, 10, 20
 and 22); check each against the code before treating it as open.
 
-_Written 2026-10-09 for the outside review that `ROADMAP.md` ("Risks", "Crypto correctness")
-and the Stage 4 plan's rules for every PR require before a public release.
+_Written 2026-10-09 for the outside review that `0.1.0` and any production-ready claim wait for
+(`ROADMAP.md`, "Where it stands").
 It covers key identity, device linking, recovery, the desktop secret vault and the browser
 device key (Stage 3), and end-to-end encryption of DMs and groups with MLS (Stage 4). It points
 into the specs instead of restating them; where the code and a spec differ, this brief says so

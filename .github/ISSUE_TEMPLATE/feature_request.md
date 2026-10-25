@@ -20,8 +20,8 @@ assignees: ""
 
 ## Core or plugin
 
-<!-- ROADMAP.md ("Principles for sequencing", "Architecture guardrails") and CONTRIBUTING.md
-("What belongs in the core") explain the line: a vertical for one kind of community is built as
+<!-- docs/vision.md ("Principles"), docs/architecture.md ("Design Guardrails") and
+CONTRIBUTING.md ("What belongs in the core") explain the line: a vertical for one kind of community is built as
 a plugin, a bot, a pipeline or a macro, and the core gains only the primitive that makes it
 possible. Say which side this is on and why. If it belongs in the core, say what it does in an
 encrypted conversation and with more than one server. -->

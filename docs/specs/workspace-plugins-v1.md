@@ -94,8 +94,8 @@ Decisions:
   to `manifest`) still ties them to the code. The cost is at most 64 KiB per entry.
 - **The identity key signs, not a device key or a new publisher key.** A device key is one of
   many, revocable, and would make every verifier check a certificate chain and revocations. A
-  separate publisher key would be a new kind of key with its own rotation story, where the roadmap
-  wants every identity to go through one principal model. The identity key is the person, and its
+  separate publisher key would be a new kind of key with its own rotation story, where the design
+  guardrails want every identity to go through one principal model. The identity key is the person, and its
   log is public.
 - **Hashes are lowercase hex**, unlike key-identity's base64url, because publishers compare them
   with `sha256sum` and the bundler's output.

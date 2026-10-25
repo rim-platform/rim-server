@@ -36,9 +36,9 @@ macros, pipelines, plugins and the AI command surface. A feature for one kind of
 incident tracker, a game tool, a ticket workflow) is a vertical, and verticals are built as
 plugins, bots or pipelines on top of the core, not inside it. When a request can be met by a
 plugin, a bot, a pipeline or a macro, the core gains the primitive that makes it possible and
-the vertical stays outside. `ROADMAP.md` ("Principles for sequencing", "Architecture
-guardrails") has the reasoning; every new server feature also answers what it does in an
-encrypted conversation and with more than one server.
+the vertical stays outside. `docs/vision.md` ("Principles") has the reasoning, and
+`docs/architecture.md` ("Design Guardrails") the rules: every new server feature also answers
+what it does in an encrypted conversation and with more than one server.
 
 ## Gates
 
