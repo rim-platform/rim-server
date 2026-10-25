@@ -21,6 +21,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- While rim-server or the web client cannot be reached, as during an upgrade's restart, Caddy
+  answers `503` with `Retry-After: 30`: JSON for `/api`, `/s2s/` and `/.well-known/`, and a
+  self-reloading "RIM is being updated" page for browsers, instead of a bare `502`
+  (`deploy/Caddyfile`, `deploy/Caddyfile.relay`).
+
 ## [0.0.1] - 2026-10-25
 
 ### Added

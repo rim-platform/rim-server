@@ -51,4 +51,45 @@
 			header_up -Forwarded
 		}
 	}
+
+	# While rim-server or the web client cannot be reached, as during an upgrade's restart, a
+	# client is told the server is being updated instead of seeing a bare 502. API and
+	# server-to-server callers get JSON they can retry; browsers get a page that reloads itself.
+	handle_errors 502 503 504 {
+		header Retry-After 30
+		header Cache-Control no-store
+
+		@machine path /api /api/* /s2s/* /.well-known/*
+		handle @machine {
+			header Content-Type application/json
+			respond `{"error":"unavailable","message":"The server is being updated. Try again in a minute."}` 503
+		}
+
+		handle {
+			header Content-Type "text/html; charset=utf-8"
+			respond <<HTML
+				<!doctype html>
+				<html lang="en">
+				<head>
+				<meta charset="utf-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1">
+				<meta http-equiv="refresh" content="30">
+				<title>RIM is being updated</title>
+				<style>
+				body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b0d12; color: #e6e8ee; font: 16px/1.5 system-ui, sans-serif; }
+				main { max-width: 28rem; padding: 2rem; text-align: center; }
+				h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
+				p { margin: 0; color: #9aa1b1; }
+				</style>
+				</head>
+				<body>
+				<main>
+				<h1>RIM is being updated</h1>
+				<p>The server is unavailable for a minute or two while it is updated. This page reloads on its own.</p>
+				</main>
+				</body>
+				</html>
+				HTML 503
+		}
+	}
 }
