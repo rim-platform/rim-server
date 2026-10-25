@@ -29,6 +29,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      attestations: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
@@ -110,8 +111,8 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=Apache-2.0
 
-      # A standalone SPDX file: it is attached to the GitHub release and attested to the image
-      # below, so it can be read without a registry and checked against the digest.
+      # A standalone SPDX file: it is attached to the GitHub release and attested to the image's
+      # digest below, so it can be read without a registry and checked against the digest.
       - name: Generate the SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
@@ -126,13 +127,21 @@ jobs:
           cosign-release: v3.0.6
 
       # Keyless: the certificate names this workflow and the tag, issued for the job's OIDC token.
-      - name: Sign the image and attest the SBOM
+      - name: Sign the image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          SBOM: rim-server-${{ steps.version.outputs.version }}.spdx.json
-        run: |
-          cosign sign --yes "$IMAGE@$DIGEST"
-          cosign attest --yes --type spdxjson --predicate "$SBOM" "$IMAGE@$DIGEST"
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      # The SBOM as a GitHub attestation to the image's digest, kept by GitHub rather than pushed
+      # to the registry: `gh attestation verify oci://<image>@<digest> --predicate-type
+      # https://spdx.dev/Document/v2.3` checks it.
+      - name: Attest the SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: rim-server-${{ steps.version.outputs.version }}.spdx.json
+          push-to-registry: false
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -174,6 +183,14 @@ jobs:
           cosign verify $IMAGE:$VERSION \\
             --certificate-identity "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/.github/workflows/release.yaml@refs/tags/v$VERSION" \\
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          \`\`\`
+
+          Its SBOM, \`rim-server-$VERSION.spdx.json\` below, is attested to that digest by the same
+          workflow:
+
+          \`\`\`sh
+          gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY \\
+            --predicate-type https://spdx.dev/Document/v2.3
           \`\`\`
           EOF
           flags=()
