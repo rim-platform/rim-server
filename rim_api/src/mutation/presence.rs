@@ -17,8 +17,8 @@ pub(crate) struct PresenceMutations;
 impl PresenceMutations {
     /// Announce that the caller is typing in a direct conversation. Typing is announced in direct
     /// conversations only: the mutation answers `true` when it emitted a `TypingStarted` event and
-    /// `false` when it did not, which is in a channel or a group, or on a repeat inside the
-    /// throttle window.
+    /// `false` when it did not, which is in a channel or a group, in a DM whose message request
+    /// the caller has not accepted, or on a repeat inside the throttle window.
     async fn start_typing(
         &self,
         ctx: &Context<'_>,
@@ -49,6 +49,16 @@ impl PresenceMutations {
             .await
             .map_err(map_service_error)?;
         if conversation.conversation_type != ConversationType::Direct {
+            return Ok(false);
+        }
+        // A conversation the caller has not accepted hears nothing from them, typing included.
+        if let Ok(federation) = ctx.data::<crate::federation::FederationContext>()
+            && federation
+                .relay
+                .conversation_hidden(actor, conversation_id.into())
+                .await
+                .map_err(map_service_error)?
+        {
             return Ok(false);
         }
 

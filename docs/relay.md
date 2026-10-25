@@ -173,7 +173,13 @@ invite for the local member; until they accept, the
 conversation is left out of their `inboxConversations`, its events out of their
 `workspaceEvents`, and its notifications, mentions and unread counts out of the notification
 list, the bell, `unreadCounts` and the email digest; its first events are held with
-the request. Everything appears once they accept. This needs
+the request. Everything appears once they accept. They may read the conversation before they
+decide, but post nothing into it: while their request for it is pending or ignored, or they
+blocked whoever started it, `sendMessage`, `replyToMessage`, `forwardMessage` into it,
+`sendEncryptedMessage` and `toggleReaction` answer `FORBIDDEN` ("accept the message request
+before posting here"), and `startTyping` answers `false` without telling anyone. This server
+enforces it for the conversations it hosts; a reply to a request for a conversation hosted
+elsewhere goes to that host through the forward path, which leaves it to the client. This needs
 server-to-server traffic to be on; with it off, conversations in the direct space are live at
 once.
 

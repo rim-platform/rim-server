@@ -8,7 +8,9 @@
 //! while someone whose DM request was accepted does not; a partner server's people reach this
 //! one's while a server that is not a partner reads no identity; a member who leaves a group
 //! they accepted keeps no accepted request for it; a group of the default workspace reaches each
-//! member as their DM settings say, and never one who blocked its starter.
+//! member as their DM settings say, and never one who blocked its starter; the recipient of a DM
+//! request reads it first and posts nothing into it, nor reacts or types there, until they
+//! accept it.
 //!
 //! Run with:
 //! ```sh
@@ -255,6 +257,71 @@ async fn a_co_members_dm_is_a_request_when_the_recipient_chose_requests() {
     let pending = carol.ok(REQUESTS, json!({ "status": "PENDING" })).await;
     assert_eq!(pending["dmRequests"], json!([]));
     assert!(listed(&carol, &direct).await.contains(&back));
+
+    a.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_takes_nothing_from_its_recipient_until_they_accept_it() {
+    const SEND: &str = "mutation($s: ID!, $c: ID!, $t: String!) { \
+         sendMessage(input: { serverId: $s, conversationId: $c, text: $t }) { id } }";
+    const REACT: &str = "mutation($s: ID!, $c: ID!, $m: ID!) { \
+         toggleReaction(input: { serverId: $s, conversationId: $c, messageId: $m, emoji: \"👍\" }) { emoji } }";
+    const TYPING: &str =
+        "mutation($s: ID!, $c: ID!) { startTyping(serverId: $s, conversationId: $c) }";
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let acme = workspace(&alice, "Acme", &[&bob, &carol]).await;
+    bob.ok(&set_members(), json!({ "s": acme, "m": "REQUESTS" }))
+        .await;
+
+    // Carol's DM is a request for Bob; she writes into it.
+    let from_carol = created(&dm(&a, &carol, &acme, &bob).await);
+    let request = bob.pending_request(&carol).await;
+    let hello = carol
+        .ok(SEND, json!({ "s": acme, "c": from_carol, "t": "hello" }))
+        .await["sendMessage"]["id"]
+        .clone();
+
+    // Bob may read it first, but posts nothing into it before he decides.
+    let refused = bob
+        .post(SEND, json!({ "s": acme, "c": from_carol, "t": "hi back" }))
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+    assert!(
+        refused["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("accept the message request")),
+        "{refused}"
+    );
+    let reaction = bob
+        .post(REACT, json!({ "s": acme, "c": from_carol, "m": hello }))
+        .await;
+    assert_eq!(code(&reaction), "FORBIDDEN", "{reaction}");
+    let typing = bob.ok(TYPING, json!({ "s": acme, "c": from_carol })).await;
+    assert_eq!(
+        typing["startTyping"],
+        json!(false),
+        "no typing reaches Carol"
+    );
+    // Carol, who started it, is not held.
+    let carols_typing = carol
+        .ok(TYPING, json!({ "s": acme, "c": from_carol }))
+        .await;
+    assert_eq!(carols_typing["startTyping"], json!(true));
+
+    // Once he accepts, he replies.
+    bob.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    bob.ok(SEND, json!({ "s": acme, "c": from_carol, "t": "hi back" }))
+        .await;
+    bob.ok(REACT, json!({ "s": acme, "c": from_carol, "m": hello }))
+        .await;
 
     a.stop().await;
 }

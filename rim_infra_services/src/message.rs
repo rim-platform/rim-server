@@ -25,6 +25,7 @@ use rim_core::message::model::{Message, MessageEncryption, MessageId, NewMessage
 use rim_core::message::repository::MessageSearchParams;
 use rim_core::message_thread::model::MessageThread;
 use rim_core::moderation::repository::ModerationRepository;
+use rim_core::relay::repository::RelayRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{Page, PageDir, SortOrder};
 use rim_core::user::model::UserId;
@@ -87,6 +88,7 @@ use crate::franking_keys::SharedFrankingKeys;
 use crate::mention::parse_mention_ids;
 use crate::moderation::{ModerationAuditEntry, audit_ids, record_moderation_action};
 use crate::repos::AppRepos;
+use crate::request_gate::ensure_request_decided;
 use crate::token_bucket::{BucketRate, TokenBucketLimiter};
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
@@ -147,6 +149,9 @@ pub struct DefaultMessageService {
     clock: Clock,
     /// This server's handle domain: `from:@name:<it>` names a local account.
     handle_domain: Option<String>,
+    /// The request inbox: a recipient posts nothing into a conversation they have not accepted.
+    /// `None` in unit tests that are not about it; the composition root wires it.
+    relay_repo: Option<Arc<dyn RelayRepository>>,
 }
 
 impl DefaultMessageService {
@@ -165,7 +170,14 @@ impl DefaultMessageService {
             limits: InstanceLimits::default(),
             clock: Clock::default(),
             handle_domain: None,
+            relay_repo: None,
         }
+    }
+
+    /// Refuse posts into a conversation whose message request the poster has not accepted.
+    pub fn with_relay_repo(mut self, relay_repo: Arc<dyn RelayRepository>) -> Self {
+        self.relay_repo = Some(relay_repo);
+        self
     }
 
     /// Resolve `from:@name:<handle_domain>` searches to local accounts.
@@ -996,6 +1008,12 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn send_message(&self, cmd: SendMessageCmd) -> ServiceResult<MessageDto> {
+        ensure_request_decided(
+            self.relay_repo.as_ref(),
+            cmd.actor.user_id,
+            cmd.conversation_id,
+        )
+        .await?;
         self.ensure_message_budget(cmd.actor.user_id).await?;
         let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
@@ -1122,6 +1140,12 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn reply_to_message(&self, cmd: ReplyToMessageCmd) -> ServiceResult<MessageDto> {
+        ensure_request_decided(
+            self.relay_repo.as_ref(),
+            cmd.actor.user_id,
+            cmd.conversation_id,
+        )
+        .await?;
         self.ensure_message_budget(cmd.actor.user_id).await?;
         // 1. Validate access (membership, archive, timeout) and slow mode
         let (conv, standing) = ensure_conversation_writable_with_standing(
@@ -1785,6 +1809,12 @@ impl MessageService for DefaultMessageService {
         )
     )]
     async fn forward_message(&self, cmd: ForwardMessageCmd) -> ServiceResult<MessageDto> {
+        ensure_request_decided(
+            self.relay_repo.as_ref(),
+            cmd.actor.user_id,
+            cmd.target_conversation_id,
+        )
+        .await?;
         self.ensure_message_budget(cmd.actor.user_id).await?;
         let access_repos = ConversationAccessRepos::from_arcs(
             &self.repos.server_member_repo,
@@ -1997,6 +2027,12 @@ impl MessageService for DefaultMessageService {
         &self,
         cmd: SendEncryptedMessageCmd,
     ) -> ServiceResult<MessageDto> {
+        ensure_request_decided(
+            self.relay_repo.as_ref(),
+            cmd.caller.actor.user_id,
+            cmd.conversation_id,
+        )
+        .await?;
         self.ensure_message_budget(cmd.caller.actor.user_id).await?;
         let e2ee = self.e2ee()?;
         require_device(&cmd.caller)?;

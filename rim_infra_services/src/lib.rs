@@ -29,6 +29,7 @@ pub(crate) mod e2ee;
 pub(crate) mod probation;
 #[cfg(test)]
 mod probation_fixtures;
+pub(crate) mod request_gate;
 // Public: the composition root (rim_server/src/app.rs) constructs
 // EmailSender/SmtpEmailSender/LogEmailSender/SmtpConfig directly.
 pub mod email;
