@@ -218,8 +218,10 @@ one for Windows x86_64, and attaches them to its release with `latest.json` for 
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     ```
 
-      The digest cosign prints matches the one in the GitHub release notes, and
-      `cosign verify-attestation --type spdxjson` with the same flags passes.
+      The digest cosign prints matches the one in the GitHub release notes, and the SBOM's
+      GitHub attestation to that digest passes for both images:
+      `gh attestation verify oci://ghcr.io/rim-platform/<image>@<digest> --repo
+      rim-platform/<repository> --predicate-type https://spdx.dev/Document/v2.3`.
 - [ ] The first release only: set both packages public (package settings on GitHub), as
       `CONTRIBUTING.md`, "Who can merge and publish", lists.
 - [ ] Desktop builds: wait for both legs of rim-ui's run. The release is published only when

@@ -154,8 +154,9 @@ order of the existing schema does not change; `CLAUDE.md` explains why.
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
-  Each release also carries the image's SBOM (SPDX JSON), attested to the image;
-  `cosign verify-attestation --type spdxjson` with the same flags checks it.
+  Each release also carries the image's SBOM (SPDX JSON), attested to the image's digest as a
+  GitHub attestation: `gh attestation verify oci://ghcr.io/rim-platform/rim-server@<digest> --repo
+  rim-platform/rim-server --predicate-type https://spdx.dev/Document/v2.3` checks it.
 - **The maintainer holds the updater key.** The minisign key that signs rim-ui's update bundles
   is held by the maintainer, with an offline backup. It reaches a build only through rim-ui's
   `release` environment, whose runs the maintainer approves. A lost updater key cannot be

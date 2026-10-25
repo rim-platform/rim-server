@@ -70,7 +70,8 @@ cosign verify ghcr.io/rim-platform/rim-web:$v \
 cosign prints the digest it verified, which is also in the GitHub release notes. Setting
 `RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` in `deploy/.env` to `…@sha256:<digest>` makes compose run
 exactly those images. Each release also carries the image's SBOM (SPDX JSON), attested to the
-image: `cosign verify-attestation --type spdxjson` with the same flags checks it.
+image's digest as a GitHub attestation: `gh attestation verify oci://<image>@<digest> --repo
+<the image's repository> --predicate-type https://spdx.dev/Document/v2.3` checks it.
 
 ### The web client's endpoint
 
