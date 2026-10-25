@@ -10,9 +10,9 @@ principles every change is held to.
 
 ## Your own workspace
 
-RIM is for teams and organizations that want a workspace of their own: built around how they
-work, extended with their own plugins, and running where they choose, with their data under
-their control.
+RIM is for teams, organizations and communities that want a workspace of their own: built
+around how they work, extended with their own plugins, and running where they choose, with
+their data under their control.
 
 Chat is the medium. The product is what you build on top of it, the way VS Code turned a text
 editor into a platform with a command palette and extensions. Instead of adapting to a tool
@@ -34,8 +34,8 @@ someone else designed, you shape RIM around your work:
   through the same commands you use, can operate whatever your plugins add, and waits for a
   person to confirm anything that changes something.
 
-RIM does not ship a feature per kind of team. A development team, an open-source project, a
-company department and an association start from the same core, and each adds what it needs.
+RIM does not ship a feature per kind of group. A development team, a company, an open-source
+community and an association start from the same core, and each adds what it needs.
 
 ## What it does not do yet
 
