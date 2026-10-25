@@ -21,6 +21,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-10-25
+
 ### Added
 
 - **Upgrade:** account passwords, checked with OPAQUE (`docs/specs/key-identity-v1.md`,
@@ -884,4 +886,5 @@ tag `v<version>`, the version every crate in the workspace carries.
   volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
   `docs/self-hosting.md` shows how to pass a file in instead.
 
-[Unreleased]: https://github.com/rim-platform/rim-server/commits/master
+[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/rim-platform/rim-server/releases/tag/v0.0.1
