@@ -65,6 +65,11 @@ In order:
 Not scheduled; picked up when the items above are done or when someone needs them enough to
 build them.
 
+- **Calls:** voice calls with the team, and video and screen sharing after them, because talking
+  a thing through is sometimes better than writing it. They follow the same rules as messages:
+  calls in DMs and private groups are end-to-end encrypted, and a self-hosted server can carry
+  them without a third-party service. Whether the media runs through the server or a separate
+  self-hosted media server is decided when the work starts.
 - **The agent:** local and self-hosted models (Ollama and OpenAI-compatible endpoints); macros
   the agent runs step by step with a pause at each change; catch-me-up summaries with citations,
   acting through commands rather than as a separate chatbot.
@@ -87,9 +92,8 @@ build them.
 
 ## Not planned
 
-- **Feature parity with Discord or Slack.** Chat in the core stays bounded on purpose.
-- **Voice and video.** A bridge plugin to a self-hosted media server is the path if a community
-  builds one.
+- **Feature parity with Discord or Slack.** Chat in the core stays bounded on purpose; calls
+  aim at a team talking things through, not at large live audiences.
 - **First-party verticals.** No gaming pack, no developer pack, no incident tracker in the core;
   showcase plugins instead.
 - **Encrypted channels.** Channels stay plaintext so server search, pipelines and the agent keep

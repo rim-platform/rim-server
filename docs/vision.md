@@ -37,8 +37,9 @@ what it needs through commands, keybinds, macros, pipelines and plugins.
 
 ## Who it is not for, yet or ever
 
-- **Voice and video.** RIM does not build them. A community that needs calls uses a
-  dedicated tool, or a bridge plugin to a self-hosted media server once one exists.
+- **Calls, for now.** There are no voice or video calls yet. Talking a thing through is
+  sometimes faster than writing it, so calls are on the roadmap (`ROADMAP.md`, "Later"); until
+  then a team that needs them uses a separate tool.
 - **Phones first.** There is a desktop app and a web app; there is no mobile app, and the web
   app has no narrow layout yet.
 - **An enterprise checklist.** There is no compliance suite and no directory of thousands of
