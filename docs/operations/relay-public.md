@@ -208,8 +208,9 @@ dc exec rim cat /data/owner-claim.txt
 Open the link and sign up with a key. The signup creates the workspace with the file's name,
 channels, topics and DM policy, makes the account its Owner and, with `claimGrantsOperator`, an
 instance operator, and deletes the file. A lost or leaked link before the claim is a restart
-(`dc restart rim`): each start revokes the previous link and writes a new one. After the claim,
-add the owner's name to `RIM_RESERVED_NAMES`.
+(`dc restart rim`): each start revokes the previous link and writes a new one. The owner's name
+can be in `RIM_RESERVED_NAMES` from the first start: the claim signup is the one signup allowed
+to take a reserved name.
 
 Its DM policy takes a fellow member's first DM or group as a request (`"memberDefault":
 "REQUESTS"`): every account on the relay is in this workspace, so a stranger's first message

@@ -384,6 +384,25 @@ pub(crate) struct Claimed {
     pub claim_link_file: PathBuf,
 }
 
+/// Whether `token` is the owner claim invite of a defined workspace nobody claimed yet: the
+/// signup that redeems it becomes the workspace's Owner.
+///
+/// # Errors
+/// Storage errors reading the default workspace record.
+pub(crate) async fn is_claim(
+    repos: &SignupRepos,
+    setting: &DefaultWorkspace,
+    token: Option<&CheckedToken>,
+) -> ServiceResult<bool> {
+    let (DefaultWorkspace::Defined(_), Some(CheckedToken::InstanceInvite(invite))) =
+        (setting, token)
+    else {
+        return Ok(false);
+    };
+    let record = repos.default_workspace_repo.record().await?;
+    Ok(record.workspace_id.is_none() && record.claim_invite_id == Some(invite.id))
+}
+
 /// Claim the defined workspace for the new account `owner`, inside the signup's transaction,
 /// when `token` is the owner claim invite (already consumed by the signup): create the
 /// workspace with `owner` as Owner, its channels with their topics and its DM policy; record it

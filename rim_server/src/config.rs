@@ -361,7 +361,8 @@ pub struct RIMConfig {
     /// Controlled by `RIM_ACCOUNT_DELETION_GRACE_DAYS`.
     pub account_deletion_grace_days: Option<u32>,
     /// Comma-separated usernames and display names signups and profile edits refuse, with
-    /// each followed by `-`, `_`, `.` or a space. Controlled by `RIM_RESERVED_NAMES`; see
+    /// each followed by `-`, `_`, `.` or a space; the signup through the owner claim link may
+    /// take them. Controlled by `RIM_RESERVED_NAMES`; see
     /// [`RIMConfig::reserved_names`].
     pub reserved_names: Option<String>,
 }

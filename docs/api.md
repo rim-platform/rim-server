@@ -263,7 +263,8 @@ nothing visible left takes the username, and `updateMyProfile` clears the name. 
 server reserves (`RIM_RESERVED_NAMES`), followed by a separator or not, answers `VALIDATION`
 `this name is reserved`, also when it is written with lookalike letters from another script
 (the Unicode confusable skeleton) or hidden behind invisible characters, the kept ones
-included. A person from another
+included. The signup through the owner claim link of a defined default workspace may take a
+reserved username and display name. A person from another
 server keeps the display name of their profile card, cleaned the same way and cut to 64
 characters; a reserved one is replaced by their username here.
 
