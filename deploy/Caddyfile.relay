@@ -16,4 +16,22 @@
 	handle {
 		respond 404
 	}
+
+	# While rim-server or the web client cannot be reached, as during an upgrade's restart, a
+	# client is told the server is being updated instead of seeing a bare 502. API and
+	# server-to-server callers get JSON they can retry; browsers get a page that reloads itself.
+	handle_errors 502 503 504 {
+		header Retry-After 30
+		header Cache-Control no-store
+
+		@machine path /api /api/* /s2s/* /.well-known/*
+		handle @machine {
+			header Content-Type application/json
+			respond `{"error":"unavailable","message":"The server is being updated. Try again in a minute."}` 503
+		}
+
+		handle {
+			respond 503
+		}
+	}
 }

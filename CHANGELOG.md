@@ -25,6 +25,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- While rim-server or the web client cannot be reached, as during an upgrade's restart, Caddy
+  answers `503` with `Retry-After: 30`: JSON for `/api`, `/s2s/` and `/.well-known/`, and a
+  self-reloading "RIM is being updated" page for browsers, instead of a bare `502`
+  (`deploy/Caddyfile`, `deploy/Caddyfile.relay`).
 - **Upgrade:** account passwords, checked with OPAQUE (`docs/specs/key-identity-v1.md`,
   "Account password (OPAQUE)"). `signupWithKey` requires `passwordRegistration` (from the new
   `passwordRegistrationStart`) and answers `serverShare`; an account of this server with a

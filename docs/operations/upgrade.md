@@ -101,6 +101,14 @@ Without compose the order is the same: run the new build's migrations while the 
 keeps serving, `DATABASE_URL=… /app/migration up` (or `cargo run --release -p migration -- up`
 from a checkout), then restart `rim-server` on the new binary.
 
+While a container restarts, Caddy cannot reach it and answers in its place
+(`handle_errors 502 503 504` in `deploy/Caddyfile` and `deploy/Caddyfile.relay`): `503` with
+`Retry-After: 30` and `Cache-Control: no-store`. Requests to `/api`, `/s2s/` and `/.well-known/`
+get JSON (`{"error":"unavailable","message":"The server is being updated. …"}`), which the
+apps read as the server being unreachable and other servers retry; a browser gets a page saying
+RIM is being updated, which reloads itself every 30 seconds. `/healthz` and `/readyz` stay
+`404` from outside. The same answer covers any other time rim-server or the web client is down.
+
 ## Rolling back
 
 **The binary, to the release before.** Migrations stay applied; the previous release's server
