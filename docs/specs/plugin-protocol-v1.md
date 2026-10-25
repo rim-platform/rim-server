@@ -865,8 +865,8 @@ schema plus any methods added under the rules below.
 - Senders emit exactly the frozen shapes; receivers ignore unknown fields rather than fail.
 - The host lists every version it speaks in `supportedVersions`, newest first, and the plugin
   picks one (section 7). When a v2 exists, a host will offer both `[2, 1]` for as long as it
-  supports v1; the RIM roadmap commits to supporting the current and the previous protocol
-  version. A v1 plugin keeps working on that host by answering `1`.
+  supports v1; RIM commits to supporting the current and the previous protocol version
+  (`docs/architecture.md`, "Design Guardrails"). A v1 plugin keeps working on that host by answering `1`.
 - A plugin that only speaks a newer version than the host offers refuses the handshake, as in
   section 7, and the user sees why.
 

@@ -88,6 +88,34 @@ The system should separate:
 
 No subsystem should silently gain power just because it exists.
 
+### Design Guardrails
+
+Every new server feature answers two questions: what it does when the message content is
+encrypted, and what it does when there is more than one server. These rules keep the answers
+cheap.
+
+- **Message identity is global, not server-local.** Ids are UUIDv7, row ids are never exposed,
+  and nothing is keyed on "the server". New tables are designed with an origin column in mind
+  even where it is a constant today.
+- **Content and metadata are separable.** Data derived from message text (search vectors, link
+  previews, mention rows) can be absent for an encrypted message without breaking the row. No
+  server feature may require reading message text; it may benefit from it.
+- **The client stays capable.** Commands, macros, keybinds, lenses and plugin logic stay
+  evaluable on the client, and server features prefer metadata (membership, timing, structure)
+  over content.
+- **One principal model.** People, bots and the system user are principals; keys and remote
+  users add a kind and a key to a principal rather than a new concept. Plugins and new APIs see
+  an opaque `principalId`, never a local UUID or `name@domain`.
+- **GraphQL is the client contract.** Server-to-server traffic is a small signed HTTP API, a
+  non-GraphQL transport like the upload routes, not federation over GraphQL.
+- **Versioned contracts overlap.** The plugin protocol, the archive format and the
+  server-to-server API each keep serving the previous version while a new one exists.
+- **Migrations only expand.** A column or table is added in one release and removed at the
+  earliest a release later, so a host can roll the binary back (`docs/operations/upgrade.md`).
+- **Single-node stores stay behind traits.** See "Scaling Limits" below.
+- **No server-only verticals.** A feature for one kind of community is a plugin, a bot or a
+  pipeline (`CONTRIBUTING.md`, "What belongs in the core").
+
 ## Current Crate Responsibilities
 
 ### `rim_core`
@@ -406,7 +434,7 @@ The architecture should preserve visible trust boundaries between:
 One server process holds some state in memory behind traits: the event broadcaster, the
 confirmation store, rate limiters, presence and typing. Some background jobs, such as the notification digest, assume one node. Running
 several nodes of one server needs those traits backed by shared stores first; new features must
-not depend on single-node semantics (`ROADMAP.md`, "Architecture guardrails").
+not depend on single-node semantics.
 
 ## Contributor Rules
 
