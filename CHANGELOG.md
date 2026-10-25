@@ -325,6 +325,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- The recipient of a DM request posts nothing into its conversation before accepting it:
+  `sendMessage`, `replyToMessage`, `forwardMessage` into it, `sendEncryptedMessage` and
+  `toggleReaction` answer `FORBIDDEN` ("accept the message request before posting here") while
+  their request is pending or ignored, or they blocked its starter, and `startTyping` answers
+  `false`. Reading it first stays possible. Before, a reply from "Read first" reached the sender
+  while the request stayed pending.
 - In the server's default workspace a group is started and grown like a DM with each newcomer:
   `createConversation` and `addConversationMembers` (and the `chat.create_group` and
   `chat.invite_to_conversation` commands) follow each newcomer's DM settings, the request

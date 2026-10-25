@@ -142,7 +142,8 @@ decide, and each may only tighten the one above it:
 - **Workspace DMs.** In a workspace hosted here, a DM a member whose relay is this server takes
   as a request is held in their request inbox like a DM from outside: until they accept it, it stays out of their
   `inboxConversations` and `workspaceEvents`, and its notifications and unread counts out of
-  theirs. Like the request inbox it needs server-to-server traffic to be on; without it workspace
+  theirs; meanwhile they may read it but post, react and type nothing in it (`docs/relay.md`,
+  "The request inbox"). Like the request inbox it needs server-to-server traffic to be on; without it workspace
   DMs arrive directly.
 - **The default workspace's groups.** In the server's default workspace, which every account
   joins, a group is started and grown like a DM with each newcomer: `createConversation` and

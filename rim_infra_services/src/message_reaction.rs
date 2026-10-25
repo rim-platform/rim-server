@@ -7,6 +7,7 @@ use sea_orm::DatabaseConnection;
 
 use rim_core::message::model::{Message, MessageId};
 use rim_core::message_reaction::model::{MessageReaction, NewMessageReaction};
+use rim_core::relay::repository::RelayRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_feature::model::ServerFeature;
 use rim_infra_db::TransactionScope;
@@ -24,6 +25,7 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::ReactionRepos;
 use crate::repos::AppRepos;
+use crate::request_gate::ensure_request_decided;
 use crate::util::{
     ConversationAccessRepos, ensure_conversation_in_server, ensure_conversation_member_access,
     ensure_conversation_writable,
@@ -115,6 +117,9 @@ pub struct DefaultMessageReactionService {
     /// Whether custom emoji, and so `:name:` reactions, are enabled. `None` refuses `:name:`
     /// reactions.
     features: Option<Arc<dyn FeatureGate>>,
+    /// The request inbox: a recipient reacts in no conversation they have not accepted. `None`
+    /// in unit tests that are not about it; the composition root wires it.
+    relay_repo: Option<Arc<dyn RelayRepository>>,
 }
 
 impl DefaultMessageReactionService {
@@ -125,7 +130,14 @@ impl DefaultMessageReactionService {
             observers,
             notification_service: None,
             features: None,
+            relay_repo: None,
         }
+    }
+
+    /// Refuse reactions in a conversation whose message request the reactor has not accepted.
+    pub fn with_relay_repo(mut self, relay_repo: Arc<dyn RelayRepository>) -> Self {
+        self.relay_repo = Some(relay_repo);
+        self
     }
 
     /// Accept `:name:` reactions while the instance has custom emoji enabled.
@@ -295,6 +307,12 @@ impl MessageReactionService for DefaultMessageReactionService {
         &self,
         cmd: ToggleReactionCmd,
     ) -> ServiceResult<Vec<ReactionGroupDto>> {
+        ensure_request_decided(
+            self.relay_repo.as_ref(),
+            cmd.actor.user_id,
+            cmd.conversation_id,
+        )
+        .await?;
         // Only an added reaction must be an emoji; the caller removes any reaction they hold,
         // whatever its text.
         let emoji = trim_reaction(&cmd.emoji)?.to_string();

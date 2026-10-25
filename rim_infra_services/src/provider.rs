@@ -292,7 +292,8 @@ impl DefaultAppServiceProvider {
         .with_moderation_repo(Arc::clone(&repos.moderation_repo))
         .with_direct_space(federation.direct_space_id)
         .with_limits(limits)
-        .with_handle_domain(federation.handle_domain.clone());
+        .with_handle_domain(federation.handle_domain.clone())
+        .with_relay_repo(Arc::clone(&repos.relay_repo));
         if let Some(rate) = federation.quotas.messages {
             message_concrete = message_concrete.with_message_budget(rate);
         }
@@ -351,7 +352,8 @@ impl DefaultAppServiceProvider {
                 observers.clone(),
             )
             .with_notification_service(Arc::clone(&notification_service))
-            .with_feature_gate(Arc::clone(&feature_gate)),
+            .with_feature_gate(Arc::clone(&feature_gate))
+            .with_relay_repo(Arc::clone(&repos.relay_repo)),
         );
         let notification_preference_service: Arc<dyn NotificationPreferenceService> = Arc::new(
             crate::notification_preference::DefaultNotificationPreferenceService::new(
