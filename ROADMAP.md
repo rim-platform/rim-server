@@ -48,16 +48,23 @@ In order:
    tokens it can revoke; one incoming webhook URL per channel, bound to a bot, with its own rate
    limit; a GitHub preset first, so releases post themselves. Bots never join encrypted
    conversations.
-2. **The outside cryptographic review**, then `0.1.0`. Before it: a "why can't I read this" view
+2. **RIM in Claude Code and other agents.** The desktop app serves RIM as a local MCP server,
+   and a Claude Code plugin packages it with a skill, so an agent on your machine can read your
+   conversations, search, draft replies and run commands. It acts as you, through your desktop
+   app: your keys stay on the device, encrypted conversations work, and every send or change
+   waits for your confirmation in RIM, under the same command registry and gate as the built-in
+   agent. Read-only by default; an encrypted conversation reaches the agent's model only with a
+   grant for that conversation, and the audit log records what the agent did.
+3. **The outside cryptographic review**, then `0.1.0`. Before it: a "why can't I read this" view
    that explains an undecryptable message, and a manual multi-device test pass in the release
    checklist.
-3. **A first-run path** in the clients that grows with the product: create a key and write down
+4. **A first-run path** in the clients that grows with the product: create a key and write down
    the phrase, choose a drive for the archive, pick a relay, install a first plugin.
-4. **Data export** per person and per workspace.
-5. **Outgoing webhooks and richer pipelines**: posting, calling a webhook and setting state as
+5. **Data export** per person and per workspace.
+6. **Outgoing webhooks and richer pipelines**: posting, calling a webhook and setting state as
    pipeline actions, conditions, run history and retries; commands a bot registers in the
    palette.
-6. **Member lists at relay scale**, so a workspace with thousands of members does not load them
+7. **Member lists at relay scale**, so a workspace with thousands of members does not load them
    all at once, and handle lookup for `@username:rim-platform.org`.
 
 ## Later
@@ -73,8 +80,8 @@ build them.
 - **The agent:** local and self-hosted models (Ollama and OpenAI-compatible endpoints); macros
   the agent runs step by step with a pause at each change; catch-me-up summaries with citations,
   acting through commands rather than as a separate chatbot.
-- **MCP:** MCP servers installed as plugins, and RIM as an MCP server so outside agents drive
-  the command registry under the same confirmation gate.
+- **More MCP:** MCP servers installed as plugins, so the built-in agent can use them; and a
+  headless MCP server with a bot token, for agents that run without a person at a desktop.
 - **`rim-cli`:** `rim send`, `rim search`, `rim watch` and `rim macro run` with a host-local
   token; it doubles as a contract test of the GraphQL API.
 - **Reach:** the web app as an installable PWA with web push and a narrow layout. No native
