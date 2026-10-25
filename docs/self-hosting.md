@@ -433,8 +433,10 @@ accounts to accept again.
 `RIM_RESERVED_NAMES` (commented out in `deploy/.env.example`) lists usernames and display names
 that signups and profile edits refuse, ignoring case, invisible characters and lookalike letters
 from other scripts (Cyrillic `А` for `A`), so nobody can pose as your maintainers; a person from
-another server whose profile card names one is shown by their username instead. Set it once
-their accounts exist, since it refuses those names to new signups too.
+another server whose profile card names one is shown by their username instead. The signup
+through the owner claim link of a defined default workspace may take a reserved name, so the
+owner's name can be listed before the first start. Any other maintainer's name is added once
+their account exists, since it refuses those names to new signups too.
 
 ## Legal duties of an operator
 

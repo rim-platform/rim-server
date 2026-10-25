@@ -1129,12 +1129,17 @@ impl KeyAuthService for DefaultKeyAuthService {
         // The display name falls back to the username as typed, keeping its case.
         let display_name =
             signup::normalize_display_name(cmd.display_name.as_deref(), cmd.username.trim())?;
-        signup::check_reserved(&self.reserved_names, username, &display_name)?;
 
         let token = match &cmd.token {
             Some(token) => Some(signup::check_token(&self.repos.signup, token).await?),
             None => None,
         };
+        // The owner claim link is held by the instance's maintainer, who may take a reserved name.
+        if !default_workspace::is_claim(&self.repos.signup, &self.default_workspace, token.as_ref())
+            .await?
+        {
+            signup::check_reserved(&self.reserved_names, username, &display_name)?;
+        }
         // An email-bound instance invite gives the account its address.
         let email = match &token {
             Some(signup::CheckedToken::InstanceInvite(invite)) => {

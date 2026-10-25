@@ -521,6 +521,17 @@ impl TestCtx {
         defined: rim_infra_services::default_workspace::DefinedWorkspace,
         registration_mode: rim_services::auth::dto::RegistrationMode,
     ) -> rim_api::AppSchema {
+        self.build_schema_with_defined_workspace_reserving(defined, registration_mode, "")
+    }
+
+    /// Build the schema on an instance with the `defined` default workspace that reserves the
+    /// comma-separated `names`, as `RIM_RESERVED_NAMES` does.
+    pub fn build_schema_with_defined_workspace_reserving(
+        &self,
+        defined: rim_infra_services::default_workspace::DefinedWorkspace,
+        registration_mode: rim_services::auth::dto::RegistrationMode,
+        names: &str,
+    ) -> rim_api::AppSchema {
         let (provider, observers) = test_provider(
             &self.conn,
             std::sync::Arc::new(NoopBroadcaster),
@@ -529,6 +540,8 @@ impl TestCtx {
                 default_workspace: rim_infra_services::default_workspace::DefaultWorkspace::Defined(
                     std::sync::Arc::new(defined),
                 ),
+                reserved_names: rim_infra_services::reserved_names::ReservedNames::parse(names)
+                    .expect("reserved names"),
                 ..Default::default()
             },
             rim_services::limits::InstanceLimits::default(),

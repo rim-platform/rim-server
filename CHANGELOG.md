@@ -482,6 +482,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- The signup through the owner claim link may take a name in `RIM_RESERVED_NAMES`, so an
+  operator can reserve the owner's name before the first start. Every other signup is still
+  refused it.
 - Concurrent first direct messages between the same two people reuse one conversation.
 - Attachment creation, completion and removal advance the message change feed; creation,
   finalization and deletion notify connected clients. Repeating finalization of a ready file

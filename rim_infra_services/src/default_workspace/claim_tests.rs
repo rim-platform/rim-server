@@ -192,6 +192,74 @@ async fn only_the_claim_invite_under_a_definition_claims() {
     );
 }
 
+/// Only the waiting claim invite of a defined workspace counts as the claim: not another
+/// instance invite, not once the workspace is claimed, and never without a definition.
+#[tokio::test]
+async fn only_the_waiting_claim_invite_is_the_claim() {
+    let invite = InstanceInviteId::new();
+    let claim_invite = CheckedToken::InstanceInvite(instance_invite(invite));
+    let other_invite = CheckedToken::InstanceInvite(instance_invite(InstanceInviteId::new()));
+    let file = PathBuf::from("/nonexistent");
+
+    let untouched = Repos::new().signup();
+    for (setting, token) in [
+        (DefaultWorkspace::None, Some(&claim_invite)),
+        (
+            DefaultWorkspace::Fixed(ServerId::new()),
+            Some(&claim_invite),
+        ),
+        (defined(file.clone()), None),
+        (
+            defined(file.clone()),
+            Some(&CheckedToken::WorkspaceInvite(workspace_invite())),
+        ),
+    ] {
+        assert!(!is_claim(&untouched, &setting, token).await.unwrap());
+    }
+
+    for (record, token, expected) in [
+        (
+            DefaultWorkspaceRecord {
+                claim_invite_id: Some(invite),
+                ..Default::default()
+            },
+            &claim_invite,
+            true,
+        ),
+        (
+            DefaultWorkspaceRecord {
+                claim_invite_id: Some(invite),
+                ..Default::default()
+            },
+            &other_invite,
+            false,
+        ),
+        (
+            DefaultWorkspaceRecord {
+                workspace_id: Some(ServerId::new()),
+                claim_invite_id: Some(invite),
+                ..Default::default()
+            },
+            &claim_invite,
+            false,
+        ),
+    ] {
+        let mut repos = Repos::new();
+        repos
+            .record
+            .expect_record()
+            .times(1)
+            .returning(move || Box::pin(std::future::ready(Ok(record.clone()))));
+        let signup = repos.signup();
+        assert_eq!(
+            is_claim(&signup, &defined(file.clone()), Some(token))
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+}
+
 /// The claim creates the workspace with the owner, its channels with topics and privacy and
 /// its DM policy, records it, adds the other local account and grants the operator role.
 #[tokio::test]

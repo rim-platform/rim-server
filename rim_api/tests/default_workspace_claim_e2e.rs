@@ -34,7 +34,7 @@ use rim_infra_services::default_workspace::{
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{anonymous_request, exec_err_code, exec_ok};
+use support::graphql::{anonymous_request, exec_err, exec_err_code, exec_ok};
 use support::identity::{SIGNUP_WITH_KEY, signed_out, signup_input};
 use support::registration::seed_operator_invite;
 
@@ -427,6 +427,68 @@ async fn a_key_signup_claims_with_the_link_in_pow_mode() {
     assert_eq!(joined(&ctx, &workspace, &owner).await, ["general"]);
     assert!(!is_operator(&ctx, &owner).await);
     assert!(!file.exists());
+    cleanup(&file);
+}
+
+/// The signup through the claim link may take a reserved username and display name, so the
+/// names can be reserved before the owner's account exists; any other signup is still refused
+/// them.
+#[tokio::test]
+async fn the_claim_may_take_a_reserved_name() {
+    let ctx = TestCtx::new().await;
+    let defined = defined(r#"{ "name": "Company", "channels": [{ "name": "general" }] }"#);
+    let file = defined.claim_link_file.clone();
+    let setting = DefaultWorkspace::Defined(Arc::new(defined.clone()));
+    run_start(&ctx, &setting, true).await.expect("start");
+    let token = claim_token(&file);
+    let schema = ctx.build_schema_with_defined_workspace_reserving(
+        defined,
+        RegistrationMode::InviteOnly,
+        "rimmer",
+    );
+
+    seed_operator_invite(
+        &ctx.db,
+        "rim_iinv_not_the_claim",
+        Utc::now() + chrono::Duration::minutes(15),
+    )
+    .await;
+    let other = key_signup(
+        &schema,
+        "rimmer",
+        64,
+        json!({ "instanceInviteToken": "rim_iinv_not_the_claim" }),
+    )
+    .await;
+    assert_eq!(
+        exec_err(&schema, other).await,
+        (
+            "VALIDATION".to_string(),
+            "this name is reserved".to_string()
+        )
+    );
+
+    let identity = TestIdentity::with_version(63, StatementVersion::V2);
+    let mut input = signup_input(
+        &schema,
+        "rimmer",
+        &identity,
+        73,
+        json!({ "instanceInviteToken": token }),
+    )
+    .await;
+    input["displayName"] = json!("Rimmer");
+    let data = exec_ok(
+        &schema,
+        signed_out(SIGNUP_WITH_KEY, json!({ "input": input })),
+    )
+    .await;
+    let owner = id(&data["signupWithKey"]["userId"]);
+    let workspace = id(&data["signupWithKey"]["serverId"]);
+    assert_eq!(
+        role(&ctx, &workspace, &owner).await.as_deref(),
+        Some("owner")
+    );
     cleanup(&file);
 }
 
