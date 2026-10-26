@@ -262,6 +262,61 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             ],
         ),
         agent_callable(
+            moderation_command(
+                "chat.set_channel_posting",
+                "Set Who Can Post",
+                "Let everyone or only the owner and moderators post in a channel \
+                 (Owner/Moderator).",
+                "Chat",
+                "chat.write",
+                vec![
+                    workspace_arg(),
+                    arg(
+                        "conversation_id",
+                        "Channel",
+                        "Channel to configure; defaults to the focused conversation.",
+                        CommandArgumentTypeDto::ConversationId,
+                        true,
+                    ),
+                    CommandArgumentDto {
+                        allowed_values: Some(vec![
+                            "everyone".to_string(),
+                            "moderators".to_string(),
+                        ]),
+                        ..arg(
+                            "policy",
+                            "Who can post",
+                            "everyone, or moderators for the owner and moderators only.",
+                            CommandArgumentTypeDto::Enum,
+                            true,
+                        )
+                    },
+                    CommandArgumentDto {
+                        default_value: Some(serde_json::Value::Bool(true)),
+                        ..arg(
+                            "allows_threads",
+                            "Others can react and reply in threads",
+                            "Under moderators, whether everyone else may still react and reply \
+                             in threads. Defaults to true.",
+                            CommandArgumentTypeDto::Boolean,
+                            false,
+                        )
+                    },
+                ],
+                TypedVerb::Configure,
+            ),
+            "Set who may post in a channel: everyone, or only the workspace owner and \
+             moderators. With moderators, allows_threads says whether everyone else may still \
+             add reactions and reply in threads. Only owners and moderators may do this. Use \
+             when the user asks to make a channel read-only or announcement-only, or to open it \
+             to everyone again.",
+            &[
+                "make #announcements moderators only",
+                "only moderators can post here, but let people reply in threads",
+                "let everyone post in this channel again",
+            ],
+        ),
+        agent_callable(
             CommandDefinitionDto {
                 required_context: vec![
                     "workspace".to_string(),

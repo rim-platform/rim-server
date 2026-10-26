@@ -123,6 +123,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | `admin.timeout` | `server_id`, `user_id`, `minutes` (1..=43200), `reason?` | yes | no | Owner/Moderator |
 | `admin.set_role` | `server_id`, `user_id`, `role` (`moderator`/`member`/`guest`) | no | yes | Owner: any but owner; Moderator: member/guest; confirmation required |
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
+| `chat.set_channel_posting` | `server_id`, `conversation_id`, `policy` (`everyone`/`moderators`), `allows_threads?` (default true) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
 
 Notification builtins (`docs/messaging.md`, Notification Rules). All are
@@ -185,15 +186,15 @@ an invite token that would pass through the model provider), and `chat.mark_all_
 List arguments such as `user_ids` and `member_ids` accept a JSON array of ids or one
 comma-separated string, because the agent's tool schema types every argument as a scalar.
 
-AI-callable builtins: 41. They are seventeen chat, channel and navigation builtins
+AI-callable builtins: 42. They are seventeen chat, channel and navigation builtins
 (`chat.post_message`, `chat.open_thread`, `workspace.open_settings`,
 `workspace.navigate_to_channel`, `workspace.switch_workspace`, `chat.list_channels`,
 `chat.create_channel`, `chat.list_members`, `chat.search_messages`, `chat.get_recent_messages`,
 `chat.pin_message`, `chat.toggle_reaction` and the five channel membership builtins above),
-`admin.timeout`, `chat.set_slow_mode` and `chat.report_message`, the three `notifications.*`
-builtins, and the eighteen general builtins above. The set is pinned by
-`collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
-`list_commands_ai_surface_returns_forty_one_commands_with_caps` (`command_tests.rs`). The
+`admin.timeout`, `chat.set_slow_mode`, `chat.set_channel_posting` and `chat.report_message`,
+the three `notifications.*` builtins, and the eighteen general builtins above. The set is
+pinned by `collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
+`list_commands_ai_surface_returns_forty_two_commands_with_caps` (`command_tests.rs`). The
 capability union the AI surface checks is `admin.manage_members`, `chat.read` and `chat.write`;
 the notification and general builtins declare none.
 
@@ -551,8 +552,8 @@ context names a workspace the caller is a member of, their role there may run it
 required capabilities passes the capability gate; a user command needs the role every step
 needs. The role a builtin needs is the one the service behind it enforces: the Owner for
 `admin.invite_member`; an Owner or Moderator for `admin.kick`, `admin.ban`, `admin.unban`,
-`admin.timeout`, `admin.set_role`, `chat.set_slow_mode`, `chat.archive_channel` and
-`chat.unarchive_channel`; a member (not a guest) for `chat.create_channel`, `chat.create_group`
+`admin.timeout`, `admin.set_role`, `chat.set_slow_mode`, `chat.set_channel_posting`,
+`chat.archive_channel` and `chat.unarchive_channel`; a member (not a guest) for `chat.create_channel`, `chat.create_group`
 and `chat.invite_to_conversation`; a member, or a guest in the direct space, for
 `chat.join_channel`; any member, guests included, for the rest. In the direct space, where
 everyone is a guest, a group is started and people are invited through `createConversation` and

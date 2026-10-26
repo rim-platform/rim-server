@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use entity::{conversation, conversation_member};
 use rim_core::conversation::model::{
-    Conversation, ConversationId, ConversationType, NewConversation,
+    Conversation, ConversationId, ConversationType, NewConversation, PostingPolicy,
 };
 use rim_core::conversation::repository::{
     ChannelListFilter, ConversationActivityCursor, ConversationCreatedCursor,
@@ -609,6 +609,25 @@ impl ConversationRepository for SeaOrmConversationRepository {
 
         let mut active: conversation::ActiveModel = model.into();
         active.slow_mode_seconds = Set(seconds);
+        let updated = active.update(&self.db).await.map_err(map_db_err)?;
+        Ok(updated.into())
+    }
+
+    async fn set_posting(
+        &self,
+        conversation_id: ConversationId,
+        policy: PostingPolicy,
+        allows_threads: bool,
+    ) -> RepoResult<Conversation> {
+        let model = conversation::Entity::find_by_id(conversation_id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active: conversation::ActiveModel = model.into();
+        active.posting_policy = Set(policy.as_str().to_owned());
+        active.posting_allows_threads = Set(allows_threads);
         let updated = active.update(&self.db).await.map_err(map_db_err)?;
         Ok(updated.into())
     }

@@ -14,7 +14,7 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::PinRepos;
 use crate::conversation::manages_channel;
 use crate::util::{
-    ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
+    ConversationAccessRepos, PostKind, ensure_can_post, ensure_conversation_member_access,
     ensure_conversation_writable_with_standing,
 };
 
@@ -67,7 +67,7 @@ impl PinService for DefaultPinService {
         fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id, conversation_id = %cmd.conversation_id, message_id = %cmd.message_id)
     )]
     async fn pin_message(&self, cmd: PinMessageCmd) -> ServiceResult<()> {
-        let conversation = ensure_conversation_writable(
+        let (conversation, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -78,6 +78,7 @@ impl PinService for DefaultPinService {
             cmd.conversation_id,
         )
         .await?;
+        ensure_can_post(&conversation, &standing, PostKind::Pin)?;
 
         self.ensure_message_in_conversation(cmd.message_id, cmd.conversation_id)
             .await?;
@@ -154,6 +155,7 @@ impl PinService for DefaultPinService {
             cmd.conversation_id,
         )
         .await?;
+        ensure_can_post(&conversation, &standing, PostKind::Pin)?;
         self.ensure_message_in_conversation(cmd.message_id, cmd.conversation_id)
             .await?;
         if !manages_channel(&conversation, standing.role, cmd.actor.user_id) {

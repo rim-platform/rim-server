@@ -6,6 +6,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use rim_core::conversation::model::PostingPolicy;
 use rim_core::dm_policy::model::{MemberDm, OutsideFloor};
 
 /// Longest workspace name, in characters, as `createServer` takes it.
@@ -45,6 +46,9 @@ pub struct ChannelDefinition {
     pub topic: Option<String>,
     /// Whether the channel is private; fixed when the channel is created.
     pub private: bool,
+    /// Who may post in the channel and, under `PostingPolicy::Moderators`, whether everyone
+    /// else may still react and reply in threads; `None` leaves the channel's setting as it is.
+    pub posting: Option<(PostingPolicy, bool)>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +78,10 @@ struct RawChannel {
     topic: Option<String>,
     #[serde(default)]
     private: bool,
+    #[serde(default)]
+    posting: Option<String>,
+    #[serde(default, rename = "postingAllowsThreads")]
+    posting_allows_threads: Option<bool>,
 }
 
 impl WorkspaceDefinition {
@@ -176,10 +184,25 @@ fn channel_definition(index: usize, raw: RawChannel) -> Result<ChannelDefinition
             "channels[{index}].topic: at most {MAX_TOPIC_CHARS} characters"
         ));
     }
+    let posting = match (raw.posting.as_deref(), raw.posting_allows_threads) {
+        (None, None) => None,
+        (None, Some(_)) => {
+            return Err(format!(
+                "channels[{index}].postingAllowsThreads: needs posting"
+            ));
+        }
+        (Some(policy), allows_threads) => {
+            let policy = policy.parse::<PostingPolicy>().map_err(|_| {
+                format!(r#"channels[{index}].posting: must be "everyone" or "moderators""#)
+            })?;
+            Some((policy, allows_threads.unwrap_or(true)))
+        }
+    };
     Ok(ChannelDefinition {
         title: title.to_string(),
         topic,
         private: raw.private,
+        posting,
     })
 }
 
@@ -223,6 +246,11 @@ mod tests {
             definition.channels[0].topic.as_deref(),
             Some("Anything about RIM")
         );
+        let posting: Vec<_> = definition.channels.iter().map(|c| c.posting).collect();
+        assert_eq!(
+            posting,
+            [None, Some((PostingPolicy::Moderators, true)), None, None]
+        );
     }
 
     #[test]
@@ -255,12 +283,37 @@ mod tests {
                     title: "staff".to_string(),
                     topic: Some("Only us".to_string()),
                     private: true,
+                    posting: None,
                 },
                 ChannelDefinition {
                     title: "blank".to_string(),
                     topic: None,
                     private: false,
+                    posting: None,
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_channel_takes_a_posting_policy_with_threads_open_by_default() {
+        let definition = WorkspaceDefinition::parse(
+            r#"{ "name": "Co", "channels": [
+                { "name": "news", "posting": "moderators" },
+                { "name": "board", "posting": "moderators", "postingAllowsThreads": false },
+                { "name": "chat", "posting": "everyone" },
+                { "name": "misc" }
+            ] }"#,
+        )
+        .expect("parse");
+        let posting: Vec<_> = definition.channels.iter().map(|c| c.posting).collect();
+        assert_eq!(
+            posting,
+            [
+                Some((PostingPolicy::Moderators, true)),
+                Some((PostingPolicy::Moderators, false)),
+                Some((PostingPolicy::Everyone, true)),
+                None,
             ]
         );
     }
@@ -313,6 +366,16 @@ mod tests {
             (
                 r#"{ "name": "a", "channels": [{ "name": "c", "title": "c" }] }"#.to_string(),
                 "unknown field `title`",
+            ),
+            (
+                r#"{ "name": "a", "channels": [{ "name": "c" }, { "name": "d", "posting": "staff" }] }"#
+                    .to_string(),
+                r#"channels[1].posting: must be "everyone" or "moderators""#,
+            ),
+            (
+                r#"{ "name": "a", "channels": [{ "name": "c", "postingAllowsThreads": false }] }"#
+                    .to_string(),
+                "channels[0].postingAllowsThreads: needs posting",
             ),
             ("not json".to_string(), "expected"),
         ];

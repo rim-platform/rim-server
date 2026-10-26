@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use rim_auth::session_token::hash_token;
 use rim_core::auth::model::{InstanceInvite, InstanceInviteId, Invite, InviteId};
 use rim_core::auth::repository::{MockInstanceInviteRepository, MockInviteRepository};
-use rim_core::conversation::model::{Conversation, ConversationId};
+use rim_core::conversation::model::{Conversation, ConversationId, PostingPolicy};
 use rim_core::conversation::repository::MockConversationRepository;
 use rim_core::conversation_member::repository::MockConversationMemberRepository;
 use rim_core::default_workspace::model::DefaultWorkspaceRecord;
@@ -30,7 +30,7 @@ const DEFINITION: &str = r#"{
   "dm": { "outsideFloor": "REQUESTS", "memberDefault": "DIRECT" },
   "channels": [
     { "name": "general", "topic": "Anything about RIM" },
-    { "name": "staff", "private": true }
+    { "name": "staff", "private": true, "posting": "moderators", "postingAllowsThreads": false }
   ]
 }"#;
 
@@ -142,6 +142,8 @@ fn channel(id: ConversationId, server_id: ServerId, title: &str, is_private: boo
         archived_at: None,
         created_by: None,
         slow_mode_seconds: 0,
+        posting_policy: PostingPolicy::Everyone,
+        posting_allows_threads: true,
         encrypted_at: None,
     }
 }
@@ -333,6 +335,17 @@ async fn the_claim_builds_the_workspace_from_the_definition() {
         .returning(move |id, topic| {
             let mut conversation = channel(id, workspace, "general", false);
             conversation.topic = topic;
+            Box::pin(async move { Ok(conversation) })
+        });
+    repos
+        .conversations
+        .expect_set_posting()
+        .withf(|_, policy, allows_threads| *policy == PostingPolicy::Moderators && !allows_threads)
+        .times(1)
+        .returning(move |id, policy, allows_threads| {
+            let mut conversation = channel(id, workspace, "staff", true);
+            conversation.posting_policy = policy;
+            conversation.posting_allows_threads = allows_threads;
             Box::pin(async move { Ok(conversation) })
         });
     repos

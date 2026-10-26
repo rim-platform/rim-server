@@ -40,8 +40,8 @@ use rim_services::conversation::dto::ConversationDto;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::moderation::command::{
     AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
-    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetMemberRoleCmd,
-    SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd,
+    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::moderation::dto::{
     MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
@@ -71,6 +71,7 @@ pub(crate) mod audit_ids {
     pub(crate) const TIMEOUT: &str = "admin.timeout";
     pub(crate) const CLEAR_TIMEOUT: &str = "admin.clear_timeout";
     pub(crate) const SET_SLOW_MODE: &str = "chat.set_slow_mode";
+    pub(crate) const SET_CHANNEL_POSTING: &str = "chat.set_channel_posting";
     pub(crate) const REPORT_MESSAGE: &str = "chat.report_message";
     pub(crate) const RESOLVE_REPORT: &str = "admin.resolve_report";
     pub(crate) const SET_MEMBER_ROLE: &str = "admin.set_member_role";
@@ -514,6 +515,8 @@ impl DefaultModerationService {
             archived_at: conversation.archived_at,
             created_by: conversation.created_by,
             slow_mode_seconds: conversation.slow_mode_seconds,
+            posting_policy: conversation.posting_policy,
+            posting_allows_threads: conversation.posting_allows_threads,
             encrypted_at: conversation.encrypted_at,
         })
     }
@@ -1068,6 +1071,69 @@ impl ModerationService for DefaultModerationService {
             args: serde_json::json!({
                 "conversation_id": cmd.conversation_id.to_string(),
                 "seconds": cmd.seconds,
+            }),
+            dangerous: false,
+            typed_verb: TypedVerb::Configure,
+        })
+        .await;
+
+        let dto = self.to_conversation_dto(updated).await?;
+        self.observers.emit(WorkspaceEvent::ConversationUpdated {
+            workspace_id: dto.server_id,
+            conversation_id: dto.id,
+            conversation_type: dto.conversation_type.as_str().to_string(),
+            is_private: dto.is_private,
+            member_user_ids: dto.member_ids.clone(),
+        });
+        Ok(dto)
+    }
+
+    async fn set_channel_posting(
+        &self,
+        cmd: SetChannelPostingCmd,
+    ) -> ServiceResult<ConversationDto> {
+        // Role first: a non-moderator learns nothing about which ids exist (same rule as
+        // archiving).
+        self.actor_moderator(cmd.server_id, cmd.actor.user_id)
+            .await?;
+        let conversation = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+        if conversation.conversation_type != ConversationType::Channel {
+            return Err(ServiceError::Validation(
+                "posting permissions apply to channels only".to_string(),
+            ));
+        }
+        ensure_not_archived(&conversation)?;
+
+        if conversation.posting_policy == cmd.policy
+            && conversation.posting_allows_threads == cmd.allows_threads
+        {
+            return self.to_conversation_dto(conversation).await;
+        }
+        let updated = self
+            .repos
+            .conversation_repo
+            .set_posting(conversation.id, cmd.policy, cmd.allows_threads)
+            .await?;
+        info!(
+            conversation_id = %updated.id,
+            policy = cmd.policy.as_str(),
+            allows_threads = cmd.allows_threads,
+            "set channel posting"
+        );
+
+        self.audit(ModerationAuditEntry {
+            actor: cmd.actor.user_id,
+            server_id: cmd.server_id,
+            command_id: audit_ids::SET_CHANNEL_POSTING,
+            args: serde_json::json!({
+                "conversation_id": cmd.conversation_id.to_string(),
+                "policy": cmd.policy.as_str(),
+                "allows_threads": cmd.allows_threads,
             }),
             dangerous: false,
             typed_verb: TypedVerb::Configure,

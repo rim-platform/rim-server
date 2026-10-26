@@ -117,6 +117,7 @@ pub(crate) fn required_role(command_id: &str) -> RequiredRole {
         | "admin.timeout"
         | "admin.set_role"
         | "chat.set_slow_mode"
+        | "chat.set_channel_posting"
         | "chat.archive_channel"
         | "chat.unarchive_channel" => RequiredRole::Moderator,
         "chat.create_channel" | "chat.create_group" | "chat.invite_to_conversation" => {
@@ -250,6 +251,7 @@ mod tests {
             "chat.archive_channel",
             "chat.unarchive_channel",
             "chat.set_slow_mode",
+            "chat.set_channel_posting",
             "admin.timeout",
             "chat.report_message",
             "notifications.set_level",

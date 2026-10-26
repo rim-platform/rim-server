@@ -9,7 +9,9 @@ mod tests {
 
     use uuid::Uuid;
 
-    use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+    use rim_core::conversation::model::{
+        Conversation, ConversationId, ConversationType, PostingPolicy,
+    };
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::e2ee::model::{
@@ -189,6 +191,8 @@ mod tests {
                 archived_at: None,
                 created_by: Some(alice_id),
                 slow_mode_seconds: 0,
+                posting_policy: PostingPolicy::Everyone,
+                posting_allows_threads: true,
                 encrypted_at: encrypted.then_some(created_at),
             };
             let repo = Arc::new(FakeE2ee::default());

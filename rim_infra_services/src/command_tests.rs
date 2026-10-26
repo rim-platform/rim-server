@@ -536,7 +536,7 @@ mod tests {
     #[tokio::test]
     // Every AI-callable builtin whose capabilities the mock grants (`chat.read`, `chat.write`,
     // `admin.manage_members`) or that needs none.
-    async fn list_commands_ai_surface_returns_forty_one_commands_with_caps() {
+    async fn list_commands_ai_surface_returns_forty_two_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -606,6 +606,7 @@ mod tests {
                 "chat.scroll_to_bottom",
                 "chat.scroll_to_top",
                 "chat.search_messages",
+                "chat.set_channel_posting",
                 "chat.set_slow_mode",
                 "chat.toggle_reaction",
                 "chat.unarchive_channel",
@@ -4029,6 +4030,7 @@ mod tests {
             "admin.timeout",
             "admin.unban",
             "chat.archive_channel",
+            "chat.set_channel_posting",
             "chat.set_slow_mode",
             "chat.unarchive_channel",
         ];
@@ -4197,6 +4199,7 @@ mod tests {
         for id in [
             "admin.timeout",
             "chat.archive_channel",
+            "chat.set_channel_posting",
             "chat.set_slow_mode",
             "chat.unarchive_channel",
         ] {
@@ -4250,7 +4253,11 @@ mod tests {
             "role": "member",
         });
         let mut member_refused: Vec<&str> = ADMIN_TARGET_COMMANDS.to_vec();
-        member_refused.extend(["chat.set_slow_mode", "admin.invite_member"]);
+        member_refused.extend([
+            "chat.set_slow_mode",
+            "chat.set_channel_posting",
+            "admin.invite_member",
+        ]);
 
         for (role, refused) in [
             (ServerMemberRole::Member, member_refused),
@@ -4263,6 +4270,7 @@ mod tests {
                 moderation.expect_timeout().never();
                 moderation.expect_set_member_role().never();
                 moderation.expect_set_slow_mode().never();
+                moderation.expect_set_channel_posting().never();
             });
             svc.services.auth_service = no_invites();
 

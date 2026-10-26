@@ -74,6 +74,9 @@ pub(super) async fn execute_builtin_command(
         "admin.timeout" => moderation::timeout(services, actor, args, context).await,
         "admin.set_role" => moderation::set_role(services, actor, args, context).await,
         "chat.set_slow_mode" => moderation::set_slow_mode(services, actor, args, context).await,
+        "chat.set_channel_posting" => {
+            moderation::set_channel_posting(services, actor, args, context).await
+        }
         "chat.report_message" => moderation::report_message(services, actor, args, context).await,
         "notifications.set_level" => notification::set_level(services, actor, args, context).await,
         "notifications.dnd" => notification::dnd(services, actor, args, context).await,

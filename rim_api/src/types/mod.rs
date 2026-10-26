@@ -62,7 +62,8 @@ pub use command_result::{
     InBandTokenInput, PipeStageResult,
 };
 pub use conversation::{
-    ChannelListFilterInput, Conversation, ConversationTypeEnum, MutedConversation, UnreadCount,
+    ChannelListFilterInput, Conversation, ConversationTypeEnum, MutedConversation,
+    PostingPolicyGql, UnreadCount,
 };
 pub use custom_emoji::CustomEmoji;
 pub use device_link::{

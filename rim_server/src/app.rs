@@ -413,6 +413,7 @@ async fn start_default_workspace(
                 renamed_to = ?changes.renamed_to,
                 channels_added = ?changes.channels_added,
                 topics_set = ?changes.topics_set,
+                posting_set = ?changes.posting_set,
                 dm_policy_set = changes.dm_policy_set,
                 "RIM_DEFAULT_WORKSPACE_FILE applied to the default workspace; every new account \
                  joins it"

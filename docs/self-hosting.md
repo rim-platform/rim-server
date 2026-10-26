@@ -496,7 +496,7 @@ it for yours:
   "dm": { "outsideFloor": "REQUESTS", "memberDefault": "REQUESTS" },
   "channels": [
     { "name": "general", "topic": "Anything about RIM" },
-    { "name": "announcements", "topic": "Releases and news from the project" }
+    { "name": "announcements", "topic": "Releases and news from the project", "posting": "moderators" }
   ]
 }
 ```
@@ -511,7 +511,12 @@ it for yours:
   in the committed file, holds it in the recipient's request inbox until they accept it, and
   each member can still choose `DIRECT` for themselves (`setMyWorkspaceDmSetting`).
 - `channels` (optional): each with a `name` (at most 100 characters, unique in the file), an
-  optional `topic` (at most 512 characters) and `private` (default `false`).
+  optional `topic` (at most 512 characters), `private` (default `false`), an optional `posting`
+  and an optional `postingAllowsThreads`. `posting` is who may post in the channel, as
+  `setChannelPosting` sets it: `"everyone"` or `"moderators"` (the Owner and Moderators only, as
+  for `announcements` in the committed file). `postingAllowsThreads` (default `true`, only
+  together with `posting`) says whether, under `"moderators"`, everyone else may still react and
+  reply in threads. Without `posting` the channel's setting stays as it is.
 
 The server checks the file at every start; a field it does not take, a missing name, a value out
 of range or a file it cannot read stops it at boot with a message naming the field. The owner is
@@ -528,8 +533,8 @@ dc exec rim cat /data/owner-claim.txt
 ```
 
 The account that signs up through the link, with a key or a password, creates the workspace in
-the same step: the workspace with that account as its Owner, the channels with their topics, the
-DM policy, and the instance operator role when `claimGrantsOperator` is set. Every local account
+the same step: the workspace with that account as its Owner, the channels with their topics and
+posting policies, the DM policy, and the instance operator role when `claimGrantsOperator` is set. Every local account
 that already exists joins it as a Member. The link is then used up and the file deleted; nothing
 needs editing and nothing restarts. Only a new signup claims: an account that already exists
 cannot, and nobody can claim by registering a name first, since only someone who can read the
@@ -539,9 +544,9 @@ whose signups take no invite, refuses to start until the workspace is claimed.
 
 **Every later start** applies the file to the claimed workspace again: it renames the workspace
 when the name changed, creates the channels missing by name (with no members; new accounts join
-the public ones), sets the topics the file gives and the DM policy. It never deletes a channel
-or a member, never changes a channel's privacy and never moves ownership (the Owner transfers
-it in the app). A channel renamed in the file is a new channel: rename it in the app first, then
+the public ones), sets the topics and posting policies the file gives and the DM policy. It
+never deletes a channel or a member, never changes a channel's privacy and never moves
+ownership (the Owner transfers it in the app). A channel renamed in the file is a new channel: rename it in the app first, then
 in the file. A channel or topic made in the app and left out of the file stays as it is. A
 channel of a file's name that someone other than the Owner or a Moderator created is left alone,
 topic included, and the log names it: give the file's channel another name. When

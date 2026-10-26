@@ -23,6 +23,8 @@ impl From<conversation::Model> for Conversation {
             created_by: m.created_by.map(Into::into),
             slow_mode_seconds: m.slow_mode_seconds,
             encrypted_at: m.encrypted_at.map(Into::into),
+            posting_policy: m.posting_policy.parse().unwrap_or_default(),
+            posting_allows_threads: m.posting_allows_threads,
         }
     }
 }

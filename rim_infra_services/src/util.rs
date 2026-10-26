@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rim_core::conversation::model::{Conversation, ConversationId};
+use rim_core::conversation::model::{Conversation, ConversationId, PostingPolicy};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::moderation::repository::ModerationRepository;
@@ -193,6 +193,50 @@ pub fn ensure_not_archived(conversation: &Conversation) -> ServiceResult<()> {
     Ok(())
 }
 
+/// What a write into a conversation adds, for the posting policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostKind {
+    /// A message in the timeline, including a forward into the conversation.
+    Message,
+    /// A reply in a thread.
+    ThreadReply,
+    /// A reaction added to a message.
+    Reaction,
+    /// Pinning or unpinning a message.
+    Pin,
+}
+
+/// The refusal for a write a channel's posting policy keeps from the actor.
+pub const POSTING_RESTRICTED: &str = "only the owner and moderators can post in this channel";
+
+/// `Forbidden` when the channel's posting policy keeps `standing` from this kind of write.
+///
+/// Under `PostingPolicy::Moderators` everyone but the Owner and Moderators is refused messages
+/// and pins, and thread replies and reactions unless `posting_allows_threads` is set. Under
+/// `PostingPolicy::Everyone` every write passes.
+///
+/// # Errors
+///
+/// `ServiceError::Forbidden` with [`POSTING_RESTRICTED`] when the policy refuses the write.
+pub fn ensure_can_post(
+    conversation: &Conversation,
+    standing: &MemberStanding,
+    kind: PostKind,
+) -> ServiceResult<()> {
+    if conversation.posting_policy == PostingPolicy::Everyone || standing.role.is_moderator() {
+        return Ok(());
+    }
+    let allowed = match kind {
+        PostKind::Message | PostKind::Pin => false,
+        PostKind::ThreadReply | PostKind::Reaction => conversation.posting_allows_threads,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(ServiceError::Forbidden(POSTING_RESTRICTED.to_string()))
+    }
+}
+
 /// `PermissionDenied` unless the user is a member of `server_id`. A local user's first use of
 /// the direct space makes them a guest there.
 pub async fn ensure_server_member(
@@ -379,7 +423,7 @@ pub async fn ensure_conversation_access_as(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use rim_core::conversation::model::{Conversation, ConversationType};
+    use rim_core::conversation::model::{Conversation, ConversationType, PostingPolicy};
     use rim_core::conversation::repository::{
         ConversationActivityCursor, ConversationCreatedCursor, ConversationRepository,
     };
@@ -733,6 +777,15 @@ mod tests {
         ) -> RepoResult<Conversation> {
             Err(RepoError::new(RepoErrorKind::Unsupported))
         }
+
+        async fn set_posting(
+            &self,
+            _conversation_id: rim_core::conversation::model::ConversationId,
+            _policy: PostingPolicy,
+            _allows_threads: bool,
+        ) -> RepoResult<Conversation> {
+            Err(RepoError::new(RepoErrorKind::Unsupported))
+        }
     }
 
     #[tokio::test]
@@ -915,6 +968,8 @@ mod tests {
                 archived_at: None,
                 created_by: None,
                 slow_mode_seconds: 0,
+                posting_policy: PostingPolicy::Everyone,
+                posting_allows_threads: true,
                 encrypted_at: None,
             }),
         };
@@ -923,6 +978,104 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
+    }
+
+    /// A public channel with `policy` and `allows_threads`.
+    fn posting_channel(policy: PostingPolicy, allows_threads: bool) -> Conversation {
+        Conversation {
+            id: ConversationId::new(),
+            conversation_type: ConversationType::Channel,
+            title: None,
+            topic: None,
+            created_at: chrono::Utc::now(),
+            last_activity_at: chrono::Utc::now(),
+            server_id: ServerId::new(),
+            is_private: false,
+            archived_at: None,
+            created_by: None,
+            slow_mode_seconds: 0,
+            encrypted_at: None,
+            posting_policy: policy,
+            posting_allows_threads: allows_threads,
+        }
+    }
+
+    const ALL_KINDS: [PostKind; 4] = [
+        PostKind::Message,
+        PostKind::ThreadReply,
+        PostKind::Reaction,
+        PostKind::Pin,
+    ];
+
+    fn is_posting_restricted<T: std::fmt::Debug>(res: ServiceResult<T>) -> bool {
+        match res {
+            Err(ServiceError::Forbidden(message)) => message == POSTING_RESTRICTED,
+            other => panic!("expected the posting refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_can_post_allows_everyone_by_default() {
+        let channel = posting_channel(PostingPolicy::default(), false);
+        for role in [ServerMemberRole::Member, ServerMemberRole::Guest] {
+            for kind in ALL_KINDS {
+                assert!(
+                    ensure_can_post(&channel, &MemberStanding::new(role), kind).is_ok(),
+                    "{role:?} {kind:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ensure_can_post_lets_staff_post_anywhere() {
+        let channel = posting_channel(PostingPolicy::Moderators, false);
+        for role in [ServerMemberRole::Owner, ServerMemberRole::Moderator] {
+            for kind in ALL_KINDS {
+                assert!(
+                    ensure_can_post(&channel, &MemberStanding::new(role), kind).is_ok(),
+                    "{role:?} {kind:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ensure_can_post_refuses_messages_and_pins_to_members() {
+        for allows_threads in [true, false] {
+            let channel = posting_channel(PostingPolicy::Moderators, allows_threads);
+            for role in [ServerMemberRole::Member, ServerMemberRole::Guest] {
+                for kind in [PostKind::Message, PostKind::Pin] {
+                    assert!(
+                        is_posting_restricted(ensure_can_post(
+                            &channel,
+                            &MemberStanding::new(role),
+                            kind
+                        )),
+                        "{role:?} {kind:?} {allows_threads}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ensure_can_post_follows_the_thread_switch() {
+        let open = posting_channel(PostingPolicy::Moderators, true);
+        let closed = posting_channel(PostingPolicy::Moderators, false);
+        for role in [ServerMemberRole::Member, ServerMemberRole::Guest] {
+            let standing = MemberStanding::new(role);
+            for kind in [PostKind::ThreadReply, PostKind::Reaction] {
+                assert!(
+                    ensure_can_post(&open, &standing, kind).is_ok(),
+                    "{role:?} {kind:?}"
+                );
+                assert!(
+                    is_posting_restricted(ensure_can_post(&closed, &standing, kind)),
+                    "{role:?} {kind:?}"
+                );
+            }
+        }
     }
 
     // ── Gate-ordering pinning tests for ensure_conversation_member_access ──
@@ -1156,6 +1309,8 @@ mod tests {
             archived_at: archived.then(chrono::Utc::now),
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         };
         let server_member_repo = FakeServerMemberRepo {
@@ -1224,6 +1379,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         };
         assert!(ensure_not_archived(&conversation).is_ok());
@@ -1266,6 +1423,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         };
         let server_member_repo = guest_repo();
@@ -1329,6 +1488,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         };
         let conversation_repo = FakeConversationRepo {

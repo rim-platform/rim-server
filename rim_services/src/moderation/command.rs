@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use rim_core::conversation::model::ConversationId;
+use rim_core::conversation::model::{ConversationId, PostingPolicy};
 use rim_core::message::model::MessageId;
 use rim_core::moderation::model::{MessageReportId, MessageReportStatus};
 use rim_core::repository::pagination::PageDir;
@@ -78,6 +78,17 @@ pub struct SetSlowModeCmd {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
     pub seconds: i32,
+}
+
+/// Owner/Moderator; channels only. Sets who may post in the channel and, under
+/// `PostingPolicy::Moderators`, whether everyone else may still react and reply in threads.
+#[derive(Debug, Clone)]
+pub struct SetChannelPostingCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub policy: PostingPolicy,
+    pub allows_threads: bool,
 }
 
 /// Any member who can read the message, once per message.

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rim_core::command::repository::MockUserCommandRepository;
-use rim_core::conversation::model::{ConversationId, ConversationType};
+use rim_core::conversation::model::{ConversationId, ConversationType, PostingPolicy};
 use rim_core::macro_def::repository::MockMacroRepository;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
@@ -405,6 +405,8 @@ async fn agent_create_group_with_proof_accepts_comma_separated_member_ids() {
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    posting_policy: PostingPolicy::Everyone,
+                    posting_allows_threads: true,
                     encrypted_at: None,
                 })
             })

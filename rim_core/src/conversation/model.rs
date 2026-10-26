@@ -64,6 +64,63 @@ impl FromStr for ConversationType {
     }
 }
 
+/// Who may post in a channel.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+pub enum PostingPolicy {
+    /// Every member who can write in the channel.
+    #[default]
+    Everyone,
+    /// The workspace's Owner and Moderators only.
+    Moderators,
+}
+
+impl PostingPolicy {
+    /// The stored form: `"everyone"` or `"moderators"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Everyone => "everyone",
+            Self::Moderators => "moderators",
+        }
+    }
+}
+
+impl fmt::Display for PostingPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A text that is not a posting policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsePostingPolicyError {
+    input: String,
+}
+
+impl fmt::Display for ParsePostingPolicyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown posting policy: {}", self.input)
+    }
+}
+
+impl std::error::Error for ParsePostingPolicyError {}
+
+impl FromStr for PostingPolicy {
+    type Err = ParsePostingPolicyError;
+
+    /// Parses the stored form, `"everyone"` or `"moderators"`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "everyone" => Ok(Self::Everyone),
+            "moderators" => Ok(Self::Moderators),
+            other => Err(ParsePostingPolicyError {
+                input: other.to_owned(),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conversation {
     pub id: ConversationId,
@@ -87,6 +144,11 @@ pub struct Conversation {
     /// When the conversation became end-to-end encrypted; never cleared once set. Only DMs and
     /// groups are encrypted.
     pub encrypted_at: Option<DateTime<Utc>>,
+    /// Who may post in the channel. Always `Everyone` for DMs and groups.
+    pub posting_policy: PostingPolicy,
+    /// Under `PostingPolicy::Moderators`, whether everyone else may still react and reply in
+    /// threads. Ignored under `Everyone`.
+    pub posting_allows_threads: bool,
 }
 
 impl Conversation {

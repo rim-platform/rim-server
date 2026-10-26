@@ -205,7 +205,7 @@ pub(super) async fn create_group(
 mod tests {
     use std::sync::Arc;
 
-    use rim_core::conversation::model::{ConversationId, ConversationType};
+    use rim_core::conversation::model::{ConversationId, ConversationType, PostingPolicy};
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
     use rim_services::Actor;
@@ -277,6 +277,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         }
     }

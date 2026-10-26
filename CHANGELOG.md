@@ -21,6 +21,15 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- Channels can be set so only the workspace's Owner and Moderators post in them, with a switch
+  for whether everyone else may still react and reply in threads: `setChannelPosting`, the
+  `PostingPolicy` enum and `Conversation.postingPolicy` / `Conversation.postingAllowsThreads`,
+  the command `chat.set_channel_posting`, and `posting` / `postingAllowsThreads` per channel in
+  the default workspace's definition file (the committed file makes `announcements` moderators
+  only).
+
 ## [0.0.1] - 2026-10-25
 
 ### Added

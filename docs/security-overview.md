@@ -142,7 +142,7 @@ whose log forks is refused until an operator checks it out of band.
   DM. A queued item goes once every device of the person acknowledged it, and after 30 days by
   default regardless; over the byte quota per person the oldest go first.
 - **A workspace host** is the authority for a workspace: membership, roles, kicks, bans,
-  timeouts, slow mode and moderator deletes ([messaging](messaging.md)). It learns the
+  timeouts, slow mode, posting permissions and moderator deletes ([messaging](messaging.md)). It learns the
   principals, devices and activity of members from other servers in its workspaces. Those
   members cannot change their account through it.
 - **One malicious server against people of another.** A hostile peer can send signed junk up to

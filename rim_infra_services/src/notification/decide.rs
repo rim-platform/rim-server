@@ -268,7 +268,7 @@ mod tests {
     use super::*;
 
     use chrono::{Duration, NaiveTime};
-    use rim_core::conversation::model::ConversationId;
+    use rim_core::conversation::model::{ConversationId, PostingPolicy};
     use rim_core::message::model::MessageId;
     use rim_core::message_thread::model::MessageThreadId;
     use rim_core::notification::model::{DndPause, DndWindow, NotificationLevel};
@@ -297,6 +297,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         }
     }

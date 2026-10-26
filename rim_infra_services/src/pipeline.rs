@@ -1006,7 +1006,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use rim_core::conversation::model::ConversationType;
+    use rim_core::conversation::model::{ConversationType, PostingPolicy};
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::pipeline::model::{PipelineAction, PipelineTrigger, PipelineTriggerKind};
@@ -1934,6 +1934,8 @@ mod tests {
                     archived_at: None,
                     created_by: None,
                     slow_mode_seconds: 0,
+                    posting_policy: PostingPolicy::Everyone,
+                    posting_allows_threads: true,
                     encrypted_at: None,
                 },
             );

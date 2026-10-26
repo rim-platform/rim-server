@@ -138,6 +138,45 @@ mutation Slow($serverId: ID!, $conversationId: ID!, $seconds: Int!) {
 }
 "#;
 
+const SET_CHANNEL_POSTING: &str = r#"
+mutation Posting($serverId: ID!, $conversationId: ID!, $policy: PostingPolicy!,
+                 $allowsThreads: Boolean!) {
+  conversation: setChannelPosting(serverId: $serverId, conversationId: $conversationId,
+                                  policy: $policy, allowsThreads: $allowsThreads) {
+    id postingPolicy postingAllowsThreads
+  }
+}
+"#;
+
+const REPLY: &str = r#"
+mutation Reply($input: ReplyToMessageInput!) { msg: replyToMessage(input: $input) { id } }
+"#;
+
+const TOGGLE_REACTION: &str = r#"
+mutation React($input: ToggleReactionInput!) {
+  reactions: toggleReaction(input: $input) { emoji userIds }
+}
+"#;
+
+const PIN_MESSAGE: &str = "mutation Pin($input: PinMessageInput!) { pinMessage(input: $input) }";
+
+const FORWARD_MESSAGE: &str = r#"
+mutation Forward($input: ForwardMessageInput!) { msg: forwardMessage(input: $input) { id } }
+"#;
+
+const CREATE_DM: &str = r#"
+mutation Dm($serverId: ID!, $memberIds: [ID!]!) {
+  conversation: createConversation(input: { serverId: $serverId, memberIds: $memberIds }) { id }
+}
+"#;
+
+const SET_ARCHIVED: &str = r#"
+mutation Archive($serverId: ID!, $conversationId: ID!) {
+  conversation: setConversationArchived(serverId: $serverId, conversationId: $conversationId,
+                                        archived: true) { id }
+}
+"#;
+
 const REPORT: &str = r#"
 mutation Report($serverId: ID!, $conversationId: ID!, $messageId: ID!, $reason: String!) {
   report: reportMessage(serverId: $serverId, conversationId: $conversationId,
@@ -582,6 +621,202 @@ async fn slow_mode_rate_limits_members_but_not_moderators() {
     exec_ok(&f.schema, f.mona.request(SET_SLOW_MODE, vars(0))).await;
     f.send(&f.bob, &f.channel_id, "second, finally").await;
     assert_eq!(f.audit_rows("chat.set_slow_mode").await.len(), 2);
+}
+
+impl Fixture {
+    /// `setChannelPosting` on `conversation_id` as `who`.
+    fn posting_request(
+        &self,
+        who: &Caller,
+        conversation_id: &str,
+        policy: &str,
+        allows_threads: bool,
+    ) -> async_graphql::Request {
+        who.request(
+            SET_CHANNEL_POSTING,
+            json!({
+                "serverId": self.server_id,
+                "conversationId": conversation_id,
+                "policy": policy,
+                "allowsThreads": allows_threads,
+            }),
+        )
+    }
+
+    /// `sendMessage` of `text` into `conversation_id` as `who`.
+    fn send_into(&self, who: &Caller, conversation_id: &str, text: &str) -> async_graphql::Request {
+        who.request(
+            SEND_MESSAGE,
+            json!({ "input": {
+                "serverId": self.server_id, "conversationId": conversation_id, "text": text,
+            } }),
+        )
+    }
+
+    /// `replyToMessage` in the thread of `root` in `conversation_id` as `who`.
+    fn reply(&self, who: &Caller, conversation_id: &str, root: &str) -> async_graphql::Request {
+        who.request(
+            REPLY,
+            json!({ "input": {
+                "serverId": self.server_id, "conversationId": conversation_id,
+                "rootMessageId": root, "text": "in the thread",
+            } }),
+        )
+    }
+
+    /// `toggleReaction` of `emoji` on `message` in `conversation_id` as `who`.
+    fn react(
+        &self,
+        who: &Caller,
+        conversation_id: &str,
+        message: &str,
+        emoji: &str,
+    ) -> async_graphql::Request {
+        who.request(
+            TOGGLE_REACTION,
+            json!({ "input": {
+                "serverId": self.server_id, "conversationId": conversation_id,
+                "messageId": message, "emoji": emoji,
+            } }),
+        )
+    }
+}
+
+#[tokio::test]
+async fn a_moderators_only_channel_takes_posts_from_staff_only() {
+    let f = setup().await;
+    let news = create_channel(&f.schema, &f.alice, &f.server_id, "news", false).await;
+    exec_ok(
+        &f.schema,
+        f.bob.request(
+            JOIN_CHANNEL,
+            json!({ "serverId": f.server_id, "conversationId": news }),
+        ),
+    )
+    .await;
+
+    let data = exec_ok(
+        &f.schema,
+        f.posting_request(&f.alice, &news, "MODERATORS", true),
+    )
+    .await;
+    assert_eq!(data["conversation"]["postingPolicy"], json!("MODERATORS"));
+    assert_eq!(data["conversation"]["postingAllowsThreads"], json!(true));
+
+    let (code, message) = exec_err(&f.schema, f.send_into(&f.bob, &news, "hello")).await;
+    assert_eq!(code, "FORBIDDEN");
+    assert!(
+        message.contains("only the owner and moderators can post in this channel"),
+        "{message}"
+    );
+    let root = f.send(&f.alice, &news, "release notes").await;
+    f.send(&f.mona, &news, "a moderator posts too").await;
+
+    // Threads open: bob reacts and replies in the thread.
+    exec_ok(&f.schema, f.react(&f.bob, &news, &root, "👍")).await;
+    exec_ok(&f.schema, f.reply(&f.bob, &news, &root)).await;
+
+    let pin = f.bob.request(
+        PIN_MESSAGE,
+        json!({ "input": { "serverId": f.server_id, "conversationId": news, "messageId": root } }),
+    );
+    assert_eq!(exec_err_code(&f.schema, pin).await, "FORBIDDEN");
+
+    let elsewhere = f.send(&f.bob, &f.channel_id, "worth sharing").await;
+    let forward = f.bob.request(
+        FORWARD_MESSAGE,
+        json!({ "input": {
+            "serverId": f.server_id, "sourceConversationId": f.channel_id,
+            "targetConversationId": news, "messageId": elsewhere,
+        } }),
+    );
+    assert_eq!(exec_err_code(&f.schema, forward).await, "FORBIDDEN");
+
+    // Threads closed: no new reaction and no thread reply, but bob may take back his own.
+    exec_ok(
+        &f.schema,
+        f.posting_request(&f.mona, &news, "MODERATORS", false),
+    )
+    .await;
+    assert_eq!(
+        exec_err_code(&f.schema, f.react(&f.bob, &news, &root, "🎉")).await,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        exec_err_code(&f.schema, f.reply(&f.bob, &news, &root)).await,
+        "FORBIDDEN"
+    );
+    let data = exec_ok(&f.schema, f.react(&f.bob, &news, &root, "👍")).await;
+    assert_eq!(data["reactions"], json!([]));
+
+    exec_ok(
+        &f.schema,
+        f.posting_request(&f.alice, &news, "EVERYONE", true),
+    )
+    .await;
+    exec_ok(&f.schema, f.send_into(&f.bob, &news, "hello at last")).await;
+    assert_eq!(f.audit_rows("chat.set_channel_posting").await.len(), 3);
+}
+
+#[tokio::test]
+async fn setting_channel_posting_needs_a_moderator_and_a_channel() {
+    let f = setup().await;
+    assert_eq!(
+        exec_err_code(
+            &f.schema,
+            f.posting_request(&f.bob, &f.channel_id, "MODERATORS", true)
+        )
+        .await,
+        "FORBIDDEN"
+    );
+
+    let dm = exec_ok(
+        &f.schema,
+        f.bob.request(
+            CREATE_DM,
+            json!({ "serverId": f.server_id, "memberIds": [f.carol.user_id.to_string()] }),
+        ),
+    )
+    .await;
+    let dm = dm["conversation"]["id"]
+        .as_str()
+        .expect("dm id")
+        .to_string();
+    assert_eq!(
+        exec_err_code(
+            &f.schema,
+            f.posting_request(&f.alice, &dm, "MODERATORS", true)
+        )
+        .await,
+        "VALIDATION"
+    );
+
+    let old = create_channel(&f.schema, &f.alice, &f.server_id, "old", false).await;
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            SET_ARCHIVED,
+            json!({ "serverId": f.server_id, "conversationId": old }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        exec_err_code(
+            &f.schema,
+            f.posting_request(&f.mona, &old, "MODERATORS", true)
+        )
+        .await,
+        "CONVERSATION_ARCHIVED"
+    );
+
+    // Setting what is already set writes no audit row.
+    let data = exec_ok(
+        &f.schema,
+        f.posting_request(&f.alice, &f.channel_id, "EVERYONE", true),
+    )
+    .await;
+    assert_eq!(data["conversation"]["postingPolicy"], json!("EVERYONE"));
+    assert!(f.audit_rows("chat.set_channel_posting").await.is_empty());
 }
 
 #[tokio::test]
@@ -1761,6 +1996,7 @@ async fn command_listings_follow_membership_and_role() {
         "admin.timeout",
         "admin.unban",
         "chat.archive_channel",
+        "chat.set_channel_posting",
         "chat.set_slow_mode",
         "chat.unarchive_channel",
     ];

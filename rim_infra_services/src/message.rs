@@ -91,8 +91,9 @@ use crate::repos::AppRepos;
 use crate::request_gate::ensure_request_decided;
 use crate::token_bucket::{BucketRate, TokenBucketLimiter};
 use crate::util::{
-    ConversationAccessRepos, ensure_conversation_member_access, ensure_conversation_writable,
-    ensure_conversation_writable_with_standing, ensure_not_archived, member_standing,
+    ConversationAccessRepos, PostKind, ensure_can_post, ensure_conversation_member_access,
+    ensure_conversation_writable, ensure_conversation_writable_with_standing, ensure_not_archived,
+    member_standing,
 };
 
 /// The refusal of a plaintext write into an encrypted conversation.
@@ -1026,6 +1027,7 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        ensure_can_post(&conv, &standing, PostKind::Message)?;
         if conv.is_encrypted() {
             return Err(encrypted_conversation());
         }
@@ -1159,6 +1161,7 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        ensure_can_post(&conv, &standing, PostKind::ThreadReply)?;
         if conv.is_encrypted() {
             return Err(encrypted_conversation());
         }
@@ -1839,7 +1842,8 @@ impl MessageService for DefaultMessageService {
             cmd.target_conversation_id,
         )
         .await?;
-        // A forward is a send into the target: slow mode applies there too.
+        // A forward is a send into the target: its posting policy and slow mode apply there too.
+        ensure_can_post(&target_conv, &standing, PostKind::Message)?;
         self.ensure_slow_mode_allows(&target_conv, &standing, cmd.actor.user_id)
             .await?;
 
@@ -2037,7 +2041,7 @@ impl MessageService for DefaultMessageService {
         let e2ee = self.e2ee()?;
         require_device(&cmd.caller)?;
         let author = cmd.caller.actor.user_id;
-        let conv = ensure_conversation_writable(
+        let (conv, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -2048,6 +2052,12 @@ impl MessageService for DefaultMessageService {
             cmd.conversation_id,
         )
         .await?;
+        let kind = if cmd.thread_root_message_id.is_some() {
+            PostKind::ThreadReply
+        } else {
+            PostKind::Message
+        };
+        ensure_can_post(&conv, &standing, kind)?;
         if !conv.is_encrypted() {
             return Err(ServiceError::Validation(
                 "this conversation is not encrypted".to_string(),

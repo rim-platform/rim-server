@@ -3,7 +3,7 @@ use rim_core::conversation::repository::{ConversationActivityCursor, Conversatio
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, PostingPolicy};
 
 #[derive(Debug, Clone)]
 pub struct ConversationDto {
@@ -26,6 +26,11 @@ pub struct ConversationDto {
     pub slow_mode_seconds: i32,
     /// When the conversation became end-to-end encrypted.
     pub encrypted_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Who may post in the channel; `Everyone` for DMs and groups.
+    pub posting_policy: PostingPolicy,
+    /// Under `PostingPolicy::Moderators`, whether everyone else may still react and reply in
+    /// threads.
+    pub posting_allows_threads: bool,
 }
 
 impl ConversationDto {

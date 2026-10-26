@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rim_core::command::repository::MockUserCommandRepository;
-use rim_core::conversation::model::{ConversationId, ConversationType};
+use rim_core::conversation::model::{ConversationId, ConversationType, PostingPolicy};
 use rim_core::macro_def::repository::MockMacroRepository;
 use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
@@ -264,6 +264,8 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             archived_at: None,
                             created_by: None,
                             slow_mode_seconds: 0,
+                            posting_policy: PostingPolicy::Everyone,
+                            posting_allows_threads: true,
                             encrypted_at: None,
                         },
                         ConversationDto {
@@ -278,6 +280,8 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
                             archived_at: Some(chrono::Utc::now()),
                             created_by: None,
                             slow_mode_seconds: 0,
+                            posting_policy: PostingPolicy::Everyone,
+                            posting_allows_threads: true,
                             encrypted_at: None,
                         },
                     ],
