@@ -706,6 +706,10 @@ included.
   - `Some(thread_id)` only for a timeline message that is the root of an existing thread
   - `None` for ordinary timeline messages
   - `None` for thread replies
+- `threadReplyCount`
+  - the number of replies in the thread a timeline message is the root of, deleted replies not
+    counted; `0` once every reply is deleted
+  - `null` wherever `root_thread_id` is `None`: ordinary timeline messages and thread replies
 
 This lets clients render the timeline normally while also knowing whether a timeline message can open an existing thread.
 

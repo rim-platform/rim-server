@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
+use rim_core::message_thread::model::MessageThreadId;
 use rim_services::message_thread::command::{GetThreadByRootMessageQuery, GetThreadQuery};
 use rim_services::message_thread::dto::ThreadDto;
 use rim_services::message_thread::service::ThreadService;
@@ -114,5 +117,16 @@ impl ThreadService for DefaultThreadService {
         }
 
         self.to_dto(thread, query.server_id).await
+    }
+
+    async fn count_replies(
+        &self,
+        thread_ids: &[MessageThreadId],
+    ) -> ServiceResult<HashMap<MessageThreadId, i64>> {
+        self.repos
+            .message_thread_repo
+            .count_live_replies(thread_ids)
+            .await
+            .map_err(ServiceError::from)
     }
 }

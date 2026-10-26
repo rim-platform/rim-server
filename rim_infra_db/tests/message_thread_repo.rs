@@ -3,8 +3,10 @@
 mod support;
 
 use rim_core::conversation::model::ConversationType;
+use rim_core::message::repository::MessageRepository;
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
+use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
 
 #[tokio::test]
@@ -112,4 +114,52 @@ async fn get_thread_ids_by_root_messages_batch() {
     assert_eq!(map.len(), 2);
     assert_eq!(map[&msg1.id], t1.id);
     assert_eq!(map[&msg2.id], t2.id);
+}
+
+#[tokio::test]
+async fn count_live_replies_skips_deleted_replies_and_empty_threads() {
+    let ctx = support::TestCtx::new().await;
+
+    let thread_repo = SeaOrmMessageThreadRepository::new(ctx.db.clone());
+    let message_repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("reply-count-user").await;
+
+    let root = ctx.create_message(conv.id, user.id, "root").await;
+    let thread = thread_repo
+        .create_thread_for_root(conv.id, root.id)
+        .await
+        .unwrap();
+    ctx.create_thread_message(conv.id, thread.id, user.id, "kept")
+        .await;
+    let deleted = ctx
+        .create_thread_message(conv.id, thread.id, user.id, "deleted")
+        .await;
+    message_repo.soft_delete_message(deleted.id).await.unwrap();
+
+    let quiet = ctx.create_thread(conv.id).await;
+    let only_deleted = ctx.create_thread(conv.id).await;
+    let gone = ctx
+        .create_thread_message(conv.id, only_deleted.id, user.id, "gone")
+        .await;
+    message_repo.soft_delete_message(gone.id).await.unwrap();
+
+    let counts = thread_repo
+        .count_live_replies(&[thread.id, quiet.id, only_deleted.id])
+        .await
+        .unwrap();
+
+    assert_eq!(counts.len(), 1);
+    assert_eq!(counts[&thread.id], 1);
+    assert!(
+        thread_repo
+            .count_live_replies(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

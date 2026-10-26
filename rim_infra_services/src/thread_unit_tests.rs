@@ -236,6 +236,10 @@ mod tests {
                 thread_id: MessageThreadId,
                 at: chrono::DateTime<chrono::Utc>,
             ) -> RepoResult<()>;
+            async fn count_live_replies(
+                &self,
+                thread_ids: &[MessageThreadId],
+            ) -> RepoResult<std::collections::HashMap<MessageThreadId, i64>>;
         }
     }
 
@@ -304,6 +308,27 @@ mod tests {
     }
 
     // ── Tests ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn count_replies_returns_the_repository_counts() {
+        let counted = MessageThreadId::new();
+        let mut message_thread_repo = MockMessageThreadRepository::new();
+        message_thread_repo
+            .expect_count_live_replies()
+            .withf(move |ids| ids == [counted])
+            .return_once(move |_| Ok(std::collections::HashMap::from([(counted, 3)])));
+
+        let svc = DefaultThreadService::new(ThreadRepos {
+            conversation_repo: Arc::new(MockConversationRepository::new()),
+            conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+            message_repo: Arc::new(MockMessageRepository::new()),
+            message_thread_repo: Arc::new(message_thread_repo),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+        });
+
+        let counts = svc.count_replies(&[counted]).await.unwrap();
+        assert_eq!(counts, std::collections::HashMap::from([(counted, 3)]));
+    }
 
     #[tokio::test]
     async fn get_thread_denies_non_member() {

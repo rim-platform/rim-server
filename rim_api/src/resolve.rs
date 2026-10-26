@@ -8,6 +8,7 @@
 use async_graphql::{Context, Result};
 
 use rim_core::message::model::MessageId;
+use rim_core::message_thread::model::MessageThreadId;
 use rim_core::user::model::UserId;
 use rim_services::ServiceError;
 use rim_services::conversation::command::GetConversationQuery;
@@ -15,7 +16,8 @@ use rim_services::conversation::dto::ConversationDto;
 use rim_services::conversation::service::ConversationService;
 
 use crate::loaders::{
-    LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, ReactionLoaderKey, UserLoader,
+    LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, ReactionLoaderKey,
+    ThreadReplyCountLoader, UserLoader,
 };
 use crate::types::{LinkPreview, ReactionGroup, User};
 
@@ -48,6 +50,12 @@ pub trait ResolveExt {
         &self,
         message_id: &async_graphql::ID,
     ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Count the live replies in a thread; 0 when it has none.
+    fn load_thread_reply_count(
+        &self,
+        thread_id: &async_graphql::ID,
+    ) -> impl Future<Output = Result<i64>> + Send;
 
     /// Load mentioned user IDs for a message.
     fn load_mentioned_user_ids(
@@ -122,6 +130,18 @@ impl ResolveExt for Context<'_> {
             .map_err(loader_err)?
             .unwrap_or(false);
         Ok(pinned)
+    }
+
+    async fn load_thread_reply_count(&self, thread_id: &async_graphql::ID) -> Result<i64> {
+        let loader =
+            self.data::<async_graphql::dataloader::DataLoader<ThreadReplyCountLoader>>()?;
+        let thread_id = crate::ids::parse_uuid_id::<MessageThreadId>(thread_id)?;
+        let replies = loader
+            .load_one(thread_id)
+            .await
+            .map_err(loader_err)?
+            .unwrap_or(0);
+        Ok(replies)
     }
 
     async fn load_mentioned_user_ids(&self, message_id: &async_graphql::ID) -> Result<Vec<UserId>> {

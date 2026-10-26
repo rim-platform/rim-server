@@ -45,6 +45,75 @@ async fn message_query_exposes_root_thread_id() {
 }
 
 #[tokio::test]
+async fn thread_reply_count_counts_live_replies_and_is_null_off_roots() {
+    let actor = UserId::new();
+    let server_id = ServerId::new();
+    let conversation_id = ConversationId::new();
+    let root_id = MessageId::new();
+    let plain_id = MessageId::new();
+    let reply_id = MessageId::new();
+    let thread_id = MessageThreadId::new();
+
+    let mut msg = MockMessageService::new();
+    msg.expect_get_message().returning(move |q| {
+        Box::pin(async move {
+            let mut dto = test_message_dto();
+            dto.id = q.message_id;
+            dto.server_id = server_id;
+            dto.conversation_id = conversation_id;
+            dto.author_id = actor;
+            if q.message_id == root_id {
+                dto.root_thread_id = Some(thread_id);
+            } else if q.message_id == reply_id {
+                dto.thread_id = Some(thread_id);
+            }
+            Ok(dto)
+        })
+    });
+
+    // The service counts live replies only: the root's thread holds two, one of them deleted.
+    let mut thread = MockThreadService::new();
+    thread
+        .expect_count_replies()
+        .withf(move |ids| ids == [thread_id])
+        .times(1)
+        .returning(move |_| {
+            Box::pin(async move { Ok(std::collections::HashMap::from([(thread_id, 1)])) })
+        });
+
+    let schema = schema_with_mocks(
+        MockAuthService::new(),
+        MockConversationService::new(),
+        msg,
+        MockMessageAttachmentService::new(),
+        thread,
+    );
+
+    let req = authed_request(
+        r#"query($sid: ID!, $cid: ID!, $root: ID!, $plain: ID!, $reply: ID!) {
+            root: message(serverId: $sid, conversationId: $cid, messageId: $root) { threadReplyCount }
+            plain: message(serverId: $sid, conversationId: $cid, messageId: $plain) { threadReplyCount }
+            reply: message(serverId: $sid, conversationId: $cid, messageId: $reply) { threadReplyCount }
+        }"#,
+        actor,
+    )
+    .variables(Variables::from_json(serde_json::json!({
+        "sid": server_id.to_string(),
+        "cid": conversation_id.to_string(),
+        "root": root_id.to_string(),
+        "plain": plain_id.to_string(),
+        "reply": reply_id.to_string(),
+    })));
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+    let data = res.data.into_json().expect("json");
+    assert_eq!(data["root"]["threadReplyCount"], 1);
+    assert!(data["plain"]["threadReplyCount"].is_null());
+    assert!(data["reply"]["threadReplyCount"].is_null());
+}
+
+#[tokio::test]
 async fn message_query_exposes_attachments() {
     let actor = UserId::new();
     let server_id = ServerId::new();
