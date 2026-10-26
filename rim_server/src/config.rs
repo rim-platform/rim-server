@@ -1175,7 +1175,7 @@ impl RIMConfig {
         if self.smtp_config().is_none() {
             unavailable.push((
                 rim_core::server_feature::model::ServerFeature::Email,
-                "SMTP is not configured: set RIM_SMTP_HOST and RIM_SMTP_FROM".to_string(),
+                "no mail server is set up".to_string(),
             ));
         }
         unavailable
@@ -2404,14 +2404,15 @@ mod tests {
     }
 
     #[test]
-    fn email_is_unavailable_without_smtp_and_disabled_wins() {
+    fn email_is_unavailable_without_smtp_with_a_plain_reason_and_disabled_wins() {
         use rim_core::server_feature::model::{FeatureState, ServerFeature};
         use rim_services::feature::service::FeatureGate;
 
         let gate = RIMConfig::default().feature_gate().expect("gate");
         assert!(matches!(
             gate.state(ServerFeature::Email),
-            FeatureState::Unavailable { reason } if reason.contains("RIM_SMTP_HOST")
+            FeatureState::Unavailable { reason }
+                if reason == "no mail server is set up" && !reason.contains("RIM_")
         ));
         for feature in ServerFeature::ALL {
             if feature != ServerFeature::Email {
