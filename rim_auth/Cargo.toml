@@ -19,7 +19,7 @@ base64 = "0.22.1"
 generic-array = "0.14.7"
 getrandom = "0.3.4"
 hkdf = "0.12.4"
-hmac = "0.12.1"
+hmac = "0.13.0"
 opaque-ke = { version = "4.0.1", default-features = false, features = ["ristretto255", "argon2"] }
 sha2 = "0.10.9"
 subtle = "2.6"
