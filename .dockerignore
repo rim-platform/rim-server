@@ -12,3 +12,4 @@ assets/
 audit.log
 *.log
 *.md
+imagecheck/

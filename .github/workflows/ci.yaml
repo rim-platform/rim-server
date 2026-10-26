@@ -179,6 +179,51 @@ jobs:
       - name: Cargo Audit
         run: cargo audit --deny unsound
 
+  imagecheck:
+    name: Image check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install the runtime requirements
+        run: pip install --no-deps -r imagecheck/requirements.txt
+      - name: Unit tests
+        run: python -m unittest discover -s imagecheck/tests
+      - name: Build the image
+        run: docker build -t rim-imagecheck:ci imagecheck
+      - name: Smoke test
+        # The container as deploy/compose.yml runs it; a generated 256x256 gradient must score
+        # below 0.5 in every category.
+        run: |
+          docker run -d --name imagecheck --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges:true --memory 1g -p 127.0.0.1:8090:8090 \
+            rim-imagecheck:ci
+          for _ in $(seq 60); do
+            curl -fsS http://127.0.0.1:8090/healthz && break
+            sleep 1
+          done
+          python - <<'EOF'
+          import io, json, urllib.request
+          from PIL import Image
+          image = Image.linear_gradient("L").resize((256, 256)).convert("RGB")
+          body = io.BytesIO()
+          image.save(body, "PNG")
+          request = urllib.request.Request(
+              "http://127.0.0.1:8090/v1/check",
+              data=body.getvalue(),
+              headers={"Content-Type": "image/png"},
+          )
+          answer = json.load(urllib.request.urlopen(request, timeout=30))
+          print(answer)
+          assert set(answer["scores"]) == {"sexual", "gore", "violence"}, answer
+          assert all(score < 0.5 for score in answer["scores"].values()), answer
+          EOF
+      - name: Container logs
+        if: always()
+        run: docker logs imagecheck || true
+
   docker_build:
     name: Docker Build
     runs-on: ubuntu-latest

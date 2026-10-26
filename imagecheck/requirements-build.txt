@@ -1,0 +1,5 @@
+# The image's build stage: the runtime packages and the tokenizer that build_prompts.py needs.
+# Installed with --no-deps; loading a tokenizer from a file needs none of tokenizers'
+# dependencies.
+-r requirements.txt
+tokenizers==0.23.3

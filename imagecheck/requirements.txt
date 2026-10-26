@@ -1,0 +1,8 @@
+# What the service runs on, every package pinned, the dependencies of the three included:
+# the image installs this file with --no-deps.
+numpy==2.5.4
+onnxruntime==1.31.0
+pillow==13.0.0
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.2
