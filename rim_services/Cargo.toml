@@ -24,10 +24,10 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]
-mockall = "0.13"
+mockall = "0.15"
 
 [dependencies.mockall]
-version = "0.13"
+version = "0.15"
 optional = true
 
 [features]
