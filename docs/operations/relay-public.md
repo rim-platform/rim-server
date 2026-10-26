@@ -392,6 +392,8 @@ before the command exits. Unknown commands print usage and exit with status 2.
 
 Logs are JSON on stdout (`dc logs rim`); audit events (`"target":"audit"`) also go to the
 daily files `/data/audit.<YYYY-MM-DD>.log`, kept 90 days. The database answers what logs do not.
+At `info` the log carries no SQL; `RUST_LOG=info,sqlx::query=debug` adds every statement, and a
+statement slower than one second logs a warning.
 Alert thresholds are **FILL** until a month of normal traffic shows the baseline.
 
 | Watch | How | Alert at |
