@@ -23,7 +23,6 @@ use rim_infra_services::s2s::{DefaultPeerService, HttpDiscoveryFetcher};
 use rim_s2s::key_hash;
 use rim_services::s2s::dto::PeerBlockChange;
 use rim_services::s2s::service::PeerService;
-use sea_orm::Database;
 
 const USAGE: &str = "usage: rim_server server-key show | server-key rotate | \
      server-key recover --recovery-key-file <file> [--new-recovery-key] | \
@@ -123,7 +122,8 @@ pub async fn run(group: &str, args: impl Iterator<Item = String>) -> i32 {
 async fn run_command(command: Command) -> Result<(), String> {
     let config =
         crate::config::load_config().map_err(|e| format!("failed to load configuration: {e}"))?;
-    let db = Database::connect(&config.database_url)
+    let db = config
+        .connect_database()
         .await
         .map_err(|e| format!("failed to connect to database: {e}"))?;
     let handle: DbHandle = db.into();
