@@ -223,7 +223,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     networks: [internal]
-    # About 200 MB resident; two inference threads.
+    # About 320 MB resident; two inference threads.
     mem_limit: 1g
     cpus: 2
     healthcheck:

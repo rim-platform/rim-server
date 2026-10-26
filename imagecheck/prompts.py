@@ -1,8 +1,9 @@
-"""The text prompts an image is compared with, grouped by category.
+"""The text prompts CLIP compares an image with, grouped by category.
 
-The categories other than `neutral` are the ones the service scores. The neutral prompts give
-ordinary pictures somewhere to go, so that the softmax over all prompts does not push their
-probability onto a scored category.
+CLIP scores gore and violence. The sexual prompts stay in the softmax without being reported,
+since the classifier scores sexual content: they take the probability of nude pictures that
+would otherwise go to gore or violence. The neutral prompts give ordinary pictures somewhere to
+go, so that the softmax over all prompts does not push their probability onto a category.
 """
 
 PROMPTS: dict[str, list[str]] = {
@@ -51,11 +52,23 @@ PROMPTS: dict[str, list[str]] = {
         "a person in a costume",
         "a medical illustration",
         "a video game screenshot",
+        "a black and white photo",
+        "a close-up texture",
+        "a microscope image",
+        "a page of text",
+        "a photo of coins",
+        "a plain colour background",
+        "a blurry photo",
+        "a screenshot",
+        "a photo of an object",
+        "a photo of a building",
+        "a photo of plants",
+        "a photo of the sky",
     ],
 }
 
-# The categories a check returns a score for, in the order of the answer.
-SCORED: tuple[str, ...] = ("sexual", "gore", "violence")
+# The categories CLIP's score is reported for, in the order of the answer.
+SCORED: tuple[str, ...] = ("gore", "violence")
 
 
 def rows() -> list[tuple[str, str]]:

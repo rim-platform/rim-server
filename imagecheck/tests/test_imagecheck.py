@@ -16,7 +16,31 @@ from PIL import Image
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import imagecheck
-from imagecheck import CLIP_MEAN, CLIP_STD, ImageRejected, Scorer, preprocess
+from imagecheck import (
+    CLIP_MEAN,
+    CLIP_STD,
+    ImageRejected,
+    Model,
+    Scorer,
+    VitProcessor,
+    clip_input,
+    load_image,
+    nsfw_index,
+)
+
+# The classifier's preprocessor_config.json at the pinned revision.
+NSFW_PREPROCESSOR = {
+    "do_convert_rgb": None,
+    "do_normalize": True,
+    "do_rescale": True,
+    "do_resize": True,
+    "image_mean": [0.5, 0.5, 0.5],
+    "image_processor_type": "ViTFeatureExtractor",
+    "image_std": [0.5, 0.5, 0.5],
+    "resample": 2,
+    "rescale_factor": 0.00392156862745098,
+    "size": {"height": 224, "width": 224},
+}
 
 
 def png(image: Image.Image) -> bytes:
@@ -29,42 +53,28 @@ def solid(rgb, size=(256, 256), mode="RGB") -> bytes:
     return png(Image.new(mode, size, rgb))
 
 
-class PreprocessTest(unittest.TestCase):
-    def test_solid_colour_is_normalized_per_channel(self):
-        pixels = preprocess(solid((200, 100, 50)))
-        self.assertEqual(pixels.shape, (1, 3, 224, 224))
-        self.assertEqual(pixels.dtype, np.float32)
-        expected = (np.array([200, 100, 50]) / 255.0 - CLIP_MEAN) / CLIP_STD
-        for channel in range(3):
-            np.testing.assert_allclose(pixels[0, channel], expected[channel], atol=1e-5)
+def stripes() -> Image.Image:
+    """448x224: a red quarter on the left, a blue one on the right, green in the middle half."""
+    image = Image.new("RGB", (448, 224), (0, 255, 0))
+    image.paste((255, 0, 0), (0, 0, 112, 224))
+    image.paste((0, 0, 255), (336, 0, 448, 224))
+    return image
 
-    def test_wide_image_keeps_the_centre(self):
-        image = Image.new("RGB", (448, 224), (0, 255, 0))
-        image.paste((255, 0, 0), (0, 0, 112, 224))
-        image.paste((0, 0, 255), (336, 0, 448, 224))
-        pixels = preprocess(png(image))
-        self.assertEqual(pixels.shape, (1, 3, 224, 224))
-        green = (np.array([0, 255, 0]) / 255.0 - CLIP_MEAN) / CLIP_STD
-        for channel in range(3):
-            np.testing.assert_allclose(pixels[0, channel, :, 4:-4], green[channel], atol=1e-5)
 
-    def test_tall_small_image_is_scaled_up(self):
-        pixels = preprocess(solid((10, 20, 30), size=(50, 120)))
-        self.assertEqual(pixels.shape, (1, 3, 224, 224))
-
+class LoadImageTest(unittest.TestCase):
     def test_grey_and_transparent_images_become_rgb(self):
-        self.assertEqual(preprocess(solid(128, mode="L")).shape, (1, 3, 224, 224))
-        self.assertEqual(preprocess(solid((1, 2, 3, 0), mode="RGBA")).shape, (1, 3, 224, 224))
+        self.assertEqual(load_image(solid(128, mode="L")).mode, "RGB")
+        self.assertEqual(load_image(solid((1, 2, 3, 0), mode="RGBA")).mode, "RGB")
 
     def test_refuses_images_over_1024_pixels(self):
         with self.assertRaises(ImageRejected) as caught:
-            preprocess(solid((0, 0, 0), size=(1025, 10)))
+            load_image(solid((0, 0, 0), size=(1025, 10)))
         self.assertEqual(caught.exception.status, 413)
-        self.assertEqual(preprocess(solid((0, 0, 0), size=(1024, 1024))).shape, (1, 3, 224, 224))
+        self.assertEqual(load_image(solid((0, 0, 0), size=(1024, 1024))).size, (1024, 1024))
 
     def test_refuses_files_over_1_mib(self):
         with self.assertRaises(ImageRejected) as caught:
-            preprocess(b"\x89PNG" + bytes(1024 * 1024))
+            load_image(b"\x89PNG" + bytes(1024 * 1024))
         self.assertEqual(caught.exception.status, 413)
 
     def test_refuses_what_is_not_a_png(self):
@@ -73,8 +83,59 @@ class PreprocessTest(unittest.TestCase):
         truncated = solid((1, 2, 3))[:60]
         for body in (b"", b"not an image", jpeg.getvalue(), truncated):
             with self.assertRaises(ImageRejected) as caught:
-                preprocess(body)
+                load_image(body)
             self.assertEqual(caught.exception.status, 400)
+
+
+class ClipInputTest(unittest.TestCase):
+    def test_solid_colour_is_normalized_per_channel(self):
+        pixels = clip_input(load_image(solid((200, 100, 50))))
+        self.assertEqual(pixels.shape, (1, 3, 224, 224))
+        self.assertEqual(pixels.dtype, np.float32)
+        expected = (np.array([200, 100, 50]) / 255.0 - CLIP_MEAN) / CLIP_STD
+        for channel in range(3):
+            np.testing.assert_allclose(pixels[0, channel], expected[channel], atol=1e-5)
+
+    def test_wide_image_keeps_the_centre(self):
+        pixels = clip_input(stripes())
+        self.assertEqual(pixels.shape, (1, 3, 224, 224))
+        green = (np.array([0, 255, 0]) / 255.0 - CLIP_MEAN) / CLIP_STD
+        for channel in range(3):
+            np.testing.assert_allclose(pixels[0, channel, :, 4:-4], green[channel], atol=1e-5)
+
+    def test_tall_small_image_is_scaled_up(self):
+        pixels = clip_input(load_image(solid((10, 20, 30), size=(50, 120))))
+        self.assertEqual(pixels.shape, (1, 3, 224, 224))
+
+
+class VitProcessorTest(unittest.TestCase):
+    def test_solid_colour_is_rescaled_and_normalized(self):
+        pixels = VitProcessor(NSFW_PREPROCESSOR)(load_image(solid((255, 0, 51))))
+        self.assertEqual(pixels.shape, (1, 3, 224, 224))
+        self.assertEqual(pixels.dtype, np.float32)
+        for channel, expected in enumerate((1.0, -1.0, -0.6)):
+            np.testing.assert_allclose(pixels[0, channel], expected, atol=1e-5)
+
+    def test_wide_image_is_squeezed_not_cropped(self):
+        pixels = VitProcessor(NSFW_PREPROCESSOR)(stripes())
+        self.assertEqual(pixels.shape, (1, 3, 224, 224))
+        # Red stays in the left quarter and blue in the right one.
+        np.testing.assert_allclose(pixels[0, 0, :, :50], 1.0, atol=1e-5)
+        np.testing.assert_allclose(pixels[0, 2, :, -50:], 1.0, atol=1e-5)
+
+    def test_flags_switch_steps_off(self):
+        config = dict(NSFW_PREPROCESSOR, do_rescale=False, do_normalize=False)
+        pixels = VitProcessor(config)(load_image(solid((255, 0, 51))))
+        np.testing.assert_allclose(pixels[0, :, 0, 0], [255.0, 0.0, 51.0])
+
+    def test_unsupported_configurations_are_refused(self):
+        for config in (
+            dict(NSFW_PREPROCESSOR, size={"shortest_edge": 224}),
+            dict(NSFW_PREPROCESSOR, do_resize=False),
+            dict(NSFW_PREPROCESSOR, do_center_crop=True),
+        ):
+            with self.assertRaises(ValueError):
+                VitProcessor(config)
 
 
 class ScoreTest(unittest.TestCase):
@@ -87,23 +148,18 @@ class ScoreTest(unittest.TestCase):
         )
 
     def test_softmax_over_all_prompts_summed_per_category(self):
+        scores = self.scorer.score(np.array([0, 0, 3.0, 0, 0]))
+        # The embedding is normalized first, so its logits are [0, 0, 1, 0, 0].
+        self.assertEqual(scores, {"gore": round(math.e / (math.e + 4), 4), "violence": 0.0})
+
+    def test_sexual_prompts_take_probability_without_being_reported(self):
         scores = self.scorer.score(np.array([3.0, 0, 0, 0, 0]))
-        # The embedding is normalized first, so its logits are [1, 0, 0, 0, 0].
-        total = math.e + 4
-        self.assertEqual(
-            scores,
-            {
-                "sexual": round((math.e + 1) / total, 4),
-                "gore": round(1 / total, 4),
-                "violence": 0.0,
-            },
-        )
+        self.assertEqual(scores, {"gore": round(1 / (math.e + 4), 4), "violence": 0.0})
 
     def test_logit_scale_sharpens(self):
         sharp = Scorer(self.scorer.embeds, self.scorer.labels, 100.0)
-        scores = sharp.score(np.array([0, 0, 1.0, 0, 0]))
-        self.assertEqual(scores["gore"], 1.0)
-        self.assertEqual(scores["sexual"], 0.0)
+        self.assertEqual(sharp.score(np.array([0, 0, 1.0, 0, 0]))["gore"], 1.0)
+        self.assertEqual(sharp.score(np.array([1.0, 0, 0, 0, 0]))["gore"], 0.0)
 
     def test_scores_are_probabilities(self):
         rng = np.random.default_rng(7)
@@ -113,19 +169,65 @@ class ScoreTest(unittest.TestCase):
         scorer = Scorer(embeds, labels, 100.0)
         for _ in range(20):
             scores = scorer.score(rng.normal(size=16))
-            self.assertEqual(list(scores), ["sexual", "gore", "violence"])
+            self.assertEqual(list(scores), ["gore", "violence"])
             self.assertTrue(all(0.0 <= value <= 1.0 for value in scores.values()))
             self.assertLessEqual(sum(scores.values()), 1.0001)
 
 
+class NsfwIndexTest(unittest.TestCase):
+    def test_finds_the_nsfw_label(self):
+        self.assertEqual(nsfw_index({"id2label": {"0": "normal", "1": "nsfw"}}), 1)
+        self.assertEqual(nsfw_index({"id2label": {"0": "nsfw", "1": "normal"}}), 0)
+
+    def test_refuses_a_classifier_without_it(self):
+        with self.assertRaises(ValueError):
+            nsfw_index({"id2label": {"0": "cat", "1": "dog"}})
+
+
+class StubSession:
+    """An ONNX session that checks its one input and answers a fixed output."""
+
+    def __init__(self, test, output, answer):
+        self.test = test
+        self.output = output
+        self.answer = np.asarray([answer], dtype=np.float32)
+
+    def run(self, outputs, inputs):
+        self.test.assertEqual(outputs, [self.output])
+        self.test.assertEqual(inputs["pixel_values"].shape, (1, 3, 224, 224))
+        return [self.answer]
+
+
+class ModelTest(unittest.TestCase):
+    def model(self, logits, nsfw_label=1):
+        clip = StubSession(self, "image_embeds", [0, 2.0, 0])
+        scorer = Scorer(np.eye(3, dtype=np.float32), np.array(["sexual", "gore", "neutral"]), 1.0)
+        nsfw = StubSession(self, "logits", logits)
+        return Model(clip, scorer, nsfw, VitProcessor(NSFW_PREPROCESSOR), nsfw_label)
+
+    def test_sexual_from_the_classifier_gore_and_violence_from_clip(self):
+        scores = self.model([0.0, math.log(3)]).check(solid((9, 9, 9)))
+        self.assertEqual(
+            scores, {"sexual": 0.75, "gore": round(math.e / (math.e + 2), 4), "violence": 0.0}
+        )
+
+    def test_the_nsfw_label_picks_the_logit(self):
+        scores = self.model([0.0, math.log(3)], nsfw_label=0).check(solid((9, 9, 9)))
+        self.assertEqual(scores["sexual"], 0.25)
+
+    def test_rejected_images_reach_no_model(self):
+        with self.assertRaises(ImageRejected):
+            self.model([0.0, 0.0]).check(b"not an image")
+
+
 class StubModel:
-    """Preprocesses like the real model, then answers fixed scores."""
+    """Decodes like the real model, then answers fixed scores."""
 
     def __init__(self):
         self.calls = 0
 
     def check(self, png_bytes):
-        preprocess(png_bytes)
+        load_image(png_bytes)
         self.calls += 1
         return {"sexual": 0.01, "gore": 0.02, "violence": 0.03}
 
@@ -171,7 +273,7 @@ class HttpTest(unittest.TestCase):
             json.loads(body),
             {
                 "scores": {"sexual": 0.01, "gore": 0.02, "violence": 0.03},
-                "model": "clip-vit-b32-q8@d15189d",
+                "model": "clip-vit-b32-q8@d15189d+falconsai-nsfw-q8@1ceb3c7",
             },
         )
 
