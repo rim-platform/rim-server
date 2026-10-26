@@ -1,7 +1,7 @@
-# Deploys the latest rim-server release to /srv/rim-server when it is not running yet; started
-# by rim-deploy.timer. `journalctl -u rim-deploy` is the deploy log.
+# Deploys the latest rim-server and rim-ui releases to /srv/rim-server when they are not running
+# yet; started by rim-deploy.timer. `journalctl -u rim-deploy` is the deploy log.
 [Unit]
-Description=Deploy the latest rim-server release
+Description=Deploy the latest rim-server and rim-ui releases
 Documentation=https://github.com/rim-platform/rim-server/blob/master/deploy/README.md
 Wants=network-online.target
 After=network-online.target docker.service

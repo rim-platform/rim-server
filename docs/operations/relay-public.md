@@ -296,10 +296,11 @@ one server to every peer.
 
 The relay runs published images only, from `/srv/rim-server` on the host, and
 `rim-deploy.timer` installs every rim-server release there within five minutes of its
-publication (`deploy/README.md`, "Unattended upgrades from releases"). Approving the release in
-the `release` environment is the deployment: approve it in a quiet hour, after doing what the
-release's **Upgrade:** lines say in `/srv/rim-server/.env`. Tag rim-ui first: until `rim-web` of
-the version is published, each check waits and tries again.
+publication, and every rim-ui release into the web client alone (`deploy/README.md`,
+"Unattended upgrades from releases"). Approving the release in the `release` environment is the
+deployment: approve it in a quiet hour, after doing what the release's **Upgrade:** lines say in
+`/srv/rim-server/.env`. The two repositories release on their own; a server release keeps the
+web client's version, `RIM_WEB_VERSION` in `.env`.
 
 - **The log**: `journalctl -u rim-deploy`, with `-f` during a deploy: the file copy, the
   signature check, the backup, the pull, the migrations, the start, `/readyz` and the version.
@@ -307,13 +308,16 @@ the version is published, each check waits and tries again.
 - **Publish without deploying**: mark the release a **pre-release** on GitHub.
 - **Stop all deploys**: `sudo touch /srv/rim-server/HOLD`; `sudo rm /srv/rim-server/HOLD` lets
   the timer deploy again.
-- **A failed deploy** rolls back by itself and writes the version to `/srv/rim-server/FAILED`;
-  the timer skips that version until the file is removed, and deploys the next release.
+- **A failed deploy** rolls back by itself and writes the version to `/srv/rim-server/FAILED`
+  (the web client: `/srv/rim-server/FAILED-web`); the timer skips that version until the file
+  is removed, and deploys the next release.
 - **Roll back by hand**: `sudo touch /srv/rim-server/HOLD`, then
-  `sudo rim-deploy <previous version>` (or mark the bad release a pre-release instead of the
+  `sudo rim-deploy <previous version>`, or for the web client
+  `sudo rim-deploy web <previous version>` (or mark the bad release a pre-release instead of the
   `HOLD`). Remove `HOLD` once the fix is released. Anything further back than the release before
   is a restore from the backup the deploy took ("Restore").
-- **When the GitHub API is down**: `sudo rim-deploy <version>` deploys without it.
+- **When the GitHub API is down**: `sudo rim-deploy <version>` and
+  `sudo rim-deploy web <version>` deploy without it.
 
 Files in `/srv/rim-server` other than `.env` come from the release tag; an edit on the host is
 overwritten by the next deploy, so a change to them is a rim-server pull request.
