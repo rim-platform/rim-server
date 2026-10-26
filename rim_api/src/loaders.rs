@@ -5,6 +5,7 @@ use async_graphql::dataloader::Loader;
 use futures_util::future::try_join_all;
 
 use rim_core::message::model::MessageId;
+use rim_core::message_thread::model::MessageThreadId;
 use rim_core::user::model::UserId;
 use rim_services::Actor;
 use rim_services::link_preview::LinkPreviewService;
@@ -12,6 +13,7 @@ use rim_services::mention::service::MentionService;
 use rim_services::message_reaction::command::GetReactionsForMessagesQuery;
 use rim_services::message_reaction::dto::ReactionGroupDto;
 use rim_services::message_reaction::service::MessageReactionService;
+use rim_services::message_thread::service::ThreadService;
 use rim_services::pin::service::PinService;
 use rim_services::user::dto::UserDto;
 use rim_services::user::service::UserService;
@@ -199,6 +201,35 @@ impl Loader<MessageId> for PinLoader {
                 .map(|id| (id, pinned_set.contains(&id)))
                 .collect())
         }
+    }
+}
+
+// ── ThreadReplyCountLoader ─────────────────────────────────────────────────
+
+/// Batches `threadReplyCount` by thread.
+pub struct ThreadReplyCountLoader {
+    thread_service: Arc<dyn ThreadService>,
+}
+
+impl ThreadReplyCountLoader {
+    pub fn new(thread_service: Arc<dyn ThreadService>) -> Self {
+        Self { thread_service }
+    }
+}
+
+impl Loader<MessageThreadId> for ThreadReplyCountLoader {
+    /// The thread's live replies, absent when it has none.
+    type Value = i64;
+    type Error = Arc<async_graphql::Error>;
+
+    fn load(
+        &self,
+        keys: &[MessageThreadId],
+    ) -> impl Future<Output = Result<HashMap<MessageThreadId, Self::Value>, Self::Error>> + Send
+    {
+        let keys = keys.to_vec();
+        let svc = Arc::clone(&self.thread_service);
+        async move { svc.count_replies(&keys).await.map_err(loader_error) }
     }
 }
 

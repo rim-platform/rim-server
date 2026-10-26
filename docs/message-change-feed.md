@@ -87,8 +87,9 @@ The result has one entry per requested conversation, in request order.
 Message creation, text edits, soft delete, `hasAttachments` and attachment lifecycle writes
 (creation, upload completion, finalization, failure and deletion) bump a version. An attachment
 change advances its parent message even when `hasAttachments` stays true; it does not set
-`editedAt`. Reactions, pins, mentions, link previews and a message becoming a thread root
-(`rootThreadId`) do not; those stay on their own queries and real-time events.
+`editedAt`. Reactions, pins, mentions, link previews, a message becoming a thread root
+(`rootThreadId`) and its thread's reply count (`threadReplyCount`) do not; those stay on their
+own queries and real-time events.
 
 ## Real-time events
 

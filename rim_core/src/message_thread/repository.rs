@@ -33,4 +33,11 @@ pub trait MessageThreadRepository: Send + Sync {
         thread_id: MessageThreadId,
         at: chrono::DateTime<chrono::Utc>,
     ) -> RepoResult<()>;
+
+    /// The number of replies in each of `thread_ids`, deleted ones not counted. A thread without
+    /// a live reply is absent from the map.
+    async fn count_live_replies(
+        &self,
+        thread_ids: &[MessageThreadId],
+    ) -> RepoResult<HashMap<MessageThreadId, i64>>;
 }

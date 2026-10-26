@@ -205,6 +205,17 @@ impl Message {
     async fn encryption(&self) -> &Option<super::MessageEncryption> {
         &self.encryption
     }
+
+    /// Replies in the thread this timeline message is the root of, deleted ones not counted;
+    /// null on a message without a thread and on thread replies.
+    #[graphql(complexity = 5)]
+    async fn thread_reply_count(&self, ctx: &Context<'_>) -> Result<Option<i32>> {
+        let Some(thread_id) = &self.root_thread_id else {
+            return Ok(None);
+        };
+        let replies = ctx.load_thread_reply_count(thread_id).await?;
+        Ok(Some(i32::try_from(replies).unwrap_or(i32::MAX)))
+    }
 }
 
 /// Input for the `searchMessages` full-text-search query. `query` accepts free text plus the

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use entity::message_thread;
+use entity::{message, message_thread};
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::{MessageThread, MessageThreadId};
@@ -8,7 +8,7 @@ use rim_core::repository::error::RepoResult;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::prelude::Expr;
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QuerySelect, Set};
 use std::collections::HashMap;
 
 use crate::DbHandle;
@@ -144,5 +144,32 @@ impl MessageThreadRepository for SeaOrmMessageThreadRepository {
         }
 
         Ok(())
+    }
+
+    async fn count_live_replies(
+        &self,
+        thread_ids: &[MessageThreadId],
+    ) -> RepoResult<HashMap<MessageThreadId, i64>> {
+        if thread_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let ids: Vec<Uuid> = thread_ids.iter().copied().map(Into::into).collect();
+        let rows: Vec<(Uuid, i64)> = message::Entity::find()
+            .select_only()
+            .column(message::Column::ThreadId)
+            .column_as(message::Column::Id.count(), "replies")
+            .filter(message::Column::ThreadId.is_in(ids))
+            .filter(message::Column::IsDeleted.eq(false))
+            .group_by(message::Column::ThreadId)
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(thread_id, replies)| (thread_id.into(), replies))
+            .collect())
     }
 }

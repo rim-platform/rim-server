@@ -21,6 +21,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- `Message.threadReplyCount`: the number of replies, deleted ones not counted, in the thread a
+  timeline message is the root of; null on other messages.
+
 ## [0.0.3] - 2026-10-26
 
 ### Added

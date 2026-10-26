@@ -66,7 +66,10 @@ pub fn build_schema(
     registration: RegistrationContext,
     federation: Option<federation::FederationContext>,
 ) -> AppSchema {
-    use crate::loaders::{LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, UserLoader};
+    use crate::loaders::{
+        LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, ThreadReplyCountLoader,
+        UserLoader,
+    };
     use async_graphql::dataloader::DataLoader;
 
     let author_ban_loader = DataLoader::new(
@@ -86,6 +89,10 @@ pub fn build_schema(
         tokio::spawn,
     );
     let pin_loader = DataLoader::new(PinLoader::new(service_provider.pin_service()), tokio::spawn);
+    let thread_reply_count_loader = DataLoader::new(
+        ThreadReplyCountLoader::new(service_provider.thread_service()),
+        tokio::spawn,
+    );
     let link_preview_loader = DataLoader::new(
         LinkPreviewLoader::new(service_provider.link_preview_service()),
         tokio::spawn,
@@ -148,6 +155,7 @@ pub fn build_schema(
         .data(mention_loader)
         .data(pin_loader)
         .data(link_preview_loader)
+        .data(thread_reply_count_loader)
         .data(registration.registration_mode)
         .data(crate::types::AuditRetention(
             registration.audit_retention_days,
