@@ -47,13 +47,15 @@ set), so the apex of the domain can serve a website from elsewhere.
 
    ```sh
    alias dc='docker compose -f deploy/compose.yml -f deploy/compose.relay.yml'
-   dc config --services          # postgres, migrate, rim, caddy-init, caddy: no web client
+   dc config --services          # postgres, migrate, rim, imagecheck, caddy-init, caddy: no web client
    ```
 
-   The relay runs only `ghcr.io/rim-platform/rim-server:<RIM_VERSION>` (or
-   `RIM_SERVER_IMAGE`). Verify it as `docs/self-hosting.md`, "Verify the images", says. To
-   build it from this checkout instead, add `-f deploy/compose.dev.yml` to the alias and use
-   `up --build`; the relay needs no rim-ui checkout either way.
+   The relay runs `ghcr.io/rim-platform/rim-server:<RIM_VERSION>` (or `RIM_SERVER_IMAGE`) and
+   its profile picture check, `ghcr.io/rim-platform/rim-imagecheck:<RIM_VERSION>` (or
+   `RIM_IMAGECHECK_IMAGE`). Verify them as `docs/self-hosting.md`, "Verify the images", says;
+   both are signed by this repository's release workflow. To build them from this checkout
+   instead, add `-f deploy/compose.dev.yml` to the alias and use `up --build`; the relay needs
+   no rim-ui checkout either way.
 
 ## Start
 
@@ -202,9 +204,9 @@ directory.
 - **The log** is `journalctl -u rim-deploy` (`-f` follows a deploy as it runs);
   `systemctl list-timers rim-deploy.timer` shows the next check. Each check logs one line when
   there is nothing to do.
-- **Not yet published images.** When `rim-web` of the version is not out yet, because rim-ui
-  was not tagged first, `upgrade.sh` exits 2 before changing anything; the check puts the files
-  back, ends quietly, and the next one tries again.
+- **Not yet published images.** When an image of the version is not out yet, such as `rim-web`
+  because rim-ui was not tagged first, `upgrade.sh` exits 2 before changing anything; the check
+  puts the files back, ends quietly, and the next one tries again.
 - **Brakes.** A release marked **pre-release** on GitHub is never deployed by the timer, which is
   how a release is published without deploying it. `touch /srv/rim-server/HOLD` stops the timer
   deploying anything until the file is removed. A deploy that fails writes its version to

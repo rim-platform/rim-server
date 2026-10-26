@@ -62,6 +62,10 @@ pub struct AppRuntime {
     pub storage_service: Arc<dyn StorageService>,
     /// Profiles; the avatar upload route asks it whether an upload may start.
     pub user_service: Arc<dyn rim_services::user::service::UserService>,
+    /// The profile picture check; `None` when `RIM_AVATAR_CHECK_URL` is unset.
+    pub avatar_checker: Option<Arc<rim_infra_services::avatar_check::AvatarChecker>>,
+    /// The abuse reports the profile picture check files.
+    pub relay_abuse_service: Arc<dyn rim_services::relay::service::RelayAbuseService>,
     pub message_attachment_service:
         Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
     pub moderation_service: Arc<dyn rim_services::moderation::service::ModerationService>,
@@ -478,6 +482,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let link_preview_concurrency = config
         .link_preview_concurrency()
         .map_err(std::io::Error::other)?;
+    let avatar_checker = avatar_checker(config).map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -1081,6 +1086,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let session_key_service = service_provider.session_key_service();
     let auth_service = service_provider.auth_service();
     let user_service = service_provider.user_service();
+    let relay_abuse_service = service_provider.relay_abuse_service();
 
     Ok(AppRuntime {
         schema,
@@ -1089,6 +1095,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         storage_backend,
         storage_service,
         user_service,
+        avatar_checker,
+        relay_abuse_service,
         message_attachment_service,
         moderation_service,
         plugin_bundle_service,
@@ -1104,6 +1112,33 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         session_revocations,
         terms_page: terms_page.map(Arc::new),
     })
+}
+
+/// The profile picture check `RIM_AVATAR_CHECK_URL` names, with its thresholds; `None`, and a
+/// warning that pictures are stored unchecked, when it is unset.
+///
+/// # Errors
+/// The configuration's message for a malformed URL or threshold, or the client's when it
+/// cannot be built.
+fn avatar_checker(
+    config: &RIMConfig,
+) -> Result<Option<Arc<rim_infra_services::avatar_check::AvatarChecker>>, String> {
+    let Some(settings) = config.avatar_check()? else {
+        tracing::warn!("RIM_AVATAR_CHECK_URL is unset: profile pictures are stored unchecked");
+        return Ok(None);
+    };
+    tracing::info!(
+        url = %settings.url,
+        block = settings.block,
+        report = settings.report,
+        "profile pictures are checked"
+    );
+    rim_infra_services::avatar_check::AvatarChecker::new(
+        &settings.url,
+        settings.block,
+        settings.report,
+    )
+    .map(|checker| Some(Arc::new(checker)))
 }
 
 /// The stored files: `RIM_STORAGE_LOCAL_PATH`, else `files` under the data directory, created

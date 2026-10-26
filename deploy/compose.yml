@@ -13,10 +13,10 @@
 #
 #   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml up -d
 #
-# The images are the published, signed ghcr.io/rim-platform/rim-server and
-# rim-web at RIM_VERSION (default latest; pin it in deploy/.env).
-# RIM_SERVER_IMAGE and RIM_WEB_IMAGE name other images. compose.dev.yml on top
-# builds both from local checkouts instead.
+# The images are the published, signed ghcr.io/rim-platform/rim-server,
+# rim-imagecheck and rim-web at RIM_VERSION (default latest; pin it in
+# deploy/.env). RIM_SERVER_IMAGE, RIM_IMAGECHECK_IMAGE and RIM_WEB_IMAGE name
+# other images. compose.dev.yml on top builds them from local checkouts instead.
 #
 # Every container has a read-only root filesystem and cannot gain privileges:
 # it writes only to its named volumes and to the tmpfs paths listed with it.
@@ -181,6 +181,12 @@ services:
       # custom_emoji, workspace_plugins, ai_commands, avatars. A switched-off feature's API
       # fails with FEATURE_DISABLED.
       RIM_FEATURES_DISABLED:
+      # The profile picture check: every uploaded picture is scored by the imagecheck service
+      # and refused at RIM_AVATAR_CHECK_BLOCK, stored and reported to the operators at
+      # RIM_AVATAR_CHECK_REPORT. Set RIM_AVATAR_CHECK_URL empty to store pictures unchecked.
+      RIM_AVATAR_CHECK_URL: ${RIM_AVATAR_CHECK_URL-http://imagecheck:8090}
+      RIM_AVATAR_CHECK_BLOCK:
+      RIM_AVATAR_CHECK_REPORT:
     # The image's rim user (uid 1001) writes only to this volume and /tmp. The terms of use
     # are read from /config/terms.md when RIM_TERMS_FILE names it, and the default workspace's
     # definition from /config/default-workspace.json when RIM_DEFAULT_WORKSPACE_FILE names it.
@@ -204,6 +210,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    restart: unless-stopped
+    logging: *logging
+
+  # Scores profile pictures for sexual content, gore and violence (imagecheck/README.md). On the
+  # internal network only: it reaches nothing and only rim reaches it. rim does not wait for
+  # it; while it is down, picture uploads fail and everything else works.
+  imagecheck:
+    image: ${RIM_IMAGECHECK_IMAGE:-ghcr.io/rim-platform/rim-imagecheck:${RIM_VERSION:-latest}}
+    tmpfs: [/tmp]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [internal]
+    # About 320 MB resident; two inference threads.
+    mem_limit: 1g
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     logging: *logging
 

@@ -41,6 +41,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 - Profile picture uploads are limited per account by `RIM_AVATAR_UPLOADS_PER_HOUR` (default 5)
   and `RIM_AVATAR_UPLOADS_PER_DAY` (default 20); past either the upload answers 429 with
   `Retry-After`. 0 turns either off; instance operators are exempt.
+- **Upgrade:** every uploaded profile picture is scored for sexual content, gore and violence
+  by a new service, `imagecheck` (`ghcr.io/rim-platform/rim-imagecheck`), which
+  `deploy/compose.yml` now runs. At `RIM_AVATAR_CHECK_BLOCK` (default 0.85) `POST
+  /api/files/avatar` answers 422 and stores nothing; at `RIM_AVATAR_CHECK_REPORT` (default 0.60)
+  the picture is stored and an abuse report with the reason "automatic profile picture check …"
+  is filed for the operators; while the service is down the upload answers 503. Take the new
+  compose file with the release; a deployment that runs without the service sets
+  `RIM_AVATAR_CHECK_URL=` empty, and pictures are stored unchecked.
 
 ## [0.0.2] - 2026-10-26
 

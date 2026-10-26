@@ -62,14 +62,17 @@ dc pull
 cosign verify ghcr.io/rim-platform/rim-server:$v \
   --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify ghcr.io/rim-platform/rim-imagecheck:$v \
+  --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cosign verify ghcr.io/rim-platform/rim-web:$v \
   --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 cosign prints the digest it verified, which is also in the GitHub release notes. Setting
-`RIM_SERVER_IMAGE` and `RIM_WEB_IMAGE` in `deploy/.env` to `…@sha256:<digest>` makes compose run
-exactly those images. Each release also carries the image's SBOM (SPDX JSON), attested to the
+`RIM_SERVER_IMAGE`, `RIM_IMAGECHECK_IMAGE` and `RIM_WEB_IMAGE` in `deploy/.env` to
+`…@sha256:<digest>` makes compose run exactly those images. Each release also carries the image's SBOM (SPDX JSON), attested to the
 image's digest as a GitHub attestation: `gh attestation verify oci://<image>@<digest> --repo
 <the image's repository> --predicate-type https://spdx.dev/Document/v2.3` checks it.
 
@@ -408,6 +411,32 @@ avatars can be switched off with `RIM_FEATURES_DISABLED` in `deploy/.env`;
 `docs/operations/features.md` lists what each one covers and what clients see.
 `RIM_LINK_PREVIEW_CONCURRENCY` (default 8) caps the link preview fetches running at once.
 Outgoing requests ignore proxy environment variables.
+
+## Profile picture check
+
+`deploy/compose.yml` runs `imagecheck` next to the server: a small service, built from
+`imagecheck/` in this repository and published as `ghcr.io/rim-platform/rim-imagecheck`, that
+scores every uploaded profile picture for sexual content, gore and violence, each from 0 to 1.
+It runs two models on the CPU, a trained nsfw classifier and CLIP, holds them in about 320 MB
+of memory (its limit is 1 GB and 2 CPUs) and takes about a tenth of a second a picture. It is on
+the internal network only and reaches nothing; `imagecheck/README.md` describes the models, their
+licences and the scores of ordinary pictures.
+
+The server holds the highest of the three scores against two thresholds:
+
+| Setting | Default | At or above it |
+|---|---|---|
+| `RIM_AVATAR_CHECK_BLOCK` | 0.85 | the upload is refused with 422 and nothing is stored |
+| `RIM_AVATAR_CHECK_REPORT` | 0.60 | the picture is stored and an abuse report is filed for the operators |
+
+Both are in (0, 1], and the report threshold is at most the block one, or the server stops at
+boot. Below both the picture is stored. Nobody approves a picture before it is shown.
+
+`RIM_AVATAR_CHECK_URL` is where the server reaches the service, `http://imagecheck:8090` in
+`deploy/compose.yml`. The server does not wait for the service at start: while it is down,
+picture uploads answer 503 and everything else works. To run without it, set
+`RIM_AVATAR_CHECK_URL=` (empty) in `deploy/.env` and leave the `imagecheck` service stopped;
+pictures are then stored unchecked, and the server logs a warning saying so at every start.
 
 ## Notice and terms
 

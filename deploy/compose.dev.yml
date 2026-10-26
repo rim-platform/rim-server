@@ -1,7 +1,8 @@
 # =============================================================================
 # RIM — builds the images from local checkouts instead of pulling the published
-# ones: rim-server from this repository, the web client from a rim-ui checkout
-# next to it (../../rim-ui from this directory). Add it after the other files:
+# ones: rim-server and the profile picture check from this repository, the web
+# client from a rim-ui checkout next to it (../../rim-ui from this directory).
+# Add it after the other files:
 #
 #   docker compose -f deploy/compose.yml -f deploy/compose.dev.yml up -d --build
 #   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml \
@@ -19,6 +20,12 @@ services:
 
   rim:
     image: ${RIM_SERVER_IMAGE:-rim-server:local}
+
+  imagecheck:
+    build:
+      context: ../imagecheck
+      dockerfile: Dockerfile
+    image: ${RIM_IMAGECHECK_IMAGE:-rim-imagecheck:local}
 
   # The GraphQL endpoint is baked in at build time; the default `/api` is this origin.
   web:

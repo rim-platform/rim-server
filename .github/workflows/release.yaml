@@ -1,8 +1,9 @@
 name: Release
 
-# Builds, signs and publishes ghcr.io/rim-platform/rim-server for a tag v<version>, then creates
-# the GitHub release with the version's CHANGELOG.md section. Only the maintainer may push v*
-# tags, and the publish job waits for the maintainer's approval in the `release` environment.
+# Builds, signs and publishes ghcr.io/rim-platform/rim-server and its profile picture check,
+# ghcr.io/rim-platform/rim-imagecheck, for a tag v<version>, then creates the GitHub release
+# with the version's CHANGELOG.md section. Only the maintainer may push v* tags, and the publish
+# job waits for the maintainer's approval in the `release` environment.
 #
 # Every action is pinned to a full commit SHA, with its version in a comment.
 
@@ -19,6 +20,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/rim-platform/rim-server
+  IMAGECHECK: ghcr.io/rim-platform/rim-imagecheck
 
 jobs:
   build-and-publish:
@@ -34,6 +36,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       digest: ${{ steps.build.outputs.digest }}
+      imagecheck-digest: ${{ steps.build-imagecheck.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,6 +68,9 @@ jobs:
             echo "prerelease=$prerelease"
             echo "tags<<EOF"
             echo "$tags"
+            echo "EOF"
+            echo "imagecheck-tags<<EOF"
+            echo "${tags//"$IMAGE:"/"$IMAGECHECK:"}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -111,6 +117,22 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=Apache-2.0
 
+      - name: Build and push the image check
+        id: build-imagecheck
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: imagecheck
+          file: imagecheck/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.version.outputs.imagecheck-tags }}
+          labels: |
+            org.opencontainers.image.title=rim-imagecheck
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+
       # A standalone SPDX file: it is attached to the GitHub release and attested to the image's
       # digest below, so it can be read without a registry and checked against the digest.
       - name: Generate the SBOM
@@ -119,6 +141,15 @@ jobs:
           image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: rim-server-${{ steps.version.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate the image check's SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGECHECK }}@${{ steps.build-imagecheck.outputs.digest }}
+          format: spdx-json
+          output-file: rim-imagecheck-${{ steps.version.outputs.version }}.spdx.json
           upload-artifact: false
           upload-release-assets: false
 
@@ -132,6 +163,11 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
 
+      - name: Sign the image check
+        env:
+          DIGEST: ${{ steps.build-imagecheck.outputs.digest }}
+        run: cosign sign --yes "$IMAGECHECK@$DIGEST"
+
       # The SBOM as a GitHub attestation to the image's digest, kept by GitHub rather than pushed
       # to the registry: `gh attestation verify oci://<image>@<digest> --predicate-type
       # https://spdx.dev/Document/v2.3` checks it.
@@ -143,12 +179,21 @@ jobs:
           sbom-path: rim-server-${{ steps.version.outputs.version }}.spdx.json
           push-to-registry: false
 
+      - name: Attest the image check's SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGECHECK }}
+          subject-digest: ${{ steps.build-imagecheck.outputs.digest }}
+          sbom-path: rim-imagecheck-${{ steps.version.outputs.version }}.spdx.json
+          push-to-registry: false
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-files
           path: |
             release-notes.md
             rim-server-${{ steps.version.outputs.version }}.spdx.json
+            rim-imagecheck-${{ steps.version.outputs.version }}.spdx.json
           if-no-files-found: error
           retention-days: 7
 
@@ -171,6 +216,7 @@ jobs:
           VERSION: ${{ needs.build-and-publish.outputs.version }}
           PRERELEASE: ${{ needs.build-and-publish.outputs.prerelease }}
           DIGEST: ${{ needs.build-and-publish.outputs.digest }}
+          IMAGECHECK_DIGEST: ${{ needs.build-and-publish.outputs.imagecheck-digest }}
         run: |
           cat >> release-notes.md <<EOF
 
@@ -192,6 +238,11 @@ jobs:
           gh attestation verify oci://$IMAGE@$DIGEST --repo $GITHUB_REPOSITORY \\
             --predicate-type https://spdx.dev/Document/v2.3
           \`\`\`
+
+          The profile picture check, \`$IMAGECHECK:$VERSION\` (\`$IMAGECHECK_DIGEST\`), is signed by
+          the same workflow, with its SBOM \`rim-imagecheck-$VERSION.spdx.json\` attested the same
+          way: verify it with the commands above, \`$IMAGECHECK\` and its digest in place of
+          \`$IMAGE\` and \`$DIGEST\`.
           EOF
           flags=()
           if [[ $PRERELEASE == true ]]; then
@@ -199,4 +250,4 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "rim-server $VERSION" --notes-file release-notes.md "${flags[@]}" \
-            "rim-server-$VERSION.spdx.json"
+            "rim-server-$VERSION.spdx.json" "rim-imagecheck-$VERSION.spdx.json"
