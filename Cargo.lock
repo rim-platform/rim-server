@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "entity"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "chrono",
  "rim_core",
@@ -3666,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "sea-orm-migration",
  "tokio",
@@ -4976,7 +4976,7 @@ dependencies = [
 
 [[package]]
 name = "rim_api"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "actix-codec",
  "actix-http",
@@ -5018,7 +5018,7 @@ dependencies = [
 
 [[package]]
 name = "rim_auth"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -5041,7 +5041,7 @@ dependencies = [
 
 [[package]]
 name = "rim_core"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5056,7 +5056,7 @@ dependencies = [
 
 [[package]]
 name = "rim_identity"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -5074,7 +5074,7 @@ dependencies = [
 
 [[package]]
 name = "rim_infra_db"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5094,7 +5094,7 @@ dependencies = [
 
 [[package]]
 name = "rim_infra_services"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "async-recursion",
@@ -5147,7 +5147,7 @@ dependencies = [
 
 [[package]]
 name = "rim_logging"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dotenvy",
  "tempfile",
@@ -5158,7 +5158,7 @@ dependencies = [
 
 [[package]]
 name = "rim_s2s"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5174,7 +5174,7 @@ dependencies = [
 
 [[package]]
 name = "rim_server"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "actix",
  "actix-cors",
@@ -5222,7 +5222,7 @@ dependencies = [
 
 [[package]]
 name = "rim_services"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "async-trait",

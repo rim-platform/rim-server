@@ -21,6 +21,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-26
+
 ### Added
 
 - `Message.threadReplyCount`: the number of replies, deleted ones not counted, in the thread a
@@ -949,7 +951,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
   `docs/self-hosting.md` shows how to pass a file in instead.
 
-[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/rim-platform/rim-server/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/rim-platform/rim-server/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/rim-platform/rim-server/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/rim-platform/rim-server/releases/tag/v0.0.1
