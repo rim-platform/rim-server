@@ -25,6 +25,7 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 - `Message.threadReplyCount`: the number of replies, deleted ones not counted, in the thread a
   timeline message is the root of; null on other messages.
+
 ### Changed
 
 - `serverInfo.features` gives email's unavailable reason as "no mail server is set up" instead
