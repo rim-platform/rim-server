@@ -5,11 +5,13 @@ use async_trait::async_trait;
 use regex::Regex;
 use sea_orm::DatabaseConnection;
 
+use rim_core::conversation::model::Conversation;
 use rim_core::message::model::{Message, MessageId};
 use rim_core::message_reaction::model::{MessageReaction, NewMessageReaction};
 use rim_core::relay::repository::RelayRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_feature::model::ServerFeature;
+use rim_core::server_member::model::MemberStanding;
 use rim_infra_db::TransactionScope;
 use rim_infra_db::begin_transaction;
 use rim_services::events::{EventObserver, Observers, ReactionGroupData, WorkspaceEvent};
@@ -27,8 +29,8 @@ use crate::ReactionRepos;
 use crate::repos::AppRepos;
 use crate::request_gate::ensure_request_decided;
 use crate::util::{
-    ConversationAccessRepos, ensure_conversation_in_server, ensure_conversation_member_access,
-    ensure_conversation_writable,
+    ConversationAccessRepos, PostKind, ensure_can_post, ensure_conversation_in_server,
+    ensure_conversation_member_access, ensure_conversation_writable_with_standing,
 };
 
 /// Most distinct emoji one message carries.
@@ -261,14 +263,16 @@ impl DefaultMessageReactionService {
             .collect()
     }
 
+    /// The message the actor reacts to, with its conversation and the actor's standing in the
+    /// workspace, once the conversation is writable for the actor and the message is live.
     async fn ensure_actor_can_react(
         &self,
         server_id: rim_core::server::model::ServerId,
         conversation_id: rim_core::conversation::model::ConversationId,
         message_id: rim_core::message::model::MessageId,
         actor_user_id: rim_core::user::model::UserId,
-    ) -> ServiceResult<Message> {
-        ensure_conversation_writable(
+    ) -> ServiceResult<(Message, Conversation, MemberStanding)> {
+        let (conversation, standing) = ensure_conversation_writable_with_standing(
             ConversationAccessRepos::from_arcs(
                 &self.repos.server_member_repo,
                 &self.repos.conversation_repo,
@@ -297,7 +301,7 @@ impl DefaultMessageReactionService {
             ));
         }
 
-        Ok(message)
+        Ok((message, conversation, standing))
     }
 }
 
@@ -317,7 +321,7 @@ impl MessageReactionService for DefaultMessageReactionService {
         // whatever its text.
         let emoji = trim_reaction(&cmd.emoji)?.to_string();
 
-        let message = self
+        let (message, conversation, standing) = self
             .ensure_actor_can_react(
                 cmd.server_id,
                 cmd.conversation_id,
@@ -348,6 +352,7 @@ impl MessageReactionService for DefaultMessageReactionService {
         let added = existing.is_none();
         match existing {
             None => {
+                ensure_can_post(&conversation, &standing, PostKind::Reaction)?;
                 validate_reaction_emoji(&emoji)?;
                 ensure_room_for_reaction(&all, cmd.actor.user_id, &emoji)?;
                 if !all.iter().any(|r| r.emoji == emoji) {

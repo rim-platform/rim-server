@@ -9,7 +9,7 @@ mod tests {
     use rim_core::auth::repository::{
         MockInstanceInviteRepository, MockInviteRepository, MockSessionRepository,
     };
-    use rim_core::conversation::model::{Conversation, ConversationId};
+    use rim_core::conversation::model::{Conversation, ConversationId, PostingPolicy};
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -200,6 +200,8 @@ mod tests {
                         archived_at: None,
                         created_by: conv.created_by,
                         slow_mode_seconds: 0,
+                        posting_policy: PostingPolicy::Everyone,
+                        posting_allows_threads: true,
                         encrypted_at: None,
                     })
                 })

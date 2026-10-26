@@ -1,4 +1,4 @@
-use crate::conversation::model::{Conversation, ConversationId, NewConversation};
+use crate::conversation::model::{Conversation, ConversationId, NewConversation, PostingPolicy};
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir};
 use crate::server::model::ServerId;
@@ -149,6 +149,15 @@ pub trait ConversationRepository: Send + Sync {
         &self,
         conversation_id: ConversationId,
         seconds: i32,
+    ) -> RepoResult<Conversation>;
+
+    /// Set who may post in the conversation and, under `PostingPolicy::Moderators`, whether
+    /// everyone else may still react and reply in threads.
+    async fn set_posting(
+        &self,
+        conversation_id: ConversationId,
+        policy: PostingPolicy,
+        allows_threads: bool,
     ) -> RepoResult<Conversation>;
 
     /// How many unarchived channels `server_id` has, public and private.

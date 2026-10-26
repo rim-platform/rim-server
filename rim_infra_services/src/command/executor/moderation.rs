@@ -1,18 +1,19 @@
 use serde_json::Value;
 
+use rim_core::conversation::model::PostingPolicy;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 use rim_services::moderation::command::{
-    BanMemberCmd, KickMemberCmd, ReportMessageCmd, SetMemberRoleCmd, SetSlowModeCmd,
-    TimeoutMemberCmd, UnbanMemberCmd,
+    BanMemberCmd, KickMemberCmd, ReportMessageCmd, SetChannelPostingCmd, SetMemberRoleCmd,
+    SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::command::CommandServices;
 
 use super::{
-    optional_integer_arg, optional_string_arg, parse_uuid_arg, require_string_arg,
-    resolve_conversation_id, resolve_workspace_id,
+    optional_bool_arg, optional_integer_arg, optional_string_arg, parse_uuid_arg,
+    require_string_arg, resolve_conversation_id, resolve_workspace_id,
 };
 
 /// Longest timeout the `admin.timeout` command accepts, in minutes (30 days); the service
@@ -225,6 +226,45 @@ pub(super) async fn set_slow_mode(
     ))
 }
 
+pub(super) async fn set_channel_posting(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let server_id = resolve_workspace_id(&args, context.as_ref(), "server_id")?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
+    let policy = require_string_arg(&args, "policy")?
+        .trim()
+        .to_ascii_lowercase()
+        .parse::<PostingPolicy>()
+        .map_err(|_| {
+            ServiceError::Validation("policy must be everyone or moderators".to_string())
+        })?;
+    let allows_threads = optional_bool_arg(&args, "allows_threads").unwrap_or(true);
+    let conversation = services
+        .moderation_service
+        .set_channel_posting(SetChannelPostingCmd {
+            actor,
+            server_id,
+            conversation_id,
+            policy,
+            allows_threads,
+        })
+        .await?;
+    Ok(success(
+        match conversation.posting_policy {
+            PostingPolicy::Everyone => "everyone can post",
+            PostingPolicy::Moderators => "only the owner and moderators can post",
+        },
+        serde_json::json!({
+            "conversation_id": conversation.id.to_string(),
+            "posting_policy": conversation.posting_policy.as_str(),
+            "posting_allows_threads": conversation.posting_allows_threads,
+        }),
+    ))
+}
+
 pub(super) async fn report_message(
     services: &CommandServices,
     actor: Actor,
@@ -269,7 +309,7 @@ pub(super) async fn report_message(
 mod tests {
     use std::sync::Arc;
 
-    use rim_core::conversation::model::{ConversationId, ConversationType};
+    use rim_core::conversation::model::{ConversationId, ConversationType, PostingPolicy};
     use rim_core::message::model::MessageId;
     use rim_core::moderation::model::{MessageReportId, MessageReportStatus};
     use rim_core::server::model::ServerId;
@@ -422,6 +462,8 @@ mod tests {
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: cmd.seconds,
+                        posting_policy: PostingPolicy::Everyone,
+                        posting_allows_threads: true,
                         encrypted_at: None,
                     })
                 })
@@ -436,6 +478,68 @@ mod tests {
         .await
         .expect("slow mode");
         assert_eq!(result.message, "slow mode on");
+    }
+
+    #[tokio::test]
+    async fn set_channel_posting_uses_the_focused_conversation() {
+        let workspace = ServerId::new();
+        let conversation = ConversationId::new();
+        let mut moderation = MockModerationService::new();
+        moderation
+            .expect_set_channel_posting()
+            .withf(move |cmd| {
+                cmd.conversation_id == conversation
+                    && cmd.policy == PostingPolicy::Moderators
+                    && cmd.allows_threads
+            })
+            .times(1)
+            .returning(move |cmd| {
+                Box::pin(async move {
+                    Ok(ConversationDto {
+                        id: cmd.conversation_id,
+                        server_id: cmd.server_id,
+                        conversation_type: ConversationType::Channel,
+                        title: None,
+                        topic: None,
+                        member_ids: vec![],
+                        pending_member_ids: vec![],
+                        is_private: false,
+                        archived_at: None,
+                        created_by: None,
+                        slow_mode_seconds: 0,
+                        encrypted_at: None,
+                        posting_policy: cmd.policy,
+                        posting_allows_threads: cmd.allows_threads,
+                    })
+                })
+            });
+        let services = make_services(moderation);
+        let result = super::set_channel_posting(
+            &services,
+            Actor::new(UserId::new()),
+            object(serde_json::json!({ "policy": "Moderators" })),
+            Some(context(workspace, Some(conversation), None)),
+        )
+        .await
+        .expect("channel posting");
+        assert_eq!(result.message, "only the owner and moderators can post");
+        let payload = result.payload.expect("payload");
+        assert_eq!(payload["posting_policy"], "moderators");
+        assert_eq!(payload["posting_allows_threads"], true);
+    }
+
+    #[tokio::test]
+    async fn set_channel_posting_rejects_unknown_policies() {
+        let services = make_services(MockModerationService::new());
+        let err = super::set_channel_posting(
+            &services,
+            Actor::new(UserId::new()),
+            object(serde_json::json!({ "policy": "admins" })),
+            Some(context(ServerId::new(), Some(ConversationId::new()), None)),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)));
     }
 
     #[tokio::test]

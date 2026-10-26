@@ -5,7 +5,9 @@ mod tests {
     use async_trait::async_trait;
     use chrono::{Duration, Utc};
 
-    use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+    use rim_core::conversation::model::{
+        Conversation, ConversationId, ConversationType, PostingPolicy,
+    };
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message::model::{Message, MessageId};
@@ -29,8 +31,8 @@ mod tests {
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::moderation::command::{
         AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery,
-        KickMemberCmd, ReportMessageCmd, ReportOutcome, ResolveReportCmd, SetMemberRoleCmd,
-        SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+        KickMemberCmd, ReportMessageCmd, ReportOutcome, ResolveReportCmd, SetChannelPostingCmd,
+        SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
     };
     use rim_services::moderation::service::ModerationService;
     use rim_services::{Actor, ServiceError, ServiceResult};
@@ -152,6 +154,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         }
     }
@@ -286,6 +290,17 @@ mod tests {
                         let mut c = channel(ServerId::new());
                         c.id = id;
                         c.slow_mode_seconds = seconds;
+                        Ok(c)
+                    })
+                });
+            conversation_repo
+                .expect_set_posting()
+                .returning(|id, policy, allows_threads| {
+                    Box::pin(async move {
+                        let mut c = channel(ServerId::new());
+                        c.id = id;
+                        c.posting_policy = policy;
+                        c.posting_allows_threads = allows_threads;
                         Ok(c)
                     })
                 });
@@ -906,6 +921,79 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    // ── channel posting ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn set_channel_posting_needs_a_moderator_and_audits() {
+        let [moderator, member] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        fx.conversation = Some(channel(fx.server_id));
+        let conversation_id = fx.conversation.as_ref().map(|c| c.id).expect("channel");
+        let svc = fx.service(MockModerationRepository::new());
+        let cmd = |actor, policy, allows_threads| SetChannelPostingCmd {
+            actor: Actor::new(actor),
+            server_id: fx.server_id,
+            conversation_id,
+            policy,
+            allows_threads,
+        };
+
+        assert!(matches!(
+            svc.set_channel_posting(cmd(member, PostingPolicy::Moderators, true))
+                .await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        // The channel already lets everyone post: nothing is written or audited.
+        let dto = svc
+            .set_channel_posting(cmd(moderator, PostingPolicy::Everyone, true))
+            .await
+            .expect("unchanged");
+        assert_eq!(dto.posting_policy, PostingPolicy::Everyone);
+        assert!(fx.audited().is_empty());
+
+        let dto = svc
+            .set_channel_posting(cmd(moderator, PostingPolicy::Moderators, false))
+            .await
+            .expect("channel posting");
+        assert_eq!(dto.posting_policy, PostingPolicy::Moderators);
+        assert!(!dto.posting_allows_threads);
+        assert_eq!(fx.audited(), [audit_ids::SET_CHANNEL_POSTING]);
+        assert!(
+            fx.events()
+                .iter()
+                .any(|e| matches!(e, WorkspaceEvent::ConversationUpdated { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn set_channel_posting_is_channels_only_and_not_archived() {
+        let [moderator] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator)]);
+        let mut group = channel(fx.server_id);
+        group.conversation_type = ConversationType::Group;
+        let mut archived = channel(fx.server_id);
+        archived.archived_at = Some(Utc::now());
+        for (conversation, archived) in [(group, false), (archived, true)] {
+            fx.conversation = Some(conversation.clone());
+            let svc = fx.service(MockModerationRepository::new());
+            let err = svc
+                .set_channel_posting(SetChannelPostingCmd {
+                    actor: Actor::new(moderator),
+                    server_id: fx.server_id,
+                    conversation_id: conversation.id,
+                    policy: PostingPolicy::Moderators,
+                    allows_threads: true,
+                })
+                .await
+                .unwrap_err();
+            if archived {
+                assert!(matches!(err, ServiceError::ConversationArchived), "{err:?}");
+            } else {
+                assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+            }
+        }
     }
 
     // ── reports ──────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ use async_graphql::{Request, Value, Variables};
 use rim_core::auth::model::SessionId;
 use rim_core::conversation::model::ConversationId;
 use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::PostingPolicy;
 use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::MessageThreadId;
 use rim_core::repository::pagination::Page;
@@ -253,6 +254,8 @@ fn test_conversation_dto() -> rim_services::conversation::dto::ConversationDto {
         archived_at: None,
         created_by: None,
         slow_mode_seconds: 0,
+        posting_policy: PostingPolicy::Everyone,
+        posting_allows_threads: true,
         encrypted_at: None,
     }
 }

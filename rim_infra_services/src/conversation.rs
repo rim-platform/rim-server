@@ -440,6 +440,8 @@ impl DefaultConversationService {
             archived_at: conversation.archived_at,
             created_by: conversation.created_by,
             slow_mode_seconds: conversation.slow_mode_seconds,
+            posting_policy: conversation.posting_policy,
+            posting_allows_threads: conversation.posting_allows_threads,
             encrypted_at: conversation.encrypted_at,
         }
     }

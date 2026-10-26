@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, NaiveTime, Utc};
 
-use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+use rim_core::conversation::model::{
+    Conversation, ConversationId, ConversationType, PostingPolicy,
+};
 use rim_core::conversation::repository::MockConversationRepository;
 use rim_core::conversation_member::repository::MockConversationMemberRepository;
 use rim_core::message::model::{Message, MessageId};
@@ -117,6 +119,8 @@ fn conversation(server_id: ServerId, kind: ConversationType) -> Conversation {
         archived_at: None,
         created_by: None,
         slow_mode_seconds: 0,
+        posting_policy: PostingPolicy::Everyone,
+        posting_allows_threads: true,
         encrypted_at: None,
     }
 }

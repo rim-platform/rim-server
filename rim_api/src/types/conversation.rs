@@ -18,6 +18,35 @@ impl From<rim_core::conversation::model::ConversationType> for ConversationTypeE
     }
 }
 
+/// Who may post in a channel.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+#[graphql(name = "PostingPolicy")]
+pub enum PostingPolicyGql {
+    /// Every member who can write in the channel.
+    Everyone,
+    /// The workspace's Owner and Moderators only.
+    Moderators,
+}
+
+impl From<rim_core::conversation::model::PostingPolicy> for PostingPolicyGql {
+    fn from(value: rim_core::conversation::model::PostingPolicy) -> Self {
+        use rim_core::conversation::model::PostingPolicy as D;
+        match value {
+            D::Everyone => Self::Everyone,
+            D::Moderators => Self::Moderators,
+        }
+    }
+}
+
+impl From<PostingPolicyGql> for rim_core::conversation::model::PostingPolicy {
+    fn from(value: PostingPolicyGql) -> Self {
+        match value {
+            PostingPolicyGql::Everyone => Self::Everyone,
+            PostingPolicyGql::Moderators => Self::Moderators,
+        }
+    }
+}
+
 #[derive(SimpleObject, Clone, Debug)]
 #[graphql(complex)]
 pub struct Conversation {
@@ -44,6 +73,12 @@ pub struct Conversation {
     /// ready, without the history before that, or `declineConversationInvite`. Not in
     /// `memberIds` or `memberCount`.
     pub pending_member_ids: Vec<async_graphql::ID>,
+    /// Who may post in the channel: `EVERYONE` or `MODERATORS` (the workspace's Owner and
+    /// Moderators). Always `EVERYONE` for DMs and groups.
+    pub posting_policy: PostingPolicyGql,
+    /// Under `MODERATORS`, whether everyone else may still add reactions and reply in threads.
+    /// Ignored under `EVERYONE`.
+    pub posting_allows_threads: bool,
 }
 
 #[ComplexObject]
@@ -229,6 +264,8 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
                 .into_iter()
                 .map(|id| async_graphql::ID(id.to_string()))
                 .collect(),
+            posting_policy: value.posting_policy.into(),
+            posting_allows_threads: value.posting_allows_threads,
         }
     }
 }

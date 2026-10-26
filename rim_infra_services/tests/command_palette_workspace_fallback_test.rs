@@ -30,7 +30,7 @@
 use std::sync::Arc;
 
 use rim_core::command::repository::MockUserCommandRepository;
-use rim_core::conversation::model::{ConversationId, ConversationType};
+use rim_core::conversation::model::{ConversationId, ConversationType, PostingPolicy};
 use rim_core::macro_def::repository::MockMacroRepository;
 use rim_core::repository::pagination::Page;
 use rim_core::server::model::ServerId;
@@ -158,6 +158,8 @@ async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_ser
                         archived_at: None,
                         created_by: None,
                         slow_mode_seconds: 0,
+                        posting_policy: PostingPolicy::Everyone,
+                        posting_allows_threads: true,
                         encrypted_at: None,
                     }],
                     None,

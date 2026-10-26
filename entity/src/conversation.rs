@@ -22,6 +22,9 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub predecessor_host: Option<String>,
     pub predecessor_conversation_id: Option<Uuid>,
+    #[sea_orm(column_type = "Text")]
+    pub posting_policy: String,
+    pub posting_allows_threads: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

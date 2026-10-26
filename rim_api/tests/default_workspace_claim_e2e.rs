@@ -743,6 +743,112 @@ async fn a_later_start_leaves_a_members_channel_of_a_defined_title_alone() {
     cleanup(&file);
 }
 
+/// The posting policy of every channel of `workspace`: title, policy and the thread switch, by
+/// title.
+async fn posting(ctx: &TestCtx, workspace: &str) -> Vec<(String, String, bool)> {
+    rows(
+        ctx,
+        "SELECT title, posting_policy, posting_allows_threads FROM conversation \
+         WHERE server_id = $1::uuid AND conversation_type = 'channel' ORDER BY title",
+        vec![workspace.into()],
+    )
+    .await
+    .iter()
+    .map(|r| {
+        (
+            r.try_get::<String>("", "title").expect("title"),
+            r.try_get::<String>("", "posting_policy")
+                .expect("posting_policy"),
+            r.try_get::<bool>("", "posting_allows_threads")
+                .expect("posting_allows_threads"),
+        )
+    })
+    .collect()
+}
+
+/// The claim sets the posting policies the file gives; a later start sets them on an existing
+/// and on a new channel where they differ, leaves a channel the file gives none alone, and
+/// writes nothing when they are already set.
+#[tokio::test]
+async fn the_file_sets_channel_posting_at_the_claim_and_at_a_later_start() {
+    let ctx = TestCtx::new().await;
+    let defined = defined(
+        r#"{
+          "name": "RIM",
+          "channels": [
+            { "name": "general" },
+            { "name": "announcements", "posting": "moderators" }
+          ]
+        }"#,
+    );
+    let file = defined.claim_link_file.clone();
+    let setting = DefaultWorkspace::Defined(Arc::new(defined.clone()));
+    run_start(&ctx, &setting, true).await.expect("start");
+    let token = claim_token(&file);
+    let schema = ctx.build_schema_with_defined_workspace(defined, RegistrationMode::InviteOnly);
+    let data = exec_ok(
+        &schema,
+        key_signup(
+            &schema,
+            "dwc-posting",
+            109,
+            json!({ "instanceInviteToken": token }),
+        )
+        .await,
+    )
+    .await;
+    let workspace = id(&data["signupWithKey"]["serverId"]);
+    assert_eq!(
+        posting(&ctx, &workspace).await,
+        vec![
+            ("announcements".to_string(), "moderators".to_string(), true),
+            ("general".to_string(), "everyone".to_string(), true),
+        ]
+    );
+
+    let later = r#"{
+      "name": "RIM",
+      "channels": [
+        { "name": "general" },
+        { "name": "announcements", "posting": "moderators", "postingAllowsThreads": false },
+        { "name": "news", "posting": "moderators" }
+      ]
+    }"#;
+    let started = run_start(
+        &ctx,
+        &DefaultWorkspace::Defined(Arc::new(defined_with(&file, later))),
+        true,
+    )
+    .await
+    .expect("later start");
+    let Started::Applied { changes, .. } = started else {
+        panic!("expected the file applied, got {started:?}");
+    };
+    assert_eq!(changes.channels_added, ["news"]);
+    assert_eq!(changes.posting_set, ["announcements", "news"]);
+    assert_eq!(
+        posting(&ctx, &workspace).await,
+        vec![
+            ("announcements".to_string(), "moderators".to_string(), false),
+            ("general".to_string(), "everyone".to_string(), true),
+            ("news".to_string(), "moderators".to_string(), true),
+        ]
+    );
+
+    let started = run_start(
+        &ctx,
+        &DefaultWorkspace::Defined(Arc::new(defined_with(&file, later))),
+        true,
+    )
+    .await
+    .expect("start with nothing to change");
+    assert!(
+        matches!(&started, Started::Applied { changes, .. } if *changes == Default::default()),
+        "{started:?}"
+    );
+    cleanup(&file);
+}
+
 /// The definition in `text` with the claim link file `file`.
 fn defined_with(file: &Path, text: &str) -> DefinedWorkspace {
     DefinedWorkspace {

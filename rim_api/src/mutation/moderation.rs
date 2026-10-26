@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::moderation::command::{
     BanMemberCmd, ClearTimeoutCmd, KickMemberCmd, ReportMessageCmd, ResolveReportCmd,
-    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::moderation::service::ModerationService;
 
@@ -11,8 +11,8 @@ use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
-    Conversation, MemberTimeout, MessageReport, ReportOutcome, ServerBan, ServerMember,
-    ServerMemberRoleGql,
+    Conversation, MemberTimeout, MessageReport, PostingPolicyGql, ReportOutcome, ServerBan,
+    ServerMember, ServerMemberRoleGql,
 };
 
 #[derive(Default)]
@@ -179,6 +179,32 @@ impl ModerationMutations {
                 server_id: parse_uuid_id(&server_id)?,
                 conversation_id: parse_uuid_id(&conversation_id)?,
                 seconds,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(conversation.into())
+    }
+
+    /// Set who may post in a channel: `EVERYONE`, or `MODERATORS` (the workspace's Owner and
+    /// Moderators). Under `MODERATORS`, `allowsThreads` says whether everyone else may still add
+    /// reactions and reply in threads. Owner/Moderator; channels only (`VALIDATION` otherwise);
+    /// not on an archived channel. Audited (`chat.set_channel_posting`).
+    async fn set_channel_posting(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        policy: PostingPolicyGql,
+        allows_threads: bool,
+    ) -> Result<Conversation> {
+        let actor = require_actor(ctx)?;
+        let conversation = moderation(ctx)?
+            .set_channel_posting(SetChannelPostingCmd {
+                actor: Actor::new(actor),
+                server_id: parse_uuid_id(&server_id)?,
+                conversation_id: parse_uuid_id(&conversation_id)?,
+                policy: policy.into(),
+                allows_threads,
             })
             .await
             .map_err(map_service_error)?;

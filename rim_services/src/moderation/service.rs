@@ -11,8 +11,8 @@ use crate::ServiceResult;
 use crate::conversation::dto::ConversationDto;
 use crate::moderation::command::{
     AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
-    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetMemberRoleCmd,
-    SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd,
+    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use crate::moderation::dto::{
     MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
@@ -53,6 +53,12 @@ pub trait ModerationService: Send + Sync {
     async fn clear_timeout(&self, cmd: ClearTimeoutCmd) -> ServiceResult<bool>;
 
     async fn set_slow_mode(&self, cmd: SetSlowModeCmd) -> ServiceResult<ConversationDto>;
+
+    /// Sets a channel's posting policy; returns the channel. Unchanged settings write nothing.
+    async fn set_channel_posting(
+        &self,
+        cmd: SetChannelPostingCmd,
+    ) -> ServiceResult<ConversationDto>;
 
     async fn report_message(&self, cmd: ReportMessageCmd) -> ServiceResult<MessageReportDto>;
 

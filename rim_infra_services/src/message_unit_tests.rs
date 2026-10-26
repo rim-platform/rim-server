@@ -2,7 +2,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use rim_core::conversation::model::{Conversation, ConversationId};
+    use rim_core::conversation::model::{Conversation, ConversationId, PostingPolicy};
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message::model::{Message, MessageId, NewMessage};
@@ -47,6 +47,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         }
     }

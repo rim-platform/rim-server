@@ -2999,7 +2999,9 @@ struct Inbox {
 /// A host at `now` with a daily limit of `DAILY` requests per sender, where Ada's oldest
 /// request of the window was filed 20 hours ago.
 fn limits_host(ada: UserId, inbox: Inbox, now: chrono::DateTime<Utc>) -> DefaultHostService {
-    use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+    use rim_core::conversation::model::{
+        Conversation, ConversationId, ConversationType, PostingPolicy,
+    };
     use rim_core::dm_policy::model::{OutsideDm, OutsideFloor, SharedWorkspace, UserWorkspaceDm};
 
     let mut host = MockHostRepository::new();
@@ -3103,6 +3105,8 @@ fn limits_host(ada: UserId, inbox: Inbox, now: chrono::DateTime<Utc>) -> Default
                 archived_at: None,
                 created_by: Some(user),
                 slow_mode_seconds: 0,
+                posting_policy: PostingPolicy::Everyone,
+                posting_allows_threads: true,
                 encrypted_at: None,
             });
             Box::pin(async move { Ok(found) })
@@ -3910,7 +3914,9 @@ fn reinvite_writer(
 
 /// A group of the space `server_id`, created by someone.
 fn group_in(server_id: ServerId) -> rim_core::conversation::model::Conversation {
-    use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
+    use rim_core::conversation::model::{
+        Conversation, ConversationId, ConversationType, PostingPolicy,
+    };
     Conversation {
         id: ConversationId::from(Uuid::from_u128(9)),
         conversation_type: ConversationType::Group,
@@ -3923,6 +3929,8 @@ fn group_in(server_id: ServerId) -> rim_core::conversation::model::Conversation 
         archived_at: None,
         created_by: Some(UserId::new()),
         slow_mode_seconds: 0,
+        posting_policy: PostingPolicy::Everyone,
+        posting_allows_threads: true,
         encrypted_at: Some(Utc::now()),
     }
 }

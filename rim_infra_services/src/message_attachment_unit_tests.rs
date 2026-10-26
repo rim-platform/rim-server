@@ -6,7 +6,7 @@ mod tests {
     use mockall::mock;
 
     use rim_core::conversation::model::{
-        Conversation, ConversationId, ConversationType, NewConversation,
+        Conversation, ConversationId, ConversationType, NewConversation, PostingPolicy,
     };
     use rim_core::conversation::repository::{
         ConversationActivityCursor, ConversationCreatedCursor,
@@ -167,6 +167,7 @@ mod tests {
                 archived_at: Option<chrono::DateTime<chrono::Utc>>,
             ) -> RepoResult<Conversation>;
             async fn set_slow_mode(&self, conversation_id: ConversationId, seconds: i32) -> RepoResult<Conversation>;
+            async fn set_posting(&self, conversation_id: ConversationId, policy: PostingPolicy, allows_threads: bool) -> RepoResult<Conversation>;
         }
     }
 
@@ -326,6 +327,8 @@ mod tests {
             archived_at: None,
             created_by: None,
             slow_mode_seconds: 0,
+            posting_policy: PostingPolicy::Everyone,
+            posting_allows_threads: true,
             encrypted_at: None,
         }
     }

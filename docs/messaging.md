@@ -185,8 +185,8 @@ decide, and each may only tighten the one above it:
 | Role | Meaning |
 |---|---|
 | `OWNER` | Everything. One per workspace; the role cannot be granted (`setMemberRole` with `OWNER` is `VALIDATION`). |
-| `MODERATOR` | Moderation (kick, ban, timeout, delete any message, slow mode, reports) and channel management (archive, remove members). Changes roles only between `MEMBER` and `GUEST`. |
-| `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining), creates channels and groups, joins public channels, invites people into conversations. In the server's default workspace only the Owner and Moderators create channels (`FORBIDDEN`). |
+| `MODERATOR` | Moderation (kick, ban, timeout, delete any message, slow mode, posting permissions, reports) and channel management (archive, remove members). Changes roles only between `MEMBER` and `GUEST`. Posts in every channel they can write in, whatever its posting policy. |
+| `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining) where the channel's posting policy lets them, creates channels and groups, joins public channels, invites people into conversations. In the server's default workspace only the Owner and Moderators create channels (`FORBIDDEN`). |
 | `GUEST` | Restricted. Reads and writes only in conversations they were explicitly added to. |
 
 - **Migration:** before the member role existed every new member was created as `guest`, so "guest" meant an
@@ -424,6 +424,36 @@ themselves (`VALIDATION`). Otherwise `FORBIDDEN`.
   is younger than the interval. Owner and Moderators are exempt. The check reads the author's
   last `sent_at` in the conversation; no in-memory state.
 
+### Posting permissions
+
+- `setChannelPosting(serverId, conversationId, policy, allowsThreads)`: Owner/Moderator, channels
+  only (a DM or group is `VALIDATION`), not on archived channels (`CONVERSATION_ARCHIVED`).
+  `policy` is `EVERYONE` (the default) or `MODERATORS` (the workspace's Owner and Moderators);
+  `allowsThreads` (default `true` for a new channel) says whether, under `MODERATORS`, everyone
+  else may still react and reply in threads, and is ignored under `EVERYONE`. Shown as
+  `Conversation.postingPolicy` and `Conversation.postingAllowsThreads` (DMs and groups are
+  always `EVERYONE`); changes emit `ConversationUpdated`. Setting what is already set writes
+  nothing. Also the command `chat.set_channel_posting`.
+- Under `MODERATORS`, the Owner and Moderators do everything as before. Everyone else (members
+  and guests alike) is refused with `FORBIDDEN` ("only the owner and moderators can post in
+  this channel") as follows:
+
+  | Action | `allowsThreads: true` | `allowsThreads: false` |
+  |---|---|---|
+  | `sendMessage` (timeline replies with `parentMessageId` included) | refused | refused |
+  | `forwardMessage` into the channel | refused | refused |
+  | `replyToMessage` (thread reply) | allowed | refused |
+  | adding a reaction | allowed | refused |
+  | removing one's own reaction | allowed | allowed |
+  | `pinMessage` / `unpinMessage` | refused | refused |
+  | editing or deleting one's own messages | allowed | allowed |
+  | reading, joining, leaving | allowed | allowed |
+
+- The check runs after the archive and timeout gates and before slow mode, in the services, so
+  commands, macros, pipelines and requests forwarded from other servers meet it too. Uploading
+  an attachment is not checked; the message that carries it is.
+- The default workspace's definition file sets it per channel (`docs/self-hosting.md`).
+
 ### Deleting messages
 
 `deleteMessage`: the author, or an Owner/Moderator of the workspace who can read the
@@ -464,7 +494,8 @@ text). `MessageDeleted` is unchanged.
 Every moderation action writes one `command_audit_log` row (initiator `moderation`) through one
 shared helper, whether it came from GraphQL or a command: `admin.set_member_role`, `admin.kick`,
 `admin.ban`, `admin.unban`, `admin.timeout`, `admin.clear_timeout`, `chat.set_slow_mode`,
-`chat.report_message`, `admin.resolve_report`, `admin.delete_message`. Arguments hold ids and
+`chat.set_channel_posting`, `chat.report_message`, `admin.resolve_report`,
+`admin.delete_message`. Arguments hold ids and
 flags only, never reasons or message text. An action run as a command also gets the generic
 command-execution row. Refused actions are not audited by the helper.
 

@@ -105,6 +105,8 @@ pub struct AppliedChanges {
     pub channels_added: Vec<String>,
     /// The titles of the channels whose topic was set.
     pub topics_set: Vec<String>,
+    /// The titles of the channels whose posting policy was set.
+    pub posting_set: Vec<String>,
     /// The titles of the channels left alone because a channel of that title exists that
     /// neither the definition nor an Owner or Moderator created.
     pub channels_taken: Vec<String>,
@@ -232,7 +234,8 @@ fn remove_claim_link(file: &Path) -> std::io::Result<()> {
 
 /// Apply `definition` to the claimed `workspace`: rename it when the name differs, create the
 /// channels missing by title (with no members; new members join the public ones), set the
-/// topics the definition gives where they differ, and set the DM policy when it differs.
+/// topics and posting policies the definition gives where they differ, and set the DM policy
+/// when it differs.
 /// Nothing is deleted, no channel's privacy changes and nobody's membership or role changes.
 /// A channel of a definition's title is taken as the definition's only when the definition, the
 /// Owner or a Moderator created it; any other is left alone and named in `channels_taken`.
@@ -262,14 +265,14 @@ pub async fn apply(
             .conversation_repo
             .get_channel_by_title(workspace, &channel.title)
             .await?;
-        let (id, topic) = match existing {
+        let current = match existing {
             Some(conversation)
                 if !created_by_staff(repos, workspace, conversation.created_by).await? =>
             {
                 changes.channels_taken.push(channel.title.clone());
                 continue;
             }
-            Some(conversation) => (conversation.id, conversation.topic),
+            Some(conversation) => conversation,
             None => {
                 let created = repos
                     .conversation_repo
@@ -280,15 +283,24 @@ pub async fn apply(
                     )
                     .await?;
                 changes.channels_added.push(channel.title.clone());
-                (created.id, None)
+                created
             }
         };
-        if channel.topic.is_some() && channel.topic != topic {
+        if channel.topic.is_some() && channel.topic != current.topic {
             repos
                 .conversation_repo
-                .update_topic(id, channel.topic.clone())
+                .update_topic(current.id, channel.topic.clone())
                 .await?;
             changes.topics_set.push(channel.title.clone());
+        }
+        if let Some((policy, allows_threads)) = channel.posting
+            && (policy, allows_threads) != (current.posting_policy, current.posting_allows_threads)
+        {
+            repos
+                .conversation_repo
+                .set_posting(current.id, policy, allows_threads)
+                .await?;
+            changes.posting_set.push(channel.title.clone());
         }
     }
     if let Some(dm) = definition.dm {
@@ -405,9 +417,10 @@ pub(crate) async fn is_claim(
 
 /// Claim the defined workspace for the new account `owner`, inside the signup's transaction,
 /// when `token` is the owner claim invite (already consumed by the signup): create the
-/// workspace with `owner` as Owner, its channels with their topics and its DM policy; record it
-/// as the default workspace; add every other local account as a Member; and make `owner` an
-/// instance operator when the definition says so. Returns `None` for every other signup.
+/// workspace with `owner` as Owner, its channels with their topics and posting policies and its
+/// DM policy; record it as the default workspace; add every other local account as a Member;
+/// and make `owner` an instance operator when the definition says so. Returns `None` for every
+/// other signup.
 ///
 /// # Errors
 /// Storage errors; the caller's transaction rolls back and the invite stays unconsumed.
@@ -450,6 +463,12 @@ pub(crate) async fn claim(
             repos
                 .conversation_repo
                 .update_topic(created.id, channel.topic.clone())
+                .await?;
+        }
+        if let Some((policy, allows_threads)) = channel.posting {
+            repos
+                .conversation_repo
+                .set_posting(created.id, policy, allows_threads)
                 .await?;
         }
     }

@@ -4,7 +4,7 @@
   "dm": { "outsideFloor": "REQUESTS", "memberDefault": "REQUESTS" },
   "channels": [
     { "name": "general", "topic": "Anything about RIM" },
-    { "name": "announcements", "topic": "Releases and news from the project" },
+    { "name": "announcements", "topic": "Releases and news from the project", "posting": "moderators" },
     { "name": "help", "topic": "Questions about installing and using RIM" },
     { "name": "plugins", "topic": "Writing and sharing plugins" }
   ]

@@ -1,6 +1,6 @@
 #![cfg(feature = "db-tests")]
 
-//! Bans, timeouts, reports, slow mode and the role migration data step against a
+//! Bans, timeouts, reports, slow mode, channel posting and the role migration data step against a
 //! live Postgres. Destructive for the shared test database: run single-threaded.
 
 mod support;
@@ -9,7 +9,7 @@ use chrono::{Duration, Utc};
 use migration::{Migrator, MigratorTrait};
 use sea_orm::ConnectionTrait;
 
-use rim_core::conversation::model::ConversationType;
+use rim_core::conversation::model::{ConversationType, PostingPolicy};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::message::repository::MessageRepository;
 use rim_core::moderation::model::{
@@ -344,6 +344,55 @@ async fn reports_are_unique_paginated_and_resolved_once() {
             .has_report(other.id, reports[0].message_id)
             .await
             .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn posting_columns_default_to_everyone_and_round_trip() {
+    let ctx = support::TestCtx::new().await;
+    let conversations = SeaOrmConversationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("posting").await;
+    let channel = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    assert_eq!(channel.posting_policy, PostingPolicy::Everyone);
+    assert!(channel.posting_allows_threads);
+
+    let updated = conversations
+        .set_posting(channel.id, PostingPolicy::Moderators, false)
+        .await
+        .unwrap();
+    assert_eq!(updated.posting_policy, PostingPolicy::Moderators);
+    assert!(!updated.posting_allows_threads);
+    let read = conversations
+        .get_by_id(channel.id)
+        .await
+        .unwrap()
+        .expect("channel");
+    assert_eq!(read.posting_policy, PostingPolicy::Moderators);
+    assert!(!read.posting_allows_threads);
+
+    // The CHECK constraint keeps the column to the known policies.
+    let refused = support::db_conn()
+        .await
+        .execute_unprepared(&format!(
+            "UPDATE conversation SET posting_policy = 'admins' WHERE id = '{}'",
+            channel.id
+        ))
+        .await;
+    assert!(refused.is_err());
+
+    assert_eq!(
+        conversations
+            .set_posting(
+                rim_core::conversation::model::ConversationId::new(),
+                PostingPolicy::Everyone,
+                true
+            )
+            .await
+            .unwrap_err()
+            .kind(),
+        RepoErrorKind::NotFound
     );
 }
 
