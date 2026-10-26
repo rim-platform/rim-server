@@ -166,8 +166,9 @@ rules above.
   and signing in starts that account's; on the desktop it keeps running and gets
   `rim.principal.changed`, as a process does.
 - **A panel frame**, one per open panel, created when the panel is shown and removed when it
-  closes, has no port. It speaks the existing panel bridge (`docs/local_plugin_host.md`,
-  "PostMessage Bridge") through `window.parent`, exactly as a local-process plugin's panel does.
+  closes, has no port. A panel is shown only for a running plugin that holds `ui.panel`. It
+  speaks the existing panel bridge (`docs/local_plugin_host.md`, "PostMessage Bridge") through
+  `window.parent`, exactly as a local-process plugin's panel does.
 
 This is the split `panel_relay.rs` already makes: logic apart from views, the host relaying state
 between them. Commands work from the palette, keybinds and the agent with no panel open, panels
