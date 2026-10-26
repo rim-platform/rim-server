@@ -19,6 +19,7 @@ use rim_services::feature::service::FeatureGate;
 use rim_services::host::dto::{ForwardAuth, ForwardRefusal, ForwardRequest};
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::storage::service::StorageService;
+use rim_services::user::service::UserService;
 use rim_services::workspace_plugin::service::PluginBundleService;
 use serde_json::json;
 
@@ -259,14 +260,18 @@ async fn execute(
             .await
         }
         ("POST", ["api", "files", "avatar"]) => {
-            let Some(storage) = req.app_data::<web::Data<Arc<dyn StorageService>>>() else {
-                return internal("storage is not configured");
+            let (Some(storage), Some(users)) = (
+                req.app_data::<web::Data<Arc<dyn StorageService>>>(),
+                req.app_data::<web::Data<Arc<dyn UserService>>>(),
+            ) else {
+                return internal("avatars are not configured");
             };
             reply_of(
                 crate::file_handlers::avatar_upload_as(
                     auth.user_id,
                     multipart(req, verified),
                     storage.get_ref().as_ref(),
+                    users.get_ref().as_ref(),
                 )
                 .await,
             )

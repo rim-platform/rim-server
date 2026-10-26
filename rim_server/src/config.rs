@@ -349,14 +349,26 @@ pub struct RIMConfig {
 
     // ── Probation of new accounts ───────────────────────────────────────────
     /// Hours after its creation during which an account cannot create a workspace, write a
-    /// workspace's shared state or send a DM request to a stranger; an instance operator is
-    /// never on probation. Unset or 0 turns
-    /// probation off. Controlled by `RIM_PROBATION_HOURS`.
+    /// workspace's shared state, send a DM request to a stranger or set a profile picture,
+    /// status or bio; an instance operator is never on probation. Unset or 0 turns probation
+    /// off. Controlled by `RIM_PROBATION_HOURS`.
     pub probation_hours: Option<u32>,
     /// Messages an account in probation sends per minute, with a burst of the same size,
     /// instead of the normal message rate; unset or 0 keeps the normal rate. Controlled by
     /// `RIM_RATE_PROBATION_MESSAGES_PER_MIN`.
     pub rate_probation_messages_per_min: Option<u32>,
+
+    // ── Profile pictures ────────────────────────────────────────────────────
+    /// Profile picture uploads one account makes per hour; every upload attempt counts,
+    /// removing a picture does not, and instance operators are exempt. Defaults to
+    /// [`DEFAULT_AVATAR_UPLOADS_PER_HOUR`]; 0 turns the hourly limit off. Controlled by
+    /// `RIM_AVATAR_UPLOADS_PER_HOUR`.
+    pub avatar_uploads_per_hour: Option<u32>,
+    /// Profile picture uploads one account makes per day; every upload attempt counts,
+    /// removing a picture does not, and instance operators are exempt. Defaults to
+    /// [`DEFAULT_AVATAR_UPLOADS_PER_DAY`]; 0 turns the daily limit off. Controlled by
+    /// `RIM_AVATAR_UPLOADS_PER_DAY`.
+    pub avatar_uploads_per_day: Option<u32>,
     /// Days between an account's deletion request and its purge, 0 to 30; default 14.
     /// Controlled by `RIM_ACCOUNT_DELETION_GRACE_DAYS`.
     pub account_deletion_grace_days: Option<u32>,
@@ -494,6 +506,8 @@ impl fmt::Debug for RIMConfig {
                 &self.account_deletion_grace_days,
             )
             .field("reserved_names", &self.reserved_names)
+            .field("avatar_uploads_per_hour", &self.avatar_uploads_per_hour)
+            .field("avatar_uploads_per_day", &self.avatar_uploads_per_day)
             .finish()
     }
 }
@@ -585,6 +599,8 @@ impl Default for RIMConfig {
             limit_accounts: None,
             probation_hours: None,
             rate_probation_messages_per_min: None,
+            avatar_uploads_per_hour: Some(DEFAULT_AVATAR_UPLOADS_PER_HOUR),
+            avatar_uploads_per_day: Some(DEFAULT_AVATAR_UPLOADS_PER_DAY),
             account_deletion_grace_days: None,
             reserved_names: None,
         }
@@ -1474,6 +1490,12 @@ pub const DEFAULT_PENDING_INVITES_PER_USER: u32 = 50;
 /// Default `RIM_LIMIT_INVITES_PER_USER_PER_DAY`.
 pub const DEFAULT_INVITES_PER_USER_PER_DAY: u32 = 50;
 
+/// Default `RIM_AVATAR_UPLOADS_PER_HOUR`.
+pub const DEFAULT_AVATAR_UPLOADS_PER_HOUR: u32 = 5;
+
+/// Default `RIM_AVATAR_UPLOADS_PER_DAY`.
+pub const DEFAULT_AVATAR_UPLOADS_PER_DAY: u32 = 20;
+
 /// Largest `RIM_LIMIT_MESSAGE_BYTES`: the largest message content a client may send.
 pub const MAX_LIMIT_MESSAGE_BYTES: u32 = rim_services::e2ee::MAX_CONTENT_BYTES as u32;
 
@@ -1529,6 +1551,8 @@ impl RIMConfig {
             probation_hours: cap(self.probation_hours),
             pending_invites_per_user: cap(self.limit_pending_invites_per_user),
             accounts: cap(self.limit_accounts),
+            avatar_uploads_per_hour: cap(self.avatar_uploads_per_hour),
+            avatar_uploads_per_day: cap(self.avatar_uploads_per_day),
         })
     }
 }
@@ -1571,6 +1595,14 @@ impl RIMConfig {
             .set_default(
                 "limit_invites_per_user_per_day",
                 i64::from(DEFAULT_INVITES_PER_USER_PER_DAY),
+            )?
+            .set_default(
+                "avatar_uploads_per_hour",
+                i64::from(DEFAULT_AVATAR_UPLOADS_PER_HOUR),
+            )?
+            .set_default(
+                "avatar_uploads_per_day",
+                i64::from(DEFAULT_AVATAR_UPLOADS_PER_DAY),
             )?
             .add_source(Environment::with_prefix("RIM").source(Some(env)))
             .add_source(Environment::default().source(Some(unprefixed)));
@@ -2804,6 +2836,8 @@ mod tests {
         let defaults = InstanceLimits {
             invites_per_user_per_day: Some(DEFAULT_INVITES_PER_USER_PER_DAY),
             pending_invites_per_user: Some(DEFAULT_PENDING_INVITES_PER_USER),
+            avatar_uploads_per_hour: Some(DEFAULT_AVATAR_UPLOADS_PER_HOUR),
+            avatar_uploads_per_day: Some(DEFAULT_AVATAR_UPLOADS_PER_DAY),
             ..relay_only
         };
         assert_eq!(RIMConfig::default().instance_limits(), Ok(defaults));
@@ -2825,6 +2859,8 @@ mod tests {
             ("RIM_LIMIT_MESSAGE_BYTES", "0"),
             ("RIM_LIMIT_PENDING_INVITES_PER_USER", "0"),
             ("RIM_LIMIT_ACCOUNTS", "0"),
+            ("RIM_AVATAR_UPLOADS_PER_HOUR", "0"),
+            ("RIM_AVATAR_UPLOADS_PER_DAY", "0"),
         ]))
         .expect("loads");
         assert_eq!(zero.instance_limits(), Ok(relay_only));
@@ -2848,6 +2884,8 @@ mod tests {
             ("RIM_LIMIT_MESSAGE_BYTES", "8192"),
             ("RIM_LIMIT_PENDING_INVITES_PER_USER", "20"),
             ("RIM_LIMIT_ACCOUNTS", "1000"),
+            ("RIM_AVATAR_UPLOADS_PER_HOUR", "3"),
+            ("RIM_AVATAR_UPLOADS_PER_DAY", "10"),
         ]))
         .expect("loads");
         assert_eq!(
@@ -2867,6 +2905,8 @@ mod tests {
                 probation_hours: None,
                 pending_invites_per_user: Some(20),
                 accounts: Some(1000),
+                avatar_uploads_per_hour: Some(3),
+                avatar_uploads_per_day: Some(10),
             })
         );
     }

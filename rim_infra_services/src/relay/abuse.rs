@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
 
@@ -23,10 +23,11 @@ use rim_services::operator::OperatorCaller;
 use rim_services::relay::dto::{
     AbuseReportDto, AccountRecordDto, AccountSummaryDto, CreatedInviteDto, FileAbuseReport,
     InviteeDto, MAX_ABUSE_REPORT_PAGE, PrincipalBlockDto, PrincipalBlockOutcome,
-    PrincipalRecordDto, PrincipalUnblockOutcome,
+    PrincipalRecordDto, PrincipalUnblockOutcome, ProfileClearOutcome,
 };
 use rim_services::relay::service::RelayAbuseService;
 use rim_services::session_revocation::SessionRevocations;
+use rim_services::user::service::UserService;
 use rim_services::{ServiceError, ServiceResult};
 
 use crate::operator::require_operator;
@@ -36,6 +37,8 @@ use crate::repos::AppRepos;
 const MAX_REASON_CHARS: usize = 1000;
 /// How long a request ignored by a block is kept, so its conversation stays dropped.
 const IGNORED_REQUEST_TTL: Duration = Duration::days(30);
+/// The days a cleared profile may be locked for.
+const PROFILE_LOCK_DAYS: std::ops::RangeInclusive<u32> = 1..=365;
 
 #[derive(Clone)]
 pub struct RelayAbuseRepos {
@@ -52,6 +55,8 @@ pub struct DefaultRelayAbuseService {
     db: Option<DatabaseConnection>,
     /// Told of the accounts a block signs out, so their live connections close.
     session_revocations: Arc<dyn SessionRevocations>,
+    /// Clears profiles; without it clearing a profile is an internal error.
+    user_service: Option<Arc<dyn UserService>>,
 }
 
 impl DefaultRelayAbuseService {
@@ -60,7 +65,14 @@ impl DefaultRelayAbuseService {
             repos,
             db: None,
             session_revocations: crate::session_revocation::unshared(),
+            user_service: None,
         }
+    }
+
+    /// Clear profiles through `user_service`.
+    pub fn with_user_service(mut self, user_service: Arc<dyn UserService>) -> Self {
+        self.user_service = Some(user_service);
+        self
     }
 
     /// Report the accounts a block signs out to `revocations`.
@@ -627,6 +639,53 @@ impl RelayAbuseService for DefaultRelayAbuseService {
             .await?
             .pop())
     }
+
+    #[instrument(name = "relay_abuse.clear_profile", skip_all)]
+    async fn clear_profile(
+        &self,
+        by: OperatorCaller,
+        principal_id: String,
+        reason: String,
+        lock_days: Option<u32>,
+    ) -> ServiceResult<ProfileClearOutcome> {
+        self.check(by).await?;
+        let reason = check_reason(&reason)?;
+        check_principal(&principal_id)?;
+        if let Some(days) = lock_days
+            && !PROFILE_LOCK_DAYS.contains(&days)
+        {
+            return Err(ServiceError::Validation(
+                "lock_days must be between 1 and 365".to_string(),
+            ));
+        }
+        // No account on this server holds the principal.
+        let user = Self::account_of(&self.repos, &principal_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        // In whole seconds, as stored and shown.
+        let locked_until =
+            lock_days.map(|days| (Utc::now() + Duration::days(i64::from(days))).trunc_subsecs(0));
+        let user_service = self.user_service.as_ref().ok_or_else(|| {
+            ServiceError::internal(anyhow::anyhow!("the user service is not configured"))
+        })?;
+        user_service.clear_profile(user.id, locked_until).await?;
+        info!(
+            target: "audit",
+            event = "relay.profile_cleared",
+            scope = "server",
+            actor_id = %by,
+            principal_id = %principal_id,
+            user_id = %user.id,
+            locked_until = ?locked_until,
+            reason = %reason,
+            "an operator cleared a profile on this server"
+        );
+        Ok(ProfileClearOutcome {
+            principal_id,
+            account: summary(&user),
+            locked_until,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -672,6 +731,7 @@ mod tests {
             timezone: None,
             principal_id: principal.map(str::to_string),
             deletion_scheduled_for: None,
+            profile_locked_until: None,
             handle: rim_core::user::model::UserHandle::Local,
         }
     }
@@ -1241,5 +1301,150 @@ mod tests {
         let lines = drain_buf(&buf);
         assert!(lines.contains(&format!("actor_id={}", w.ada.id)), "{lines}");
         assert!(lines.contains("actor_id=cli"), "{lines}");
+    }
+
+    /// The locks a user service was asked to clear profiles with, by account.
+    type Cleared = Arc<Mutex<Vec<(UserId, Option<chrono::DateTime<Utc>>)>>>;
+
+    /// A user service that records each profile it clears in `cleared`.
+    fn clearing(cleared: &Cleared) -> Arc<dyn UserService> {
+        let mut users = rim_services::user::service::MockUserService::new();
+        let cleared = Arc::clone(cleared);
+        users.expect_clear_profile().returning(move |id, locked| {
+            cleared.lock().unwrap().push((id, locked));
+            Box::pin(async move {
+                Ok(rim_services::user::dto::UserDto {
+                    id,
+                    username: "u".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
+                    principal_id: None,
+                    deletion_scheduled_for: None,
+                    profile_locked_until: locked,
+                    handle: None,
+                })
+            })
+        });
+        Arc::new(users)
+    }
+
+    /// An operator clears the profile of the account holding a principal, locked for the days
+    /// asked from now, or not locked without them.
+    #[tokio::test]
+    async fn an_operator_clears_a_profile_and_locks_it_for_the_days_asked() {
+        let w = World::new();
+        let cleared = Cleared::default();
+        let svc = w.service().with_user_service(clearing(&cleared));
+
+        let before = Utc::now().trunc_subsecs(0);
+        let outcome = svc
+            .clear_profile(
+                as_user(&w.ada),
+                BOB.to_string(),
+                "abusive picture".to_string(),
+                Some(7),
+            )
+            .await
+            .expect("cleared");
+        let after = Utc::now();
+        assert_eq!(outcome.principal_id, BOB);
+        assert_eq!(outcome.account, summary(&w.bob));
+        let until = outcome.locked_until.expect("locked");
+        assert_eq!(until.timestamp_subsec_nanos(), 0, "{until}");
+        assert!(
+            until >= before + Duration::days(7) && until <= after + Duration::days(7),
+            "{until}"
+        );
+
+        let unlocked = svc
+            .clear_profile(CLI, ADA.to_string(), "name".to_string(), None)
+            .await
+            .expect("cleared");
+        assert_eq!(unlocked.locked_until, None);
+        assert_eq!(
+            *cleared.lock().unwrap(),
+            vec![(w.bob.id, Some(until)), (w.ada.id, None)]
+        );
+    }
+
+    /// A caller who is not an operator, a bad principal, reason or lock, and a principal no
+    /// account here holds are refused before any profile is cleared; without a user service
+    /// the clear is an internal error.
+    #[tokio::test]
+    async fn clearing_a_profile_refuses_non_operators_bad_input_and_unknown_principals() {
+        let w = World::new();
+        let cleared = Cleared::default();
+        let svc = w.service().with_user_service(clearing(&cleared));
+        let clear = |by, principal: &str, reason: &str, days| {
+            svc.clear_profile(by, principal.to_string(), reason.to_string(), days)
+        };
+
+        assert!(matches!(
+            clear(as_user(&w.bob), ADA, "spam", None).await,
+            Err(ServiceError::Forbidden(_))
+        ));
+        for (principal, reason, days) in [
+            ("bob", "spam", None),
+            (ADA, " ", None),
+            (ADA, "spam", Some(0)),
+            (ADA, "spam", Some(366)),
+        ] {
+            let refusal = clear(CLI, principal, reason, days).await;
+            assert!(
+                matches!(refusal, Err(ServiceError::Validation(_))),
+                "{principal} {reason:?} {days:?}: {refusal:?}"
+            );
+        }
+        assert!(matches!(
+            clear(CLI, ADA, "spam", Some(0)).await,
+            Err(ServiceError::Validation(m)) if m == "lock_days must be between 1 and 365"
+        ));
+        let nobody = format!("rimp1_{}", "A".repeat(43));
+        assert!(matches!(
+            clear(CLI, &nobody, "spam", None).await,
+            Err(ServiceError::NotFound)
+        ));
+        assert!(cleared.lock().unwrap().is_empty());
+
+        assert!(matches!(
+            w.service()
+                .clear_profile(CLI, ADA.to_string(), "spam".to_string(), Some(365))
+                .await,
+            Err(ServiceError::Internal(_))
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clearing_a_profile_writes_an_audit_line() {
+        let (_guard, buf) = capture_audit_lines();
+        let w = World::new();
+        let cleared = Cleared::default();
+        let svc = w.service().with_user_service(clearing(&cleared));
+
+        let outcome = svc
+            .clear_profile(
+                as_user(&w.ada),
+                BOB.to_string(),
+                "abusive picture".to_string(),
+                Some(3),
+            )
+            .await
+            .expect("cleared");
+        let lines = drain_buf(&buf);
+        for part in [
+            "event=\"relay.profile_cleared\"".to_string(),
+            format!("actor_id={}", w.ada.id),
+            format!("principal_id={BOB}"),
+            format!("user_id={}", w.bob.id),
+            format!(
+                "locked_until=Some({:?})",
+                outcome.locked_until.expect("locked")
+            ),
+            "reason=abusive picture".to_string(),
+        ] {
+            assert!(lines.contains(&part), "{part} in {lines}");
+        }
     }
 }

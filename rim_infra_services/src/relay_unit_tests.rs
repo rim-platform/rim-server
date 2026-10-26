@@ -3865,6 +3865,7 @@ fn reinvite_writer(
         timezone: None,
         principal_id: Some(principal.to_string()),
         deletion_scheduled_for: None,
+        profile_locked_until: None,
         handle: rim_core::user::model::UserHandle::Local,
     };
     let mut users = MockUserRepository::new();
@@ -4127,6 +4128,7 @@ fn default_workspace_writer(
         timezone: None,
         principal_id: Some(principal.to_string()),
         deletion_scheduled_for: None,
+        profile_locked_until: None,
         handle: rim_core::user::model::UserHandle::Local,
     };
     let mut users = MockUserRepository::new();

@@ -462,6 +462,28 @@ Signs: `relay.registration_pow` far above normal, many reports, DM requests from
 It does not bring back the sessions or the invites the block ended, and it lifts one account:
 unblock each account a cascade blocked.
 
+### An abusive profile
+
+Signs: reports of a picture, a display name, a status or a bio rather than of messages.
+
+1. Find the principal: the report names it, or `rim-relay principal show <principalId>`.
+2. Clear the profile: `rim-relay principal clear-profile <principalId> --reason "<what>"`. The
+   display name, picture, status and bio are emptied, the stored pictures deleted, and the
+   people sharing a workspace with the account see the change at once. The command prints the
+   account and whether the profile is locked.
+3. When it would only be set again, lock it: add `--lock-days <n>` (1 to 365). Until then the
+   account can clear those fields but not set them, and its picture uploads are refused. An
+   instance operator does the same in the app with `instanceClearProfile`.
+4. When the account exists only to abuse, block it instead (step 3 of "A spam wave").
+
+It clears what this server shows. A person whose relay is another server keeps their display
+name in the signed profile card that server serves, and other servers keep showing the copy of
+the card they hold; write to that server's operator. Each clear is audited as
+`relay.profile_cleared` with the reason and the lock's end. New accounts cannot set a picture,
+status or bio during `RIM_PROBATION_HOURS`, and uploads are limited by
+`RIM_AVATAR_UPLOADS_PER_HOUR` and `RIM_AVATAR_UPLOADS_PER_DAY` (`docs/self-hosting.md`, "Instance
+limits").
+
 ### A hostile peer
 
 Signs: one `peer_server_id` in many signature refusals, replays or rate limits; deliveries
@@ -583,6 +605,7 @@ rim-relay abuse-reports resolve <report id>
 rim-relay server-key show | rotate | recover --recovery-key-file F [--new-recovery-key]
 rim-relay franking-key show | rotate
 rim-relay principal block <principalId> --reason <text> [--cascade] | unblock <principalId> | show <principalId> | list
+rim-relay principal clear-profile <principalId> --reason <text> [--lock-days N]
 rim-relay peer block <serverId> | unblock <serverId> | reset <serverId>
 rim-relay abuse-reports list [--open] [--after <id>] [--limit N] | add [--principal P] [--server S] --reason <text> | resolve <id>
 rim-relay invite create [--email A] [--max-uses N] [--expires-in-days D] [--public-url https://<domain>] | list | revoke <id>
@@ -599,7 +622,8 @@ moderation"). A blocked account or one scheduled for deletion cannot be granted 
 
 Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`, one per
 account a block reaches, `cascade` true for those after the first),
-`relay.principal_unblocked`, `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
+`relay.principal_unblocked`, `relay.profile_cleared` (`scope` `server`, with the `user_id`,
+`locked_until` and `reason`), `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
 `server_key.recovered`, `instance_invite_issued`,
 `instance_invite_revoked` (`issued_by` or `actor` `operator`), `ip.block` and `ip.unblock`

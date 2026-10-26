@@ -378,16 +378,28 @@ at a time, so two at once never pass it. Lowering it below the accounts there ar
 signups only; nobody loses an account.
 
 `RIM_PROBATION_HOURS` slows down accounts made to spam: for that many hours after its creation
-an account cannot create a workspace, write a workspace's shared state, or send a DM request to
-someone it shares no workspace with and does not know (a contact who lists it too, or someone
-either of them accepted a DM request from; adding someone as a contact alone is not enough), and
-with `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
+an account cannot create a workspace, write a workspace's shared state, set a profile picture,
+status or bio (it may set its display name), or send a DM request to someone it shares no
+workspace with and does not know (a contact who lists it too, or someone either of them
+accepted a DM request from; adding someone as a contact alone is not enough), and with `RIM_RATE_PROBATION_MESSAGES_PER_MIN` it sends messages at that lower rate. Existing accounts
 are judged by their age, so turning it on does not hold back anyone older than the setting. The
 default workspace ("A default workspace" below) is left out of the workspaces it shares, since
 every new account joins it, and a DM in it meets probation like one in the direct space. The
 instance operator is never on probation: the account that claims the default workspace with the
 operator role, or one granted it with `rim_server operator grant`, can create workspaces and
 message anyone from the moment it holds the role.
+
+Profile pictures are re-encoded by the server: whatever is uploaded (PNG, JPEG, GIF or WebP, at
+most 1 MiB and 4096 pixels a side) is stored as a 256×256 PNG of its first frame with no
+metadata. Two limits per account are on by default, and 0 turns either off:
+`RIM_AVATAR_UPLOADS_PER_HOUR` (5) and `RIM_AVATAR_UPLOADS_PER_DAY` (20). Every upload attempt
+counts, a refused one too; removing a picture does not, and an instance operator is exempt. Past
+either the upload is refused with 429 and `Retry-After`. The counts are kept in the server's
+memory, so a restart starts them afresh. A profile with an abusive picture, name, status or bio
+is cleared with `rim_server principal clear-profile <principal-id> --reason <text>`, and
+`--lock-days <n>` keeps the account from setting them again for that many days
+(`docs/operations/relay-public.md`, "An abusive profile"). It clears what this server shows;
+another server keeps showing the display name in its copy of the person's signed profile card.
 
 ## Optional features
 

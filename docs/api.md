@@ -177,13 +177,23 @@ The file routes are plain HTTP, not GraphQL. They answer JSON errors of the form
   finalizing an already ready file succeeds again. Attachment creation, finalization and deletion
   emit `MESSAGE_UPDATED`; attachment writes also advance the parent message's change-feed version.
 - **`POST /api/files/avatar`** stores the caller's avatar: a multipart body with one file of
-  type `image/png`, `image/jpeg`, `image/gif` or `image/webp`, at most 2 MiB, whose bytes start
-  with that format's signature (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG `FF D8 FF`, GIF `GIF87a` or
-  `GIF89a`, WebP `RIFF` with `WEBP` at byte 8); another type, or bytes that do not match the
-  declared one, is 415. It is stored as `avatars/<user id>/avatar.<png|jpeg|gif|webp>`, and the
-  caller's other avatar files are deleted. The answer is `{"path","size_bytes","url"}`, where
-  `url` is the `/api/files/...` path to read it back and the only value `updateMyProfile` takes
-  as `avatarUrl` besides an empty one. Off when the `avatars` feature is not enabled.
+  type `image/png`, `image/jpeg`, `image/gif` or `image/webp`, at most 1 MiB (413 past it),
+  whose bytes start with that format's signature (PNG `89 50 4E 47 0D 0A 1A 0A`, JPEG
+  `FF D8 FF`, GIF `GIF87a` or `GIF89a`, WebP `RIFF` with `WEBP` at byte 8); another type, or
+  bytes that do not match the declared one, is 415. The server decodes the file as its declared
+  type and re-encodes it: the first frame of an animated GIF or WebP, centre-cropped to a
+  square, is stored as a static 256×256 PNG with no metadata. Bytes that do not decode are 415
+  (`avatar could not be read as an image`), an image wider or taller than 4096 pixels 413
+  (`avatar image must be at most 4096×4096 pixels`). It is stored as
+  `avatars/<user id>/avatar-<16 hex>.png`, named by the first eight bytes of the stored PNG's
+  SHA-256, and the caller's other avatar files are deleted. Before the body is read the upload
+  is refused with 403 while this server's operators lock the caller's profile, with 400
+  (`a new account can set a profile picture in … minutes`) during probation, and with 429 and
+  `Retry-After` past `RIM_AVATAR_UPLOADS_PER_HOUR` or `RIM_AVATAR_UPLOADS_PER_DAY` (see
+  "Limits" below); every attempt counts against those. The answer is
+  `{"path","size_bytes","url"}`, where `url` is the `/api/files/...` path to read it back and
+  the only value `updateMyProfile` takes as `avatarUrl` besides an empty one. Off when the
+  `avatars` feature is not enabled.
 - **`GET /api/files/{path}`** serves a stored avatar to any signed-in user, as an attachment
   with the type its extension implies and `X-Content-Type-Options: nosniff`. Any path outside
   `avatars/` is refused with 403. Off when the `avatars` feature is not enabled.
@@ -505,12 +515,22 @@ direct space or in a workspace, someone it does not know (a contact who lists it
 either of them accepted a DM request from: "Who May Start A DM" in `docs/messaging.md`) and
 shares no workspace with but the server's default workspace, which every new account joins
 (`serverInfo.defaultWorkspace`); an account without a key is known only through a workspace.
-Each answers `VALIDATION` saying when it can, in minutes rounded up ("a new account can create
-a workspace in 42 minutes"). Its messages follow `RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a
+It cannot set a profile picture, status or bio either (`updateMyProfile` and
+`POST /api/files/avatar`); it may set its display name and clear any of them. Each answers
+`VALIDATION` saying when it can, in minutes rounded up ("a new account can create a workspace in
+42 minutes", "a new account can set a profile picture, bio or status in 42 minutes"). Its
+messages follow `RIM_RATE_PROBATION_MESSAGES_PER_MIN`, with a
 burst of the same size, instead of `RIM_RATE_MESSAGES_PER_MIN_PER_USER`; unset, the normal rate
 applies. The `probationHours` of
 `serverInfo.limits` reports the setting, null when off, and `me { probationEndsAt }` tells the
 signed-in caller when theirs ends, null once it has and for an instance operator.
+
+Profile picture uploads have two limits per account, on by default: `RIM_AVATAR_UPLOADS_PER_HOUR`
+(5) and `RIM_AVATAR_UPLOADS_PER_DAY` (20); 0 turns either off. Every upload attempt counts, one
+refused for its content too; removing a picture or setting `avatarUrl` to an uploaded one does
+not, and an instance operator is exempt. Past either, `POST /api/files/avatar` answers 429 with
+`Retry-After` and `retryAfterSeconds`. The limits are counted in the server's memory, so a
+restart starts them afresh. `serverInfo.limits` does not report them.
 
 An operator can also block an address or range (`rim_server ip block`). A blocked address is
 answered 403 with `{"error":"blocked"}` and nothing else on every route but `/healthz`: the API,
@@ -536,12 +556,25 @@ user).
 | `instanceIpBlocks` | `ip list` |
 | `instanceBlockIp(cidr, reason, expiresInDays)` | `ip block [--expires-in-days]` |
 | `instanceUnblockIp(cidr)` | `ip unblock` |
+| `instanceClearProfile(principalId, reason, lockDays)` | `principal clear-profile [--lock-days]`; `NOT_FOUND` when no account here holds the principal |
 
 Reports and blocks name the local account holding a principal (`subjectUsername`, `username`),
 null when no account here holds it. Each root needs a session and the mutations the CSRF
 header. Anyone but an instance operator gets `FORBIDDEN`, an app or bot acting for one too.
 Each change writes the same audit line as its command, with the operator's user id as
 `actor_id` (`cli` for the command line).
+
+`instanceClearProfile` clears the display name, picture, status and bio of the account holding
+a principal here and deletes its stored pictures; its workspaces see the change at once. With
+`lockDays` (1 to 365) the account cannot set any of the four again until the lock ends:
+`updateMyProfile` setting one answers `FORBIDDEN` ("this server's operators locked your profile
+until …"), clearing one still works, and `POST /api/files/avatar` answers 403, an operator's
+too. `me { profileLockedUntil }` tells the account when its lock ends, null while none holds
+and on every other user. The outcome names the principal, the account (`InstanceAccount`) and
+`lockedUntil`, and the audit line is `relay.profile_cleared` with the reason and the lock's
+end. It clears what this server shows: a person whose relay is another server keeps their
+display name in the signed profile card that server serves, and other servers keep showing the
+copy of the card they hold.
 
 `instanceReports` pages from the oldest report: the next page passes the last report's `id` as
 `after`. A user reports a DM request once (`reportDmRequest` answers `CONFLICT` the second
@@ -706,11 +739,13 @@ the fields mean.
 
 ### Profile picture refresh
 
-Avatar uploads use `avatars/<user id>/avatar-<16 lowercase SHA-256 hex>.<ext>`, so changing
-image bytes changes the URL. Authenticated downloads of these names use
+Avatar uploads are stored as `avatars/<user id>/avatar-<16 lowercase SHA-256 hex>.png`, the
+hash of the re-encoded PNG, so changing the image changes the URL; files stored before
+re-encoding keep their `.jpeg`, `.gif` or `.webp` name until replaced. Authenticated downloads of these names use
 `Cache-Control: private, max-age=31536000, immutable`; unversioned avatar names require
 revalidation. `updateMyProfile` accepts both name forms only for the caller's own directory.
-Replacement deletes the old avatar file. `MemberProfileUpdated` identifies a changed profile
+Replacement deletes the old avatar file, and an operator's `instanceClearProfile` deletes all
+of them. `MemberProfileUpdated` identifies a changed profile
 in each workspace; the direct space sends the account's own change to its other sessions.
 Clients refetch the directory and, for their own user id, `me` when the event arrives.
 

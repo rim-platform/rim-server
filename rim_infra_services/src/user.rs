@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 use rim_core::user::avatar::own_avatar_key;
-use rim_core::user::model::{UpdateProfilePatch, UserHandle, UserId};
+use rim_core::user::model::{UpdateProfilePatch, User, UserHandle, UserId};
+use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::limits::InstanceLimits;
 use rim_services::storage::service::StorageService;
 use rim_services::user::command::{GetMeQuery, UpdateMyProfileCmd};
@@ -14,7 +16,23 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::UserRepos;
 use crate::clock::Clock;
 use crate::display_name;
+use crate::keyed_rate_limiter::KeyedRateLimiter;
 use crate::reserved_names::ReservedNames;
+
+/// The window of the hourly profile picture upload limit, in seconds.
+const HOUR_SECS: u64 = 60 * 60;
+/// The window of the daily profile picture upload limit, in seconds.
+const DAY_SECS: u64 = 24 * HOUR_SECS;
+/// The metrics name of the profile picture upload limits.
+const AVATAR_UPLOADS_LIMITER: &str = "avatar_uploads";
+
+/// The refusal of a profile change while the instance's operators lock the profile.
+fn profile_locked(until: DateTime<Utc>) -> ServiceError {
+    ServiceError::Forbidden(format!(
+        "this server's operators locked your profile until {}",
+        until.to_rfc3339()
+    ))
+}
 
 /// Strip control characters (except newline/tab in bio) from a string.
 fn strip_control_chars(s: &str) -> String {
@@ -45,6 +63,10 @@ pub struct DefaultUserService {
         rim_services::events::Observers,
     )>,
     direct_space_id: Option<rim_core::server::model::ServerId>,
+    /// Profile picture uploads per account in the last hour; `None` without an hourly limit.
+    avatar_uploads_per_hour: Option<KeyedRateLimiter>,
+    /// Profile picture uploads per account in the last day; `None` without a daily limit.
+    avatar_uploads_per_day: Option<KeyedRateLimiter>,
 }
 
 impl DefaultUserService {
@@ -58,6 +80,8 @@ impl DefaultUserService {
             storage: None,
             profile_events: None,
             direct_space_id: None,
+            avatar_uploads_per_hour: None,
+            avatar_uploads_per_day: None,
         }
     }
 
@@ -85,8 +109,15 @@ impl DefaultUserService {
         self
     }
 
+    /// Apply the instance's probation and its profile picture upload limits.
     pub fn with_limits(mut self, limits: InstanceLimits) -> Self {
         self.limits = limits;
+        self.avatar_uploads_per_hour = limits
+            .avatar_uploads_per_hour
+            .map(|limit| KeyedRateLimiter::new(HOUR_SECS, limit));
+        self.avatar_uploads_per_day = limits
+            .avatar_uploads_per_day
+            .map(|limit| KeyedRateLimiter::new(DAY_SECS, limit));
         self
     }
 
@@ -119,6 +150,93 @@ impl DefaultUserService {
         self.reserved_names.check(display_name)
     }
 
+    /// The account `user_id`.
+    ///
+    /// # Errors
+    /// `NotFound` when there is no such account.
+    async fn user(&self, user_id: UserId) -> ServiceResult<User> {
+        self.repos
+            .user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)
+    }
+
+    /// `Ok` unless the instance's operators lock `user`'s profile at `now`.
+    ///
+    /// # Errors
+    /// `Forbidden` naming when the lock ends.
+    fn ensure_unlocked(user: &User, now: DateTime<Utc>) -> ServiceResult<()> {
+        match user.profile_locked_until {
+            Some(until) if until > now => Err(profile_locked(until)),
+            _ => Ok(()),
+        }
+    }
+
+    /// Record one upload by `user_id` on `limiter`, when there is one.
+    ///
+    /// # Errors
+    /// `RateLimited` when the limiter's window is full.
+    fn record_upload(
+        limiter: Option<&KeyedRateLimiter>,
+        user_id: UserId,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        let Some(limiter) = limiter else {
+            return Ok(());
+        };
+        match limiter.check_and_record(&user_id.to_string(), now) {
+            RateLimitDecision::Allowed => Ok(()),
+            RateLimitDecision::Limited {
+                retry_after_seconds,
+            } => {
+                crate::metrics::rate_limited(AVATAR_UPLOADS_LIMITER);
+                Err(ServiceError::RateLimited {
+                    retry_after_seconds,
+                })
+            }
+        }
+    }
+
+    /// Tell every workspace `user_id` is in, and the direct space, that their profile changed.
+    /// `workspaces` are the user's workspaces, read before the change.
+    fn emit_profile_updated(
+        &self,
+        user_id: UserId,
+        workspaces: Vec<rim_core::server::model::ServerId>,
+    ) {
+        if let Some((_, observers)) = &self.profile_events {
+            use rim_services::events::EventObserver;
+            for workspace_id in workspaces {
+                observers.emit(rim_services::events::WorkspaceEvent::MemberProfileUpdated {
+                    workspace_id,
+                    user_id,
+                });
+            }
+        }
+    }
+
+    /// The workspaces whose members see `user_id`'s profile change: the user's workspaces and
+    /// the direct space. Empty without profile events.
+    async fn profile_audience(
+        &self,
+        user_id: UserId,
+    ) -> ServiceResult<Vec<rim_core::server::model::ServerId>> {
+        let mut workspaces = match &self.profile_events {
+            Some((servers, _)) => servers
+                .get_servers_for_user(user_id)
+                .await?
+                .into_iter()
+                .map(|server| server.id)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        if let Some(direct) = self.direct_space_id {
+            workspaces.push(direct);
+        }
+        Ok(workspaces)
+    }
+
     /// The account's handle: a local account's username at this server's handle domain, a
     /// remote user's handle at their home relay, or `None`.
     fn handle(&self, user: &rim_core::user::model::User) -> Option<String> {
@@ -143,6 +261,7 @@ impl DefaultUserService {
             bio: user.bio,
             principal_id: user.principal_id,
             deletion_scheduled_for: None,
+            profile_locked_until: None,
         }
     }
 }
@@ -150,16 +269,14 @@ impl DefaultUserService {
 #[async_trait]
 impl UserService for DefaultUserService {
     async fn get_me(&self, query: GetMeQuery) -> ServiceResult<UserDto> {
-        let user = self
-            .repos
-            .user_repo
-            .get_by_id(query.actor.user_id)
-            .await?
-            .ok_or(ServiceError::NotFound)?;
+        let user = self.user(query.actor.user_id).await?;
         let deletion_scheduled_for = user.deletion_scheduled_for;
+        let now = self.clock.now();
+        let profile_locked_until = user.profile_locked_until.filter(|until| *until > now);
 
         Ok(UserDto {
             deletion_scheduled_for,
+            profile_locked_until,
             ..self.convert_to_dto(user)
         })
     }
@@ -247,18 +364,27 @@ impl UserService for DefaultUserService {
             None => None,
         };
 
-        let mut workspaces = match &self.profile_events {
-            Some((servers, _)) => servers
-                .get_servers_for_user(user_id)
-                .await?
-                .into_iter()
-                .map(|server| server.id)
-                .collect::<Vec<_>>(),
-            None => Vec::new(),
-        };
-        if let Some(direct) = self.direct_space_id {
-            workspaces.push(direct);
+        // A lock holds back every field it covers; probation holds back the picture, status and
+        // bio but not the display name. Clearing a field is always allowed.
+        let sets = |field: &Option<Option<String>>| matches!(field, Some(Some(_)));
+        let sets_gated = sets(&avatar_url) || sets(&bio) || sets(&status_text);
+        if sets_gated || sets(&display_name) {
+            let user = self.user(user_id).await?;
+            let now = self.clock.now();
+            Self::ensure_unlocked(&user, now)?;
+            if sets_gated {
+                crate::probation::ensure_out_of_probation(
+                    &self.limits,
+                    self.repos.user_repo.as_ref(),
+                    &user,
+                    now,
+                    "set a profile picture, bio or status",
+                )
+                .await?;
+            }
         }
+
+        let workspaces = self.profile_audience(user_id).await?;
         let user = self
             .repos
             .user_repo
@@ -281,15 +407,50 @@ impl UserService for DefaultUserService {
             tracing::warn!(user_id = %user_id, error = %e, "could not delete unused avatar files");
         }
 
-        if let Some((_, observers)) = &self.profile_events {
-            use rim_services::events::EventObserver;
-            for workspace_id in workspaces {
-                observers.emit(rim_services::events::WorkspaceEvent::MemberProfileUpdated {
-                    workspace_id,
-                    user_id,
-                });
-            }
+        self.emit_profile_updated(user_id, workspaces);
+        Ok(self.convert_to_dto(user))
+    }
+
+    async fn begin_avatar_upload(&self, user_id: UserId) -> ServiceResult<()> {
+        let user = self.user(user_id).await?;
+        let now = self.clock.now();
+        Self::ensure_unlocked(&user, now)?;
+        if self.repos.user_repo.is_instance_operator(user_id).await? {
+            return Ok(());
         }
+        crate::probation::ensure_out_of_probation(
+            &self.limits,
+            self.repos.user_repo.as_ref(),
+            &user,
+            now,
+            "set a profile picture",
+        )
+        .await?;
+        Self::record_upload(self.avatar_uploads_per_day.as_ref(), user_id, now)?;
+        Self::record_upload(self.avatar_uploads_per_hour.as_ref(), user_id, now)
+    }
+
+    async fn clear_profile(
+        &self,
+        user_id: UserId,
+        locked_until: Option<DateTime<Utc>>,
+    ) -> ServiceResult<UserDto> {
+        let workspaces = self.profile_audience(user_id).await?;
+        let user = self
+            .repos
+            .user_repo
+            .clear_profile(user_id, locked_until)
+            .await?;
+
+        // The profile is cleared; a file that cannot be deleted now goes with the next upload
+        // or the account.
+        if let Some(storage) = &self.storage
+            && let Err(e) = storage.delete_avatar_files(user_id, None).await
+        {
+            tracing::warn!(user_id = %user_id, error = %e, "could not delete the avatar files");
+        }
+
+        self.emit_profile_updated(user_id, workspaces);
         Ok(self.convert_to_dto(user))
     }
 }

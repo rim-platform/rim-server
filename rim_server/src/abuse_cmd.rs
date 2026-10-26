@@ -5,6 +5,7 @@
 //! rim_server principal unblock <principal-id>
 //! rim_server principal show <principal-id>
 //! rim_server principal list
+//! rim_server principal clear-profile <principal-id> --reason <text> [--lock-days <n>]
 //! rim_server abuse-reports list [--open] [--after <report-id>] [--limit <n>]
 //! rim_server abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text>
 //! rim_server abuse-reports resolve <report-id>
@@ -12,8 +13,10 @@
 //!
 //! A block applies at once on every node: its sessions end, its invites are revoked, its email
 //! is refused, and the next signup, login or delivery is refused. `--cascade` blocks every
-//! account its invites created too, recursively. Exit code 0 on success, 1 on any error, 2 on a
-//! usage error.
+//! account its invites created too, recursively. `clear-profile` clears the display name,
+//! picture, status and bio of the account holding a principal here and, with `--lock-days`,
+//! keeps the account from setting them again for that many days (1 to 365). Exit code 0 on
+//! success, 1 on any error, 2 on a usage error.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -22,12 +25,14 @@ use rim_core::relay::model::AbuseReportId;
 use rim_infra_db::DbHandle;
 use rim_infra_services::AppRepos;
 use rim_infra_services::relay::abuse::DefaultRelayAbuseService;
+use rim_infra_services::user::DefaultUserService;
 use rim_services::operator::OperatorCaller;
 use rim_services::relay::dto::{
     ABUSE_REPORT_PAGE, AbuseReportDto, AccountSummaryDto, FileAbuseReport, MAX_ABUSE_REPORT_PAGE,
     PrincipalBlockOutcome, PrincipalRecordDto,
 };
 use rim_services::relay::service::RelayAbuseService;
+use rim_services::user::service::UserService;
 use sea_orm::Database;
 use uuid::Uuid;
 
@@ -38,7 +43,8 @@ const CLI: OperatorCaller = OperatorCaller::CommandLine;
 
 const USAGE: &str = "usage: rim_server principal block <principal-id> --reason <text> \
      [--cascade] | principal unblock <principal-id> | principal show <principal-id> | \
-     principal list | abuse-reports list [--open] [--after <report-id>] [--limit <n>] | \
+     principal list | principal clear-profile <principal-id> --reason <text> [--lock-days <n>] | \
+     abuse-reports list [--open] [--after <report-id>] [--limit <n>] | \
      abuse-reports add [--principal <principal-id>] [--server <server-id>] --reason <text> | \
      abuse-reports resolve <report-id>";
 
@@ -57,6 +63,11 @@ enum Command {
         principal_id: String,
     },
     ListBlocks,
+    ClearProfile {
+        principal_id: String,
+        reason: String,
+        lock_days: Option<u32>,
+    },
     ListReports {
         open_only: bool,
         after: Option<Uuid>,
@@ -106,6 +117,33 @@ fn parse(group: &str, mut args: impl Iterator<Item = String>) -> Result<Command,
                 .ok_or("principal show requires a principal id")?,
         },
         ("principal", "list") => Command::ListBlocks,
+        ("principal", "clear-profile") => {
+            let principal_id = args
+                .next()
+                .ok_or("principal clear-profile requires a principal id")?;
+            let mut reason = None;
+            let mut lock_days = None;
+            while let Some(flag) = args.next() {
+                match flag.as_str() {
+                    "--reason" => reason = Some(value("--reason", &mut args)?),
+                    "--lock-days" => {
+                        let n = value("--lock-days", &mut args)?;
+                        lock_days = Some(
+                            n.parse()
+                                .ok()
+                                .filter(|n| (1..=365).contains(n))
+                                .ok_or_else(|| format!("--lock-days takes 1 to 365, not {n}"))?,
+                        );
+                    }
+                    other => return Err(format!("unknown argument: {other}")),
+                }
+            }
+            return Ok(Command::ClearProfile {
+                principal_id,
+                reason: reason.ok_or("--reason <text> is required")?,
+                lock_days,
+            });
+        }
         ("abuse-reports", "list") => {
             let mut open_only = false;
             let mut after = None;
@@ -397,8 +435,22 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
         .await
         .map_err(|e| format!("failed to connect to database: {e}"))?;
     let handle: DbHandle = db.clone().into();
+    let repos = AppRepos::with_handle(&handle);
+    let mut users = DefaultUserService::new(repos.for_user());
+    // Without the stored files the profile is still cleared; its picture files go with the
+    // account's next upload or its purge.
+    let files_kept = match crate::app::build_storage(config, &repos) {
+        Ok((_, storage)) => {
+            users = users.with_storage(storage);
+            false
+        }
+        Err(_) => true,
+    };
+    let users: Arc<dyn UserService> = Arc::new(users);
     let service: Arc<dyn RelayAbuseService> = Arc::new(
-        DefaultRelayAbuseService::new(AppRepos::with_handle(&handle).for_relay_abuse()).with_db(db),
+        DefaultRelayAbuseService::new(repos.for_relay_abuse())
+            .with_db(db)
+            .with_user_service(users),
     );
     let mut out = String::new();
     match command {
@@ -454,6 +506,42 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
                     block.principal_id,
                     block.created_at.to_rfc3339(),
                     block.reason
+                );
+            }
+        }
+        Command::ClearProfile {
+            principal_id,
+            reason,
+            lock_days,
+        } => {
+            let outcome = service
+                .clear_profile(CLI, principal_id, reason, lock_days)
+                .await
+                .map_err(|e| match e {
+                    rim_services::ServiceError::NotFound => {
+                        "no account on this server holds that principal".to_string()
+                    }
+                    e => e.to_string(),
+                })?;
+            let _ = writeln!(
+                out,
+                "cleared the display name, picture, status and bio of {} (user {})",
+                account_label(&outcome.account),
+                outcome.account.user_id
+            );
+            match outcome.locked_until {
+                Some(until) => {
+                    let _ = writeln!(out, "    profile locked until {}", until.to_rfc3339());
+                }
+                None => {
+                    let _ = writeln!(out, "    profile not locked");
+                }
+            }
+            if files_kept {
+                let _ = writeln!(
+                    out,
+                    "    the stored files could not be opened; the picture files go with the \
+                     account's next upload or its purge"
                 );
             }
         }
@@ -549,6 +637,28 @@ mod tests {
         );
         assert_eq!(parse("principal", args(&["list"])), Ok(Command::ListBlocks));
         assert_eq!(
+            parse(
+                "principal",
+                args(&["clear-profile", P, "--reason", "abusive picture"])
+            ),
+            Ok(Command::ClearProfile {
+                principal_id: P.to_string(),
+                reason: "abusive picture".to_string(),
+                lock_days: None,
+            })
+        );
+        assert_eq!(
+            parse(
+                "principal",
+                args(&["clear-profile", P, "--lock-days", "7", "--reason", "slur"])
+            ),
+            Ok(Command::ClearProfile {
+                principal_id: P.to_string(),
+                reason: "slur".to_string(),
+                lock_days: Some(7),
+            })
+        );
+        assert_eq!(
             parse("abuse-reports", args(&["list", "--open"])),
             Ok(Command::ListReports {
                 open_only: true,
@@ -605,6 +715,26 @@ mod tests {
         assert!(parse("principal", args(&["show"])).is_err());
         assert!(parse("principal", args(&["show", P, "--cascade"])).is_err());
         assert!(parse("principal", args(&["list", "extra"])).is_err());
+        assert!(parse("principal", args(&["clear-profile"])).is_err());
+        assert!(parse("principal", args(&["clear-profile", P])).is_err());
+        assert!(parse("principal", args(&["clear-profile", P, "--lock-days", "7"])).is_err());
+        for days in ["0", "366", "x", "-1"] {
+            assert!(
+                parse(
+                    "principal",
+                    args(&["clear-profile", P, "--reason", "x", "--lock-days", days])
+                )
+                .is_err(),
+                "{days}"
+            );
+        }
+        assert!(
+            parse(
+                "principal",
+                args(&["clear-profile", P, "--reason", "x", "--cascade"])
+            )
+            .is_err()
+        );
         assert!(parse("abuse-reports", args(&["list", "--all"])).is_err());
         assert!(parse("abuse-reports", args(&["list", "--limit", "0"])).is_err());
         assert!(parse("abuse-reports", args(&["list", "--limit", "501"])).is_err());

@@ -143,6 +143,58 @@ async fn lock_user_reports_whether_the_user_exists() {
 }
 
 #[tokio::test]
+async fn clear_profile_empties_the_profile_and_sets_and_lifts_the_lock() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmUserRepository::new(ctx.db.clone());
+    let alice = ctx.create_user("u_test_clear_profile").await;
+    let text = |v: &str| Some(Some(v.to_string()));
+    repo.update_profile(
+        alice.id,
+        rim_core::user::model::UpdateProfilePatch {
+            display_name: text("Alice"),
+            avatar_url: text("/api/files/avatars/a/avatar.png"),
+            status_text: text("away"),
+            bio: text("hello"),
+        },
+    )
+    .await
+    .unwrap();
+    // Whole microseconds, as Postgres stores them.
+    let until = chrono::DateTime::from_timestamp(1_900_000_000, 123_456_000).unwrap();
+
+    let cleared = repo.clear_profile(alice.id, Some(until)).await.unwrap();
+    let stored = repo.get_by_id(alice.id).await.unwrap().unwrap();
+    for user in [&cleared, &stored] {
+        assert_eq!(user.display_name, None);
+        assert_eq!(user.avatar_url, None);
+        assert_eq!(user.status_text, None);
+        assert_eq!(user.bio, None);
+        assert_eq!(user.profile_locked_until, Some(until));
+    }
+    assert_eq!(stored.username, "u_test_clear_profile");
+
+    let unlocked = repo.clear_profile(alice.id, None).await.unwrap();
+    assert_eq!(unlocked.profile_locked_until, None);
+    assert_eq!(
+        repo.get_by_id(alice.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .profile_locked_until,
+        None
+    );
+
+    let missing = repo
+        .clear_profile(rim_core::user::model::UserId::new(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        missing.kind(),
+        rim_core::repository::error::RepoErrorKind::NotFound
+    ));
+}
+
+#[tokio::test]
 async fn record_terms_acceptance_stores_the_url_and_time() {
     use sea_orm::EntityTrait;
 

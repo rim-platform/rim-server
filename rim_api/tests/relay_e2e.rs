@@ -819,6 +819,20 @@ async fn forwarded_graphql_keeps_the_hosts_batch_cap_and_a_mutation_budget_per_d
     b.stop().await;
 }
 
+/// A 32×32 image of one `color`, encoded as `format`.
+fn image_of(format: image::ImageFormat, color: [u8; 3]) -> Vec<u8> {
+    let image =
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(32, 32, image::Rgb(color)));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, format).expect("encode");
+    bytes.into_inner()
+}
+
+/// `data`, uploaded as `format`, as the server stores it: re-encoded as a PNG.
+fn stored_avatar(data: &[u8], format: rim_core::user::avatar::AvatarFormat) -> Vec<u8> {
+    rim_infra_services::avatar_image::normalize_avatar(data, format).expect("an image")
+}
+
 /// A multipart body with one file field.
 fn multipart_file(boundary: &str, filename: &str, content_type: &str, data: &[u8]) -> Vec<u8> {
     let mut body = format!(
@@ -842,8 +856,9 @@ async fn avatars_upload_and_download_through_the_forward_path() {
     bob.pending_request(&alice).await;
     let multipart = format!("multipart/form-data; boundary={BOUNDARY}");
 
-    // Bob stores his avatar at Alice's server through his relay.
-    let png = b"\x89PNG\r\n\x1a\nbob";
+    // Bob stores his avatar at Alice's server through his relay; it is stored re-encoded.
+    let png = &image_of(image::ImageFormat::Png, [0, 0, 200]);
+    let bob_png = stored_avatar(png, rim_core::user::avatar::AvatarFormat::Png);
     let (uploaded, _) = bob
         .forward_typed(
             &a,
@@ -863,7 +878,7 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         json!(rim_core::user::avatar::hashed_avatar_key(
             bob_on_a,
             rim_core::user::avatar::AvatarFormat::Png,
-            &sha2::Sha256::digest(png).into()
+            &sha2::Sha256::digest(&bob_png).into()
         ))
     );
 
@@ -938,7 +953,7 @@ async fn avatars_upload_and_download_through_the_forward_path() {
     );
 
     // Alice's avatar, stored on her own server, reaches Bob through the same path.
-    let alice_png = b"\x89PNG\r\n\x1a\nalice";
+    let alice_png = &image_of(image::ImageFormat::Png, [200, 0, 0]);
     let stored: Value = alice
         .http
         .post(format!("{}/api/files/avatar", a.origin))
@@ -976,14 +991,18 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         .await;
     assert_eq!(downloaded.status, 200);
     assert!(downloaded.host_signed);
-    assert_eq!(downloaded.bytes, alice_png);
+    assert_eq!(
+        downloaded.bytes,
+        stored_avatar(alice_png, rim_core::user::avatar::AvatarFormat::Png)
+    );
     let (own, _) = bob
         .forward(&a, "GET", &avatar_url, Vec::new(), None, None)
         .await;
-    assert_eq!(own.bytes, png);
+    assert_eq!(own.bytes, bob_png);
 
-    // A GIF takes its place and the PNG goes; bytes that are not the declared type are refused.
-    let gif = b"GIF89abob";
+    // A GIF, stored as a PNG, takes its place and the first goes; bytes that are not the
+    // declared type are refused.
+    let gif = &image_of(image::ImageFormat::Gif, [0, 200, 0]);
     let (as_gif, _) = bob
         .forward_typed(
             &a,
@@ -1000,8 +1019,12 @@ async fn avatars_upload_and_download_through_the_forward_path() {
         as_gif.body["path"],
         json!(rim_core::user::avatar::hashed_avatar_key(
             bob_on_a,
-            rim_core::user::avatar::AvatarFormat::Gif,
-            &sha2::Sha256::digest(gif).into()
+            rim_core::user::avatar::AvatarFormat::Png,
+            &sha2::Sha256::digest(stored_avatar(
+                gif,
+                rim_core::user::avatar::AvatarFormat::Gif
+            ))
+            .into()
         ))
     );
     for (path, status) in [

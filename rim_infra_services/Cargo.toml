@@ -56,6 +56,7 @@ rim_identity = { path = "../rim_identity" }
 rim_infra_db = { path = "../rim_infra_db" }
 metrics = "0.24.6"
 flate2 = "1.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 [dev-dependencies]
 mockall = "0.13"

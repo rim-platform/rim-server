@@ -58,6 +58,37 @@ async fn me_reports_when_the_callers_probation_ends() {
 }
 
 #[tokio::test]
+async fn me_reports_until_when_the_callers_profile_is_locked() {
+    let actor = UserId::new();
+    let until = chrono::DateTime::parse_from_rfc3339("2026-11-02T08:30:00Z")
+        .expect("time")
+        .with_timezone(&chrono::Utc);
+    let mut user = MockUserService::new();
+    user.expect_get_me().returning(move |_| {
+        Box::pin(async move {
+            Ok(rim_services::user::dto::UserDto {
+                profile_locked_until: Some(until),
+                ..test_user_dto()
+            })
+        })
+    });
+    let schema = schema_with_user_mock(user);
+
+    let res = schema
+        .execute(authed_request(
+            r#"query { me { profileLockedUntil } }"#,
+            actor,
+        ))
+        .await;
+    assert_no_errors(&res);
+    let json = res.data.into_json().unwrap();
+    assert_eq!(
+        json["me"]["profileLockedUntil"],
+        serde_json::json!("2026-11-02T08:30:00+00:00")
+    );
+}
+
+#[tokio::test]
 async fn me_query_requires_auth() {
     let schema = schema_with_user_mock(MockUserService::new());
 

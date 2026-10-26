@@ -11,8 +11,8 @@ use crate::operator::OperatorCaller;
 use crate::relay::dto::{
     AbuseReportDto, ContactDto, DeliverItem, DeliverResponse, DmRequestDto, FileAbuseReport,
     IdentityDocument, PeerClaimRequest, PeerClaimResponse, PrincipalBlockDto,
-    PrincipalBlockOutcome, PrincipalRecordDto, PrincipalUnblockOutcome, RelayCleanup,
-    RelayItemPageDto, RelayNotice, RemoteIdentityDto, RemoteServerDto, SignedJson,
+    PrincipalBlockOutcome, PrincipalRecordDto, PrincipalUnblockOutcome, ProfileClearOutcome,
+    RelayCleanup, RelayItemPageDto, RelayNotice, RemoteIdentityDto, RemoteServerDto, SignedJson,
 };
 use crate::{Actor, ServiceResult};
 
@@ -234,4 +234,18 @@ pub trait RelayAbuseService: Send + Sync {
         by: OperatorCaller,
         id: AbuseReportId,
     ) -> ServiceResult<Option<AbuseReportDto>>;
+
+    /// Clear the profile of the account holding `principal_id` on this server: display name,
+    /// picture, status and bio, and lock profile changes for `lock_days` days when given (1–365).
+    ///
+    /// # Errors
+    /// `Validation` for a bad principal, reason or `lock_days`, `NotFound` when no account here
+    /// holds the principal.
+    async fn clear_profile(
+        &self,
+        by: OperatorCaller,
+        principal_id: String,
+        reason: String,
+        lock_days: Option<u32>,
+    ) -> ServiceResult<ProfileClearOutcome>;
 }

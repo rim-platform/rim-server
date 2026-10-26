@@ -25,6 +25,9 @@ pub struct User {
     pub principal_id: Option<String>,
     /// When the account's pending deletion runs; `None` while no deletion is pending.
     pub deletion_scheduled_for: Option<DateTime<Utc>>,
+    /// Until when the instance's operators locked the account's display name, picture, status
+    /// and bio; `None` while no lock is set.
+    pub profile_locked_until: Option<DateTime<Utc>>,
     /// What the account's handle is built from.
     pub handle: UserHandle,
 }

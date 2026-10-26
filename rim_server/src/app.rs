@@ -60,6 +60,8 @@ pub struct AppRuntime {
     pub session_key_service: Arc<dyn rim_services::session_key::service::SessionKeyService>,
     pub storage_backend: Arc<dyn StorageBackend>,
     pub storage_service: Arc<dyn StorageService>,
+    /// Profiles; the avatar upload route asks it whether an upload may start.
+    pub user_service: Arc<dyn rim_services::user::service::UserService>,
     pub message_attachment_service:
         Arc<dyn rim_services::message_attachment::service::MessageAttachmentService>,
     pub moderation_service: Arc<dyn rim_services::moderation::service::ModerationService>,
@@ -1078,6 +1080,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let request_authenticator = service_provider.request_authenticator();
     let session_key_service = service_provider.session_key_service();
     let auth_service = service_provider.auth_service();
+    let user_service = service_provider.user_service();
 
     Ok(AppRuntime {
         schema,
@@ -1085,6 +1088,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         session_key_service,
         storage_backend,
         storage_service,
+        user_service,
         message_attachment_service,
         moderation_service,
         plugin_bundle_service,

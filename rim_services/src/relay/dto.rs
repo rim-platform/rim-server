@@ -326,6 +326,17 @@ pub struct PrincipalBlockOutcome {
     pub invitees: Vec<AccountSummaryDto>,
 }
 
+/// What clearing an account's profile did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileClearOutcome {
+    /// The principal whose account was cleared.
+    pub principal_id: String,
+    /// The account cleared.
+    pub account: AccountSummaryDto,
+    /// Until when the account cannot change its profile; `None` when it was not locked.
+    pub locked_until: Option<DateTime<Utc>>,
+}
+
 /// What lifting a block did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrincipalUnblockOutcome {

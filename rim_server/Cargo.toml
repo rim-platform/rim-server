@@ -50,6 +50,7 @@ async-trait = "0.1.89"
 
 [dev-dependencies]
 tempfile = "3"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 rim_services = { path = "../rim_services", features = ["mocks"] }
 rim_core = { path = "../rim_core", features = ["mocks"] }
 async-trait = "0.1.89"
