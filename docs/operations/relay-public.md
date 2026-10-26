@@ -590,6 +590,18 @@ reference"):
 - **Messages in a workspace** go to that workspace's owners and moderators, not to the
   operators.
 
+The profile picture check (`docs/self-hosting.md`, "Profile picture check") files its reports
+into that list too, as the server: a picture scoring at `RIM_AVATAR_CHECK_REPORT` (0.60) is
+stored and reported against the uploader's principal, with a reason starting "automatic profile
+picture check", the category, the score and the picture's URL, such as `automatic profile
+picture check: sexual 0.72 — /api/files/avatars/<user id>/avatar-<hex>.png`. The audit line is
+`relay.abuse_report_filed` with `actor_id` `server`. Handle one like any other report of a
+profile ("An abusive profile"): the picture is already shown. A picture at
+`RIM_AVATAR_CHECK_BLOCK` (0.85) is refused and never stored; each refusal is audited as
+`avatar.refused` with the user, the category and the score. When automatic reports of harmless
+pictures pile up, raise `RIM_AVATAR_CHECK_REPORT`; when refusals hit harmless pictures, raise
+`RIM_AVATAR_CHECK_BLOCK`. Both go in `deploy/.env` and apply at the next start.
+
 Reports from the abuse address go into the same list as the DM requests:
 
 ```sh

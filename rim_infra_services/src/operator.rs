@@ -15,14 +15,14 @@ use crate::relay::abuse::{DefaultRelayAbuseService, RelayAbuseRepos, summary};
 /// The message of the `Forbidden` error a user who is not an instance operator gets.
 pub(crate) const OPERATORS_ONLY: &str = "instance operators only";
 
-/// Refuse `by` with `Forbidden` unless it is the command line or a user acting for themselves
-/// who is an instance operator.
+/// Refuse `by` with `Forbidden` unless it is the command line, the server itself or a user
+/// acting for themselves who is an instance operator.
 pub(crate) async fn require_operator(
     user_repo: &dyn UserRepository,
     by: OperatorCaller,
 ) -> ServiceResult<()> {
     match by {
-        OperatorCaller::CommandLine => Ok(()),
+        OperatorCaller::CommandLine | OperatorCaller::Server => Ok(()),
         OperatorCaller::User(actor) => {
             if is_operator(user_repo, actor).await? {
                 Ok(())
@@ -251,5 +251,25 @@ mod tests {
                 .await
                 .expect("checked")
         );
+    }
+
+    #[tokio::test]
+    async fn the_command_line_and_the_server_pass_without_a_lookup() {
+        let users = MockUserRepository::new();
+        for by in [OperatorCaller::CommandLine, OperatorCaller::Server] {
+            assert!(require_operator(&users, by).await.is_ok(), "{by}");
+        }
+        assert_eq!(OperatorCaller::Server.to_string(), "server");
+    }
+
+    #[tokio::test]
+    async fn a_user_who_is_not_an_operator_is_refused() {
+        let mut users = MockUserRepository::new();
+        users.expect_is_instance_operator().returning(|_| Ok(false));
+        let by = OperatorCaller::User(Actor::new(UserId::new()));
+        assert!(matches!(
+            require_operator(&users, by).await,
+            Err(ServiceError::Forbidden(_))
+        ));
     }
 }

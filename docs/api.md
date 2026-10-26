@@ -184,7 +184,12 @@ The file routes are plain HTTP, not GraphQL. They answer JSON errors of the form
   type and re-encodes it: the first frame of an animated GIF or WebP, centre-cropped to a
   square, is stored as a static 256×256 PNG with no metadata. Bytes that do not decode are 415
   (`avatar could not be read as an image`), an image wider or taller than 4096 pixels 413
-  (`avatar image must be at most 4096×4096 pixels`). It is stored as
+  (`avatar image must be at most 4096×4096 pixels`). When the server runs the profile picture
+  check (`RIM_AVATAR_CHECK_URL`), the re-encoded picture is then scored for sexual content, gore
+  and violence: at the block threshold the upload answers 422 (`this image isn't allowed as a
+  profile picture`), at the report threshold it is stored and reported to the server's
+  operators, and while the check cannot run it answers 503 (`profile pictures can't be checked
+  right now; try again later`); neither refusal stores anything. It is stored as
   `avatars/<user id>/avatar-<16 hex>.png`, named by the first eight bytes of the stored PNG's
   SHA-256, and the caller's other avatar files are deleted. Before the body is read the upload
   is refused with 403 while this server's operators lock the caller's profile, with 400

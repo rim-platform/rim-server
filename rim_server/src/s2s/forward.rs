@@ -14,10 +14,12 @@ use rim_api::auth_intent::AuthIntentCtx;
 use rim_api::federation::{ForwardedRequest, refused_account_mutation_in};
 use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
+use rim_infra_services::avatar_check::AvatarChecker;
 use rim_s2s::host::sign_host_response;
 use rim_services::feature::service::FeatureGate;
 use rim_services::host::dto::{ForwardAuth, ForwardRefusal, ForwardRequest};
 use rim_services::message_attachment::service::MessageAttachmentService;
+use rim_services::relay::service::RelayAbuseService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
 use rim_services::workspace_plugin::service::PluginBundleService;
@@ -260,9 +262,11 @@ async fn execute(
             .await
         }
         ("POST", ["api", "files", "avatar"]) => {
-            let (Some(storage), Some(users)) = (
+            let (Some(storage), Some(users), Some(checker), Some(abuse)) = (
                 req.app_data::<web::Data<Arc<dyn StorageService>>>(),
                 req.app_data::<web::Data<Arc<dyn UserService>>>(),
+                req.app_data::<web::Data<Option<Arc<AvatarChecker>>>>(),
+                req.app_data::<web::Data<Arc<dyn RelayAbuseService>>>(),
             ) else {
                 return internal("avatars are not configured");
             };
@@ -272,6 +276,10 @@ async fn execute(
                     multipart(req, verified),
                     storage.get_ref().as_ref(),
                     users.get_ref().as_ref(),
+                    crate::file_handlers::AvatarScreening {
+                        checker: checker.get_ref().as_deref(),
+                        abuse: abuse.get_ref().as_ref(),
+                    },
                 )
                 .await,
             )

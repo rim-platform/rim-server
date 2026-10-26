@@ -7,15 +7,19 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rim_core::server_feature::model::ServerFeature;
-use rim_core::storage::StorageBackend;
+use rim_core::storage::{StorageBackend, StoredFile};
 use rim_core::user::avatar::{AvatarFormat, file_url, hashed_avatar_key, is_hashed_avatar_key};
 use rim_core::user::model::UserId;
+use rim_infra_services::avatar_check::{AvatarCheckError, AvatarChecker, AvatarVerdict};
 use rim_infra_services::avatar_image::{AvatarImageError, MAX_SOURCE_SIDE, normalize_avatar};
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::feature::service::FeatureGate;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::moderation::command::AuthorizeReportAttachmentQuery;
 use rim_services::moderation::service::ModerationService;
+use rim_services::operator::OperatorCaller;
+use rim_services::relay::dto::FileAbuseReport;
+use rim_services::relay::service::RelayAbuseService;
 use rim_services::storage::service::StorageService;
 use rim_services::user::service::UserService;
 use sha2::{Digest, Sha256};
@@ -571,6 +575,17 @@ pub async fn handle_report_attachment_download(
         .body(data)
 }
 
+/// The profile picture check every uploaded picture goes through, and where the reports it
+/// files go. Without a checker pictures are stored unchecked.
+#[derive(Clone, Copy)]
+pub(crate) struct AvatarScreening<'a> {
+    pub(crate) checker: Option<&'a AvatarChecker>,
+    pub(crate) abuse: &'a dyn RelayAbuseService,
+}
+
+/// The reason an automatic report of a picture starts with.
+const AUTOMATIC_REPORT_PREFIX: &str = "automatic profile picture check";
+
 /// POST /api/files/avatar
 pub async fn handle_avatar_upload(
     req: HttpRequest,
@@ -578,6 +593,8 @@ pub async fn handle_avatar_upload(
     storage_service: web::Data<Arc<dyn StorageService>>,
     user_service: web::Data<Arc<dyn UserService>>,
     features: web::Data<Arc<dyn FeatureGate>>,
+    checker: web::Data<Option<Arc<AvatarChecker>>>,
+    abuse: web::Data<Arc<dyn RelayAbuseService>>,
 ) -> HttpResponse {
     if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Avatars) {
         return resp;
@@ -595,6 +612,10 @@ pub async fn handle_avatar_upload(
         payload,
         storage_service.get_ref().as_ref(),
         user_service.get_ref().as_ref(),
+        AvatarScreening {
+            checker: checker.get_ref().as_deref(),
+            abuse: abuse.get_ref().as_ref(),
+        },
     )
     .await
 }
@@ -609,11 +630,17 @@ pub async fn handle_avatar_upload(
 /// re-encoded: its first frame, centre-cropped to a square, is stored as a 256×256 PNG without
 /// metadata. Bytes that do not decode answer 415, an image wider or taller than 4096 pixels
 /// 413.
+///
+/// With a checker in `screening`, the re-encoded picture is scored before it is stored: a
+/// score at the block threshold answers 422 and one at the report threshold is stored and
+/// reported to the operators; when the check cannot run the answer is 503. Nothing is stored
+/// unless the check let it through.
 pub(crate) async fn avatar_upload_as(
     user_id: UserId,
     payload: Multipart,
     storage_service: &dyn StorageService,
     user_service: &dyn UserService,
+    screening: AvatarScreening<'_>,
 ) -> HttpResponse {
     if let Err(e) = user_service.begin_avatar_upload(user_id).await {
         return map_service_error_to_response(e);
@@ -637,7 +664,113 @@ pub(crate) async fn avatar_upload_as(
         Ok(png) => png,
         Err(resp) => return resp,
     };
-    store_avatar(user_id, &png, storage_service).await
+    let verdict = match screening.checker {
+        Some(checker) => match check_avatar(user_id, &png, checker).await {
+            Ok(verdict) => verdict,
+            Err(resp) => return resp,
+        },
+        None => AvatarVerdict::Allow,
+    };
+    let stored = match store_avatar(user_id, &png, storage_service).await {
+        Ok(stored) => stored,
+        Err(resp) => return resp,
+    };
+    if let AvatarVerdict::Report { category, score } = verdict {
+        report_avatar(
+            user_id,
+            &category,
+            score,
+            &stored.key,
+            user_service,
+            screening.abuse,
+        )
+        .await;
+    }
+    HttpResponse::Ok().json(serde_json::json!({
+        "path": stored.key,
+        "size_bytes": stored.size_bytes,
+        "url": file_url(&stored.key),
+    }))
+}
+
+/// The checker's verdict on `user_id`'s re-encoded `png`.
+///
+/// # Errors
+/// 422 for a picture at the block threshold, logged as the audit event `avatar.refused`; 503
+/// when the check cannot run.
+async fn check_avatar(
+    user_id: UserId,
+    png: &[u8],
+    checker: &AvatarChecker,
+) -> Result<AvatarVerdict, HttpResponse> {
+    match checker.check(png).await {
+        Ok(AvatarVerdict::Block { category, score }) => {
+            tracing::info!(
+                target: "audit",
+                event = "avatar.refused",
+                user_id = %user_id,
+                category = %category,
+                score,
+                "a profile picture was refused by the automatic check"
+            );
+            Err(HttpResponse::UnprocessableEntity().json(serde_json::json!({
+                "error": "this image isn't allowed as a profile picture"
+            })))
+        }
+        Ok(verdict) => Ok(verdict),
+        Err(AvatarCheckError::Unavailable(why)) => {
+            tracing::warn!(user_id = %user_id, error = %why, "the profile picture check is unavailable");
+            Err(HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "profile pictures can't be checked right now; try again later"
+            })))
+        }
+    }
+}
+
+/// File an abuse report of `user_id`'s stored picture at `key`, which scored `score` in
+/// `category`, as the server. Skipped with a warning when the account has no principal id; a
+/// failure is logged and never fails the upload.
+async fn report_avatar(
+    user_id: UserId,
+    category: &str,
+    score: f64,
+    key: &str,
+    user_service: &dyn UserService,
+    abuse: &dyn RelayAbuseService,
+) {
+    let principal_id = match user_service.get_users_by_ids(&[user_id]).await {
+        Ok(users) => users.into_iter().find_map(|user| user.principal_id),
+        Err(e) => {
+            tracing::error!(user_id = %user_id, error = %e, "could not look up the account to report its profile picture");
+            return;
+        }
+    };
+    let Some(principal_id) = principal_id else {
+        tracing::warn!(
+            user_id = %user_id,
+            category,
+            score,
+            "a profile picture was flagged, but the account has no principal id to report"
+        );
+        return;
+    };
+    let reason = format!(
+        "{AUTOMATIC_REPORT_PREFIX}: {category} {score:.2} — {}",
+        file_url(key)
+    );
+    if let Err(e) = abuse
+        .file_report(
+            OperatorCaller::Server,
+            FileAbuseReport {
+                subject_principal_id: Some(principal_id),
+                subject_server_id: None,
+                reason,
+            },
+        )
+        .await
+    {
+        tracing::error!(user_id = %user_id, error = %e, "could not report a flagged profile picture");
+    }
 }
 
 /// `data`, of the declared `format`, re-encoded as the PNG that is stored, on the blocking
@@ -665,13 +798,16 @@ async fn reencode_avatar(data: Vec<u8>, format: AvatarFormat) -> Result<Vec<u8>,
     }
 }
 
-/// Store `png` as `user_id`'s avatar under its content-addressed key, delete the user's other
-/// avatar files, and answer its path, size and URL.
+/// Store `png` as `user_id`'s avatar under its content-addressed key and delete the user's
+/// other avatar files.
+///
+/// # Errors
+/// 500 when the file cannot be stored.
 async fn store_avatar(
     user_id: UserId,
     png: &[u8],
     storage_service: &dyn StorageService,
-) -> HttpResponse {
+) -> Result<StoredFile, HttpResponse> {
     let storage_key = hashed_avatar_key(user_id, AvatarFormat::Png, &Sha256::digest(png).into());
     let stored = match storage_service
         .upload_file(&storage_key, png, AvatarFormat::Png.mime())
@@ -680,8 +816,8 @@ async fn store_avatar(
         Ok(stored) => stored,
         Err(e) => {
             tracing::error!(error = %e, "avatar upload failed");
-            return HttpResponse::InternalServerError()
-                .json(serde_json::json!({"error": "upload failed"}));
+            return Err(HttpResponse::InternalServerError()
+                .json(serde_json::json!({"error": "upload failed"})));
         }
     };
 
@@ -693,12 +829,7 @@ async fn store_avatar(
     {
         tracing::warn!(user_id = %user_id, error = %e, "could not delete the previous avatar files");
     }
-
-    HttpResponse::Ok().json(serde_json::json!({
-        "path": stored.key,
-        "size_bytes": stored.size_bytes,
-        "url": file_url(&stored.key),
-    }))
+    Ok(stored)
 }
 
 #[cfg(test)]
@@ -718,7 +849,9 @@ mod tests {
     use rim_services::message_attachment::service::MockMessageAttachmentService;
     use rim_services::moderation::dto::ReportAttachmentDto;
     use rim_services::moderation::service::MockModerationService;
+    use rim_services::relay::service::MockRelayAbuseService;
     use rim_services::storage::service::MockStorageService;
+    use rim_services::user::dto::UserDto;
     use rim_services::user::service::MockUserService;
     use serde_json::{Value, json};
 
@@ -796,6 +929,8 @@ mod tests {
         moderation: MockModerationService,
         users: MockUserService,
         disabled: Vec<ServerFeature>,
+        checker: Option<Arc<AvatarChecker>>,
+        abuse: MockRelayAbuseService,
     }
 
     impl Deps {
@@ -807,6 +942,8 @@ mod tests {
                 moderation: MockModerationService::new(),
                 users: MockUserService::new(),
                 disabled: Vec::new(),
+                checker: None,
+                abuse: MockRelayAbuseService::new(),
             }
         }
     }
@@ -850,6 +987,10 @@ mod tests {
                         Arc::new(deps.moderation) as Arc<dyn ModerationService>
                     ))
                     .app_data(web::Data::new(Arc::new(deps.users) as Arc<dyn UserService>))
+                    .app_data(web::Data::new(deps.checker))
+                    .app_data(web::Data::new(
+                        Arc::new(deps.abuse) as Arc<dyn RelayAbuseService>
+                    ))
                     .app_data(web::Data::new(Arc::new(Files) as Arc<dyn StorageBackend>))
                     .app_data(web::Data::new(Arc::new(
                         rim_infra_services::feature_gate::InstanceFeatureGate::new(
@@ -1808,6 +1949,243 @@ mod tests {
             assert_eq!(retry_after.as_deref(), (status == 429).then_some("42"));
             let got: Value = serde_json::from_slice(&actix_test::read_body(resp).await).unwrap();
             assert_eq!(got, body);
+        }
+    }
+
+    // ── Profile picture check ───────────────────────────────────────────────
+
+    /// What the stub image check service received: content type and body of each request.
+    type Received = Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+    /// A loopback image check service that answers every request with `status` and `body`,
+    /// and a checker of it that blocks at 0.85 and reports at 0.60.
+    fn check_service(status: &'static str, body: &str) -> (Arc<AvatarChecker>, Received) {
+        use std::io::{BufRead, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let received = Received::default();
+        let log = Arc::clone(&received);
+        let body = body.to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+                let (mut content_type, mut len) = (String::new(), 0);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = line.trim().split_once(':') {
+                        match name.to_ascii_lowercase().as_str() {
+                            "content-type" => content_type = value.trim().to_string(),
+                            "content-length" => len = value.trim().parse().unwrap_or(0),
+                            _ => {}
+                        }
+                    }
+                }
+                let mut data = vec![0; len];
+                let _ = reader.read_exact(&mut data);
+                log.lock().unwrap().push((content_type, data));
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let checker = AvatarChecker::new(&format!("http://{addr}"), 0.85, 0.60).expect("client");
+        (Arc::new(checker), received)
+    }
+
+    fn scores(sexual: f64, gore: f64, violence: f64) -> String {
+        json!({
+            "scores": { "sexual": sexual, "gore": gore, "violence": violence },
+            "model": "test",
+        })
+        .to_string()
+    }
+
+    /// A user service that finds `user_id` with `principal_id`.
+    fn finding(deps: &mut Deps, principal_id: Option<&str>) {
+        let user_id = deps.user_id;
+        let principal_id = principal_id.map(str::to_string);
+        deps.users
+            .expect_get_users_by_ids()
+            .withf(move |ids| ids == [user_id])
+            .returning(move |_| {
+                let user = UserDto {
+                    id: user_id,
+                    username: "ada".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    status_text: None,
+                    bio: None,
+                    principal_id: principal_id.clone(),
+                    deletion_scheduled_for: None,
+                    profile_locked_until: None,
+                    handle: None,
+                };
+                Box::pin(async move { Ok(vec![user]) })
+            });
+    }
+
+    /// Storage that stores every upload and deletes nothing else.
+    fn storing_avatars(deps: &mut Deps) {
+        storing(deps);
+        deps.storage
+            .expect_delete_avatar_files()
+            .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+    }
+
+    /// A JPEG upload and the PNG it is re-encoded to.
+    fn jpeg_and_png() -> (Vec<u8>, Vec<u8>) {
+        let jpeg = image_of(image::ImageFormat::Jpeg, 300, 200, [200, 30, 30]);
+        let png = normalize_avatar(&jpeg, AvatarFormat::Jpeg).expect("normalized");
+        (jpeg, png)
+    }
+
+    const PRINCIPAL: &str = "rimp1_txDLbnipi5i3kCJtJwBOUixzv_MY8OnU0mcy--Tyje0";
+
+    /// Below the report threshold the re-encoded PNG is checked, stored and not reported.
+    #[actix_web::test]
+    async fn a_picture_the_check_allows_is_stored_unreported() {
+        let mut deps = Deps::new();
+        allowing(&mut deps);
+        storing_avatars(&mut deps);
+        deps.abuse.expect_file_report().never();
+        let (checker, received) = check_service("200 OK", &scores(0.1, 0.59, 0.0));
+        deps.checker = Some(checker);
+        let app = app!(deps);
+        let (jpeg, png) = jpeg_and_png();
+
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.jpeg", "image/jpeg", &jpeg)],
+        );
+        assert_eq!(status_and_body!(&app, req).0, 200);
+        assert_eq!(
+            received.lock().unwrap().as_slice(),
+            [("image/png".to_string(), png)]
+        );
+    }
+
+    /// At the report threshold the picture is stored, then reported by the server against the
+    /// account's principal with the category, score and the stored file's URL.
+    #[actix_web::test]
+    async fn a_picture_at_the_report_threshold_is_stored_and_reported() {
+        let mut deps = Deps::new();
+        allowing(&mut deps);
+        storing_avatars(&mut deps);
+        finding(&mut deps, Some(PRINCIPAL));
+        let user_id = deps.user_id;
+        let (jpeg, png) = jpeg_and_png();
+        let key = hashed_avatar_key(user_id, AvatarFormat::Png, &Sha256::digest(&png).into());
+        let reason = format!("automatic profile picture check: gore 0.72 — /api/files/{key}");
+        deps.abuse
+            .expect_file_report()
+            .withf(move |by, report| {
+                *by == OperatorCaller::Server
+                    && report.subject_principal_id.as_deref() == Some(PRINCIPAL)
+                    && report.subject_server_id.is_none()
+                    && report.reason == reason
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Err(ServiceError::NotFound) }));
+        let (checker, _) = check_service("200 OK", &scores(0.1, 0.72, 0.3));
+        deps.checker = Some(checker);
+        let app = app!(deps);
+
+        // A failed report does not fail the upload.
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.jpeg", "image/jpeg", &jpeg)],
+        );
+        let (status, body) = status_and_body!(&app, req);
+        assert_eq!(status, 200);
+        assert_eq!(body["path"], key);
+    }
+
+    /// A flagged picture of an account without a principal id is stored without a report.
+    #[actix_web::test]
+    async fn a_flagged_picture_without_a_principal_is_stored_unreported() {
+        let mut deps = Deps::new();
+        allowing(&mut deps);
+        storing_avatars(&mut deps);
+        finding(&mut deps, None);
+        deps.abuse.expect_file_report().never();
+        let (checker, _) = check_service("200 OK", &scores(0.6, 0.0, 0.0));
+        deps.checker = Some(checker);
+        let app = app!(deps);
+        let (jpeg, _) = jpeg_and_png();
+
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.jpeg", "image/jpeg", &jpeg)],
+        );
+        assert_eq!(status_and_body!(&app, req).0, 200);
+    }
+
+    /// At the block threshold the answer is 422 and nothing is stored or reported.
+    #[actix_web::test]
+    async fn a_picture_at_the_block_threshold_is_refused_and_not_stored() {
+        let mut deps = Deps::new();
+        allowing(&mut deps);
+        deps.storage.expect_upload_file().never();
+        deps.storage.expect_delete_avatar_files().never();
+        deps.abuse.expect_file_report().never();
+        let (checker, _) = check_service("200 OK", &scores(0.85, 0.0, 0.0));
+        deps.checker = Some(checker);
+        let app = app!(deps);
+        let (jpeg, _) = jpeg_and_png();
+
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.jpeg", "image/jpeg", &jpeg)],
+        );
+        assert_eq!(
+            status_and_body!(&app, req),
+            (
+                422,
+                json!({ "error": "this image isn't allowed as a profile picture" })
+            )
+        );
+    }
+
+    /// When the check cannot run the answer is 503 and nothing is stored.
+    #[actix_web::test]
+    async fn an_unavailable_check_answers_503_and_stores_nothing() {
+        let closed = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            listener.local_addr().expect("addr")
+        };
+        let checkers = [
+            check_service("500 Internal Server Error", "{}").0,
+            check_service("200 OK", "not json").0,
+            Arc::new(AvatarChecker::new(&format!("http://{closed}"), 0.85, 0.6).expect("client")),
+        ];
+        for checker in checkers {
+            let mut deps = Deps::new();
+            allowing(&mut deps);
+            deps.storage.expect_upload_file().never();
+            deps.storage.expect_delete_avatar_files().never();
+            deps.checker = Some(checker);
+            let app = app!(deps);
+            let (jpeg, _) = jpeg_and_png();
+
+            let req = post(
+                "/api/files/avatar",
+                &[Part::File("me.jpeg", "image/jpeg", &jpeg)],
+            );
+            assert_eq!(
+                status_and_body!(&app, req),
+                (
+                    503,
+                    json!({ "error": "profile pictures can't be checked right now; try again later" })
+                )
+            );
         }
     }
 }

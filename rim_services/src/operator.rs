@@ -15,15 +15,19 @@ use crate::{Actor, ServiceResult};
 pub enum OperatorCaller {
     /// The `rim_server` command line, run by whoever runs the server.
     CommandLine,
+    /// The server acting on its own, such as the automatic profile picture check filing a
+    /// report.
+    Server,
     /// A signed-in user; the action is refused unless they are an instance operator.
     User(Actor),
 }
 
 impl fmt::Display for OperatorCaller {
-    /// `cli`, or the user's id, as the audit line's `actor_id`.
+    /// `cli`, `server`, or the user's id, as the audit line's `actor_id`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CommandLine => f.write_str("cli"),
+            Self::Server => f.write_str("server"),
             Self::User(actor) => write!(f, "{}", actor.user_id),
         }
     }

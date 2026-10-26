@@ -369,6 +369,18 @@ pub struct RIMConfig {
     /// [`DEFAULT_AVATAR_UPLOADS_PER_DAY`]; 0 turns the daily limit off. Controlled by
     /// `RIM_AVATAR_UPLOADS_PER_DAY`.
     pub avatar_uploads_per_day: Option<u32>,
+    /// Base URL of the image check service every uploaded profile picture is scored by, an
+    /// absolute http(s) URL; unset or blank checks nothing. Controlled by
+    /// `RIM_AVATAR_CHECK_URL`; see [`RIMConfig::avatar_check`].
+    pub avatar_check_url: Option<String>,
+    /// The highest category score, in (0, 1], at or above which an uploaded profile picture is
+    /// refused. Defaults to [`DEFAULT_AVATAR_CHECK_BLOCK`]. Controlled by
+    /// `RIM_AVATAR_CHECK_BLOCK`.
+    pub avatar_check_block: Option<f64>,
+    /// The highest category score, in (0, 1] and at most the block threshold, at or above
+    /// which an uploaded profile picture is stored and reported to the operators. Defaults to
+    /// [`DEFAULT_AVATAR_CHECK_REPORT`]. Controlled by `RIM_AVATAR_CHECK_REPORT`.
+    pub avatar_check_report: Option<f64>,
     /// Days between an account's deletion request and its purge, 0 to 30; default 14.
     /// Controlled by `RIM_ACCOUNT_DELETION_GRACE_DAYS`.
     pub account_deletion_grace_days: Option<u32>,
@@ -508,6 +520,9 @@ impl fmt::Debug for RIMConfig {
             .field("reserved_names", &self.reserved_names)
             .field("avatar_uploads_per_hour", &self.avatar_uploads_per_hour)
             .field("avatar_uploads_per_day", &self.avatar_uploads_per_day)
+            .field("avatar_check_url", &self.avatar_check_url)
+            .field("avatar_check_block", &self.avatar_check_block)
+            .field("avatar_check_report", &self.avatar_check_report)
             .finish()
     }
 }
@@ -601,6 +616,9 @@ impl Default for RIMConfig {
             rate_probation_messages_per_min: None,
             avatar_uploads_per_hour: Some(DEFAULT_AVATAR_UPLOADS_PER_HOUR),
             avatar_uploads_per_day: Some(DEFAULT_AVATAR_UPLOADS_PER_DAY),
+            avatar_check_url: None,
+            avatar_check_block: None,
+            avatar_check_report: None,
             account_deletion_grace_days: None,
             reserved_names: None,
         }
@@ -1216,6 +1234,54 @@ impl RIMConfig {
         }
     }
 
+    /// The profile picture check: `RIM_AVATAR_CHECK_URL`, trimmed, with `RIM_AVATAR_CHECK_BLOCK`
+    /// and `RIM_AVATAR_CHECK_REPORT` or their defaults. `None` when the URL is unset or blank;
+    /// the thresholds are checked either way.
+    ///
+    /// # Errors
+    /// A message naming the variable when the URL is not an absolute `http` or `https` URL with
+    /// a host, when a threshold is outside (0, 1], or when the report threshold is above the
+    /// block threshold.
+    pub fn avatar_check(&self) -> Result<Option<AvatarCheckSettings>, String> {
+        let threshold = |name: &str, value: Option<f64>, default: f64| match value {
+            None => Ok(default),
+            Some(v) if v > 0.0 && v <= 1.0 => Ok(v),
+            Some(v) => Err(format!("{name}={v} is outside (0, 1]")),
+        };
+        let block = threshold(
+            "RIM_AVATAR_CHECK_BLOCK",
+            self.avatar_check_block,
+            DEFAULT_AVATAR_CHECK_BLOCK,
+        )?;
+        let report = threshold(
+            "RIM_AVATAR_CHECK_REPORT",
+            self.avatar_check_report,
+            DEFAULT_AVATAR_CHECK_REPORT,
+        )?;
+        if report > block {
+            return Err(format!(
+                "RIM_AVATAR_CHECK_REPORT={report} is above RIM_AVATAR_CHECK_BLOCK={block}"
+            ));
+        }
+        let Some(url) = non_blank(self.avatar_check_url.as_deref()) else {
+            return Ok(None);
+        };
+        match url::Url::parse(url) {
+            Ok(parsed)
+                if matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some() =>
+            {
+                Ok(Some(AvatarCheckSettings {
+                    url: url.to_string(),
+                    block,
+                    report,
+                }))
+            }
+            _ => Err(format!(
+                "RIM_AVATAR_CHECK_URL={url} is not an absolute http or https URL"
+            )),
+        }
+    }
+
     /// `RIM_DEFAULT_WORKSPACE`, trimmed; `None` when unset or blank. Whether the workspace
     /// exists is checked against the database at start.
     ///
@@ -1495,6 +1561,24 @@ pub const DEFAULT_AVATAR_UPLOADS_PER_HOUR: u32 = 5;
 
 /// Default `RIM_AVATAR_UPLOADS_PER_DAY`.
 pub const DEFAULT_AVATAR_UPLOADS_PER_DAY: u32 = 20;
+
+/// Default `RIM_AVATAR_CHECK_BLOCK`.
+pub const DEFAULT_AVATAR_CHECK_BLOCK: f64 = 0.85;
+
+/// Default `RIM_AVATAR_CHECK_REPORT`.
+pub const DEFAULT_AVATAR_CHECK_REPORT: f64 = 0.60;
+
+/// The profile picture check: the image check service and the two thresholds its scores are
+/// held against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AvatarCheckSettings {
+    /// The service's base URL.
+    pub url: String,
+    /// A score at or above this refuses the picture.
+    pub block: f64,
+    /// A score at or above this, and below `block`, stores the picture and reports it.
+    pub report: f64,
+}
 
 /// Largest `RIM_LIMIT_MESSAGE_BYTES`: the largest message content a client may send.
 pub const MAX_LIMIT_MESSAGE_BYTES: u32 = rim_services::e2ee::MAX_CONTENT_BYTES as u32;
@@ -2499,6 +2583,93 @@ mod tests {
             ..Default::default()
         };
         assert!(config.instance_policy(None).is_err());
+    }
+
+    #[test]
+    fn avatar_check_is_off_without_a_url_and_defaults_its_thresholds() {
+        assert_eq!(RIMConfig::default().avatar_check(), Ok(None));
+        let blank = RIMConfig {
+            avatar_check_url: Some("  ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(blank.avatar_check(), Ok(None));
+        let config = RIMConfig {
+            avatar_check_url: Some(" http://imagecheck:8090 ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.avatar_check(),
+            Ok(Some(AvatarCheckSettings {
+                url: "http://imagecheck:8090".to_string(),
+                block: DEFAULT_AVATAR_CHECK_BLOCK,
+                report: DEFAULT_AVATAR_CHECK_REPORT,
+            }))
+        );
+    }
+
+    #[test]
+    fn avatar_check_takes_an_http_url_and_ordered_thresholds_in_0_to_1() {
+        let check = |url: &str, block: Option<f64>, report: Option<f64>| {
+            RIMConfig {
+                avatar_check_url: Some(url.to_string()),
+                avatar_check_block: block,
+                avatar_check_report: report,
+                ..Default::default()
+            }
+            .avatar_check()
+        };
+        let thresholds = |url: &str, block, report| {
+            check(url, block, report).map(|set| set.map(|set| (set.block, set.report)))
+        };
+        assert_eq!(
+            thresholds("https://check.example.org/", Some(1.0), Some(1.0)),
+            Ok(Some((1.0, 1.0)))
+        );
+        assert_eq!(
+            thresholds("http://imagecheck:8090", Some(0.9), Some(0.1)),
+            Ok(Some((0.9, 0.1)))
+        );
+        for bad in ["/check", "imagecheck:8090", "ftp://imagecheck/", "http://"] {
+            let err = check(bad, None, None).unwrap_err();
+            assert!(err.starts_with("RIM_AVATAR_CHECK_URL="), "{bad}: {err}");
+        }
+        for (block, report, name) in [
+            (Some(0.0), None, "RIM_AVATAR_CHECK_BLOCK=0"),
+            (Some(1.5), None, "RIM_AVATAR_CHECK_BLOCK=1.5"),
+            (Some(f64::NAN), None, "RIM_AVATAR_CHECK_BLOCK=NaN"),
+            (None, Some(-0.1), "RIM_AVATAR_CHECK_REPORT=-0.1"),
+            (Some(0.5), Some(0.7), "RIM_AVATAR_CHECK_REPORT=0.7 is above"),
+            (Some(0.5), None, "RIM_AVATAR_CHECK_REPORT=0.6 is above"),
+        ] {
+            let err = check("http://imagecheck:8090", block, report).unwrap_err();
+            assert!(err.starts_with(name), "{err}");
+            // The thresholds are checked with the check off too.
+            let off = RIMConfig {
+                avatar_check_block: block,
+                avatar_check_report: report,
+                ..Default::default()
+            };
+            assert!(off.avatar_check().is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn avatar_check_is_read_from_its_variables() {
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_AVATAR_CHECK_URL", "http://imagecheck:8090"),
+            ("RIM_AVATAR_CHECK_BLOCK", "0.9"),
+            ("RIM_AVATAR_CHECK_REPORT", "0.5"),
+        ]))
+        .expect("loads");
+        assert_eq!(
+            config.avatar_check(),
+            Ok(Some(AvatarCheckSettings {
+                url: "http://imagecheck:8090".to_string(),
+                block: 0.9,
+                report: 0.5,
+            }))
+        );
     }
 
     #[test]

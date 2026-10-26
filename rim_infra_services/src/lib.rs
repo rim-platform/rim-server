@@ -9,6 +9,8 @@ mod audit_capture;
 /// Public for `rim_server`, whose composition root starts the daily purge and whose
 /// `audit purge` command runs it once.
 pub mod audit_retention;
+/// Public for `rim_server`, whose avatar upload route has every picture checked with it.
+pub mod avatar_check;
 /// Public for `rim_server`, whose avatar upload route re-encodes every picture with it.
 pub mod avatar_image;
 // Public: DefaultAuthService is re-exported below for integration tests

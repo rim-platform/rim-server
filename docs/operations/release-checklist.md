@@ -195,8 +195,9 @@ Pushing the tag starts `.github/workflows/release.yaml` in each repository. Its
 job checks the tag against the version in `Cargo.toml` (rim-ui: `package.json`) and the
 changelog's section for it, builds the image for `linux/amd64`, pushes the tags `<version>`,
 `<major>.<minor>`, `sha-<short sha>` and `latest`, signs the digest with cosign keyless and
-attests an SPDX SBOM to it. The next job creates the GitHub release with the changelog section
-and the SBOM. rim-ui's workflow also builds the desktop installers, one leg for Linux x86_64 and
+attests an SPDX SBOM to it. rim-server's job does the same for a second image, the profile
+picture check `ghcr.io/rim-platform/rim-imagecheck` built from `imagecheck/`, with the same
+tags. The next job creates the GitHub release with the changelog section and the SBOMs. rim-ui's workflow also builds the desktop installers, one leg for Linux x86_64 and
 one for Windows x86_64, and attaches them to its release with `latest.json` for the updater,
 `SHA256SUMS` signed with cosign keyless and a build-provenance attestation for each bundle.
 
@@ -213,17 +214,22 @@ one for Windows x86_64, and attaches them to its release with `latest.json` for 
     cosign verify ghcr.io/rim-platform/rim-server:$v \
       --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    cosign verify ghcr.io/rim-platform/rim-imagecheck:$v \
+      --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
     cosign verify ghcr.io/rim-platform/rim-web:$v \
       --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     ```
 
       The digest cosign prints matches the one in the GitHub release notes, and the SBOM's
-      GitHub attestation to that digest passes for both images:
+      GitHub attestation to that digest passes for every image:
       `gh attestation verify oci://ghcr.io/rim-platform/<image>@<digest> --repo
       rim-platform/<repository> --predicate-type https://spdx.dev/Document/v2.3`.
 - [ ] The first release only: set both packages public (package settings on GitHub), as
       `CONTRIBUTING.md`, "Who can merge and publish", lists.
+- [ ] The first release that publishes `rim-imagecheck`: set that package public too. Until it
+      is, `deploy/upgrade.sh` and every self-hosted deployment fail to pull it.
 - [ ] Desktop builds: wait for both legs of rim-ui's run. The release is published only when
       every asset is attached; until then it is not the `latest` the updater reads.
 - [ ] Install one Linux bundle and one Windows bundle from the release page, sign in and send a

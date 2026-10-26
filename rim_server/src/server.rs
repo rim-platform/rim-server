@@ -109,6 +109,8 @@ pub async fn serve(
     let storage_backend = runtime.storage_backend;
     let storage_service = runtime.storage_service;
     let user_service = runtime.user_service;
+    let avatar_checker = runtime.avatar_checker;
+    let relay_abuse_service = runtime.relay_abuse_service;
     let message_attachment_service = runtime.message_attachment_service;
     let moderation_service = runtime.moderation_service;
     let plugin_bundle_service = runtime.plugin_bundle_service;
@@ -223,6 +225,8 @@ pub async fn serve(
             .app_data(web::Data::new(Arc::clone(&storage_backend)))
             .app_data(web::Data::new(Arc::clone(&storage_service)))
             .app_data(web::Data::new(Arc::clone(&user_service)))
+            .app_data(web::Data::new(avatar_checker.clone()))
+            .app_data(web::Data::new(Arc::clone(&relay_abuse_service)))
             .app_data(web::Data::new(Arc::clone(&message_attachment_service)))
             .app_data(web::Data::new(Arc::clone(&moderation_service)))
             .app_data(web::Data::new(Arc::clone(&plugin_bundle_service)))

@@ -192,6 +192,14 @@ USER rim
 #   RIM_RESERVED_NAMES    — comma-separated usernames and display names signups and profile
 #                           edits refuse, also followed by -, _, . or a space (default: none);
 #                           an empty entry stops the server at boot
+#   RIM_AVATAR_CHECK_URL  — base URL of the image check service (imagecheck/) every uploaded
+#                           profile picture is scored by (default: none, pictures unchecked);
+#                           while it is down picture uploads answer 503
+#   RIM_AVATAR_CHECK_BLOCK — highest score at or above which a picture is refused, in (0, 1]
+#                           (default: 0.85)
+#   RIM_AVATAR_CHECK_REPORT — highest score at or above which a picture is stored and reported
+#                           to the operators, in (0, 1] and at most the block one
+#                           (default: 0.60); a bad value stops the server at boot
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs
