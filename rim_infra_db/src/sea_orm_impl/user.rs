@@ -167,6 +167,33 @@ impl UserRepository for SeaOrmUserRepository {
         Ok(updated.into())
     }
 
+    async fn clear_profile(
+        &self,
+        id: UserId,
+        locked_until: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> RepoResult<User> {
+        let model = user::Entity::find_by_id(id)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or(RepoError::new(RepoErrorKind::NotFound))?;
+
+        let mut active = model.into_active_model();
+        active.display_name = Set(None);
+        active.avatar_url = Set(None);
+        active.status_text = Set(None);
+        active.bio = Set(None);
+        active.profile_locked_until = Set(locked_until.map(Into::into));
+        active.updated_at = Set(chrono::Utc::now().into());
+
+        let updated = user::Entity::update(active)
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(updated.into())
+    }
+
     /// Find a user by email address using a case-insensitive comparison.
     ///
     /// Applies `LOWER(email) = LOWER($1)` so that input casing is irrelevant.

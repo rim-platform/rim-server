@@ -177,13 +177,15 @@ fn server_info_sdl_matches_the_contract() {
     assert!(sdl.contains("enum ServerFeatureState { ENABLED DISABLED UNAVAILABLE }"));
 }
 
-/// `User` ends with the caller's probation end, pending deletion, operator role and handle.
+/// `User` ends with the caller's probation end, profile lock, pending deletion, operator role
+/// and handle.
 #[test]
 fn user_sdl_ends_with_the_probation_end_the_pending_deletion_the_operator_role_and_the_handle() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     assert!(
         sdl.contains(
-            "principalId: String probationEndsAt: DateTime deletionScheduledFor: DateTime \
+            "principalId: String probationEndsAt: DateTime profileLockedUntil: DateTime \
+             deletionScheduledFor: DateTime \
              instanceOperator: Boolean! handle: String banned: Boolean! bannedUntil: DateTime banReason: String }"
         ),
         "User keeps profile fields followed by workspace ban status"
@@ -430,6 +432,8 @@ fn instance_moderation_sdl_matches_the_contract() {
         "instanceBlockIp( cidr: String!, reason: String!, expiresInDays: Int ): \
          InstanceIpBlockOutcome!",
         "instanceUnblockIp( cidr: String! ): Boolean!",
+        "instanceClearProfile( principalId: String!, reason: String!, lockDays: Int ): \
+         InstanceProfileClearOutcome!",
         "type InstanceAbuseReport { id: ID! reporterUserId: ID reporterUsername: String \
          subjectPrincipalId: String subjectUsername: String subjectServerId: String requestId: \
          ID reason: String! createdAt: DateTime! resolvedAt: DateTime resolved: Boolean! }",
@@ -444,6 +448,8 @@ fn instance_moderation_sdl_matches_the_contract() {
          account: InstanceAccount reason: String! endedSessions: Int! ignoredRequests: Int! \
          revokedInvites: Int! emailBlocked: Boolean! invitees: [InstanceAccount!]! }",
         "type InstancePrincipalUnblockOutcome { lifted: Boolean! emailUnblocked: Boolean! }",
+        "type InstanceProfileClearOutcome { principalId: String! account: InstanceAccount! \
+         lockedUntil: DateTime }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }

@@ -218,6 +218,7 @@ fn user_dto(id: UserId, username: &str) -> UserDto {
         bio: None,
         principal_id: None,
         deletion_scheduled_for: None,
+        profile_locked_until: None,
         handle: None,
     }
 }

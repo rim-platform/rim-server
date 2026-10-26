@@ -21,6 +21,27 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- An operator can clear the display name, picture, status and bio of the account holding a
+  principal and optionally lock them for 1 to 365 days: `rim_server principal clear-profile
+  <principal-id> --reason <text> [--lock-days <n>]`, and in the app the mutation
+  `instanceClearProfile` returning `InstanceProfileClearOutcome`. `User.profileLockedUntil`
+  tells the account on `me` until when its profile is locked; while it is, setting any of the
+  four answers `FORBIDDEN` and picture uploads 403. Audited as `relay.profile_cleared`.
+
+### Security
+
+- Profile pictures are re-encoded by the server: `POST /api/files/avatar` decodes the upload as
+  its declared type and stores the first frame, centre-cropped, as a 256×256 PNG without
+  metadata. The upload limit drops from 2 MiB to 1 MiB, images past 4096 pixels a side answer
+  413, and bytes that do not decode 415.
+- During `RIM_PROBATION_HOURS` a new account cannot set a profile picture, status or bio; its
+  display name it still can.
+- Profile picture uploads are limited per account by `RIM_AVATAR_UPLOADS_PER_HOUR` (default 5)
+  and `RIM_AVATAR_UPLOADS_PER_DAY` (default 20); past either the upload answers 429 with
+  `Retry-After`. 0 turns either off; instance operators are exempt.
+
 ## [0.0.2] - 2026-10-26
 
 ### Added

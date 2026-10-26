@@ -37,6 +37,7 @@ rim_identity = { path = "../rim_identity", features = ["testing"] }
 rim_infra_db = { path = "../rim_infra_db" }
 rim_infra_services = { path = "../rim_infra_services" }
 sha2 = "0.10.9"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 entity = { path = "../entity" }
 rim_server = { path = "../rim_server" }
 rim_s2s = { path = "../rim_s2s", features = ["testing"] }

@@ -40,6 +40,17 @@ pub trait UserRepository: Send + Sync {
 
     async fn update_profile(&self, id: UserId, patch: UpdateProfilePatch) -> RepoResult<User>;
 
+    /// Clear `id`'s display name, avatar URL, status text and bio, and set
+    /// `profile_locked_until`. Returns the account as it now is.
+    ///
+    /// # Errors
+    /// `NotFound` when there is no such account.
+    async fn clear_profile(
+        &self,
+        id: UserId,
+        locked_until: Option<DateTime<Utc>>,
+    ) -> RepoResult<User>;
+
     /// Find a user by email address using a case-insensitive comparison.
     ///
     /// The lookup uses `LOWER(email) = LOWER($1)` so that `"Foo@Bar.COM"` and

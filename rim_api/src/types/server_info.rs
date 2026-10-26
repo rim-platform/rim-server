@@ -82,9 +82,9 @@ pub struct ServerLimits {
     pub invite_max_uses: Option<u32>,
     /// Bytes of one message's text.
     pub message_bytes: Option<u32>,
-    /// Hours after its creation during which an account cannot create a workspace or send a
-    /// DM request to a stranger, and sends messages at a lower rate; `me.probationEndsAt` says
-    /// when the caller's ends.
+    /// Hours after its creation during which an account cannot create a workspace, send a DM
+    /// request to a stranger or set a profile picture, status or bio, and sends messages at a
+    /// lower rate; `me.probationEndsAt` says when the caller's ends.
     pub probation_hours: Option<u32>,
     /// Pending invitations to encrypted conversations one user holds; past it, adding them to
     /// one more answers `VALIDATION`.

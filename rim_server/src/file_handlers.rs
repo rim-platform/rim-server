@@ -9,12 +9,15 @@ use futures_util::StreamExt;
 use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
 use rim_core::user::avatar::{AvatarFormat, file_url, hashed_avatar_key, is_hashed_avatar_key};
+use rim_core::user::model::UserId;
+use rim_infra_services::avatar_image::{AvatarImageError, MAX_SOURCE_SIDE, normalize_avatar};
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::feature::service::FeatureGate;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::moderation::command::AuthorizeReportAttachmentQuery;
 use rim_services::moderation::service::ModerationService;
 use rim_services::storage::service::StorageService;
+use rim_services::user::service::UserService;
 use sha2::{Digest, Sha256};
 
 use crate::graphql_support::{extract_auth, extract_auth_without_secret, validate_csrf_header};
@@ -77,8 +80,8 @@ pub(crate) fn map_service_error_to_response(err: rim_services::ServiceError) -> 
 /// Maximum upload size: 25 MB, the same cap the attachment service puts on declared sizes.
 const MAX_UPLOAD_BYTES: u64 = rim_services::message_attachment::MAX_ATTACHMENT_BYTES;
 
-/// Maximum avatar size: 2 MB.
-const MAX_AVATAR_BYTES: u64 = 2 * 1024 * 1024;
+/// Maximum avatar upload size: 1 MiB.
+const MAX_AVATAR_BYTES: u64 = 1024 * 1024;
 
 /// The type of an encrypted conversation's blob. The service accepts it only for an attachment
 /// created with a `blobSha256`, and checks the bytes against it.
@@ -573,6 +576,7 @@ pub async fn handle_avatar_upload(
     req: HttpRequest,
     payload: Multipart,
     storage_service: web::Data<Arc<dyn StorageService>>,
+    user_service: web::Data<Arc<dyn UserService>>,
     features: web::Data<Arc<dyn FeatureGate>>,
 ) -> HttpResponse {
     if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::Avatars) {
@@ -586,17 +590,35 @@ pub async fn handle_avatar_upload(
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    avatar_upload_as(user_id, payload, storage_service.get_ref().as_ref()).await
+    avatar_upload_as(
+        user_id,
+        payload,
+        storage_service.get_ref().as_ref(),
+        user_service.get_ref().as_ref(),
+    )
+    .await
 }
 
 /// Store `user_id`'s avatar, then delete the user's other avatar files: the session path above
-/// and forwarded requests from another relay share it. The declared type must be png, jpeg, gif
-/// or webp and the bytes must start with that format's signature, or the answer is 415.
+/// and forwarded requests from another relay share it.
+///
+/// The user service first decides whether the upload may start, before the body is read: a
+/// locked profile answers 403, probation 400 and an upload limit 429 with `Retry-After`. The
+/// declared type must be png, jpeg, gif or webp and the bytes must start with that format's
+/// signature (415), within 1 MiB (413). The image is then decoded as its declared type and
+/// re-encoded: its first frame, centre-cropped to a square, is stored as a 256×256 PNG without
+/// metadata. Bytes that do not decode answer 415, an image wider or taller than 4096 pixels
+/// 413.
 pub(crate) async fn avatar_upload_as(
-    user_id: rim_core::user::model::UserId,
+    user_id: UserId,
     payload: Multipart,
     storage_service: &dyn StorageService,
+    user_service: &dyn UserService,
 ) -> HttpResponse {
+    if let Err(e) = user_service.begin_avatar_upload(user_id).await {
+        return map_service_error_to_response(e);
+    }
+
     let upload = match read_multipart_fields(payload, MAX_AVATAR_BYTES).await {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -611,10 +633,48 @@ pub(crate) async fn avatar_upload_as(
             .json(serde_json::json!({"error": "avatar content does not match its type"}));
     }
 
-    // Both the type and the content, rather than the client filename, determine the key.
-    let storage_key = hashed_avatar_key(user_id, format, &Sha256::digest(&upload.data).into());
+    let png = match reencode_avatar(upload.data, format).await {
+        Ok(png) => png,
+        Err(resp) => return resp,
+    };
+    store_avatar(user_id, &png, storage_service).await
+}
+
+/// `data`, of the declared `format`, re-encoded as the PNG that is stored, on the blocking
+/// pool.
+///
+/// # Errors
+/// 415 for bytes that do not decode, 413 past the pixel limit, 500 when the pool fails.
+async fn reencode_avatar(data: Vec<u8>, format: AvatarFormat) -> Result<Vec<u8>, HttpResponse> {
+    match web::block(move || normalize_avatar(&data, format)).await {
+        Ok(Ok(png)) => Ok(png),
+        Ok(Err(AvatarImageError::Unreadable)) => Err(HttpResponse::UnsupportedMediaType()
+            .json(serde_json::json!({"error": "avatar could not be read as an image"}))),
+        Ok(Err(AvatarImageError::TooLarge)) => {
+            Err(HttpResponse::PayloadTooLarge().json(serde_json::json!({
+                "error": format!(
+                    "avatar image must be at most {MAX_SOURCE_SIDE}×{MAX_SOURCE_SIDE} pixels"
+                )
+            })))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "avatar re-encoding failed");
+            Err(HttpResponse::InternalServerError()
+                .json(serde_json::json!({"error": "internal error"})))
+        }
+    }
+}
+
+/// Store `png` as `user_id`'s avatar under its content-addressed key, delete the user's other
+/// avatar files, and answer its path, size and URL.
+async fn store_avatar(
+    user_id: UserId,
+    png: &[u8],
+    storage_service: &dyn StorageService,
+) -> HttpResponse {
+    let storage_key = hashed_avatar_key(user_id, AvatarFormat::Png, &Sha256::digest(png).into());
     let stored = match storage_service
-        .upload_file(&storage_key, &upload.data, format.mime())
+        .upload_file(&storage_key, png, AvatarFormat::Png.mime())
         .await
     {
         Ok(stored) => stored,
@@ -659,6 +719,7 @@ mod tests {
     use rim_services::moderation::dto::ReportAttachmentDto;
     use rim_services::moderation::service::MockModerationService;
     use rim_services::storage::service::MockStorageService;
+    use rim_services::user::service::MockUserService;
     use serde_json::{Value, json};
 
     use super::*;
@@ -733,6 +794,7 @@ mod tests {
         attachments: MockMessageAttachmentService,
         storage: MockStorageService,
         moderation: MockModerationService,
+        users: MockUserService,
         disabled: Vec<ServerFeature>,
     }
 
@@ -743,6 +805,7 @@ mod tests {
                 attachments: MockMessageAttachmentService::new(),
                 storage: MockStorageService::new(),
                 moderation: MockModerationService::new(),
+                users: MockUserService::new(),
                 disabled: Vec::new(),
             }
         }
@@ -786,6 +849,7 @@ mod tests {
                     .app_data(web::Data::new(
                         Arc::new(deps.moderation) as Arc<dyn ModerationService>
                     ))
+                    .app_data(web::Data::new(Arc::new(deps.users) as Arc<dyn UserService>))
                     .app_data(web::Data::new(Arc::new(Files) as Arc<dyn StorageBackend>))
                     .app_data(web::Data::new(Arc::new(
                         rim_infra_services::feature_gate::InstanceFeatureGate::new(
@@ -1350,6 +1414,13 @@ mod tests {
 
     // ── Avatar upload ───────────────────────────────────────────────────────
 
+    /// A user service that lets every avatar upload start.
+    fn allowing(deps: &mut Deps) {
+        deps.users
+            .expect_begin_avatar_upload()
+            .returning(|_| Box::pin(async { Ok(()) }));
+    }
+
     /// Storage that stores every upload as asked.
     fn storing(deps: &mut Deps) {
         deps.storage.expect_upload_file().returning(|k, data, _| {
@@ -1361,22 +1432,49 @@ mod tests {
         });
     }
 
-    /// An avatar is stored under the caller's key with the extension of its content type, not of
-    /// the client's file name, the caller's other avatar files are deleted, and the answer
-    /// carries its path, size and URL.
+    /// A `width`×`height` image of one `color`, encoded as `format`.
+    fn image_of(format: image::ImageFormat, width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            width,
+            height,
+            image::Rgb(color),
+        ));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, format).expect("encode");
+        bytes.into_inner()
+    }
+
+    /// The stored PNG decoded, after checking it is 256×256.
+    fn stored_png(data: &[u8]) -> image::RgbaImage {
+        let image = image::load_from_memory_with_format(data, image::ImageFormat::Png)
+            .expect("a png")
+            .to_rgba8();
+        assert_eq!(image.dimensions(), (256, 256));
+        image
+    }
+
+    /// A JPEG upload is stored re-encoded as a 256×256 PNG under the caller's key, whatever the
+    /// client's file name, the caller's other avatar files are deleted, and the answer carries
+    /// its path, size and URL.
     #[actix_web::test]
-    async fn avatar_upload_stores_under_the_callers_key_by_type() {
+    async fn a_jpeg_avatar_is_stored_as_a_png_under_the_callers_key() {
         let mut deps = Deps::new();
+        allowing(&mut deps);
         let user_id = deps.user_id;
-        let key = hashed_avatar_key(user_id, AvatarFormat::Jpeg, &Sha256::digest(JPEG).into());
+        let jpeg = image_of(image::ImageFormat::Jpeg, 300, 200, [200, 30, 30]);
+        let png = normalize_avatar(&jpeg, AvatarFormat::Jpeg).expect("normalized");
+        let key = hashed_avatar_key(user_id, AvatarFormat::Png, &Sha256::digest(&png).into());
+        assert!(key.ends_with(".png"), "{key}");
         let expected = key.clone();
+        let stored = png.clone();
         deps.storage
             .expect_upload_file()
             .withf(move |k, data, content_type| {
-                k == expected && data == JPEG && content_type == "image/jpeg"
+                k == expected && data == stored && content_type == "image/png"
             })
             .times(1)
             .returning(|k, data, _| {
+                stored_png(data);
                 let stored = StoredFile {
                     key: k.to_string(),
                     size_bytes: data.len() as u64,
@@ -1396,20 +1494,59 @@ mod tests {
 
         let req = post(
             "/api/files/avatar",
-            &[Part::File("me.png", "image/jpeg", JPEG)],
+            &[Part::File("me.jpeg", "image/jpeg", &jpeg)],
         );
         assert_eq!(
             status_and_body!(&app, req),
             (
                 200,
-                json!({ "path": key, "size_bytes": JPEG.len(), "url": format!("/api/files/{key}") })
+                json!({ "path": key, "size_bytes": png.len(), "url": format!("/api/files/{key}") })
             )
         );
+    }
+
+    /// A GIF upload is stored as a PNG too.
+    #[actix_web::test]
+    async fn a_gif_avatar_is_stored_as_a_png() {
+        let mut deps = Deps::new();
+        allowing(&mut deps);
+        deps.storage
+            .expect_upload_file()
+            .withf(|k, data, content_type| {
+                k.ends_with(".png") && content_type == "image/png" && {
+                    stored_png(data);
+                    true
+                }
+            })
+            .times(1)
+            .returning(|k, data, _| {
+                let stored = StoredFile {
+                    key: k.to_string(),
+                    size_bytes: data.len() as u64,
+                };
+                Box::pin(async move { Ok(stored) })
+            });
+        deps.storage
+            .expect_delete_avatar_files()
+            .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+        let app = app!(deps);
+
+        let gif = image_of(image::ImageFormat::Gif, 64, 64, [0, 0, 255]);
+        let (status, body) = status_and_body!(
+            &app,
+            post(
+                "/api/files/avatar",
+                &[Part::File("me.gif", "image/gif", &gif)]
+            )
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body["url"].as_str().unwrap().ends_with(".png"));
     }
 
     #[actix_web::test]
     async fn replacing_an_avatar_changes_its_url_and_deletes_the_previous_key() {
         let mut deps = Deps::new();
+        allowing(&mut deps);
         let files = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
             String,
             Vec<u8>,
@@ -1440,12 +1577,13 @@ mod tests {
             });
         let app = app!(deps);
         let mut urls = Vec::new();
-        for data in [PNG, b"\x89PNG\r\n\x1a\nchanged".as_slice()] {
+        for color in [[255, 0, 0], [0, 255, 0]] {
+            let png = image_of(image::ImageFormat::Png, 32, 32, color);
             let (status, body) = status_and_body!(
                 &app,
                 post(
                     "/api/files/avatar",
-                    &[Part::File("me.png", "image/png", data)]
+                    &[Part::File("me.png", "image/png", &png)]
                 )
             );
             assert_eq!(status, 200);
@@ -1477,6 +1615,7 @@ mod tests {
     #[actix_web::test]
     async fn avatar_upload_succeeds_when_the_old_files_cannot_be_deleted() {
         let mut deps = Deps::new();
+        allowing(&mut deps);
         storing(&mut deps);
         deps.storage
             .expect_delete_avatar_files()
@@ -1484,9 +1623,10 @@ mod tests {
             .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
         let app = app!(deps);
 
+        let png = image_of(image::ImageFormat::Png, 16, 16, [1, 2, 3]);
         let req = post(
             "/api/files/avatar",
-            &[Part::File("me.png", "image/png", PNG)],
+            &[Part::File("me.png", "image/png", &png)],
         );
         assert_eq!(status_and_body!(&app, req).0, 200);
     }
@@ -1495,7 +1635,9 @@ mod tests {
     /// is stored or deleted.
     #[actix_web::test]
     async fn avatar_upload_refuses_bytes_that_are_not_the_declared_format() {
-        let app = app!(Deps::new());
+        let mut deps = Deps::new();
+        allowing(&mut deps);
+        let app = app!(deps);
         let mismatch = json!({ "error": "avatar content does not match its type" });
         let cases: [(&str, &[u8]); 6] = [
             ("image/png", JPEG),
@@ -1518,11 +1660,49 @@ mod tests {
         }
     }
 
-    /// An avatar must be a png, jpeg, gif or webp image of at most 2 MiB; a storage failure
+    /// Bytes behind a valid signature that do not decode answer 415, and an image wider than
+    /// 4096 pixels 413, before anything is stored.
+    #[actix_web::test]
+    async fn avatar_upload_refuses_unreadable_images_and_too_many_pixels() {
+        let mut deps = Deps::new();
+        allowing(&mut deps);
+        let app = app!(deps);
+
+        for (content_type, data) in [("image/png", PNG), ("image/jpeg", JPEG)] {
+            let req = post(
+                "/api/files/avatar",
+                &[Part::File("me.png", content_type, data)],
+            );
+            assert_eq!(
+                status_and_body!(&app, req),
+                (
+                    415,
+                    json!({ "error": "avatar could not be read as an image" })
+                ),
+                "{content_type}"
+            );
+        }
+
+        let wide = image_of(image::ImageFormat::Png, 4097, 1, [0, 0, 0]);
+        let req = post(
+            "/api/files/avatar",
+            &[Part::File("me.png", "image/png", &wide)],
+        );
+        assert_eq!(
+            status_and_body!(&app, req),
+            (
+                413,
+                json!({ "error": "avatar image must be at most 4096×4096 pixels" })
+            )
+        );
+    }
+
+    /// An avatar must be a png, jpeg, gif or webp image of at most 1 MiB; a storage failure
     /// answers 500.
     #[actix_web::test]
     async fn avatar_upload_refuses_other_types_large_files_and_storage_failures() {
         let mut deps = Deps::new();
+        allowing(&mut deps);
         deps.storage
             .expect_upload_file()
             .times(1)
@@ -1542,6 +1722,7 @@ mod tests {
             );
         }
 
+        assert_eq!(MAX_AVATAR_BYTES, 1024 * 1024);
         let large = vec![b'a'; MAX_AVATAR_BYTES as usize + 1];
         let req = post(
             "/api/files/avatar",
@@ -1555,13 +1736,78 @@ mod tests {
             )
         );
 
+        let png = image_of(image::ImageFormat::Png, 16, 16, [1, 2, 3]);
         let req = post(
             "/api/files/avatar",
-            &[Part::File("me.png", "image/png", PNG)],
+            &[Part::File("me.png", "image/png", &png)],
         );
         assert_eq!(
             status_and_body!(&app, req),
             (500, json!({ "error": "upload failed" }))
         );
+    }
+
+    /// The user service's refusal is answered before the body is read: an upload limit as 429
+    /// with `Retry-After`, a lock as 403 and probation as 400, each with its message, and
+    /// nothing is stored.
+    #[actix_web::test]
+    async fn a_refused_upload_answers_the_services_refusal_without_reading_the_body() {
+        let refusals = [
+            (
+                ServiceError::RateLimited {
+                    retry_after_seconds: 42,
+                },
+                429,
+                json!({ "error": "rate limit exceeded", "retryAfterSeconds": 42 }),
+            ),
+            (
+                ServiceError::Forbidden("this server's operators locked your profile".to_string()),
+                403,
+                json!({ "error": "this server's operators locked your profile" }),
+            ),
+            (
+                ServiceError::Validation(
+                    "a new account can set a profile picture in 5 minutes".to_string(),
+                ),
+                400,
+                json!({ "error": "a new account can set a profile picture in 5 minutes" }),
+            ),
+        ];
+        for (refusal, status, body) in refusals {
+            let mut deps = Deps::new();
+            let user_id = deps.user_id;
+            let refusal = std::sync::Mutex::new(Some(refusal));
+            deps.users
+                .expect_begin_avatar_upload()
+                .withf(move |id| *id == user_id)
+                .times(1)
+                .returning(move |_| {
+                    let refusal = refusal.lock().unwrap().take().expect("one refusal");
+                    Box::pin(async move { Err(refusal) })
+                });
+            deps.storage.expect_upload_file().never();
+            deps.storage.expect_delete_avatar_files().never();
+            let app = app!(deps);
+
+            // A body that would otherwise be refused as too large.
+            let large = vec![b'a'; MAX_AVATAR_BYTES as usize + 1];
+            let resp = actix_test::call_service(
+                &app,
+                post(
+                    "/api/files/avatar",
+                    &[Part::File("me.png", "image/png", &large)],
+                )
+                .to_request(),
+            )
+            .await;
+            assert_eq!(resp.status().as_u16(), status);
+            let retry_after = resp
+                .headers()
+                .get("Retry-After")
+                .map(|v| v.to_str().unwrap().to_string());
+            assert_eq!(retry_after.as_deref(), (status == 429).then_some("42"));
+            let got: Value = serde_json::from_slice(&actix_test::read_body(resp).await).unwrap();
+            assert_eq!(got, body);
+        }
     }
 }

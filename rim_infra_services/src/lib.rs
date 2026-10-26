@@ -9,6 +9,8 @@ mod audit_capture;
 /// Public for `rim_server`, whose composition root starts the daily purge and whose
 /// `audit purge` command runs it once.
 pub mod audit_retention;
+/// Public for `rim_server`, whose avatar upload route re-encodes every picture with it.
+pub mod avatar_image;
 // Public: DefaultAuthService is re-exported below for integration tests
 // (signup_txn_regression) that construct the service directly against a live database.
 pub mod auth;
@@ -105,7 +107,8 @@ pub(crate) mod thread;
 /// Public for `rim_server`, whose per-address, per-session and WebSocket limits use it.
 pub mod token_bucket;
 pub mod typing;
-pub(crate) mod user;
+/// Public for `rim_server`, whose `principal clear-profile` command builds the user service.
+pub mod user;
 pub(crate) mod workspace_plugin;
 pub(crate) mod workspace_state;
 

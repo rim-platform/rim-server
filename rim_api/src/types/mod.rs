@@ -83,6 +83,7 @@ pub use e2ee::{
 pub use instance_moderation::{
     InstanceAbuseReport, InstanceAccount, InstanceIpBlock, InstanceIpBlockOutcome,
     InstancePrincipalBlock, InstancePrincipalBlockOutcome, InstancePrincipalUnblockOutcome,
+    InstanceProfileClearOutcome,
 };
 pub use invite::{
     InviteTokenPreviewGql, InviteTokenTypeGql, RegistrationModeGql, SignupWithKeyPayload,

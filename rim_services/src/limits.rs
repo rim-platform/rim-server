@@ -34,13 +34,20 @@ pub struct InstanceLimits {
     /// Bytes of one message's text.
     pub message_bytes: Option<u32>,
     /// Hours after its creation during which an account cannot create a workspace, write a
-    /// workspace's shared state or send a DM request to a stranger, and sends messages at the
-    /// probation rate; an instance operator is never on probation.
+    /// workspace's shared state, send a DM request to a stranger or set a profile picture,
+    /// status or bio, and sends messages at the probation rate; an instance operator is never
+    /// on probation.
     pub probation_hours: Option<u32>,
     /// Pending invitations to encrypted conversations one user holds.
     pub pending_invites_per_user: Option<u32>,
     /// Local accounts the instance holds, those in a deletion grace period included.
     pub accounts: Option<u32>,
+    /// Profile picture uploads one account makes per hour. Every upload attempt counts,
+    /// removing a picture does not, and an instance operator is exempt.
+    pub avatar_uploads_per_hour: Option<u32>,
+    /// Profile picture uploads one account makes per day. Every upload attempt counts,
+    /// removing a picture does not, and an instance operator is exempt.
+    pub avatar_uploads_per_day: Option<u32>,
 }
 
 /// How many times `channels_per_workspace` a workspace may hold in channels, archived ones

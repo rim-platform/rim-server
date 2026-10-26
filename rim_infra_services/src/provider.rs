@@ -529,7 +529,8 @@ impl DefaultAppServiceProvider {
         let relay_abuse_service: Arc<dyn RelayAbuseService> = Arc::new(
             crate::relay::abuse::DefaultRelayAbuseService::new(repos.for_relay_abuse())
                 .with_db(db.clone())
-                .with_session_revocations(Arc::clone(&session_revocations)),
+                .with_session_revocations(Arc::clone(&session_revocations))
+                .with_user_service(Arc::clone(&user_service)),
         );
         let ip_block_service: Arc<dyn IpBlockService> =
             Arc::new(crate::ip_block::DefaultIpBlockService::new(

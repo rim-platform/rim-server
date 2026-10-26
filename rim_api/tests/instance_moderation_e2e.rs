@@ -73,6 +73,18 @@ const BLOCK_IP: &str = r#"mutation($cidr: String!, $r: String!, $days: Int) {
 
 const UNBLOCK_IP: &str = "mutation($cidr: String!) { instanceUnblockIp(cidr: $cidr) }";
 
+const CLEAR_PROFILE: &str = r#"mutation($p: String!, $r: String!, $days: Int) {
+  instanceClearProfile(principalId: $p, reason: $r, lockDays: $days) {
+    principalId lockedUntil account { username principalId }
+  }
+}"#;
+
+const MY_PROFILE: &str = "query { me { displayName avatarUrl statusText bio profileLockedUntil } }";
+
+const UPDATE_PROFILE: &str = r#"mutation($input: UpdateMyProfileInput!) {
+  updateMyProfile(input: $input) { displayName statusText bio }
+}"#;
+
 /// A schema over a fresh database with an instance operator and a plain member whose account
 /// holds [`MEMBER_PRINCIPAL`].
 struct Queue {
@@ -292,6 +304,10 @@ async fn every_instance_root_is_forbidden_to_a_member_and_unauthenticated_withou
         (RESOLVE, json!({ "id": report })),
         (BLOCK_IP, json!({ "cidr": "198.51.100.1", "r": "spam" })),
         (UNBLOCK_IP, json!({ "cidr": "198.51.100.1" })),
+        (
+            CLEAR_PROFILE,
+            json!({ "p": MEMBER_PRINCIPAL, "r": "spam", "days": 7 }),
+        ),
     ];
     assert_each_refused(&q.schema, &calls, "FORBIDDEN", |query, variables| {
         q.member.request(query, variables)
@@ -310,4 +326,193 @@ async fn every_instance_root_is_forbidden_to_a_member_and_unauthenticated_withou
     );
     let open = q.as_operator(REPORTS, json!({})).await;
     assert_eq!(open["instanceReports"][0]["resolved"], json!(false));
+    let me = exec_ok(&q.schema, q.member.request(MY_PROFILE, json!({}))).await;
+    assert_eq!(me["me"]["profileLockedUntil"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_operator_clears_a_members_profile_and_locks_it() {
+    let q = Queue::new().await;
+    let member = |query: &str, variables: Value| q.member.request(query, variables);
+    exec_ok(
+        &q.schema,
+        member(
+            UPDATE_PROFILE,
+            json!({ "input": { "displayName": "Milo", "statusText": "here", "bio": "hello" } }),
+        ),
+    )
+    .await;
+
+    let cleared = q
+        .as_operator(
+            CLEAR_PROFILE,
+            json!({ "p": MEMBER_PRINCIPAL, "r": "abusive name", "days": 7 }),
+        )
+        .await;
+    let outcome = &cleared["instanceClearProfile"];
+    assert_eq!(outcome["principalId"], json!(MEMBER_PRINCIPAL));
+    assert_eq!(
+        outcome["account"],
+        json!({ "username": "milo", "principalId": MEMBER_PRINCIPAL })
+    );
+    let until = chrono::DateTime::parse_from_rfc3339(outcome["lockedUntil"].as_str().unwrap())
+        .expect("a time");
+    let days = (until.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_hours();
+    assert!((7 * 24 - 1..=7 * 24).contains(&days), "{days} hours");
+
+    let me = exec_ok(&q.schema, member(MY_PROFILE, json!({}))).await;
+    assert_eq!(me["me"]["displayName"], Value::Null);
+    assert_eq!(me["me"]["avatarUrl"], Value::Null);
+    assert_eq!(me["me"]["statusText"], Value::Null);
+    assert_eq!(me["me"]["bio"], Value::Null);
+    assert_eq!(me["me"]["profileLockedUntil"], outcome["lockedUntil"]);
+    // Another viewer does not see the lock.
+    let viewed = q.as_operator(MY_PROFILE, json!({})).await;
+    assert_eq!(viewed["me"]["profileLockedUntil"], Value::Null);
+
+    for input in [
+        json!({ "bio": "x" }),
+        json!({ "displayName": "Milo" }),
+        json!({ "statusText": "back" }),
+    ] {
+        let (code, message) = support::graphql::exec_err(
+            &q.schema,
+            member(UPDATE_PROFILE, json!({ "input": input.clone() })),
+        )
+        .await;
+        assert_eq!(code, "FORBIDDEN", "{input}");
+        assert!(
+            message.starts_with("this server's operators locked your profile until "),
+            "{message}"
+        );
+    }
+    let still_clear = exec_ok(
+        &q.schema,
+        member(
+            UPDATE_PROFILE,
+            json!({ "input": { "bio": "", "statusText": "" } }),
+        ),
+    )
+    .await;
+    assert_eq!(still_clear["updateMyProfile"]["bio"], Value::Null);
+
+    // Without a lock the profile is cleared and may be set again.
+    let unlocked = q
+        .as_operator(
+            CLEAR_PROFILE,
+            json!({ "p": MEMBER_PRINCIPAL, "r": "abusive name", "days": null }),
+        )
+        .await;
+    assert_eq!(unlocked["instanceClearProfile"]["lockedUntil"], Value::Null);
+    exec_ok(
+        &q.schema,
+        member(UPDATE_PROFILE, json!({ "input": { "bio": "back" } })),
+    )
+    .await;
+
+    let missing = exec_err_code(
+        &q.schema,
+        q.operator.request(
+            CLEAR_PROFILE,
+            json!({ "p": STRANGER, "r": "spam", "days": null }),
+        ),
+    )
+    .await;
+    assert_eq!(missing, "NOT_FOUND");
+    let bad_lock = exec_err_code(
+        &q.schema,
+        q.operator.request(
+            CLEAR_PROFILE,
+            json!({ "p": MEMBER_PRINCIPAL, "r": "spam", "days": 366 }),
+        ),
+    )
+    .await;
+    assert_eq!(bad_lock, "VALIDATION");
+}
+
+/// `rim_server principal clear-profile` clears and locks a profile as the mutation does.
+#[tokio::test]
+async fn the_command_line_clears_a_profile_and_locks_it() {
+    let q = Queue::new().await;
+    exec_ok(
+        &q.schema,
+        q.member
+            .request(UPDATE_PROFILE, json!({ "input": { "bio": "hello" } })),
+    )
+    .await;
+    let files = tempfile::tempdir().expect("temp dir");
+    let config = rim_server::config::RIMConfig {
+        database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL"),
+        storage_local_path: Some(files.path().display().to_string()),
+        ..Default::default()
+    };
+    let args = [
+        "clear-profile",
+        MEMBER_PRINCIPAL,
+        "--reason",
+        "abusive bio",
+        "--lock-days",
+        "3",
+    ];
+    let out =
+        rim_server::abuse_cmd::run_with(&config, "principal", args.iter().map(|a| a.to_string()))
+            .await
+            .expect("clear-profile");
+    assert!(
+        out.starts_with(&format!(
+            "cleared the display name, picture, status and bio of milo ({MEMBER_PRINCIPAL})"
+        )),
+        "{out}"
+    );
+    assert!(out.contains("profile locked until "), "{out}");
+
+    let me = exec_ok(&q.schema, q.member.request(MY_PROFILE, json!({}))).await;
+    assert_eq!(me["me"]["bio"], Value::Null);
+    assert!(me["me"]["profileLockedUntil"].is_string(), "{me}");
+
+    let missing = rim_server::abuse_cmd::run_with(
+        &config,
+        "principal",
+        ["clear-profile", STRANGER, "--reason", "spam"]
+            .iter()
+            .map(|a| a.to_string()),
+    )
+    .await;
+    assert_eq!(
+        missing,
+        Err("no account on this server holds that principal".to_string())
+    );
+}
+
+#[tokio::test]
+async fn a_new_account_sets_its_display_name_but_not_its_bio_in_probation() {
+    let ctx = TestCtx::new().await;
+    let (schema, _events) = ctx.build_with_limits(rim_services::limits::InstanceLimits {
+        probation_hours: Some(24),
+        ..Default::default()
+    });
+    let newcomer = ctx.create_user("nina").await;
+    let newcomer = ctx.caller(&newcomer).await;
+
+    for input in [json!({ "bio": "hello" }), json!({ "statusText": "hi" })] {
+        let (code, message) = support::graphql::exec_err(
+            &schema,
+            newcomer.request(UPDATE_PROFILE, json!({ "input": input.clone() })),
+        )
+        .await;
+        assert_eq!(code, "VALIDATION", "{input}");
+        assert!(
+            message.starts_with("a new account can set a profile picture, bio or status in "),
+            "{message}"
+        );
+    }
+    let named = exec_ok(
+        &schema,
+        newcomer.request(
+            UPDATE_PROFILE,
+            json!({ "input": { "displayName": "Nina" } }),
+        ),
+    )
+    .await;
+    assert_eq!(named["updateMyProfile"]["displayName"], json!("Nina"));
 }

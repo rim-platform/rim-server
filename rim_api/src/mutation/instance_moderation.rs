@@ -12,7 +12,7 @@ use crate::ids::parse_uuid_id;
 use crate::query::instance_moderation::operator_caller;
 use crate::types::{
     InstanceAbuseReport, InstanceIpBlockOutcome, InstancePrincipalBlockOutcome,
-    InstancePrincipalUnblockOutcome,
+    InstancePrincipalUnblockOutcome, InstanceProfileClearOutcome,
 };
 
 #[derive(Default)]
@@ -117,5 +117,28 @@ impl InstanceModerationMutations {
             .unblock(by, cidr)
             .await
             .map_err(map_service_error)
+    }
+
+    /// Clear the display name, picture, status and bio of the account holding a principal on
+    /// this server, deleting its stored pictures, and optionally lock them: until the lock
+    /// ends the account can only clear them. Another server keeps showing the display name in
+    /// its copy of the person's signed profile card. `NOT_FOUND` when no account here holds the
+    /// principal. Instance operators only; anyone else gets `FORBIDDEN`.
+    async fn instance_clear_profile(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "The principal whose account to clear (`rimp1_…`).")] principal_id: String,
+        #[graphql(desc = "Why it is cleared, 1 to 1000 characters; written to the audit log.")]
+        reason: String,
+        #[graphql(desc = "Days to lock the profile for, 1 to 365; null leaves it unlocked.")]
+        lock_days: Option<u32>,
+    ) -> Result<InstanceProfileClearOutcome> {
+        let by = operator_caller(ctx)?;
+        Ok(ctx
+            .data::<Arc<dyn RelayAbuseService>>()?
+            .clear_profile(by, principal_id, reason, lock_days)
+            .await
+            .map_err(map_service_error)?
+            .into())
     }
 }

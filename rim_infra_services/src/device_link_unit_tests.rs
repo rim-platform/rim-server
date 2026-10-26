@@ -262,6 +262,7 @@ mod tests {
             timezone: None,
             principal_id,
             deletion_scheduled_for: None,
+            profile_locked_until: None,
             handle: rim_core::user::model::UserHandle::Local,
         }
     }

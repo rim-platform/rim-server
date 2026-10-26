@@ -52,6 +52,9 @@ pub struct Model {
     /// The checked handle domain of a remote user's home relay.
     #[sea_orm(column_type = "Text", nullable)]
     pub home_handle_domain: Option<String>,
+    /// Until when the instance's operators locked the account's display name, picture, status
+    /// and bio; null while no lock is set.
+    pub profile_locked_until: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

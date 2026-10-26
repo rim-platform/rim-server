@@ -28,6 +28,7 @@ mod tests {
             timezone: None,
             principal_id: None,
             deletion_scheduled_for: None,
+            profile_locked_until: None,
             handle: rim_core::user::model::UserHandle::Local,
         }
     }
@@ -48,6 +49,9 @@ mod tests {
         let workspace = ServerId::new();
         let direct = ServerId::new();
         let mut users = MockUserRepository::new();
+        users
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(user(id))));
         users
             .expect_update_profile()
             .returning(move |_, _| Ok(user(id)));
@@ -194,6 +198,9 @@ mod tests {
         let id = UserId::new();
         let mut user_repo = MockUserRepository::new();
         user_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(user(id))));
+        user_repo
             .expect_update_profile()
             .returning(move |uid, patch: UpdateProfilePatch| {
                 assert_eq!(uid, id);
@@ -261,6 +268,9 @@ mod tests {
     /// files through `storage`.
     fn avatar_svc(id: UserId, storage: MockStorageService) -> DefaultUserService {
         let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(user(id))));
         user_repo
             .expect_update_profile()
             .returning(move |_, patch: UpdateProfilePatch| {
@@ -368,6 +378,9 @@ mod tests {
     async fn update_profile_strips_control_chars() {
         let id = UserId::new();
         let mut user_repo = MockUserRepository::new();
+        user_repo
+            .expect_get_by_id()
+            .returning(move |id| Ok(Some(user(id))));
         user_repo
             .expect_update_profile()
             .returning(move |_uid, patch: UpdateProfilePatch| {
@@ -548,5 +561,405 @@ mod tests {
         }
         let padded = format!("{}\u{200B}", "x".repeat(64));
         assert!(svc.update_my_profile(rename(id, &padded)).await.is_ok());
+    }
+
+    /// An account `id` created at `created`, whose profile is locked until `locked_until`, in a
+    /// repository that saves profile changes and clears profiles; `operator` holds the
+    /// instance operator role.
+    fn profile_repo(
+        id: UserId,
+        created: chrono::DateTime<chrono::Utc>,
+        locked_until: Option<chrono::DateTime<chrono::Utc>>,
+        operator: bool,
+    ) -> MockUserRepository {
+        let account = User {
+            profile_locked_until: locked_until,
+            ..crate::probation_fixtures::account(id, created, None)
+        };
+        let saved = account.clone();
+        let mut repo = crate::probation_fixtures::users_and_operators(
+            vec![account],
+            if operator { vec![id] } else { Vec::new() },
+        );
+        repo.expect_update_profile()
+            .returning(move |_, patch: UpdateProfilePatch| {
+                let mut u = saved.clone();
+                for (field, value) in [
+                    (&mut u.display_name, patch.display_name),
+                    (&mut u.avatar_url, patch.avatar_url),
+                    (&mut u.status_text, patch.status_text),
+                    (&mut u.bio, patch.bio),
+                ] {
+                    if let Some(value) = value {
+                        *field = value;
+                    }
+                }
+                Ok(u)
+            });
+        repo
+    }
+
+    /// A user service over `repo` at `now`, with `probation_hours` and the given hourly and
+    /// daily upload limits.
+    fn limited_svc(
+        repo: MockUserRepository,
+        now: crate::clock::Clock,
+        probation_hours: Option<u32>,
+        per_hour: Option<u32>,
+        per_day: Option<u32>,
+    ) -> DefaultUserService {
+        DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(repo),
+        })
+        .with_limits(rim_services::limits::InstanceLimits {
+            probation_hours,
+            avatar_uploads_per_hour: per_hour,
+            avatar_uploads_per_day: per_day,
+            ..Default::default()
+        })
+        .with_clock(now)
+    }
+
+    /// A profile change of one field of `id`: `display_name`, `avatar_url`, `status_text` or
+    /// `bio`, set to `value`.
+    fn change(id: UserId, field: &str, value: &str) -> UpdateMyProfileCmd {
+        let value = Some(value.to_string());
+        let mut cmd = UpdateMyProfileCmd {
+            actor: Actor::new(id),
+            display_name: None,
+            avatar_url: None,
+            status_text: None,
+            bio: None,
+        };
+        match field {
+            "display_name" => cmd.display_name = value,
+            "avatar_url" => cmd.avatar_url = value,
+            "status_text" => cmd.status_text = value,
+            _ => cmd.bio = value,
+        }
+        cmd
+    }
+
+    fn own_avatar(id: UserId) -> String {
+        format!("/api/files/avatars/{id}/avatar-0123456789abcdef.png")
+    }
+
+    /// In probation an account cannot set a picture, status or bio, but may set its display
+    /// name and clear any field; an instance operator is never held back.
+    #[tokio::test]
+    async fn probation_holds_back_the_picture_status_and_bio_but_not_the_display_name() {
+        let id = UserId::new();
+        let created = chrono::Utc::now();
+        let now = crate::clock::Clock::fixed(created + chrono::Duration::hours(1));
+        let svc = limited_svc(
+            profile_repo(id, created, None, false),
+            now.clone(),
+            Some(24),
+            None,
+            None,
+        );
+        let avatar = own_avatar(id);
+        for (field, value) in [
+            ("avatar_url", avatar.as_str()),
+            ("status_text", "hi"),
+            ("bio", "about me"),
+        ] {
+            let err = svc
+                .update_my_profile(change(id, field, value))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m)
+                    if m == "a new account can set a profile picture, bio or status in 1380 minutes"),
+                "{field}: {err:?}"
+            );
+            let cleared = svc.update_my_profile(change(id, field, " ")).await;
+            assert!(cleared.is_ok(), "clearing {field}: {cleared:?}");
+        }
+        let dto = svc
+            .update_my_profile(change(id, "display_name", "Alice"))
+            .await
+            .unwrap();
+        assert_eq!(dto.display_name.as_deref(), Some("Alice"));
+
+        let operator = limited_svc(
+            profile_repo(id, created, None, true),
+            now,
+            Some(24),
+            None,
+            None,
+        );
+        for (field, value) in [
+            ("avatar_url", avatar.as_str()),
+            ("status_text", "hi"),
+            ("bio", "about me"),
+        ] {
+            let set = operator.update_my_profile(change(id, field, value)).await;
+            assert!(set.is_ok(), "{field}: {set:?}");
+        }
+    }
+
+    /// While the profile is locked every field it covers is refused, the display name too, and
+    /// clearing any of them is allowed; a lock that has ended holds nothing back.
+    #[tokio::test]
+    async fn a_locked_profile_refuses_every_change_but_clearing() {
+        let id = UserId::new();
+        let created = chrono::Utc::now() - chrono::Duration::days(30);
+        let now = chrono::Utc::now();
+        let until = now + chrono::Duration::days(7);
+        let avatar = own_avatar(id);
+        let fields = [
+            ("display_name", "Alice"),
+            ("avatar_url", avatar.as_str()),
+            ("status_text", "hi"),
+            ("bio", "about me"),
+        ];
+        for operator in [false, true] {
+            let svc = limited_svc(
+                profile_repo(id, created, Some(until), operator),
+                crate::clock::Clock::fixed(now),
+                Some(24),
+                None,
+                None,
+            );
+            for (field, value) in fields {
+                let err = svc
+                    .update_my_profile(change(id, field, value))
+                    .await
+                    .unwrap_err();
+                assert!(
+                    matches!(&err, ServiceError::Forbidden(m)
+                        if *m == format!("this server's operators locked your profile until {}", until.to_rfc3339())),
+                    "{field}: {err:?}"
+                );
+                let cleared = svc.update_my_profile(change(id, field, "")).await;
+                assert!(cleared.is_ok(), "clearing {field}: {cleared:?}");
+            }
+        }
+
+        let ended = limited_svc(
+            profile_repo(id, created, Some(now - chrono::Duration::seconds(1)), false),
+            crate::clock::Clock::fixed(now),
+            Some(24),
+            None,
+            None,
+        );
+        for (field, value) in fields {
+            let set = ended.update_my_profile(change(id, field, value)).await;
+            assert!(set.is_ok(), "{field}: {set:?}");
+        }
+    }
+
+    /// `me` carries the lock while it holds and no longer once it has ended.
+    #[tokio::test]
+    async fn me_shows_the_profile_lock_while_it_holds() {
+        let id = UserId::new();
+        let now = chrono::Utc::now();
+        let until = now + chrono::Duration::days(7);
+        let svc = limited_svc(
+            profile_repo(id, now, Some(until), false),
+            crate::clock::Clock::fixed(now),
+            None,
+            None,
+            None,
+        );
+        let me = || GetMeQuery {
+            actor: Actor::new(id),
+        };
+        assert_eq!(
+            svc.get_me(me()).await.unwrap().profile_locked_until,
+            Some(until)
+        );
+        assert_eq!(
+            svc.get_users_by_ids(&[id]).await.unwrap()[0].profile_locked_until,
+            None
+        );
+        let later = svc.with_clock(crate::clock::Clock::fixed(until));
+        assert_eq!(later.get_me(me()).await.unwrap().profile_locked_until, None);
+    }
+
+    /// An upload is refused during probation and while the profile is locked, an operator's
+    /// too; an operator is held back by neither probation nor the upload limits.
+    #[tokio::test]
+    async fn begin_avatar_upload_refuses_probation_and_locks_and_exempts_operators() {
+        let id = UserId::new();
+        let created = chrono::Utc::now();
+        let now = crate::clock::Clock::fixed(created + chrono::Duration::minutes(30));
+        let svc = limited_svc(
+            profile_repo(id, created, None, false),
+            now.clone(),
+            Some(1),
+            Some(1),
+            Some(1),
+        );
+        assert!(matches!(
+            svc.begin_avatar_upload(id).await,
+            Err(ServiceError::Validation(m)) if m == "a new account can set a profile picture in 30 minutes"
+        ));
+
+        let until = created + chrono::Duration::days(1);
+        for operator in [false, true] {
+            let locked = limited_svc(
+                profile_repo(id, created, Some(until), operator),
+                now.clone(),
+                Some(1),
+                None,
+                None,
+            );
+            assert!(
+                matches!(
+                    locked.begin_avatar_upload(id).await,
+                    Err(ServiceError::Forbidden(m)) if m.contains("locked your profile until")
+                ),
+                "operator: {operator}"
+            );
+        }
+
+        let operator = limited_svc(
+            profile_repo(id, created, None, true),
+            now,
+            Some(1),
+            Some(1),
+            Some(1),
+        );
+        for attempt in 0..3 {
+            assert!(
+                operator.begin_avatar_upload(id).await.is_ok(),
+                "attempt {attempt}"
+            );
+        }
+
+        let missing = svc.begin_avatar_upload(UserId::new()).await;
+        assert!(matches!(missing, Err(ServiceError::NotFound)));
+    }
+
+    /// The sixth upload in an hour and the twenty-first in a day are refused with the seconds
+    /// until the oldest counted upload leaves its window.
+    #[tokio::test]
+    async fn begin_avatar_upload_refuses_past_the_hourly_and_daily_limits() {
+        let id = UserId::new();
+        let created = chrono::Utc::now() - chrono::Duration::days(30);
+        let start = chrono::Utc::now();
+        let at = Arc::new(std::sync::Mutex::new(start));
+        let clock_at = Arc::clone(&at);
+        let svc = limited_svc(
+            profile_repo(id, created, None, false),
+            crate::clock::Clock::from_fn(move || *clock_at.lock().unwrap()),
+            Some(24),
+            Some(5),
+            Some(20),
+        );
+        let hour = chrono::Duration::seconds(3600);
+
+        for upload in 1..=5 {
+            assert!(svc.begin_avatar_upload(id).await.is_ok(), "upload {upload}");
+        }
+        assert!(matches!(
+            svc.begin_avatar_upload(id).await,
+            Err(ServiceError::RateLimited {
+                retry_after_seconds: 3601
+            })
+        ));
+
+        // Every attempt counts against the day, the refused sixth above too: six, then five in
+        // each of the next two hours, then four make twenty.
+        for h in 1..=2 {
+            *at.lock().unwrap() = start + hour * h;
+            for upload in 1..=5 {
+                assert!(
+                    svc.begin_avatar_upload(id).await.is_ok(),
+                    "hour {h} upload {upload}"
+                );
+            }
+        }
+        *at.lock().unwrap() = start + hour * 3;
+        for upload in 1..=4 {
+            assert!(
+                svc.begin_avatar_upload(id).await.is_ok(),
+                "hour 3 upload {upload}"
+            );
+        }
+        assert!(matches!(
+            svc.begin_avatar_upload(id).await,
+            Err(ServiceError::RateLimited { retry_after_seconds })
+                if retry_after_seconds == 86_400 - 3 * 3600 + 1
+        ));
+
+        // Another account has its own count.
+        let other = UserId::new();
+        let others = limited_svc(
+            profile_repo(other, created, None, false),
+            crate::clock::Clock::fixed(start),
+            None,
+            Some(5),
+            Some(20),
+        );
+        assert!(others.begin_avatar_upload(other).await.is_ok());
+    }
+
+    /// Clearing a profile clears it in the repository with the lock, deletes every avatar file
+    /// of the account, and tells its workspaces and the direct space.
+    #[tokio::test]
+    async fn clear_profile_clears_deletes_the_files_and_announces_the_change() {
+        use rim_core::server::model::{Server, ServerId};
+        use rim_core::server::repository::MockServerRepository;
+        use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
+        #[derive(Default)]
+        struct Seen(std::sync::Mutex<Vec<WorkspaceEvent>>);
+        impl Broadcaster for Seen {
+            fn broadcast(&self, event: WorkspaceEvent) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        let id = UserId::new();
+        let workspace = ServerId::new();
+        let direct = ServerId::new();
+        let until = chrono::Utc::now() + chrono::Duration::days(7);
+        let mut users = MockUserRepository::new();
+        users
+            .expect_clear_profile()
+            .withf(move |user_id, locked| *user_id == id && *locked == Some(until))
+            .times(1)
+            .returning(move |id, locked| {
+                Ok(User {
+                    profile_locked_until: locked,
+                    ..user(id)
+                })
+            });
+        let mut servers = MockServerRepository::new();
+        servers.expect_get_servers_for_user().returning(move |_| {
+            Ok(vec![Server {
+                id: workspace,
+                name: "Workspace".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }])
+        });
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_delete_avatar_files()
+            .withf(move |user_id, keep| *user_id == id && keep.is_none())
+            .times(1)
+            .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+        let seen = Arc::new(Seen::default());
+        let svc = DefaultUserService::new(UserRepos {
+            user_repo: Arc::new(users),
+        })
+        .with_storage(Arc::new(storage))
+        .with_profile_events(
+            Arc::new(servers),
+            Observers::new(seen.clone()),
+            Some(direct),
+        );
+
+        let dto = svc.clear_profile(id, Some(until)).await.unwrap();
+        assert_eq!(dto.id, id);
+        assert_eq!(dto.display_name, None);
+        assert_eq!(dto.avatar_url, None);
+        let events = seen.0.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        for workspace_id in [workspace, direct] {
+            assert!(events.iter().any(|event| matches!(event, WorkspaceEvent::MemberProfileUpdated { workspace_id: sid, user_id } if *sid == workspace_id && *user_id == id)));
+        }
     }
 }

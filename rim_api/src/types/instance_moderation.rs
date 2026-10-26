@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use rim_services::ip_block::dto::{IpBlockDto, IpBlockOutcome};
 use rim_services::relay::dto::{
     AbuseReportDto, AccountSummaryDto, PrincipalBlockDto, PrincipalBlockOutcome,
-    PrincipalUnblockOutcome,
+    PrincipalUnblockOutcome, ProfileClearOutcome,
 };
 
 /// An abuse report filed with this server, by a local user or from the abuse address.
@@ -170,6 +170,28 @@ impl From<PrincipalBlockOutcome> for InstancePrincipalBlockOutcome {
             revoked_invites: outcome.revoked_invites,
             email_blocked: outcome.blocked_email.is_some(),
             invitees: outcome.invitees.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// What clearing an account's profile did.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct InstanceProfileClearOutcome {
+    /// The principal whose account was cleared (`rimp1_…`).
+    pub principal_id: String,
+    /// The local account whose display name, picture, status and bio were cleared.
+    pub account: InstanceAccount,
+    /// Until when the account cannot set its display name, picture, status or bio; null when
+    /// it was not locked.
+    pub locked_until: Option<DateTime<Utc>>,
+}
+
+impl From<ProfileClearOutcome> for InstanceProfileClearOutcome {
+    fn from(outcome: ProfileClearOutcome) -> Self {
+        Self {
+            principal_id: outcome.principal_id,
+            account: outcome.account.into(),
+            locked_until: outcome.locked_until,
         }
     }
 }
