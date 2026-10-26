@@ -5,9 +5,12 @@ short form for `deploy/compose.yml`; this page adds what to read first, the roll
 works. The commands use the `dc` alias from `docs/self-hosting.md` (a relay: the alias in
 `deploy/README.md`), from the repository root.
 
-A release is the git tag `v<version>` and the images `ghcr.io/rim-platform/rim-server:<version>`
-and `ghcr.io/rim-platform/rim-web:<version>` its release workflows publish. rim-server and
-rim-ui release under the same version, so `RIM_VERSION` in `deploy/.env` names both images.
+A server release is the git tag `v<version>` and the images
+`ghcr.io/rim-platform/rim-server:<version>` and `ghcr.io/rim-platform/rim-imagecheck:<version>`
+its release workflow publishes; `RIM_VERSION` in `deploy/.env` names them. The web client is
+rim-ui's own release, versioned on its own: `RIM_WEB_VERSION` names its image
+`ghcr.io/rim-platform/rim-web:<version>` (unset, it is `RIM_VERSION`). A server upgrade leaves
+the web client at its version, and the web client moves alone ("The web client" below).
 `CHANGELOG.md` lists what each release changes, and a
 line starting with **Upgrade:** is something the operator does before or after the upgrade.
 
@@ -36,15 +39,18 @@ deploy/upgrade.sh <version>
 
 In order, it:
 
-1. checks that the version's images are published (`rim-web` only when the web client runs);
-   when one is not, it says which, changes nothing and exits 2. rim-ui's release publishes
-   `rim-web`, so tag rim-ui first;
+1. checks that the version's images are published, and `rim-web` at the web client's version
+   when the web client runs; when one is not, it says which, changes nothing and exits 2;
 2. verifies the signatures against the release workflows, as `docs/self-hosting.md`, "Verify
-   the images", says (cosign must be installed);
+   the images", says (cosign must be installed): `rim-web` against rim-ui's of the tag
+   `v<web client version>`;
 3. runs `deploy/backup.sh`, or says there is nothing to back up when the deployment has no
    data volume yet (the first start);
 4. writes `RIM_VERSION=<version>` into `deploy/.env`, keeping the file before as
-   `deploy/.env.previous`;
+   `deploy/.env.previous`. When the web client runs and `RIM_WEB_VERSION` is unset, it writes
+   `RIM_WEB_VERSION` too: the version that ran before, so the web client stays as it is, or on
+   the first start `<version>`. A `RIM_WEB_IMAGE` of `ghcr.io/rim-platform/rim-web:<version>`
+   becomes `RIM_WEB_VERSION=<version>` in the same write;
 5. pulls the images, runs the migrations (`dc run --rm migrate`) and `dc up -d`;
 6. waits up to 90 seconds (`RIM_UPGRADE_TIMEOUT`) for `/readyz`, then as long for
    `https://<RIM_DOMAIN>/.well-known/rim-server` from the host;
@@ -60,9 +66,11 @@ their dependencies.
 It reads `COMPOSE_FILE` from the environment or from `deploy/.env`, as the backup scripts do, so
 a relay sets it once in `deploy/.env` (`COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml`,
 relative to the directory the scripts run from). It touches no git, and refuses to run while
-`RIM_SERVER_IMAGE` or `RIM_WEB_IMAGE` is set, since those override the version. A server that
-runs published images only can leave all of this to `rim-deploy`, which installs each release as
-it is published (`deploy/README.md`, "Unattended upgrades from releases").
+`RIM_SERVER_IMAGE` or `RIM_IMAGECHECK_IMAGE` is set, since those override the version. Any
+other `RIM_WEB_IMAGE` than a published `rim-web` is a custom web client: the script says so and
+neither checks nor changes it. A server that runs published images only can leave all of this
+to `rim-deploy`, which installs each release of rim-server and of rim-ui as it is published
+(`deploy/README.md`, "Unattended upgrades from releases").
 
 The same steps by hand:
 
@@ -78,8 +86,8 @@ dc logs -f rim
 
 Between `dc pull` and the migrations, verify the new images' signatures as
 `docs/self-hosting.md`, "Verify the images", says. With `deploy/compose.dev.yml`, which builds
-the images from checkouts, check out rim-ui's `v<version>` next to this repository and run
-`dc build` in place of `dc pull`.
+the images from checkouts, check out the rim-ui release the web client runs next to this
+repository and run `dc build` in place of `dc pull`.
 
 `dc run --rm migrate` runs `/app/migration up` from the new image against the database while the
 old server is still serving; that is safe because a release's migrations only add (below). `dc up
@@ -124,11 +132,11 @@ and `rim` waits for `migrate` to succeed. So start the old server without its de
 ```sh
 git checkout v<previous version>
 $EDITOR deploy/.env                           # RIM_VERSION=<previous version>
-dc pull rim web
-dc up -d --no-deps rim web
+dc pull rim imagecheck
+dc up -d --no-deps rim imagecheck
 ```
 
-A relay has no web client: `dc pull rim` and `dc up -d --no-deps rim`. From the previous release's
+The web client keeps its own version. From the previous release's
 checkout, `deploy/upgrade.sh <previous version>` does the same after a backup. The old server's
 `/readyz` passes: it counts only the migrations it knows as pending. Until the next upgrade, a plain
 `dc up -d` stops at the failing `migrate`; use `--no-deps` as above. When you upgrade again there is
@@ -137,9 +145,29 @@ no migration left to run.
 **Further back.** Restore the backup taken before the upgrade (`docs/self-hosting.md`,
 "Restore"). Everything written since that backup is lost.
 
+**The web client** goes back as it goes forward, alone (below).
+
 **Never `migrate down` a server with data.** Each migration has a `down`, for development and
 tests: on a real database it drops tables and columns with their rows, and some refuse to run
 once there are rows to lose.
+
+## The web client
+
+The web client is static files: a rim-ui release moves it forward or back with no migration
+and no backup, and the server keeps running. Verify the image as `docs/self-hosting.md`,
+"Verify the images", says, with the rim-ui release in place of `$v`, then:
+
+```sh
+$EDITOR deploy/.env                           # RIM_WEB_VERSION=<rim-ui version>
+dc pull web
+dc up -d --no-deps web
+dc ps web                                     # web: healthy
+```
+
+Back is the same with the version before. On a host that `rim-deploy` runs,
+`rim-deploy web <version>` does these steps, checks the signature, and puts the env file back
+when the container does not become healthy. An **Upgrade:** line in the changelogs says when a
+web client needs a newer server, which then goes first.
 
 ## Why migrations only go forward
 

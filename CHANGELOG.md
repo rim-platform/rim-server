@@ -21,6 +21,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Changed
+
+- The web client is versioned and deployed on its own: `RIM_WEB_VERSION` picks the rim-ui
+  release (unset: `RIM_VERSION`), rim-deploy also follows rim-ui releases and deploys the web
+  container alone, and upgrade.sh no longer needs a rim-web image at the server's version.
+
 ## [0.0.4] - 2026-10-26
 
 ### Added

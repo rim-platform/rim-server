@@ -1,6 +1,6 @@
 # Runs rim-deploy.service every five minutes, and once at boot when a run was missed.
 [Unit]
-Description=Check for a new rim-server release every five minutes
+Description=Check for new rim-server and rim-ui releases every five minutes
 Documentation=https://github.com/rim-platform/rim-server/blob/master/deploy/README.md
 
 [Timer]

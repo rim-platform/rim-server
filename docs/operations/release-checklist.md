@@ -79,8 +79,9 @@ release is announced (section 9). Later releases keep the order as written.
       the major version is 0, a breaking change raises the minor version and anything else
       raises the patch.
 - [ ] The version is a plain `<major>.<minor>.<patch>`: there are no release candidates.
-- [ ] rim-server and rim-ui release together. Both carry the same version and are tagged the
-      same day, even when one of them has no changes.
+- [ ] rim-server releases on its own. rim-ui has its own version and releases when it has
+      changes; a server release neither waits for one nor needs one, and the web client keeps
+      the version it runs (`RIM_WEB_VERSION`).
 - [ ] If a GraphQL field or argument was removed or changed meaning, `API_VERSION` in
       `rim_api/src/types/server_info.rs` goes up by one.
 
@@ -111,7 +112,6 @@ docker build -t rim-server:release-check .
 
 - [ ] Every command above passes. `cargo audit` findings are fixed or listed in
       `.cargo/audit.toml` with the reason they do not apply and when the entry comes out.
-- [ ] rim-ui's gates pass on its release commit (FILL: rim-ui's own checklist, once it has one).
 
 ## 4. Test the upgrade and the rollback
 
@@ -122,8 +122,8 @@ yet, so the new images are built from the release commits with `deploy/compose.d
       and an encrypted conversation, upload a file, and take a backup with `deploy/backup.sh`.
 - [ ] Upgrade to the release commit as `docs/operations/upgrade.md` says. `/readyz` answers 200
       and the data is there.
-- [ ] Roll the binary back to the previous release with `dc up -d --no-deps rim web`.
-      `/readyz` answers 200 and the previous client still works.
+- [ ] Roll the binary back to the previous release with `dc up -d --no-deps rim imagecheck`.
+      `/readyz` answers 200 and the web client still works.
 - [ ] Upgrade again: `migrate` has nothing to run and the server starts.
 - [ ] `deploy/restore-drill.sh` on the latest nightly backup of the public relay
       `relay.rim-platform.org`, with the image built from the release commit: the new image
@@ -138,10 +138,15 @@ yet, so the new images are built from the release commits with `deploy/compose.d
 ## 5. Check the clients against the server
 
 - [ ] With the release commit running, `curl -s http://localhost:8080/api/sdl` matches the
-      `schema.graphql` committed in rim-ui's release commit.
-- [ ] In rim-ui, `npm run skew:check -- <previous rim-ui release>` lists what the new client sends
-      that a server on the previous release refuses. Anything it lists goes into the changelog as
-      an **Upgrade:** line (servers before the client).
+      `schema.graphql` committed on rim-ui's `master`.
+- [ ] The web client production runs (`RIM_WEB_VERSION` on the public relay) works against the
+      release commit: start it with `RIM_WEB_VERSION` set to that version, sign in and send a
+      message. A field or argument it uses that the release removes or changes needs a rim-ui
+      release first, or an **Upgrade:** line that says which web client the server needs.
+- [ ] In rim-ui, `npm run skew:check -- <ref>` checks the client against the server version
+      production runs, with `<ref>` the rim-ui commit that holds that version's
+      `schema.graphql`: it lists what the client sends that the server refuses. Anything it
+      lists goes into the changelog as an **Upgrade:** line (servers before the client).
 
 ## 6. Version, changelog, pull request
 
@@ -152,10 +157,8 @@ yet, so the new images are built from the release commits with `deploy/compose.d
       previous release (the first release links to `…/releases/tag/v<version>`). It refuses an
       invalid version, a version the changelog already has and an empty `Unreleased`, before it
       changes anything. `scripts/release/test-set-version.sh` tests it; CI's lint job runs that.
-- [ ] In rim-ui, run `npm run version:set -- <version>`. It sets the same version in
-      `package.json`, `src-tauri/Cargo.toml` and the lockfiles and cuts rim-ui's `CHANGELOG.md`
-      the same way. The compose files run both images at one `RIM_VERSION`, and rim-ui's
-      release workflow refuses a tag that differs from `package.json`.
+- [ ] rim-ui's version, changelog and tag are its own release, cut in rim-ui with
+      `npm run version:set -- <rim-ui version>` when rim-ui releases; nothing here changes them.
 - [ ] Open the pull request "Release <version>": the scripts' diff, with this list ticked and
       the gate tails. Merge it.
 
@@ -186,11 +189,12 @@ git push origin v<version>
     git config --global gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
     git tag -v v<version>
     ```
-- [ ] rim-ui is tagged `v<version>` at its release commit the same way.
 
 ## 8. Publish
 
-Pushing the tag starts `.github/workflows/release.yaml` in each repository. Its
+Pushing the tag starts `.github/workflows/release.yaml`. rim-ui's workflow runs the same way on
+a rim-ui tag, with its own version; the items below that name rim-ui are for a rim-ui release,
+and a rim-server release skips them. The
 `build-and-publish` job waits in the `release` environment until the maintainer approves it. The
 job checks the tag against the version in `Cargo.toml` (rim-ui: `package.json`) and the
 changelog's section for it, builds the image for `linux/amd64`, pushes the tags `<version>`,
@@ -201,9 +205,9 @@ tags. The next job creates the GitHub release with the changelog section and the
 one for Windows x86_64, and attaches them to its release with `latest.json` for the updater,
 `SHA256SUMS` signed with cosign keyless and a build-provenance attestation for each bundle.
 
-- [ ] Approve the run of both repositories on its page ("Review deployments", environment
-      `release`), after checking that it ran for the tag just pushed.
-- [ ] Both runs pass. One that fails before "Build and push" published nothing: fix the cause,
+- [ ] Approve the run on its page ("Review deployments", environment `release`), after checking
+      that it ran for the tag just pushed.
+- [ ] The run passes. A run that fails before "Build and push" published nothing: fix the cause,
       delete the tag and push it again. Once an image is pushed the version is spent, and a fix
       goes out as the next patch.
 - [ ] Verify the signatures. The certificate must name each repository's release workflow at
@@ -217,6 +221,7 @@ one for Windows x86_64, and attaches them to its release with `latest.json` for 
     cosign verify ghcr.io/rim-platform/rim-imagecheck:$v \
       --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    # a rim-ui release: its rim-web image, with v its version
     cosign verify ghcr.io/rim-platform/rim-web:$v \
       --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com

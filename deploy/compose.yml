@@ -13,9 +13,10 @@
 #
 #   docker compose -f deploy/compose.yml -f deploy/compose.relay.yml up -d
 #
-# The images are the published, signed ghcr.io/rim-platform/rim-server,
-# rim-imagecheck and rim-web at RIM_VERSION (default latest; pin it in
-# deploy/.env). RIM_SERVER_IMAGE, RIM_IMAGECHECK_IMAGE and RIM_WEB_IMAGE name
+# The images are the published, signed ghcr.io/rim-platform/rim-server and
+# rim-imagecheck at RIM_VERSION (default latest; pin it in deploy/.env), and
+# rim-web at RIM_WEB_VERSION, the rim-ui release of the web client (unset: at
+# RIM_VERSION). RIM_SERVER_IMAGE, RIM_IMAGECHECK_IMAGE and RIM_WEB_IMAGE name
 # other images. compose.dev.yml on top builds them from local checkouts instead.
 #
 # Every container has a read-only root filesystem and cannot gain privileges:
@@ -238,7 +239,7 @@ services:
   # The web client: static files behind nginx. The published image is built with the
   # GraphQL endpoint `/api`, this origin, so one image serves any domain.
   web:
-    image: ${RIM_WEB_IMAGE:-ghcr.io/rim-platform/rim-web:${RIM_VERSION:-latest}}
+    image: ${RIM_WEB_IMAGE:-ghcr.io/rim-platform/rim-web:${RIM_WEB_VERSION:-${RIM_VERSION:-latest}}}
     # nginx runs as the image's nginx user (uid 101); its temporary files and its pid and
     # lock files go to tmpfs directories it owns.
     tmpfs:

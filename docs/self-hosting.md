@@ -25,18 +25,20 @@ Everything marked **FILL** is the operator's choice, recorded here once made.
    git checkout v<version>
    ```
 
-   The compose files run `ghcr.io/rim-platform/rim-server` and `ghcr.io/rim-platform/rim-web`
-   at `RIM_VERSION` from `deploy/.env`; set it to the same `<version>`. Left unset it is
-   `latest`, which moves with every release. To build both images on the host instead, check
-   out rim-ui next to this repository and add `-f deploy/compose.dev.yml` to every compose
-   command (the alias below) with `up --build`.
+   The compose files run `ghcr.io/rim-platform/rim-server` at `RIM_VERSION` from
+   `deploy/.env`; set it to the same `<version>`. Left unset it is `latest`, which moves with
+   every release. The web client, `ghcr.io/rim-platform/rim-web`, is rim-ui's release and is
+   versioned on its own: set `RIM_WEB_VERSION` to a rim-ui release, such as its latest (unset,
+   it is `RIM_VERSION`). To build both images on the host instead, check out rim-ui next to
+   this repository and add `-f deploy/compose.dev.yml` to every compose command (the alias
+   below) with `up --build`.
 3. `deploy/.env` from the example, filled in:
 
    ```sh
    cp deploy/.env.example deploy/.env
    chmod 600 deploy/.env
    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=')|" deploy/.env
-   $EDITOR deploy/.env          # RIM_VERSION, RIM_DOMAIN, and SMTP for invites
+   $EDITOR deploy/.env          # RIM_VERSION, RIM_WEB_VERSION, RIM_DOMAIN, and SMTP for invites
    ```
 
    Every variable the compose files read is in `.env.example` with what it does. Without
@@ -58,6 +60,7 @@ signed anywhere else does not verify. Before the first start and after every upg
 
 ```sh
 v=0.0.1                                      # your RIM_VERSION
+w=0.0.1                                      # your RIM_WEB_VERSION
 dc pull
 cosign verify ghcr.io/rim-platform/rim-server:$v \
   --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
@@ -65,8 +68,8 @@ cosign verify ghcr.io/rim-platform/rim-server:$v \
 cosign verify ghcr.io/rim-platform/rim-imagecheck:$v \
   --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v$v \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-cosign verify ghcr.io/rim-platform/rim-web:$v \
-  --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$v \
+cosign verify ghcr.io/rim-platform/rim-web:$w \
+  --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v$w \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -207,12 +210,13 @@ dc logs -f rim
 ```
 
 `deploy/upgrade.sh <version>`, run after the checkout, does these steps with the signature
-check and rolls back when the new version does not come up. `up` runs `migrate` before it
-starts the new server. To run the migrations alone,
-`dc run --rm migrate`. Rolling the image back leaves the migrations in place: the previous
-release runs on them, started with `dc up -d --no-deps rim web`, and anything further back is the
-backup taken before the update. `docs/operations/upgrade.md` has the whole procedure, what to
-read in `CHANGELOG.md` first, and the rollback.
+check and rolls back when the new version does not come up; the web client stays at its
+`RIM_WEB_VERSION`. `up` runs `migrate` before it starts the new server. To run the migrations
+alone, `dc run --rm migrate`. Rolling the image back leaves the migrations in place: the
+previous release runs on them, started with `dc up -d --no-deps rim imagecheck`, and anything
+further back is the backup taken before the update. The web client moves on its own: a new
+`RIM_WEB_VERSION`, then `dc pull web && dc up -d --no-deps web`. `docs/operations/upgrade.md`
+has the whole procedure, what to read in `CHANGELOG.md` first, the rollback and the web client.
 
 ## Backups
 
