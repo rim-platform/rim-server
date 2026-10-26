@@ -26,6 +26,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `serverInfo.features` gives email's unavailable reason as "no mail server is set up" instead
   of naming the server's settings; the boot warning still names `RIM_SMTP_HOST` and
   `RIM_SMTP_FROM`.
+### Fixed
+
+- At `RUST_LOG=info` the server no longer logs every SQL statement, such as the
+  server-to-server outbox poll each second; statements log at `debug` and those slower than one
+  second at `warn`.
 
 ## [0.0.3] - 2026-10-26
 
