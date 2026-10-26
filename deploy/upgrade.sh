@@ -18,6 +18,13 @@
 # with the logs' tails. A version older than the running one skips the migrations and starts
 # rim, the profile picture check and the web client without their dependencies, as a binary
 # rollback. --dry-run checks the images and prints the rest without changing anything.
+#
+# The web client is a rim-ui release of its own, RIM_WEB_VERSION, which the upgrade leaves as it
+# is: its rim-web image is checked and verified at that version against rim-ui's release workflow
+# of the tag v<RIM_WEB_VERSION>. Unset, it becomes the version that ran before, or on a first
+# deploy the version installed, and is written into the env file with RIM_VERSION. A
+# RIM_WEB_IMAGE of ghcr.io/rim-platform/rim-web:<version> becomes RIM_WEB_VERSION=<version> in
+# the same write; any other RIM_WEB_IMAGE is a custom web image, neither checked nor changed.
 set -euo pipefail
 
 # shellcheck source=deploy/backup-lib.sh
@@ -41,8 +48,10 @@ done
 	die "$version is not a version: <major>.<minor>.<patch>[-<pre-release>]"
 
 [[ -f $env_file ]] || die "$env_file does not exist"
-[[ -z ${RIM_VERSION:-} ]] || die "RIM_VERSION is set in the environment and overrides $env_file; unset it"
-for name in RIM_SERVER_IMAGE RIM_IMAGECHECK_IMAGE RIM_WEB_IMAGE; do
+for name in RIM_VERSION RIM_WEB_VERSION RIM_WEB_IMAGE; do
+	[[ -z ${!name:-} ]] || die "$name is set in the environment and overrides $env_file; unset it"
+done
+for name in RIM_SERVER_IMAGE RIM_IMAGECHECK_IMAGE; do
 	[[ -z $(setting "$name") ]] || die "$name is set and overrides RIM_VERSION; remove it to upgrade by version"
 done
 
@@ -52,17 +61,40 @@ domain=$(setting RIM_DOMAIN)
 issuer=https://token.actions.githubusercontent.com
 
 # The services the version's images run, and each image with the repository whose release
-# workflow signs it.
+# workflow signs it and the version it runs at.
 services=$(compose config --services) || die "docker compose cannot read the deployment's files"
 app_services=(rim)
-images=("rim-server rim-server")
+images=("rim-server rim-server $version")
 if grep -qx imagecheck <<<"$services"; then
 	app_services+=(imagecheck)
-	images+=("rim-imagecheck rim-server")
+	images+=("rim-imagecheck rim-server $version")
+fi
+
+# The web client's version: RIM_WEB_VERSION, or the tag of a published RIM_WEB_IMAGE, which the
+# env file write turns into RIM_WEB_VERSION (convert_web). Unset, it is pinned to the version
+# that ran before, or on a first deploy to the version installed (pin_web). A custom
+# RIM_WEB_IMAGE leaves web_version empty.
+web_version=$(setting RIM_WEB_VERSION)
+web_image=$(setting RIM_WEB_IMAGE)
+convert_web=0
+pin_web=0
+if [[ $web_image =~ ^ghcr\.io/rim-platform/rim-web:([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+	web_version=${BASH_REMATCH[1]}
+	convert_web=1
+elif [[ -n $web_image ]]; then
+	web_version=""
 fi
 if grep -qx web <<<"$services"; then
 	app_services+=(web)
-	images+=("rim-web rim-ui")
+	if [[ -n $web_image ]] && ((!convert_web)); then
+		say "RIM_WEB_IMAGE=$web_image is not a published rim-web version: the web image is not checked and stays as it is"
+	else
+		if [[ -z $web_version ]]; then
+			web_version=${previous:-$version}
+			pin_web=1
+		fi
+		images+=("rim-web rim-ui $web_version")
+	fi
 fi
 
 # Whether version $1 is older than $2: by major, minor and patch, and a pre-release before the
@@ -76,14 +108,22 @@ older() {
 	fi
 }
 
-# Writes RIM_VERSION=<version> into the env file, replacing the line that sets it or adding one.
+# Writes RIM_VERSION=<version> into the env file, replacing the line that sets it or adding one,
+# with RIM_WEB_VERSION=<web version> the same way when it is converted or pinned; a converted
+# RIM_WEB_IMAGE line goes.
 set_version() {
-	local tmp
+	local tmp web=""
+	((!convert_web && !pin_web)) || web=$web_version
 	tmp=$(mktemp "$env_file.XXXXXX")
-	awk -v line="RIM_VERSION=$version" '
+	awk -v line="RIM_VERSION=$version" -v web="$web" -v drop_image="$convert_web" '
 		/^RIM_VERSION=/ { if (!done) print line; done = 1; next }
+		/^RIM_WEB_VERSION=/ && web != "" { if (!web_done) print "RIM_WEB_VERSION=" web; web_done = 1; next }
+		/^RIM_WEB_IMAGE=/ && drop_image { next }
 		{ print }
-		END { if (!done) print line }
+		END {
+			if (!done) print line
+			if (web != "" && !web_done) print "RIM_WEB_VERSION=" web
+		}
 	' "$env_file" >"$tmp"
 	mv "$tmp" "$env_file"
 }
@@ -111,12 +151,13 @@ roll_back() {
 
 say "checking that the images of $version are published"
 for entry in "${images[@]}"; do
-	read -r image repository <<<"$entry"
-	if ! docker manifest inspect "ghcr.io/rim-platform/$image:$version" >/dev/null 2>&1; then
+	read -r image repository image_version <<<"$entry"
+	if ! docker manifest inspect "ghcr.io/rim-platform/$image:$image_version" >/dev/null 2>&1; then
 		if [[ $image == rim-web ]]; then
-			printf '%s %s is not published yet; tag rim-ui first\n' "$image" "$version" >&2
+			printf '%s %s is not published yet; the web client runs that rim-ui release (RIM_WEB_VERSION)\n' \
+				"$image" "$image_version" >&2
 		else
-			printf '%s %s is not published yet\n' "$image" "$version" >&2
+			printf '%s %s is not published yet\n' "$image" "$image_version" >&2
 		fi
 		exit 2
 	fi
@@ -125,11 +166,11 @@ done
 say "verifying the signatures"
 command -v cosign >/dev/null || die "cosign is not installed"
 for entry in "${images[@]}"; do
-	read -r image repository <<<"$entry"
-	cosign verify "ghcr.io/rim-platform/$image:$version" \
-		--certificate-identity "https://github.com/rim-platform/$repository/.github/workflows/release.yaml@refs/tags/v$version" \
+	read -r image repository image_version <<<"$entry"
+	cosign verify "ghcr.io/rim-platform/$image:$image_version" \
+		--certificate-identity "https://github.com/rim-platform/$repository/.github/workflows/release.yaml@refs/tags/v$image_version" \
 		--certificate-oidc-issuer "$issuer" >/dev/null ||
-		die "ghcr.io/rim-platform/$image:$version is not signed by the $repository release workflow"
+		die "ghcr.io/rim-platform/$image:$image_version is not signed by the $repository release workflow"
 done
 
 downgrade=0
@@ -147,6 +188,14 @@ fi
 if ((dry_run)); then
 	((backup == 0)) || say "dry run: $deploy_dir/backup.sh"
 	say "dry run: set RIM_VERSION=$version in $env_file (now ${previous:-unset}), the old file kept as .env.previous"
+	if ((convert_web)); then
+		say "dry run: replace RIM_WEB_IMAGE=$web_image with RIM_WEB_VERSION=$web_version"
+	elif ((pin_web)); then
+		say "dry run: set RIM_WEB_VERSION=$web_version"
+	fi
+	if [[ -n $web_version ]] && grep -qx web <<<"$services"; then
+		say "dry run: the web client stays at rim-web $web_version"
+	fi
 	if ((downgrade)); then
 		say "dry run: compose pull ${app_services[*]}"
 		say "dry run: compose up -d --no-deps ${app_services[*]}"
@@ -162,6 +211,11 @@ fi
 ((backup == 0)) || "$deploy_dir/backup.sh"
 say "setting RIM_VERSION=$version (was ${previous:-unset}); the old env file stays as .env.previous"
 cp -p "$env_file" "$env_file.previous"
+if ((convert_web)); then
+	say "replacing RIM_WEB_IMAGE=$web_image with RIM_WEB_VERSION=$web_version"
+elif ((pin_web)); then
+	say "setting RIM_WEB_VERSION=$web_version, the web client's version"
+fi
 set_version
 
 if ((downgrade)); then

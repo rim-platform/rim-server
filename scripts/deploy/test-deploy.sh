@@ -44,6 +44,10 @@ while [[ $1 == -* ]]; do
   shift 2
 done
 version=$(sed -n 's/^RIM_VERSION=//p' "$env_file" | tail -n 1)
+# The web client's version as compose picks it: RIM_WEB_IMAGE's tag, RIM_WEB_VERSION, RIM_VERSION.
+web_version=$(sed -n 's/^RIM_WEB_IMAGE=.*://p' "$env_file" | tail -n 1)
+[[ -n $web_version ]] || web_version=$(sed -n 's/^RIM_WEB_VERSION=//p' "$env_file" | tail -n 1)
+[[ -n $web_version ]] || web_version=$version
 case "$*" in
 "config --services")
   printf '%s\n' postgres migrate rim caddy-init caddy
@@ -56,6 +60,13 @@ config) printf 'name: rim\nservices: {}\n' ;;
 "ps --status running -q caddy") printf 'c0ffee\n' ;;
 "ps --status running -q postgres") [[ ${STUB_POSTGRES:-0} != 1 ]] || printf 'c0ffee\n' ;;
 "ps --status running -q "*) ;;
+"ps --format "*" web")
+  if [[ $web_version == "${STUB_BAD_WEB:-}" ]]; then
+    printf 'running unhealthy\n'
+  else
+    printf 'running healthy\n'
+  fi
+  ;;
 *) [[ ${STUB_FAIL:-} != "${1:-}" ]] ;;
 esac
 STUB
@@ -78,6 +89,10 @@ for arg in "$@"; do
   prev=$arg
 done
 case $arg in
+*/rim-platform/rim-ui/releases/latest)
+  cp "$STUB_WEB_RELEASE" "$out"
+  printf '%s' "${STUB_WEB_RELEASE_STATUS:-200}"
+  ;;
 */releases/latest)
   cp "$STUB_RELEASE" "$out"
   printf '%s' "${STUB_RELEASE_STATUS:-200}"
@@ -92,9 +107,9 @@ printf '#!/bin/sh\n' >"$work/bin/sleep"
 chmod +x "$work/bin/"*
 export PATH=$work/bin:$PATH STUB_CALLS=$work/calls
 export STUB_UNPUBLISHED="" STUB_UNSIGNED="" STUB_VOLUME="" STUB_IMAGECHECK=0 STUB_WEB=0
-export STUB_BAD_VERSION="" STUB_FAIL=""
+export STUB_BAD_VERSION="" STUB_FAIL="" STUB_BAD_WEB=""
 export STUB_PUBLIC_DOWN=0
-unset RIM_VERSION COMPOSE_FILE
+unset RIM_VERSION RIM_WEB_VERSION RIM_WEB_IMAGE COMPOSE_FILE
 
 called() {
   grep -qxF -- "$1" "$work/calls"
@@ -158,13 +173,14 @@ if upgrade 0.2; then fail "upgrade.sh 0.2 was accepted"; fi
 expect_stderr "0.2 is not a version" "bad version"
 [[ ! -s $work/calls ]] || fail "bad version: commands ran: $(cat "$work/calls")"
 
-# rim-web not published yet: exit 2, nothing changed.
+# rim-web not published yet at the web client's version: exit 2, nothing changed.
 setup_upgrade 0.1.0
-STUB_UNPUBLISHED=$web:0.2.0
+printf 'RIM_WEB_VERSION=0.1.5\n' >>"$d/.env"
+STUB_UNPUBLISHED=$web:0.1.5
 status=0
 upgrade 0.2.0 || status=$?
 [[ $status == 2 ]] || fail "unpublished rim-web: exit $status, not 2"
-expect_stderr "rim-web 0.2.0 is not published yet; tag rim-ui first" "unpublished rim-web"
+expect_stderr "rim-web 0.1.5 is not published yet; the web client runs that rim-ui release" "unpublished rim-web"
 [[ $(env_version "$d/.env") == 0.1.0 ]] || fail "unpublished rim-web: the env file changed"
 [[ -z $(steps) ]] || fail "unpublished rim-web: steps ran: $(steps)"
 not_called cosign || fail "unpublished rim-web: cosign ran"
@@ -199,22 +215,25 @@ not_called "manifest inspect $web" || fail "relay without web client: rim-web wa
 
 # An image whose signature does not verify: exit 1 before the backup, nothing changed.
 setup_upgrade 0.1.0
-STUB_UNSIGNED=$web:0.2.0
+STUB_UNSIGNED=$web:0.1.0
 status=0
 upgrade 0.2.0 || status=$?
 [[ $status == 1 ]] || fail "unsigned image: exit $status, not 1"
-expect_stderr "$web:0.2.0 is not signed by the rim-ui release workflow" "unsigned image"
+expect_stderr "$web:0.1.0 is not signed by the rim-ui release workflow" "unsigned image"
 [[ $(env_version "$d/.env") == 0.1.0 && -z $(steps) ]] || fail "unsigned image: something changed"
 
-# The upgrade: images checked and verified against both release workflows, then backup, env
-# file, pull, migrations, start, probes, version.
+# The upgrade: images checked and verified against both release workflows, rim-web at the
+# version that ran before, then backup, env file, pull, migrations, start, probes, version.
 setup_upgrade 0.1.0
 upgrade 0.2.0 || fail "upgrade 0.1.0 -> 0.2.0: $(cat "$work/stderr")"
 issuer="--certificate-oidc-issuer https://token.actions.githubusercontent.com"
 called "cosign verify $server:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
   fail "upgrade: rim-server not verified against its release workflow"
-called "cosign verify $web:0.2.0 --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
-  fail "upgrade: rim-web not verified against rim-ui's release workflow"
+called "cosign verify $web:0.1.0 --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v0.1.0 $issuer" ||
+  fail "upgrade: rim-web not verified against rim-ui's release workflow at the web client's version"
+not_called "$web:0.2.0" || fail "upgrade: rim-web was looked up at the server's version"
+grep -qxF RIM_WEB_VERSION=0.1.0 "$d/.env" || fail "upgrade: RIM_WEB_VERSION not pinned to 0.1.0"
+! grep -q '^RIM_WEB_VERSION=' "$d/.env.previous" || fail "upgrade: .env.previous has RIM_WEB_VERSION"
 called "cosign verify $imagecheck:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
   fail "upgrade: rim-imagecheck not verified against rim-server's release workflow"
 expected=$'backup.sh\ncompose pull\ncompose run --rm migrate\ncompose up -d'
@@ -402,6 +421,7 @@ expect_stderr "RIM_BACKUP_HEARTBEAT_URL is not an https URL" "http heartbeat"
 srv=$work/srv
 export RIM_DEPLOY_DIR=$srv RIM_DEPLOY_LOCK=$work/rim-deploy.lock
 export STUB_RELEASE=$work/release.json STUB_TARBALL=$work/source.tar.gz STUB_RELEASE_STATUS=200
+export STUB_WEB_RELEASE=$work/web-release.json STUB_WEB_RELEASE_STATUS=200
 
 # A tarball like GitHub's archive of tag v$1: its deploy/ holds a stub upgrade.sh that records
 # its argument and directory and exits with STUB_UPGRADE_EXIT, a changed compose.yml, a new
@@ -429,7 +449,13 @@ release() {
   printf '{\n  "tag_name": "%s",\n  "draft": false,\n  "prerelease": %s\n}\n' "$1" "${2:-false}" >"$STUB_RELEASE"
 }
 
-# The host's directory at RIM_VERSION 0.1.0 with the files of 0.1.0.
+# The same for rim-ui's latest release.
+web_release() {
+  printf '{\n  "tag_name": "%s",\n  "draft": false,\n  "prerelease": %s\n}\n' "$1" "${2:-false}" >"$STUB_WEB_RELEASE"
+}
+
+# The host's directory at RIM_VERSION 0.1.0 with the files of 0.1.0, running the web client,
+# whose latest release, 0.1.0, it runs.
 setup_srv() {
   rm -rf "$srv" "$work/calls"
   mkdir "$srv"
@@ -439,8 +465,10 @@ setup_srv() {
   printf '#!/bin/sh\nexit 0\n' >"$srv/upgrade.sh"
   chmod +x "$srv/upgrade.sh"
   : >"$work/calls"
-  export STUB_UPGRADE_EXIT=0 STUB_RELEASE_STATUS=200
+  export STUB_UPGRADE_EXIT=0 STUB_RELEASE_STATUS=200 STUB_WEB_RELEASE_STATUS=200
+  STUB_WEB=1 STUB_BAD_WEB="" STUB_UNPUBLISHED="" STUB_UNSIGNED=""
   release v0.2.0
+  web_release v0.1.0
   make_tarball 0.2.0
 }
 
@@ -601,5 +629,290 @@ flock 8
 if rim_deploy --check; then fail "lock: a second deploy ran"; fi
 expect_stderr "another deploy is running" "lock"
 exec 8>&-
+
+# --- rim-deploy.sh: the web client -----------------------------------------------------------
+
+web_identity() {
+  printf -- '--certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v%s %s' "$1" "$issuer"
+}
+
+# The setting $1 of the deployment's env file $2 (default .env).
+env_setting() {
+  sed -n "s/^$1=//p" "$srv/${2:-.env}"
+}
+
+# The running version is read from RIM_WEB_VERSION, from a published RIM_WEB_IMAGE and from
+# RIM_VERSION: nothing to do in each case.
+setup_srv
+release v0.1.0
+printf 'RIM_WEB_VERSION=0.1.5\n' >>"$srv/.env"
+web_release v0.1.5
+rim_deploy --check || fail "web at RIM_WEB_VERSION: $(cat "$work/stderr")"
+expect_stderr "web client 0.1.5 is running; nothing to do" "web at RIM_WEB_VERSION"
+setup_srv
+release v0.1.0
+printf 'RIM_WEB_IMAGE=%s:0.1.6\n' "$web" >>"$srv/.env"
+web_release v0.1.6
+rim_deploy --check || fail "web at RIM_WEB_IMAGE: $(cat "$work/stderr")"
+expect_stderr "web client 0.1.6 is running; nothing to do" "web at RIM_WEB_IMAGE"
+setup_srv
+release v0.1.0
+rim_deploy --check || fail "web at RIM_VERSION: $(cat "$work/stderr")"
+expect_stderr "web client 0.1.0 is running; nothing to do" "web at RIM_VERSION"
+[[ -z $(steps) ]] || fail "web already running: steps ran: $(steps)"
+
+# A custom RIM_WEB_IMAGE is never deployed over: rim-ui's API is not asked, and by hand it is
+# refused.
+setup_srv
+release v0.1.0
+printf 'RIM_WEB_IMAGE=rim-web:local\n' >>"$srv/.env"
+web_release v0.1.1
+rim_deploy --check || fail "custom web image: $(cat "$work/stderr")"
+expect_stderr "RIM_WEB_IMAGE names a custom web image" "custom web image"
+not_called "rim-ui/releases/latest" || fail "custom web image: the rim-ui API was asked"
+if rim_deploy web 0.1.1; then fail "custom web image by hand: accepted"; fi
+expect_stderr "RIM_WEB_IMAGE names a custom web image; remove it" "custom web image by hand"
+[[ $(env_setting RIM_WEB_IMAGE) == rim-web:local ]] || fail "custom web image: RIM_WEB_IMAGE changed"
+
+# A new rim-ui release on the files of a compose.yml that does not read RIM_WEB_VERSION: its
+# image verified against rim-ui's release workflow, RIM_WEB_IMAGE written, the old env file
+# kept, the web container pulled and restarted alone, the server left as it is.
+setup_srv
+release v0.1.0
+web_release v0.1.1
+cp "$srv/.env" "$work/env-before"
+rim_deploy --check || fail "new web release: $(cat "$work/stderr")"
+called "cosign verify $web:0.1.1 $(web_identity 0.1.1)" ||
+  fail "new web release: rim-web not verified against rim-ui's release workflow of v0.1.1"
+[[ $(env_setting RIM_WEB_IMAGE) == "$web:0.1.1" ]] || fail "new web release: RIM_WEB_IMAGE is $(env_setting RIM_WEB_IMAGE)"
+[[ -z $(env_setting RIM_WEB_VERSION) ]] || fail "new web release: RIM_WEB_VERSION written for an old compose.yml"
+[[ $(env_version "$srv/.env") == 0.1.0 ]] || fail "new web release: RIM_VERSION changed"
+cmp -s "$srv/.env.previous" "$work/env-before" || fail "new web release: .env.previous is not the env file from before"
+[[ $(steps) == $'compose pull web\ncompose up -d --no-deps web' ]] || fail "new web release: steps were $(steps)"
+not_called ".tar.gz" || fail "new web release: the server's tag was fetched"
+[[ ! -e $srv/FAILED-web ]] || fail "new web release: FAILED-web written"
+
+# The same on files whose compose.yml reads RIM_WEB_VERSION: it replaces the setting and drops
+# a published RIM_WEB_IMAGE.
+setup_srv
+release v0.1.0
+printf 'compose of 0.2.0, which reads RIM_WEB_VERSION\n' >"$srv/compose.yml"
+printf 'RIM_WEB_VERSION=0.1.0\nRIM_WEB_IMAGE=%s:0.1.0\n' "$web" >>"$srv/.env"
+web_release v0.1.1
+rim_deploy --check || fail "new web release, new compose.yml: $(cat "$work/stderr")"
+[[ $(env_setting RIM_WEB_VERSION) == 0.1.1 ]] || fail "new compose.yml: RIM_WEB_VERSION is $(env_setting RIM_WEB_VERSION)"
+! grep -q '^RIM_WEB_IMAGE=' "$srv/.env" || fail "new compose.yml: RIM_WEB_IMAGE stayed"
+[[ $(grep -c '^RIM_WEB_VERSION=' "$srv/.env") == 1 ]] || fail "new compose.yml: RIM_WEB_VERSION set twice"
+grep -qxF POSTGRES_PASSWORD=secret "$srv/.env" || fail "new compose.yml: another setting was lost"
+
+# A new server release and a new rim-ui release: both deploy, the server first.
+setup_srv
+web_release v0.1.1
+rim_deploy --check || fail "server and web: $(cat "$work/stderr")"
+called "upgrade.sh 0.2.0 in $srv" || fail "server and web: upgrade.sh did not run"
+[[ $(env_setting RIM_WEB_IMAGE) == "$web:0.1.1" ]] || fail "server and web: the web client was not deployed"
+upgrade_line=$(grep -n '^upgrade.sh' "$work/calls" | cut -d: -f1)
+pull_line=$(grep -n 'pull web$' "$work/calls" | cut -d: -f1)
+((upgrade_line < pull_line)) || fail "server and web: the web client deployed before the server"
+
+# A pre-release, a draft or a tag that is not v<major>.<minor>.<patch> of rim-ui is ignored.
+setup_srv
+release v0.1.0
+web_release v0.1.1 true
+rim_deploy --check || fail "web pre-release: $(cat "$work/stderr")"
+expect_stderr "rim-platform/rim-ui: the latest release is a pre-release or a draft" "web pre-release"
+[[ -z $(steps) ]] || fail "web pre-release: steps ran: $(steps)"
+setup_srv
+release v0.1.0
+web_release v0.1.1-rc.1
+rim_deploy --check || fail "web pre-release tag: $(cat "$work/stderr")"
+expect_stderr "is not v<major>.<minor>.<patch>; ignoring it" "web pre-release tag"
+[[ -z $(steps) ]] || fail "web pre-release tag: steps ran: $(steps)"
+
+# HOLD stops the web client too.
+setup_srv
+release v0.1.0
+web_release v0.1.1
+touch "$srv/HOLD"
+rim_deploy --check || fail "web HOLD: $(cat "$work/stderr")"
+not_called "curl" || fail "web HOLD: curl ran"
+[[ -z $(steps) ]] || fail "web HOLD: steps ran: $(steps)"
+
+# A relay without the web client: rim-ui's API is not asked. Before a server version runs, the
+# web client waits.
+setup_srv
+release v0.1.0
+web_release v0.1.1
+STUB_WEB=0
+rim_deploy --check || fail "no web service: $(cat "$work/stderr")"
+expect_stderr "the deployment runs no web client" "no web service"
+not_called "rim-ui/releases/latest" || fail "no web service: the rim-ui API was asked"
+if rim_deploy web 0.1.1; then fail "no web service by hand: accepted"; fi
+expect_stderr "the deployment runs no web client" "no web service by hand"
+setup_srv
+printf 'POSTGRES_PASSWORD=secret\n' >"$srv/.env"
+release v0.1.0
+STUB_UNPUBLISHED=$server:0.1.0
+web_release v0.1.1
+rim_deploy --check || fail "no server version: $(cat "$work/stderr")"
+expect_stderr "no server version runs yet; the web client waits for it" "no server version"
+[[ -z $(steps) ]] || fail "no server version: steps ran: $(steps)"
+STUB_UNPUBLISHED=""
+
+# rim-web not published yet: quiet, nothing changed, the next check tries again.
+setup_srv
+release v0.1.0
+web_release v0.1.1
+STUB_UNPUBLISHED=$web:0.1.1
+cp "$srv/.env" "$work/env-before"
+rim_deploy --check || fail "web not published: $(cat "$work/stderr")"
+expect_stderr "web client 0.1.1 is not deployable yet; the next check tries again" "web not published"
+cmp -s "$srv/.env" "$work/env-before" || fail "web not published: the env file changed"
+[[ -z $(steps) && ! -e $srv/FAILED-web ]] || fail "web not published: something ran or FAILED-web written"
+STUB_UNPUBLISHED=""
+
+# rim-web without rim-ui's signature: exit 1, nothing changed.
+setup_srv
+release v0.1.0
+web_release v0.1.1
+STUB_UNSIGNED=$web:0.1.1
+cp "$srv/.env" "$work/env-before"
+if rim_deploy --check; then fail "unsigned web image: the check passed"; fi
+expect_stderr "$web:0.1.1 is not signed by the rim-ui release workflow of v0.1.1" "unsigned web image"
+cmp -s "$srv/.env" "$work/env-before" || fail "unsigned web image: the env file changed"
+[[ -z $(steps) ]] || fail "unsigned web image: steps ran: $(steps)"
+STUB_UNSIGNED=""
+
+# The new web client never gets healthy: the env file from before comes back, the web client
+# from before starts again, FAILED-web holds the version back, and the check exits 1.
+setup_srv
+release v0.1.0
+web_release v0.1.1
+STUB_BAD_WEB=0.1.1
+cp "$srv/.env" "$work/env-before"
+status=0
+RIM_UPGRADE_TIMEOUT=6 rim_deploy --check || status=$?
+[[ $status == 1 ]] || fail "unhealthy web: exit $status, not 1"
+expect_stderr "the web client 0.1.1 did not become healthy within 6s" "unhealthy web"
+expect_stderr "the web client from before runs again" "unhealthy web"
+cmp -s "$srv/.env" "$work/env-before" || fail "unhealthy web: the env file is $(cat "$srv/.env")"
+expected=$'compose pull web\ncompose up -d --no-deps web\ncompose up -d --no-deps web'
+[[ $(steps) == "$expected" ]] || fail "unhealthy web: steps were $(steps)"
+[[ $(cat "$srv/FAILED-web") == 0.1.1 ]] || fail "unhealthy web: FAILED-web does not hold 0.1.1"
+: >"$work/calls"
+rim_deploy --check || fail "after a web failure: $(cat "$work/stderr")"
+expect_stderr "web client 0.1.1 failed to deploy before" "after a web failure"
+[[ -z $(steps) ]] || fail "after a web failure: steps ran: $(steps)"
+
+# A pull that fails is rolled back the same way.
+setup_srv
+release v0.1.0
+web_release v0.1.1
+STUB_FAIL=pull
+cp "$srv/.env" "$work/env-before"
+if rim_deploy --check; then fail "failed web pull: the check passed"; fi
+cmp -s "$srv/.env" "$work/env-before" || fail "failed web pull: the env file changed"
+STUB_FAIL=""
+
+# A server deploy that fails ends the check before the web client.
+setup_srv
+web_release v0.1.1
+STUB_UPGRADE_EXIT=1
+if rim_deploy --check; then fail "failed server deploy: the check passed"; fi
+expect_stderr "the web client is not deployed in the run of a failed server deploy" "failed server deploy"
+not_called "rim-ui/releases/latest" || fail "failed server deploy: the rim-ui API was asked"
+[[ -z $(env_setting RIM_WEB_IMAGE) ]] || fail "failed server deploy: the web client was deployed"
+
+# By hand: HOLD and FAILED-web do not stop it, it goes back as well as forward, success
+# removes FAILED-web, and the API is not asked.
+setup_srv
+touch "$srv/HOLD"
+printf '0.0.9\n' >"$srv/FAILED-web"
+rim_deploy web 0.0.9 || fail "web by hand: $(cat "$work/stderr")"
+[[ $(env_setting RIM_WEB_IMAGE) == "$web:0.0.9" ]] || fail "web by hand: RIM_WEB_IMAGE is $(env_setting RIM_WEB_IMAGE)"
+[[ ! -e $srv/FAILED-web ]] || fail "web by hand: FAILED-web stayed"
+not_called "api.github.com" || fail "web by hand: the API was asked"
+called "cosign verify $web:0.0.9 $(web_identity 0.0.9)" || fail "web by hand: not verified"
+
+# By hand, not published is exit 2, and a version that is not one is refused.
+setup_srv
+STUB_UNPUBLISHED=$web:0.1.1
+status=0
+rim_deploy web 0.1.1 || status=$?
+[[ $status == 2 ]] || fail "web by hand, not published: exit $status, not 2"
+STUB_UNPUBLISHED=""
+setup_srv
+if rim_deploy web '0.1.1;reboot'; then fail "bad web version by hand: accepted"; fi
+expect_stderr "is not a version" "bad web version by hand"
+[[ ! -s $work/calls ]] || fail "bad web version by hand: commands ran"
+if rim_deploy web; then fail "web without a version: accepted"; fi
+expect_stderr "usage:" "web without a version"
+
+# A server tag never overwrites FAILED-web.
+setup_srv
+printf 'from the tag\n' >"$work/tar/rim-server-0.2.0/deploy/FAILED-web"
+tar czf "$STUB_TARBALL" -C "$work/tar" rim-server-0.2.0
+printf '0.1.1\n' >"$srv/FAILED-web"
+rim_deploy 0.2.0 || fail "FAILED-web in a tag: $(cat "$work/stderr")"
+[[ $(cat "$srv/FAILED-web") == 0.1.1 ]] || fail "FAILED-web in a tag: overwritten"
+
+# --- upgrade.sh: the web client's version ---------------------------------------------------
+
+# RIM_WEB_VERSION stays as it is, and rim-web is checked at it.
+setup_upgrade 0.1.0
+printf 'RIM_WEB_VERSION=0.1.5\n' >>"$d/.env"
+upgrade 0.2.0 || fail "upgrade with RIM_WEB_VERSION: $(cat "$work/stderr")"
+called "cosign verify $web:0.1.5 $(web_identity 0.1.5)" || fail "upgrade with RIM_WEB_VERSION: rim-web not verified at 0.1.5"
+not_called "$web:0.2.0" || fail "upgrade with RIM_WEB_VERSION: rim-web looked up at 0.2.0"
+[[ $(sed -n 's/^RIM_WEB_VERSION=//p' "$d/.env") == 0.1.5 ]] || fail "upgrade with RIM_WEB_VERSION: it changed"
+
+# The first run pins the web client to the version installed.
+setup_upgrade ""
+STUB_VOLUME=""
+upgrade 0.1.0 || fail "first run, web: $(cat "$work/stderr")"
+grep -qxF RIM_WEB_VERSION=0.1.0 "$d/.env" || fail "first run: RIM_WEB_VERSION not written"
+
+# A published RIM_WEB_IMAGE becomes RIM_WEB_VERSION in the same write as RIM_VERSION, and the
+# old env file keeps it.
+setup_upgrade 0.1.0
+printf 'RIM_WEB_IMAGE=%s:0.1.3\n' "$web" >>"$d/.env"
+upgrade 0.2.0 || fail "RIM_WEB_IMAGE conversion: $(cat "$work/stderr")"
+called "cosign verify $web:0.1.3 $(web_identity 0.1.3)" || fail "RIM_WEB_IMAGE conversion: rim-web not verified at 0.1.3"
+grep -qxF RIM_WEB_VERSION=0.1.3 "$d/.env" || fail "RIM_WEB_IMAGE conversion: RIM_WEB_VERSION not written"
+! grep -q '^RIM_WEB_IMAGE=' "$d/.env" || fail "RIM_WEB_IMAGE conversion: RIM_WEB_IMAGE stayed"
+grep -qxF "RIM_WEB_IMAGE=$web:0.1.3" "$d/.env.previous" || fail "RIM_WEB_IMAGE conversion: .env.previous lost it"
+[[ $(env_version "$d/.env") == 0.2.0 ]] || fail "RIM_WEB_IMAGE conversion: RIM_VERSION is $(env_version "$d/.env")"
+setup_upgrade 0.1.0
+printf 'RIM_WEB_IMAGE=%s:0.1.3\n' "$web" >>"$d/.env"
+cp "$d/.env" "$work/env-before"
+STUB_BAD_VERSION=0.2.0
+if upgrade 0.2.0; then fail "RIM_WEB_IMAGE conversion rolled back: the upgrade passed"; fi
+cmp -s "$d/.env" "$work/env-before" || fail "RIM_WEB_IMAGE conversion rolled back: the env file is $(cat "$d/.env")"
+setup_upgrade 0.1.0
+printf 'RIM_WEB_IMAGE=%s:0.1.3\n' "$web" >>"$d/.env"
+upgrade --dry-run 0.2.0 || fail "RIM_WEB_IMAGE dry run: $(cat "$work/stderr")"
+expect_stderr "dry run: replace RIM_WEB_IMAGE=$web:0.1.3 with RIM_WEB_VERSION=0.1.3" "RIM_WEB_IMAGE dry run"
+expect_stderr "dry run: the web client stays at rim-web 0.1.3" "RIM_WEB_IMAGE dry run"
+grep -qxF "RIM_WEB_IMAGE=$web:0.1.3" "$d/.env" || fail "RIM_WEB_IMAGE dry run: the env file changed"
+
+# Any other RIM_WEB_IMAGE is left as it is and its image not checked.
+setup_upgrade 0.1.0
+printf 'RIM_WEB_IMAGE=%s@sha256:00\n' "$web" >>"$d/.env"
+upgrade 0.2.0 || fail "custom RIM_WEB_IMAGE: $(cat "$work/stderr")"
+expect_stderr "is not a published rim-web version: the web image is not checked and stays as it is" "custom RIM_WEB_IMAGE"
+not_called "manifest inspect $web" || fail "custom RIM_WEB_IMAGE: rim-web was looked up"
+grep -qxF "RIM_WEB_IMAGE=$web@sha256:00" "$d/.env" || fail "custom RIM_WEB_IMAGE: it changed"
+! grep -q '^RIM_WEB_VERSION=' "$d/.env" || fail "custom RIM_WEB_IMAGE: RIM_WEB_VERSION written"
+
+# A relay without the web client gets no RIM_WEB_VERSION.
+setup_upgrade 0.1.0
+STUB_WEB=0
+upgrade 0.2.0 || fail "relay, web version: $(cat "$work/stderr")"
+! grep -q '^RIM_WEB_VERSION=' "$d/.env" || fail "relay: RIM_WEB_VERSION written"
+
+# A web setting in the environment would override the env file: refused.
+setup_upgrade 0.1.0
+if RIM_WEB_VERSION=0.1.5 upgrade 0.2.0; then fail "RIM_WEB_VERSION in the environment: accepted"; fi
+expect_stderr "RIM_WEB_VERSION is set in the environment" "RIM_WEB_VERSION in the environment"
 
 echo "deploy scripts: all tests passed"
