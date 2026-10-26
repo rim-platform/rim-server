@@ -21,6 +21,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-10-26
+
+### Changed
+
+- No server changes. Released with rim-ui 0.0.5, which fixes the render error of the 0.0.4 web
+  and desktop apps; the deployment runs both images at one `RIM_VERSION`.
+
 ## [0.0.4] - 2026-10-26
 
 ### Added
@@ -951,7 +958,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
   `docs/self-hosting.md` shows how to pass a file in instead.
 
-[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/rim-platform/rim-server/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/rim-platform/rim-server/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/rim-platform/rim-server/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/rim-platform/rim-server/compare/v0.0.1...v0.0.2
