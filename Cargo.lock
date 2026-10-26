@@ -5194,6 +5194,7 @@ dependencies = [
  "futures-util",
  "http 1.5.0",
  "image",
+ "log",
  "metrics",
  "metrics-exporter-prometheus",
  "migration",

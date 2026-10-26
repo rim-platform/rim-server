@@ -47,6 +47,7 @@ metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 migration = { path = "../migration" }
 async-trait = "0.1.89"
+log = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

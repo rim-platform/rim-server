@@ -65,11 +65,7 @@ async fn disabled_features_are_reported_and_refused() {
     assert_eq!(state("custom_emoji")["state"], "DISABLED");
     assert_eq!(state("avatars")["state"], "DISABLED");
     assert_eq!(state("email")["state"], "UNAVAILABLE");
-    assert!(
-        state("email")["reason"]
-            .as_str()
-            .is_some_and(|r| r.contains("RIM_SMTP_HOST"))
-    );
+    assert_eq!(state("email")["reason"], "no mail server is set up");
     for key in ["link_previews", "workspace_plugins", "ai_commands"] {
         assert_eq!(state(key)["state"], "ENABLED", "{key}");
     }

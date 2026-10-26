@@ -33,7 +33,6 @@ use rim_services::relay::dto::{
 };
 use rim_services::relay::service::RelayAbuseService;
 use rim_services::user::service::UserService;
-use sea_orm::Database;
 use uuid::Uuid;
 
 use crate::config::RIMConfig;
@@ -431,7 +430,8 @@ fn describe_record(out: &mut String, record: &PrincipalRecordDto) {
 }
 
 async fn execute(command: Command, config: &RIMConfig) -> Result<String, String> {
-    let db = Database::connect(&config.database_url)
+    let db = config
+        .connect_database()
         .await
         .map_err(|e| format!("failed to connect to database: {e}"))?;
     let handle: DbHandle = db.clone().into();

@@ -632,11 +632,23 @@ impl RIMConfig {
     /// # Errors
     /// The driver's error when Postgres cannot be reached.
     pub async fn connect_database(&self) -> Result<sea_orm::DatabaseConnection, sea_orm::DbErr> {
+        sea_orm::Database::connect(self.database_options()).await
+    }
+
+    /// The server's pool options: `RIM_DATABASE_MAX_CONNECTIONS`, statements logged at debug and
+    /// those slower than a second at warn.
+    pub fn database_options(&self) -> sea_orm::ConnectOptions {
         let mut options = sea_orm::ConnectOptions::new(self.database_url.clone());
         if let Some(max) = self.database_max_connections {
             options.max_connections(max.max(1));
         }
-        sea_orm::Database::connect(options).await
+        options
+            .sqlx_logging_level(log::LevelFilter::Debug)
+            .sqlx_slow_statements_logging_settings(
+                log::LevelFilter::Warn,
+                std::time::Duration::from_secs(1),
+            );
+        options
     }
 
     /// Resolve the registration mode from the environment: `pow` when
@@ -1175,7 +1187,7 @@ impl RIMConfig {
         if self.smtp_config().is_none() {
             unavailable.push((
                 rim_core::server_feature::model::ServerFeature::Email,
-                "SMTP is not configured: set RIM_SMTP_HOST and RIM_SMTP_FROM".to_string(),
+                "no mail server is set up".to_string(),
             ));
         }
         unavailable
@@ -1725,6 +1737,23 @@ mod tests {
             version_line(),
             format!("rim-server {}", workspace_version())
         );
+    }
+
+    #[test]
+    fn database_options_log_statements_at_debug_and_slow_ones_at_warn() {
+        let options = RIMConfig::default().database_options();
+        assert_eq!(options.get_sqlx_logging_level(), log::LevelFilter::Debug);
+        assert_eq!(
+            options.get_sqlx_slow_statements_logging_settings(),
+            (log::LevelFilter::Warn, std::time::Duration::from_secs(1))
+        );
+        assert_eq!(options.get_max_connections(), None);
+
+        let capped = RIMConfig {
+            database_max_connections: Some(5),
+            ..Default::default()
+        };
+        assert_eq!(capped.database_options().get_max_connections(), Some(5));
     }
 
     fn env(pairs: &[(&str, &str)]) -> config::Map<String, String> {
@@ -2404,14 +2433,15 @@ mod tests {
     }
 
     #[test]
-    fn email_is_unavailable_without_smtp_and_disabled_wins() {
+    fn email_is_unavailable_without_smtp_with_a_plain_reason_and_disabled_wins() {
         use rim_core::server_feature::model::{FeatureState, ServerFeature};
         use rim_services::feature::service::FeatureGate;
 
         let gate = RIMConfig::default().feature_gate().expect("gate");
         assert!(matches!(
             gate.state(ServerFeature::Email),
-            FeatureState::Unavailable { reason } if reason.contains("RIM_SMTP_HOST")
+            FeatureState::Unavailable { reason }
+                if reason == "no mail server is set up" && !reason.contains("RIM_")
         ));
         for feature in ServerFeature::ALL {
             if feature != ServerFeature::Email {
