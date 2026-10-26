@@ -47,6 +47,7 @@ version=$(sed -n 's/^RIM_VERSION=//p' "$env_file" | tail -n 1)
 case "$*" in
 "config --services")
   printf '%s\n' postgres migrate rim caddy-init caddy
+  [[ ${STUB_IMAGECHECK:-0} != 1 ]] || printf 'imagecheck\n'
   [[ ${STUB_WEB:-0} != 1 ]] || printf 'web\n'
   ;;
 config) printf 'name: rim\nservices: {}\n' ;;
@@ -90,7 +91,8 @@ STUB
 printf '#!/bin/sh\n' >"$work/bin/sleep"
 chmod +x "$work/bin/"*
 export PATH=$work/bin:$PATH STUB_CALLS=$work/calls
-export STUB_UNPUBLISHED="" STUB_UNSIGNED="" STUB_VOLUME="" STUB_WEB=0 STUB_BAD_VERSION="" STUB_FAIL=""
+export STUB_UNPUBLISHED="" STUB_UNSIGNED="" STUB_VOLUME="" STUB_IMAGECHECK=0 STUB_WEB=0
+export STUB_BAD_VERSION="" STUB_FAIL=""
 export STUB_PUBLIC_DOWN=0
 unset RIM_VERSION COMPOSE_FILE
 
@@ -127,7 +129,8 @@ BACKUP
     printf 'RIM_LIMIT_ACCOUNTS=10\n'
   } >"$d/.env"
   : >"$work/calls"
-  STUB_VOLUME=rim_rim_data STUB_WEB=1 STUB_UNPUBLISHED="" STUB_UNSIGNED="" STUB_BAD_VERSION=""
+  STUB_VOLUME=rim_rim_data STUB_IMAGECHECK=1 STUB_WEB=1 STUB_UNPUBLISHED="" STUB_UNSIGNED=""
+  STUB_BAD_VERSION=""
   STUB_FAIL="" STUB_PUBLIC_DOWN=0
 }
 
@@ -146,6 +149,7 @@ steps() {
 }
 
 server=ghcr.io/rim-platform/rim-server
+imagecheck=ghcr.io/rim-platform/rim-imagecheck
 web=ghcr.io/rim-platform/rim-web
 
 # A version that is not one is refused before anything runs.
@@ -173,6 +177,20 @@ upgrade 0.2.0 || status=$?
 [[ $status == 2 ]] || fail "unpublished rim-server: exit $status, not 2"
 expect_stderr "rim-server 0.2.0 is not published yet" "unpublished rim-server"
 
+# rim-imagecheck not published yet: exit 2 as well.
+setup_upgrade 0.1.0
+STUB_UNPUBLISHED=$imagecheck:0.2.0
+status=0
+upgrade 0.2.0 || status=$?
+[[ $status == 2 ]] || fail "unpublished rim-imagecheck: exit $status, not 2"
+expect_stderr "rim-imagecheck 0.2.0 is not published yet" "unpublished rim-imagecheck"
+
+# The files of a release without the imagecheck service need no rim-imagecheck image.
+setup_upgrade 0.1.0
+STUB_IMAGECHECK=0 STUB_UNPUBLISHED=$imagecheck:0.2.0
+upgrade 0.2.0 || fail "release without imagecheck: $(cat "$work/stderr")"
+not_called "manifest inspect $imagecheck" || fail "release without imagecheck: rim-imagecheck was looked up"
+
 # A relay without the web client needs no rim-web image.
 setup_upgrade 0.1.0
 STUB_WEB=0 STUB_UNPUBLISHED=$web:0.2.0
@@ -197,6 +215,8 @@ called "cosign verify $server:0.2.0 --certificate-identity https://github.com/ri
   fail "upgrade: rim-server not verified against its release workflow"
 called "cosign verify $web:0.2.0 --certificate-identity https://github.com/rim-platform/rim-ui/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
   fail "upgrade: rim-web not verified against rim-ui's release workflow"
+called "cosign verify $imagecheck:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
+  fail "upgrade: rim-imagecheck not verified against rim-server's release workflow"
 expected=$'backup.sh\ncompose pull\ncompose run --rm migrate\ncompose up -d'
 [[ $(steps) == "$expected" ]] || fail "upgrade: steps were $(steps)"
 [[ $(env_version "$d/.env") == 0.2.0 ]] || fail "upgrade: RIM_VERSION is $(env_version "$d/.env")"
@@ -244,7 +264,7 @@ upgrade 0.2.0 || status=$?
 expect_stderr "/readyz did not answer" "rollback"
 expect_stderr "0.1.0 is running again" "rollback"
 [[ $(env_version "$d/.env") == 0.1.0 ]] || fail "rollback: RIM_VERSION is $(env_version "$d/.env")"
-expected=$'backup.sh\ncompose pull\ncompose run --rm migrate\ncompose up -d\ncompose up -d --no-deps rim web'
+expected=$'backup.sh\ncompose pull\ncompose run --rm migrate\ncompose up -d\ncompose up -d --no-deps rim imagecheck web'
 [[ $(steps) == "$expected" ]] || fail "rollback: steps were $(steps)"
 called "docker compose -f $d/compose.yml --env-file $d/.env logs --tail 40 migrate rim" || fail "rollback: no logs"
 
@@ -260,7 +280,7 @@ setup_upgrade 0.1.0
 STUB_FAIL=run
 if upgrade 0.2.0; then fail "failed migrations: the upgrade passed"; fi
 expect_stderr "failed: the migrations" "failed migrations"
-expected=$'backup.sh\ncompose pull\ncompose run --rm migrate\ncompose up -d --no-deps rim web'
+expected=$'backup.sh\ncompose pull\ncompose run --rm migrate\ncompose up -d --no-deps rim imagecheck web'
 [[ $(steps) == "$expected" ]] || fail "failed migrations: steps were $(steps)"
 [[ $(env_version "$d/.env") == 0.1.0 ]] || fail "failed migrations: not rolled back"
 
@@ -272,10 +292,11 @@ expect_stderr "no version ran before; stopping the stack" "failed first run"
 [[ $(steps | tail -n 1) == "compose stop" ]] || fail "failed first run: steps were $(steps)"
 [[ -z $(env_version "$d/.env") ]] || fail "failed first run: RIM_VERSION stayed"
 
-# An older version is a binary rollback: no migrations, rim and web without dependencies.
+# An older version is a binary rollback: no migrations, rim, imagecheck and web without
+# dependencies.
 setup_upgrade 0.2.0
 upgrade 0.1.0 || fail "downgrade: $(cat "$work/stderr")"
-expected=$'backup.sh\ncompose pull rim web\ncompose up -d --no-deps rim web'
+expected=$'backup.sh\ncompose pull rim imagecheck web\ncompose up -d --no-deps rim imagecheck web'
 [[ $(steps) == "$expected" ]] || fail "downgrade: steps were $(steps)"
 
 # A pre-release is older than its release, and the release newer than its pre-release.
@@ -295,6 +316,10 @@ setup_upgrade 0.1.0
 printf 'RIM_SERVER_IMAGE=ghcr.io/rim-platform/rim-server@sha256:00\n' >>"$d/.env"
 if upgrade 0.2.0; then fail "image override: the upgrade passed"; fi
 expect_stderr "RIM_SERVER_IMAGE is set" "image override"
+setup_upgrade 0.1.0
+printf 'RIM_IMAGECHECK_IMAGE=rim-imagecheck:local\n' >>"$d/.env"
+if upgrade 0.2.0; then fail "image check override: the upgrade passed"; fi
+expect_stderr "RIM_IMAGECHECK_IMAGE is set" "image check override"
 
 # backup-lib.sh's wait_ready, which restore.sh uses: the answer when ready, else the logs and
 # exit 1 after RIM_READY_TIMEOUT.

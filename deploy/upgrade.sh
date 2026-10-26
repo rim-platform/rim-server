@@ -6,17 +6,18 @@
 #   deploy/upgrade.sh [--dry-run] <version>
 #   COMPOSE_FILE=deploy/compose.yml:deploy/compose.relay.yml deploy/upgrade.sh 0.2.0
 #
-# In order: the version's images are published (rim-web only when the web client runs; exit 2
-# when one is not, with nothing changed), their cosign signatures name the release workflows,
-# backup.sh runs (skipped when the deployment has no data volume yet), RIM_VERSION=<version>
-# goes into the env file with the old file kept as .env.previous, the images are pulled, the
-# migrations run and the stack starts; then /readyz and https://$RIM_DOMAIN/.well-known/rim-server
-# must answer within RIM_UPGRADE_TIMEOUT seconds (90) each, and Caddy reloads its Caddyfile.
+# In order: the version's images are published (rim-imagecheck and rim-web only when their
+# services run; exit 2 when one is not, with nothing changed), their cosign signatures name the
+# release workflows, backup.sh runs (skipped when the deployment has no data volume yet),
+# RIM_VERSION=<version> goes into the env file with the old file kept as .env.previous, the
+# images are pulled, the migrations run and the stack starts; then /readyz and
+# https://$RIM_DOMAIN/.well-known/rim-server must answer within RIM_UPGRADE_TIMEOUT seconds (90)
+# each, and Caddy reloads its Caddyfile.
 # When a step after the env file fails, the old env file comes back, the version before starts
 # again (on a first deploy, with no version before, the stack stops) and the script exits 1
 # with the logs' tails. A version older than the running one skips the migrations and starts
-# rim and the web client without their dependencies, as a binary rollback. --dry-run checks the
-# images and prints the rest without changing anything.
+# rim, the profile picture check and the web client without their dependencies, as a binary
+# rollback. --dry-run checks the images and prints the rest without changing anything.
 set -euo pipefail
 
 # shellcheck source=deploy/backup-lib.sh
@@ -41,7 +42,7 @@ done
 
 [[ -f $env_file ]] || die "$env_file does not exist"
 [[ -z ${RIM_VERSION:-} ]] || die "RIM_VERSION is set in the environment and overrides $env_file; unset it"
-for name in RIM_SERVER_IMAGE RIM_WEB_IMAGE; do
+for name in RIM_SERVER_IMAGE RIM_IMAGECHECK_IMAGE RIM_WEB_IMAGE; do
 	[[ -z $(setting "$name") ]] || die "$name is set and overrides RIM_VERSION; remove it to upgrade by version"
 done
 
@@ -55,6 +56,10 @@ issuer=https://token.actions.githubusercontent.com
 services=$(compose config --services) || die "docker compose cannot read the deployment's files"
 app_services=(rim)
 images=("rim-server rim-server")
+if grep -qx imagecheck <<<"$services"; then
+	app_services+=(imagecheck)
+	images+=("rim-imagecheck rim-server")
+fi
 if grep -qx web <<<"$services"; then
 	app_services+=(web)
 	images+=("rim-web rim-ui")
