@@ -69,6 +69,7 @@ use crate::relay::{
     origin_of, relays_include_origin,
 };
 use crate::repos::AppRepos;
+use crate::request_gate::DM_NOT_TAKEN;
 use crate::reserved_names::ReservedNames;
 
 /// Name of the direct space.
@@ -299,9 +300,7 @@ impl DefaultHostService {
                 .is_principal_blocked(&principal_id)
                 .await?;
         if blocked || policy == DmPolicy::Refuse {
-            return Err(ServiceError::Forbidden(
-                "they do not take direct messages from you".to_string(),
-            ));
+            return Err(ServiceError::Forbidden(DM_NOT_TAKEN.to_string()));
         }
         Ok(policy)
     }

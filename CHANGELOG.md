@@ -51,6 +51,15 @@ tag `v<version>`, the version every crate in the workspace carries.
   run only in the client, are refused too.
 - `createUserCommand` takes only lowercase letters, numbers, dots, dashes and underscores after
   `user.`; existing user commands keep their ids.
+- `unblockPrincipal` clears the requests the caller ignored from that person, by hand or by the
+  block: the next item of such a conversation files it again as a new request holding the
+  invite and that item, as a first contact would. Nothing they sent while blocked comes back
+  from the relay. Audited as `relay.principal_unblocked` (`scope` `user`) with
+  `cleared_requests`.
+- Someone blocked by the other member of a DM this server hosts posts nothing into it:
+  `sendMessage`, `replyToMessage`, `forwardMessage`, `sendEncryptedMessage` and `toggleReaction`
+  answer `FORBIDDEN` ("they do not take direct messages from you"), as starting the DM already
+  did.
 - A relay ends a person's subscription to a workspace elsewhere when their `MemberLeft` arrives
   on their own stream, instead of letting it lapse (`docs/specs/server-to-server-v1.md`,
   "Subscriptions").

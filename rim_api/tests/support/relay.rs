@@ -47,7 +47,7 @@ mutation Create($input: CreateConversationInput!) { createConversation(input: $i
 pub const REQUESTS: &str = r#"
 query Requests($status: DmRequestStatus) {
   dmRequests(status: $status) {
-    id fromPrincipalId hostServerId conversationId status card { payload signature }
+    id fromPrincipalId hostServerId conversationId status createdAt card { payload signature }
     heldItems { id hostServerId workspaceId envelope { payload signature } }
   }
 }"#;

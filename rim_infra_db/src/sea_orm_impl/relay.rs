@@ -570,7 +570,10 @@ impl RelayRepository for SeaOrmRelayRepository {
 
     async fn count_pending_requests(&self, user_id: UserId) -> RepoResult<i64> {
         self.count(
-            "SELECT count(*) AS n FROM relay_dm_request WHERE user_id = $1 AND status = 'pending'",
+            &format!(
+                "SELECT count(*) AS n FROM relay_dm_request \
+                 WHERE user_id = $1 AND status = 'pending' AND {FILED}"
+            ),
             vec![uuid(user_id)],
         )
         .await
@@ -729,6 +732,33 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
+    async fn clear_ignored_from(
+        &self,
+        user_id: UserId,
+        principal_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64> {
+        self.execute(
+            "UPDATE relay_dm_request r SET status = 'pending', created_at = now(), \
+             decided_at = now(), expires_at = $3 \
+             WHERE r.user_id = $1 AND r.from_principal_id = $2 AND r.status = 'ignored' \
+             AND EXISTS (SELECT 1 FROM relay_item i WHERE i.request_id = r.id)",
+            vec![uuid(user_id), principal_id.into(), expires_at.into()],
+        )
+        .await
+    }
+
+    async fn refile_request(&self, id: DmRequestId, expires_at: DateTime<Utc>) -> RepoResult<bool> {
+        Ok(self
+            .execute(
+                "UPDATE relay_dm_request SET created_at = now(), decided_at = NULL, expires_at = $2 \
+                 WHERE id = $1 AND status = 'pending' AND decided_at = created_at",
+                vec![uuid(id), expires_at.into()],
+            )
+            .await?
+            == 1)
+    }
+
     async fn delete_expired_requests(&self, now: DateTime<Utc>) -> RepoResult<u64> {
         self.execute(
             "DELETE FROM relay_dm_request WHERE expires_at < $1",
@@ -785,6 +815,8 @@ impl RelayRepository for SeaOrmRelayRepository {
             .all::<HolderRow>(
                 r#"SELECT r.user_id, u.principal_id FROM relay_dm_request r
                    JOIN "user" u ON u.id = r.user_id
+                   JOIN conversation_member m
+                     ON m.conversation_id = r.conversation_id AND m.user_id = r.user_id
                    WHERE r.conversation_id = $1 AND r.status = 'pending'
                      AND u.kind = 'local' AND u.principal_id IS NOT NULL"#,
                 vec![conversation_id.into()],
@@ -811,6 +843,22 @@ impl RelayRepository for SeaOrmRelayRepository {
     ) -> RepoResult<bool> {
         self.flag(
             &format!("SELECT {} AS flag", hidden("$1", "$2")),
+            vec![uuid(user_id), conversation_id.into()],
+        )
+        .await
+    }
+
+    async fn blocked_by_dm_partner(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+    ) -> RepoResult<bool> {
+        self.flag(
+            r#"SELECT EXISTS (SELECT 1 FROM conversation c
+                   JOIN conversation_member m ON m.conversation_id = c.id AND m.user_id <> $1
+                   JOIN "user" me ON me.id = $1
+                   JOIN relay_block b ON b.user_id = m.user_id AND b.principal_id = me.principal_id
+                   WHERE c.id = $2 AND c.conversation_type = 'direct') AS flag"#,
             vec![uuid(user_id), conversation_id.into()],
         )
         .await
