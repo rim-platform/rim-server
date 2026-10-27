@@ -326,6 +326,95 @@ async fn a_request_takes_nothing_from_its_recipient_until_they_accept_it() {
     a.stop().await;
 }
 
+const BLOCK: &str = "mutation($p: String!) { blockPrincipal(principalId: $p) }";
+const UNBLOCK: &str = "mutation($p: String!) { unblockPrincipal(principalId: $p) }";
+const SEND: &str = "mutation($s: ID!, $c: ID!, $t: String!) { \
+     sendMessage(input: { serverId: $s, conversationId: $c, text: $t }) { id } }";
+const MESSAGES: &str = r#"query($s: ID!, $c: ID!) {
+  messages(serverId: $s, conversationId: $c, dir: AFTER, limit: 50, includeDeleted: true) {
+    items { id text }
+  }
+}"#;
+
+/// The texts of the messages `person` reads in `conversation` of `server`.
+async fn texts(person: &Person, server: &str, conversation: &str) -> Vec<String> {
+    person
+        .ok(MESSAGES, json!({ "s": server, "c": conversation }))
+        .await["messages"]["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|m| m["text"].as_str().expect("text").to_string())
+        .collect()
+}
+
+/// The ids of `person`'s requests in `status`.
+async fn request_ids(person: &Person, status: &str) -> Vec<Value> {
+    person.ok(REQUESTS, json!({ "status": status })).await["dmRequests"]
+        .as_array()
+        .expect("requests")
+        .iter()
+        .map(|r| r["id"].clone())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unblocked_senders_next_message_is_a_new_request() {
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = direct_space(&alice).await;
+
+    let conv = created(&dm(&a, &alice, &direct, &bob).await);
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
+        .await;
+    let request = bob.pending_request(&alice).await;
+
+    let blocked = bob.ok(BLOCK, json!({ "p": alice.principal() })).await;
+    assert_eq!(blocked["blockPrincipal"], json!(true));
+    assert!(request_ids(&bob, "PENDING").await.is_empty());
+
+    let unblocked = bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
+    assert_eq!(unblocked["unblockPrincipal"], json!(true));
+    assert!(request_ids(&bob, "PENDING").await.is_empty());
+    assert!(request_ids(&bob, "IGNORED").await.is_empty());
+    assert!(!listed(&bob, &direct).await.contains(&conv));
+
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "after" }))
+        .await;
+    let again = bob.pending_request(&alice).await;
+    assert_eq!(again["id"], request["id"]);
+    assert_eq!(again["heldItems"].as_array().expect("held").len(), 2);
+    assert!(
+        again["createdAt"].as_str() > request["createdAt"].as_str(),
+        "the request is filed anew: {request} then {again}"
+    );
+    assert!(!listed(&bob, &direct).await.contains(&conv));
+
+    bob.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    assert!(listed(&bob, &direct).await.contains(&conv));
+    assert_eq!(texts(&bob, &direct, &conv).await, ["hello", "after"]);
+    bob.ok(SEND, json!({ "s": direct, "c": conv, "t": "hi back" }))
+        .await;
+
+    // Unblocking someone who has no request changes nothing.
+    let carols = bob.ok(BLOCK, json!({ "p": carol.principal() })).await;
+    assert_eq!(carols["blockPrincipal"], json!(true));
+    let lifted = bob.ok(UNBLOCK, json!({ "p": carol.principal() })).await;
+    assert_eq!(lifted["unblockPrincipal"], json!(true));
+    let again = bob.ok(UNBLOCK, json!({ "p": carol.principal() })).await;
+    assert_eq!(again["unblockPrincipal"], json!(false));
+
+    a.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn only_the_owner_sets_a_workspaces_rules_and_a_closing_floor_binds_its_members() {
     let a = one_server(|_| {}).await;

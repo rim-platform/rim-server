@@ -4276,3 +4276,178 @@ async fn a_group_of_the_default_workspace_reaches_its_local_members_as_an_invite
         }
     }
 }
+
+// ── Unblocking ───────────────────────────────────────────────────────────────────────────
+
+/// A relay for Bob whose only repository is `relay`, over the usual mocks.
+fn unblock_relay(relay: MockRelayRepository) -> DefaultRelayService {
+    relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            ..empty_repos()
+        },
+        MockPeerService::new(),
+        MockS2sClient::new(),
+    )
+}
+
+#[tokio::test]
+async fn unblocking_clears_the_ignored_requests_from_that_principal() {
+    let bob = UserId::new();
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_unblock()
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(true) }));
+    relay
+        .expect_clear_ignored_from()
+        .withf(move |user_id, principal, at| {
+            *user_id == bob && principal == "rimp1_alice" && *at > Utc::now() + Duration::days(29)
+        })
+        .times(1)
+        .returning(|_, _, _| Box::pin(async { Ok(2) }));
+
+    let lifted = unblock_relay(relay)
+        .unblock_principal(Actor::new(bob), "rimp1_alice".into())
+        .await
+        .expect("unblocked");
+
+    assert!(lifted);
+}
+
+#[tokio::test]
+async fn unblocking_someone_not_blocked_clears_nothing() {
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_unblock()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    relay.expect_clear_ignored_from().never();
+
+    let lifted = unblock_relay(relay)
+        .unblock_principal(Actor::new(UserId::new()), "rimp1_alice".into())
+        .await
+        .expect("unblocked");
+
+    assert!(!lifted);
+}
+
+/// Bob's relay holding one pending request for `CONVERSATION`, decided as it was filed when
+/// `cleared`; `refiled` records each request it files again.
+fn held_request_relay(
+    cleared: bool,
+    refiled: Arc<Mutex<Vec<rim_core::relay::model::DmRequestId>>>,
+) -> (DefaultRelayService, rim_core::relay::model::DmRequestId) {
+    use rim_core::relay::model::DmRequestStatus;
+
+    let bob = UserId::new();
+    let mut row = accepted_row(bob, Utc::now() + Duration::days(30), false);
+    let request_id = row.id;
+    row.status = DmRequestStatus::Pending;
+    row.decided_at = cleared.then_some(row.created_at);
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay.expect_find_request().returning(move |_, _, _| {
+        let found = Some(row.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    relay
+        .expect_count_held()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_request_held_bytes()
+        .returning(|_| Box::pin(async { Ok(100) }));
+    relay
+        .expect_user_held_bytes()
+        .returning(|_| Box::pin(async { Ok(100) }));
+    relay
+        .expect_refresh_request()
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+    relay.expect_refile_request().returning(move |id, _| {
+        refiled.lock().expect("lock").push(id);
+        Box::pin(async { Ok(true) })
+    });
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_insert_item()
+        .withf(move |item| item.request_id == Some(request_id))
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_queued_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    let svc = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&host_signer(40), 0), None),
+        MockS2sClient::new(),
+    );
+    (svc, request_id)
+}
+
+/// Delivers a message of `CONVERSATION` to Bob's relay and returns the notices it raised.
+async fn deliver_message(svc: &DefaultRelayService) -> Vec<RelayNotice> {
+    let mut notices = svc.subscribe();
+    let response = svc
+        .deliver(
+            PEER.to_string(),
+            vec![conversation_item(
+                &format!("c:{CONVERSATION}"),
+                serde_json::json!({ "type": "MessageCreated", "conversation_id": CONVERSATION }),
+            )],
+        )
+        .await
+        .expect("delivered");
+    assert!(response.refused.is_empty(), "{:?}", response.refused);
+    std::iter::from_fn(|| notices.try_recv().ok()).collect()
+}
+
+#[tokio::test]
+async fn the_next_item_of_a_cleared_request_files_it_again_as_a_new_request() {
+    let refiled = Arc::default();
+    let (svc, request_id) = held_request_relay(true, Arc::clone(&refiled));
+
+    let notices = deliver_message(&svc).await;
+
+    assert_eq!(*refiled.lock().expect("lock"), vec![request_id]);
+    assert!(
+        notices.iter().any(|n| matches!(
+            n,
+            RelayNotice::DmRequestReceived { request_id: id, .. } if *id == request_id
+        )),
+        "{notices:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_item_of_an_ordinary_pending_request_is_held_without_filing_it_again() {
+    let refiled = Arc::default();
+    let (svc, _) = held_request_relay(false, Arc::clone(&refiled));
+
+    let notices = deliver_message(&svc).await;
+
+    assert!(refiled.lock().expect("lock").is_empty());
+    assert!(
+        !notices
+            .iter()
+            .any(|n| matches!(n, RelayNotice::DmRequestReceived { .. })),
+        "{notices:?}"
+    );
+}

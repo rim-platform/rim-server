@@ -44,6 +44,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   run only in the client, are refused too.
 - `createUserCommand` takes only lowercase letters, numbers, dots, dashes and underscores after
   `user.`; existing user commands keep their ids.
+- `unblockPrincipal` clears the requests the caller ignored from that person, by hand or by the
+  block: the next item of such a conversation files it again as a new request holding the
+  invite and that item, as a first contact would. Nothing they sent while blocked comes back
+  from the relay. Audited as `relay.principal_unblocked` (`scope` `user`) with
+  `cleared_requests`.
 
 ### Fixed
 

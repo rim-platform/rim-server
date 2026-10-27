@@ -444,6 +444,95 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
     b.stop().await;
 }
 
+/// Unblocking clears the requests ignored from the principal: nothing sent while blocked comes
+/// back, and the next item files the request again with the invite and that item.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unblocked_sender_on_another_relay_files_a_new_request_with_their_next_item() {
+    let (a, b) = relays().await;
+    let mut alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&b, "bob", 2).await;
+
+    let conv = alice.start_dm(&bob, &b, true).await;
+    let direct = alice.direct_space().await;
+    let request = bob.pending_request(&alice).await;
+    let claimed = alice
+        .ok(
+            CLAIM,
+            json!({ "input": {
+                "serverId": direct,
+                "conversationId": conv,
+                "devices": [{ "principalId": bob.principal(), "deviceId": bob.device_id() }],
+            } }),
+        )
+        .await["claimMlsKeyPackages"]
+        .clone();
+    let bob_principal = bob.principal();
+    let (commit, welcome) = alice.mls.create_group(
+        conv.parse().expect("uuid"),
+        &[(
+            bob_principal.as_str(),
+            bob.device_id(),
+            claimed[0]["keyPackage"].as_str().expect("package"),
+        )],
+    );
+
+    // Blocked, Bob keeps only the invite, and nothing Alice sends is kept.
+    let blocked = bob
+        .ok(
+            "mutation($p: String!) { blockPrincipal(principalId: $p) }",
+            json!({ "p": alice.principal() }),
+        )
+        .await;
+    assert_eq!(blocked["blockPrincipal"], json!(true));
+    alice
+        .ok(
+            SUBMIT,
+            json!({ "input": {
+                "serverId": direct, "conversationId": conv, "incarnation": 1, "epoch": 0,
+                "cipherSuite": 0x004f, "commit": commit, "welcome": welcome,
+            } }),
+        )
+        .await;
+    alice.mls.merge_pending();
+    alice.send_encrypted(&direct, &conv, "while blocked").await;
+    drained(&a).await;
+    assert!(bob.items(&a, None).await.is_empty());
+    let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+    assert_eq!(pending["dmRequests"], json!([]));
+
+    // Unblocked, nothing comes back by itself.
+    let unblocked = bob
+        .ok(
+            "mutation($p: String!) { unblockPrincipal(principalId: $p) }",
+            json!({ "p": alice.principal() }),
+        )
+        .await;
+    assert_eq!(unblocked["unblockPrincipal"], json!(true));
+    let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+    assert_eq!(pending["dmRequests"], json!([]));
+
+    // Her next message files the request again, holding the invite and that message with its
+    // notification.
+    alice.send_encrypted(&direct, &conv, "after unblock").await;
+    drained(&a).await;
+    let refiled = eventually("the request filed again", || async {
+        let refiled = bob.pending_request(&alice).await;
+        (refiled["heldItems"].as_array().map(Vec::len) == Some(3)).then_some(refiled)
+    })
+    .await;
+    assert_eq!(refiled["id"], request["id"]);
+    let held: Vec<Value> = refiled["heldItems"]
+        .as_array()
+        .expect("held")
+        .iter()
+        .map(|item| verify_item(&a, item).event["type"].clone())
+        .collect();
+    assert_eq!(held, ["DmInvite", "NewMessage", "NotificationDue"]);
+
+    a.stop().await;
+    b.stop().await;
+}
+
 /// A block of a principal an account here holds names that account; the list is the caller's
 /// own and needs a session.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

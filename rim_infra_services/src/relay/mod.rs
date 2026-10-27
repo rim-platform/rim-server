@@ -864,7 +864,21 @@ impl DefaultRelayService {
             // Local members read a conversation they accepted live, not from the queue.
             Filing::Deliver if read.local => return Ok(Filed::Done(None)),
             Filing::Deliver => None,
-            Filing::Hold(id) => Some(id),
+            Filing::Hold(id) => {
+                // A request an unblock cleared is filed again by the next item of its conversation.
+                if found.as_ref().is_some_and(DmRequest::is_cleared)
+                    && repos
+                        .relay_repo
+                        .refile_request(id, now + self.settings.retention)
+                        .await?
+                {
+                    notices.push(RelayNotice::DmRequestReceived {
+                        user_id,
+                        request_id: id,
+                    });
+                }
+                Some(id)
+            }
             filing @ (Filing::FileAccepted | Filing::FileRequest) => {
                 let (Some(invite), Some(conversation_id)) = (&read.invite, read.conversation_id)
                 else {
@@ -1302,12 +1316,40 @@ impl RelayService for DefaultRelayService {
         Ok(added)
     }
 
+    #[instrument(name = "relay.unblock_principal", skip_all, fields(actor_id = %actor.user_id))]
     async fn unblock_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool> {
-        Ok(self
-            .repos
+        let (scope, repos) = self.begin().await?;
+        let lifted = repos
             .relay_repo
             .unblock(actor.user_id, &principal_id)
-            .await?)
+            .await?;
+        // Unblocked, they may reach the user again: the next item of a conversation the user
+        // ignored from them files it again, as a first contact's invite would.
+        let cleared = if lifted {
+            repos
+                .relay_repo
+                .clear_ignored_from(
+                    actor.user_id,
+                    &principal_id,
+                    Utc::now() + self.settings.retention,
+                )
+                .await?
+        } else {
+            0
+        };
+        Self::commit(scope).await?;
+        if lifted {
+            info!(
+                target: "audit",
+                event = "relay.principal_unblocked",
+                scope = "user",
+                user_id = %actor.user_id,
+                principal_id = %principal_id,
+                cleared_requests = cleared,
+                "a user unblocked a principal"
+            );
+        }
+        Ok(lifted)
     }
 
     async fn blocked_principals(&self, actor: Actor) -> ServiceResult<Vec<BlockedPrincipalDto>> {

@@ -92,6 +92,7 @@ pub trait RelayRepository: Send + Sync {
         status: Option<DmRequestStatus>,
     ) -> RepoResult<Vec<DmRequest>>;
 
+    /// A user's pending requests, cleared ones not counted.
     async fn count_pending_requests(&self, user_id: UserId) -> RepoResult<i64>;
 
     /// Requests from a principal created since `since`, for every local user.
@@ -155,6 +156,20 @@ pub trait RelayRepository: Send + Sync {
         expires_at: DateTime<Utc>,
     ) -> RepoResult<u64>;
 
+    /// Clear every ignored request from a principal that still holds its invite: pending again,
+    /// decided as it is filed so it is neither listed nor counted, expiring at `expires_at`. The
+    /// next item of its conversation files it again ([`Self::refile_request`]). Returns how many.
+    async fn clear_ignored_from(
+        &self,
+        user_id: UserId,
+        principal_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
+
+    /// File a cleared request again as a new pending request, expiring at `expires_at`. Returns
+    /// `false` when the request is not cleared.
+    async fn refile_request(&self, id: DmRequestId, expires_at: DateTime<Utc>) -> RepoResult<bool>;
+
     async fn delete_expired_requests(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 
     /// How many of a user's conversations from a host are accepted.
@@ -181,8 +196,8 @@ pub trait RelayRepository: Send + Sync {
         conversation_id: Uuid,
     ) -> RepoResult<u64>;
 
-    /// Local users whose request for a conversation of this server's direct space is pending,
-    /// with their principal ids.
+    /// Local users still members of a conversation of this server's direct space whose request
+    /// for it is pending, with their principal ids.
     async fn pending_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
 
     /// Whether a local user's request for a conversation is pending.

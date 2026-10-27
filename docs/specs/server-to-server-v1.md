@@ -834,7 +834,8 @@ Once accepted it is an ordinary conversation of the space he uses directly.
 |---|---|
 | `acceptDmRequest(id)` | Held items released; later items flow; the sender becomes a contact |
 | `ignoreDmRequest(id)` | Held items deleted but the `DmInvite`; later items of that conversation dropped; row expires in 30 days |
-| `blockPrincipal(principalId)` | Pending requests from it ignored; its `DmInvite`s refused (`blocked`) and its claims refused; the app leaves the conversation through the home |
+| `blockPrincipal(principalId)` | Pending requests from it ignored; its `DmInvite`s refused (`blocked`) and its claims refused; the app leaves a group's conversation through the home (a DM cannot be left) |
+| `unblockPrincipal(principalId)` | Block lifted; requests ignored from it cleared: the next item of such a conversation files it again as a pending request |
 | Nothing | Expires after 30 days; from then on deciding or reporting it is `NOT_FOUND`, as for an unknown request |
 
 The app shows the card's name (verified against the sender's key log) and a fingerprint of the
@@ -1405,7 +1406,7 @@ database, so correctness never depends on one node. Audit (ids only):
 `s2s.peer_unblocked`, `host.remote_join`, `host.delegation_accepted`, `host.revocation_applied`,
 `host.recovery_applied`, `host.identity_revocations_applied`,
 `relay.principal_blocked` (`scope` `user` for `blockPrincipal`, `server` for the operator's),
-`relay.principal_unblocked`, `relay.blocked_principal_refused`, `relay.dm_request_reported`,
+`relay.principal_unblocked` (`scope` `user` for `unblockPrincipal`, with `cleared_requests`; `server` for the operator's), `relay.blocked_principal_refused`, `relay.dm_request_reported`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `relay.registration_pow`,
 `server_key.created`, `server_key.rotated`, `server_key.recovered`, `s2s.peer_reset`,
 `s2s.peer_forgotten`. Events with an acting user and workspace go to `command_audit_log`; the server

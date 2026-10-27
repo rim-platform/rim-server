@@ -111,6 +111,14 @@ pub struct DmRequest {
     pub host_user_id: Option<Uuid>,
 }
 
+impl DmRequest {
+    /// Whether an unblock cleared the request: pending, but decided as it was filed, so it is
+    /// not listed until the next item of its conversation files it again.
+    pub fn is_cleared(&self) -> bool {
+        self.status == DmRequestStatus::Pending && self.decided_at == Some(self.created_at)
+    }
+}
+
 /// A request to file. A conversation from a contact is filed `Accepted` at once, so every
 /// conversation a relay delivers for has a row; such rows are not listed as requests and keep
 /// no card.

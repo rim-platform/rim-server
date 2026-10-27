@@ -188,6 +188,7 @@ once.
 | `acceptDmRequest` | Held items released; later items flow; the sender becomes a contact |
 | `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days |
 | `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused |
+| `unblockPrincipal` | The block lifted; every ignored request from the principal that still keeps its invite, ignored by hand or by the block, is cleared: listed and counted nowhere, until the next item of its conversation files it again as a new pending request holding that item. Nothing dropped while it was ignored comes back. A conversation hosted elsewhere keeps at its host what they wrote meanwhile, which reading it there shows. Unblocking someone not blocked changes nothing |
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored. Once per user and request: a second report is `CONFLICT` |
 | Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request |
 
@@ -284,7 +285,7 @@ requests, outbox rows over 7 days (delivered or not) and accepted `seq` values o
 delegations and those of revoked devices or departed members, and marks this relay's expired
 subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit events
 (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
-`server` for an operator's), `relay.principal_unblocked`, `relay.blocked_principal_refused`,
+`server` for an operator's), `relay.principal_unblocked` (`scope` `user` with `cleared_requests` for a user's unblock, `server` for an operator's), `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
 `blocked_email_refused` (`action` `signup`), `relay.registration_pow`, `relay.left`, `key_identity_adopted`, `host.revocation_applied`,
 `host.recovery_applied` and `host.identity_revocations_applied` (a recovery or revocations
@@ -403,7 +404,7 @@ space").
   conversation's space to its home before reading or leaving it.
 - `myBlockedPrincipals` lists the caller's blocks newest first: `principalId`, `blockedAt`, and
   `userId`, `username` and `displayName` of the account on this server holding the principal
-  (null when none does). `unblockPrincipal` takes one off.
+  (null when none does). `unblockPrincipal` takes one off and clears the requests ignored from that person ("The request inbox").
 - `relayStream(after)` on the existing WebSocket yields the session device's items above `after`
   (its cursor when omitted), then live ones, as JSON strings:
   `{"type":"RelayItem","id","hostServerId","workspaceId","envelope":{"payload","signature"}}`, plus

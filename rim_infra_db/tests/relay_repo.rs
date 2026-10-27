@@ -1688,3 +1688,229 @@ async fn the_host_user_migration_bounds_accepted_rows_kept_forever() {
     );
     assert_eq!(pending.host_user_id, None);
 }
+
+#[tokio::test]
+async fn unblocking_clears_ignored_requests_until_their_next_item() {
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let new = |status, from: &str| NewDmRequest {
+        status,
+        user_id: bob.id,
+        from_principal_id: from.to_string(),
+        card_payload: "{}".to_string(),
+        card_signature: "ed25519:c".to_string(),
+        host_server_id: HOST.to_string(),
+        conversation_id: Uuid::now_v7(),
+        expires_at: Utc::now() + Duration::days(30),
+    };
+    let mut seq = 0;
+    let mut hold = async |request_id, n| {
+        for _ in 0..n {
+            seq += 1;
+            let env = repo
+                .insert_envelope(envelope(Some(seq), Uuid::now_v7()))
+                .await
+                .unwrap();
+            repo.insert_item(NewRelayItem {
+                request_id: Some(request_id),
+                ..item(bob.id, env)
+            })
+            .await
+            .unwrap();
+        }
+    };
+    let ignored = repo
+        .insert_request(new(DmRequestStatus::Pending, "rimp1_alice"))
+        .await
+        .unwrap();
+    hold(ignored.id, 2).await;
+    let in_30_days = Utc::now() + Duration::days(30);
+    repo.ignore_pending_from(bob.id, "rimp1_alice", in_30_days)
+        .await
+        .unwrap();
+    let by_hand = repo
+        .insert_request(new(DmRequestStatus::Pending, "rimp1_alice"))
+        .await
+        .unwrap();
+    hold(by_hand.id, 1).await;
+    repo.decide_request(by_hand.id, DmRequestStatus::Ignored, in_30_days)
+        .await
+        .unwrap()
+        .expect("pending");
+    let empty = repo
+        .insert_request(new(DmRequestStatus::Ignored, "rimp1_alice"))
+        .await
+        .unwrap();
+    let carols = repo
+        .insert_request(new(DmRequestStatus::Pending, "rimp1_carol"))
+        .await
+        .unwrap();
+    hold(carols.id, 1).await;
+    repo.decide_request(carols.id, DmRequestStatus::Ignored, in_30_days)
+        .await
+        .unwrap()
+        .expect("pending");
+    let accepted = repo
+        .insert_request(new(DmRequestStatus::Accepted, "rimp1_alice"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.clear_ignored_from(bob.id, "rimp1_alice", in_30_days)
+            .await
+            .unwrap(),
+        2,
+        "the ignored requests that hold an invite"
+    );
+    let find = |id| {
+        let repo = &repo;
+        async move { repo.get_request(bob.id, id).await.unwrap().expect("row") }
+    };
+    for cleared in [ignored.id, by_hand.id] {
+        let row = find(cleared).await;
+        assert_eq!(row.status, DmRequestStatus::Pending);
+        assert!(row.is_cleared());
+    }
+    assert_eq!(repo.count_held(ignored.id).await.unwrap(), 1);
+    assert_eq!(
+        find(empty.id).await.status,
+        DmRequestStatus::Ignored,
+        "a row without an invite stays ignored"
+    );
+    assert_eq!(find(carols.id).await.status, DmRequestStatus::Ignored);
+    assert_eq!(find(accepted.id).await.status, DmRequestStatus::Accepted);
+    let listed: Vec<_> = repo
+        .list_requests(bob.id, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert!(!listed.contains(&ignored.id) && !listed.contains(&by_hand.id));
+    assert_eq!(repo.count_pending_requests(bob.id).await.unwrap(), 0);
+
+    assert!(repo.refile_request(ignored.id, in_30_days).await.unwrap());
+    assert!(
+        !repo.refile_request(ignored.id, in_30_days).await.unwrap(),
+        "a request is filed again once"
+    );
+    let refiled = find(ignored.id).await;
+    assert_eq!(refiled.status, DmRequestStatus::Pending);
+    assert!(!refiled.is_cleared());
+    assert_eq!(refiled.decided_at, None);
+    let pending: Vec<_> = repo
+        .list_requests(bob.id, Some(DmRequestStatus::Pending))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(pending, vec![ignored.id]);
+    assert_eq!(repo.count_pending_requests(bob.id).await.unwrap(), 1);
+}
+
+/// The direct space with alice (key-only), bob (key-only) and a conversation of `kind` alice
+/// created, both of them members.
+async fn direct_pair(
+    ctx: &support::TestCtx,
+    kind: rim_core::conversation::model::ConversationType,
+) -> (
+    rim_core::user::model::User,
+    rim_core::user::model::User,
+    rim_core::conversation::model::ConversationId,
+) {
+    use rim_core::conversation::model::NewConversation;
+    use rim_core::conversation::repository::ConversationRepository;
+    use rim_core::conversation_member::repository::ConversationMemberRepository;
+    use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
+    use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
+
+    let direct = SeaOrmHostRepository::new(ctx.db.clone())
+        .ensure_direct_space("Direct messages")
+        .await
+        .unwrap();
+    let alice = ctx.create_key_only_user("alice", "rimp1_alice").await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let conversation = SeaOrmConversationRepository::new(ctx.db.clone())
+        .create_conversation(NewConversation {
+            server_id: direct,
+            conversation_type: kind,
+            title: None,
+            is_private: true,
+            created_by: Some(alice.id),
+            encrypted: false,
+        })
+        .await
+        .unwrap();
+    let members = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+    members.add_member(conversation.id, alice.id).await.unwrap();
+    members.add_member(conversation.id, bob.id).await.unwrap();
+    (alice, bob, conversation.id)
+}
+
+#[tokio::test]
+async fn a_cleared_conversation_of_the_direct_space_stays_hidden_and_holders_are_members_still() {
+    use rim_core::conversation::model::ConversationType;
+    use rim_core::conversation_member::repository::ConversationMemberRepository;
+    use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
+
+    let ctx = support::TestCtx::new().await;
+    let (_, bob, conversation) = direct_pair(&ctx, ConversationType::Direct).await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let request = repo
+        .insert_request(NewDmRequest {
+            status: DmRequestStatus::Pending,
+            user_id: bob.id,
+            from_principal_id: "rimp1_alice".to_string(),
+            card_payload: "{}".to_string(),
+            card_signature: "ed25519:c".to_string(),
+            host_server_id: HOST.to_string(),
+            conversation_id: conversation.into(),
+            expires_at: Utc::now() + Duration::days(30),
+        })
+        .await
+        .unwrap();
+    let env = repo
+        .insert_envelope(envelope(Some(1), Uuid::now_v7()))
+        .await
+        .unwrap();
+    repo.insert_item(NewRelayItem {
+        request_id: Some(request.id),
+        ..item(bob.id, env)
+    })
+    .await
+    .unwrap();
+    repo.ignore_pending_from(bob.id, "rimp1_alice", Utc::now() + Duration::days(30))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.clear_ignored_from(bob.id, "rimp1_alice", Utc::now() + Duration::days(30))
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        repo.conversation_hidden(bob.id, conversation.into())
+            .await
+            .unwrap(),
+        "a cleared request keeps the conversation out of the list"
+    );
+    let holders = repo.pending_holders(conversation.into()).await.unwrap();
+    assert_eq!(
+        holders.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![bob.id]
+    );
+    SeaOrmConversationMemberRepository::new(ctx.db.clone())
+        .remove_member(conversation, bob.id)
+        .await
+        .unwrap();
+    assert!(
+        repo.pending_holders(conversation.into())
+            .await
+            .unwrap()
+            .is_empty(),
+        "someone who left holds nothing"
+    );
+}
