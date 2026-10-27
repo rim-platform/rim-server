@@ -166,24 +166,22 @@ from it: here when this server hosts it, and for a conversation hosted elsewhere
 host on the user's own stream (a Welcome, a read state, a notification) told it the host's id
 for them.
 
-The same rule covers conversations of this server's own direct space whose creator is someone
-else (a person from another relay creating a DM with a local user through the forward path, or a
-local user), and DMs between members of a workspace this server hosts. The server files its own
-invite for the local member; until they accept, the
-conversation is left out of their `inboxConversations`, its events out of their
-`workspaceEvents`, and its notifications, mentions and unread counts out of the notification
-list, the bell, `unreadCounts` and the email digest; its first events are held with
-the request. Everything appears once they accept. They may read the conversation before they
-decide, but post nothing into it: while their request for it is pending or ignored, or they
-blocked whoever started it, `sendMessage`, `replyToMessage`, `forwardMessage` into it,
-`sendEncryptedMessage` and `toggleReaction` answer `FORBIDDEN` ("accept the message request
-before posting here"), and `startTyping` answers `false` without telling anyone. Someone the other member of a DM
-blocked posts nothing into it either: the same mutations answer `FORBIDDEN` ("they do not take
-direct messages from you"), so nothing they write while blocked is stored here. This server
-enforces it for the conversations it hosts; a reply to a request for a conversation hosted
-elsewhere goes to that host through the forward path, which leaves it to the client. This needs
-server-to-server traffic to be on; with it off, conversations in the direct space are live at
-once.
+The same rule covers conversations of this server's own direct space whose creator is someone else
+(a person from another relay creating a DM with a local user through the forward path, or a local
+user), and DMs between members of a workspace this server hosts. The server files its own invite for
+the local member; until they accept, the conversation is left out of their `inboxConversations`, its
+events out of their `workspaceEvents`, and its notifications, mentions and unread counts out of the
+notification list, the bell, `unreadCounts` and the email digest; its first events are held with the
+request. Everything appears once they accept. They may read the conversation before they decide, but
+post nothing into it: while their request for it is pending or ignored, or they blocked whoever
+started it, `sendMessage`, `replyToMessage`, `forwardMessage` into it, `sendEncryptedMessage` and
+`toggleReaction` answer `FORBIDDEN` ("accept the message request before posting here"), and
+`startTyping` answers `false` without telling anyone. Someone the other member of a DM blocked posts
+nothing into it either: the same mutations answer `FORBIDDEN` ("they do not take direct messages
+from you"), so nothing they write while blocked is stored here. This server enforces it for the
+conversations it hosts; a reply to a request for a conversation hosted elsewhere goes to that host
+through the forward path, which leaves it to the client. This needs server-to-server traffic to be
+on; with it off, conversations in the direct space are live at once.
 
 | Action | Effect |
 |---|---|
@@ -283,16 +281,18 @@ mutations stay refused on it.
 ### Cleanup and audit
 
 Every minute the server deletes acknowledged and expired items, envelopes no item uses, expired
-requests, outbox rows over 7 days (delivered or not) and accepted `seq` values out of the window, ends expired
-delegations and those of revoked devices or departed members, and marks this relay's expired
-subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit events
-(target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
-`server` for an operator's), `relay.principal_unblocked` (`scope` `user` with `cleared_requests` for a user's unblock, `server` for an operator's), `relay.blocked_principal_refused`,
+requests, outbox rows over 7 days (delivered or not) and accepted `seq` values out of the window,
+ends expired delegations and those of revoked devices or departed members, and marks this relay's
+expired subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit
+events (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
+`server` for an operator's), `relay.principal_unblocked` (`scope` `user` with `cleared_requests` for
+a user's unblock, `server` for an operator's), `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
-`blocked_email_refused` (`action` `signup`), `relay.registration_pow`, `relay.left`, `key_identity_adopted`, `host.revocation_applied`,
-`host.recovery_applied` and `host.identity_revocations_applied` (a recovery or revocations
-applied from a person's identity, with the sessions and delegations they ended); `host.remote_join` and
-`host.delegation_accepted` are also written to `command_audit_log` (initiator `s2s`).
+`blocked_email_refused` (`action` `signup`), `relay.registration_pow`, `relay.left`,
+`key_identity_adopted`, `host.revocation_applied`, `host.recovery_applied` and
+`host.identity_revocations_applied` (a recovery or revocations applied from a person's identity,
+with the sessions and delegations they ended); `host.remote_join` and `host.delegation_accepted` are
+also written to `command_audit_log` (initiator `s2s`).
 
 ### The public relay
 
@@ -406,7 +406,8 @@ space").
   conversation's space to its home before reading or leaving it.
 - `myBlockedPrincipals` lists the caller's blocks newest first: `principalId`, `blockedAt`, and
   `userId`, `username` and `displayName` of the account on this server holding the principal
-  (null when none does). `unblockPrincipal` takes one off and clears the requests ignored from that person ("The request inbox").
+  (null when none does). `unblockPrincipal` takes one off and clears the requests ignored from
+  that person ("The request inbox").
 - `relayStream(after)` on the existing WebSocket yields the session device's items above `after`
   (its cursor when omitted), then live ones, as JSON strings:
   `{"type":"RelayItem","id","hostServerId","workspaceId","envelope":{"payload","signature"}}`, plus
