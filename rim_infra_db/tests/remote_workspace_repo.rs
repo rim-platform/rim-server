@@ -477,6 +477,52 @@ async fn a_subscription_stays_active_while_any_device_keeps_it() {
 }
 
 #[tokio::test]
+async fn ending_one_subscription_leaves_the_others() {
+    let ctx = support::TestCtx::new().await;
+    let user = ctx.create_key_only_user("alice", "rimp1_alice").await.id;
+    let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
+    let repo = SeaOrmSubscriptionRepository::new(ctx.db.clone());
+    let now = Utc::now();
+    let later = now + Duration::hours(10);
+    for workspace in [first, second] {
+        repo.upsert_subscription(
+            user,
+            RELAY,
+            workspace,
+            SubscriptionStatus::Active,
+            Some(later),
+        )
+        .await
+        .unwrap();
+    }
+
+    assert!(repo.end_subscription(user, RELAY, first).await.unwrap());
+    assert!(!repo.end_subscription(user, RELAY, first).await.unwrap());
+    let statuses: Vec<_> = repo
+        .list_subscriptions(user)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.workspace_id, s.status))
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            (first, SubscriptionStatus::Ended),
+            (second, SubscriptionStatus::Active),
+        ]
+    );
+    assert!(!repo.is_subscribed(user, RELAY, first, now).await.unwrap());
+    assert!(repo.is_subscribed(user, RELAY, second, now).await.unwrap());
+
+    let joined_again = repo
+        .upsert_subscription(user, RELAY, first, SubscriptionStatus::Active, Some(later))
+        .await
+        .unwrap();
+    assert_eq!(joined_again.status, SubscriptionStatus::Active);
+}
+
+#[tokio::test]
 async fn a_join_request_filed_elsewhere_is_recorded_until_it_expires_or_is_forgotten() {
     let ctx = support::TestCtx::new().await;
     let user = ctx.create_key_only_user("alice", "rimp1_alice").await.id;

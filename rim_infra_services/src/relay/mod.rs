@@ -260,6 +260,8 @@ struct ReadEnvelope {
     removes_member: bool,
     /// The event decides a join request (`JoinRequestDecided`).
     join_decided: bool,
+    /// The event says a member left the workspace (`MemberLeft`).
+    departed: bool,
 }
 
 /// The request inbox's decision for one recipient of an item.
@@ -525,6 +527,7 @@ fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadE
         let event_type = event.event.get("type").and_then(|v| v.as_str());
         let removes_member = event_type == Some("MemberRemovedFromConversation");
         let join_decided = event_type == Some("JoinRequestDecided");
+        let departed = event_type == Some("MemberLeft");
         let invite = (event_type == Some("DmInvite")).then(|| Invite {
             from_principal_id: event
                 .event
@@ -549,6 +552,7 @@ fn envelope_fields(event: rim_s2s::host::HostEvent, local: bool) -> Option<ReadE
             user_id,
             removes_member,
             join_decided,
+            departed,
         })
     }
 }
@@ -654,6 +658,14 @@ impl DefaultRelayService {
         if !subscribed && !read.local {
             self.queued_per_peer
                 .add(peer_server_id, now, u64::try_from(size).unwrap_or(0));
+        }
+        // A departure on the user's own stream ends their subscription there: the host ended
+        // their delegations with it.
+        if subscribed && read.departed && read.stream.strip_prefix("u:") == Some(principal_id) {
+            repos
+                .subscription_repo
+                .end_subscription(user_id, peer_server_id, read.workspace_id)
+                .await?;
         }
         // A delivered decision closes the user's request at that host.
         if read.join_decided && !read.local {

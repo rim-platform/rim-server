@@ -398,6 +398,9 @@ themselves (`VALIDATION`). Otherwise `FORBIDDEN`.
 
 - `kickMember`: removes the member from the workspace and from every conversation of it, deletes
   their macros and pipelines there, emits `MemberLeft`. They can re-join with a new invite.
+- `leaveWorkspace`: a member's own way out, removed as by a kick (`MemberLeft` cause `left`);
+  not for the Owner, the direct space or the default workspace (`docs/api.md`, "Leaving or
+  renaming a workspace").
 - `banMember(reason, expiresAt)`: records a ban (`server_ban`), then removes the member like a
   kick. A user who is not a member can be banned pre-emptively. While a ban is active (no
   `expiresAt`, or `expiresAt` in the future) accepting an invite, joining by invite and being
@@ -512,19 +515,24 @@ changes, with the mode, role and `allow_remote`), `join_request.accepted` and
 `workspace.member_joined` with `"source": "public_link"` for every join through the link (the
 joiner's row, with the role and the accepted request's id). Never the token.
 
+A member's own workspace actions write rows with initiator `workspace`: `workspace.leave` (with
+the role they left) and `workspace.rename` (the Owner's; no name text).
+
 ### Realtime events
 
 Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
 
-- `{"type": "MemberLeft", "workspace_id": "…", "user_id": "…"}` — a member was kicked or banned.
-  Delivered to the workspace (guests: only about themselves), including the removed user, whose
-  subscription then ends. Optional `cause` is `kick`, `ban`, `workspace_deleted` or
+- `{"type": "MemberLeft", "workspace_id": "…", "user_id": "…"}` — a member left, or was kicked or
+  banned. Delivered to the workspace (guests: only about themselves), including the removed user,
+  whose subscription then ends. Optional `cause` is `left`, `kick`, `ban`, `workspace_deleted` or
   `account_deleted`; a temporary ban includes `until` (RFC 3339). For a kick or ban, only the
   removed user's own delivery includes the moderator's optional `reason`. Other members
   receive no reason. The removed member may keep this explanation until they dismiss it.
 - `{"type": "MemberRoleChanged", "workspace_id": "…", "user_id": "…", "role": "member"}` — `role`
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
+- `{"type": "WorkspaceUpdated", "workspace_id": "…", "name": "…"}`: the workspace was renamed.
+  Delivered to every member, guests included.
 
 Join requests:
 

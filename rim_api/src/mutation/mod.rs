@@ -60,6 +60,7 @@ pub struct Mutation(
     MutationGroup7,
     MutationGroup8,
     MutationGroup9,
+    MutationGroup10,
 );
 
 #[derive(MergedObject, Default)]
@@ -133,3 +134,6 @@ pub(crate) struct MutationGroup9(
     account_password::AccountPasswordMutations,
     session_key::SessionKeyMutations,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct MutationGroup10(workspace::WorkspaceMembershipMutations);

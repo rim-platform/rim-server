@@ -606,6 +606,24 @@ impl SubscriptionRepository for SeaOrmSubscriptionRepository {
             .await
     }
 
+    async fn end_subscription(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+    ) -> RepoResult<bool> {
+        let affected = self
+            .sql()
+            .execute(
+                "UPDATE relay_subscription SET status = 'ended', updated_at = now() \
+                 WHERE user_id = $1 AND host_server_id = $2 AND workspace_id = $3 \
+                   AND status <> 'ended'",
+                vec![uuid(user_id), host_server_id.into(), uuid(workspace_id)],
+            )
+            .await?;
+        Ok(affected > 0)
+    }
+
     async fn lapse_expired(&self, now: DateTime<Utc>) -> RepoResult<u64> {
         self.sql()
             .execute(

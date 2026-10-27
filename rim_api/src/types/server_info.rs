@@ -14,7 +14,7 @@ use rim_services::limits::InstanceLimits;
 pub const API_VERSION: i32 = 1;
 
 /// API additions an older server lacks, by name, so a client asks for them only here.
-pub const CAPABILITIES: &[&str] = &["message_edited_at"];
+pub const CAPABILITIES: &[&str] = &["message_edited_at", "workspace_leave", "workspace_rename"];
 
 /// The running server build, the API version it speaks and the optional features it runs.
 #[derive(SimpleObject, Clone, Debug)]
@@ -171,7 +171,8 @@ impl ServerInfo {
     }
 
     /// API additions this server has that an older server lacks, by name: `message_edited_at`
-    /// (`Message.editedAt`). A client ignores names it does not know.
+    /// (`Message.editedAt`), `workspace_leave` (`leaveWorkspace`), `workspace_rename`
+    /// (`renameWorkspace`). A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES
             .iter()

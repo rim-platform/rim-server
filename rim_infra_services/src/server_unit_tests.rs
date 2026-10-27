@@ -14,7 +14,7 @@ mod tests {
     use rim_services::events::Observers;
     use rim_services::server::command::{
         CreateServerCmd, DeleteWorkspaceCmd, GetServerQuery, ListMyServersQuery,
-        TransferWorkspaceOwnershipCmd,
+        RenameWorkspaceCmd, TransferWorkspaceOwnershipCmd,
     };
     use rim_services::server::service::ServerService;
     use rim_services::{Actor, ServiceError};
@@ -743,6 +743,218 @@ mod tests {
                 other => panic!("unexpected {other:?}"),
             };
             assert_eq!(got, want, "{name}");
+        }
+    }
+
+    /// Every audit row written through it, in order.
+    #[derive(Default)]
+    struct AuditRecorder(std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>);
+
+    #[async_trait::async_trait]
+    impl rim_services::audit::service::AuditLogService for AuditRecorder {
+        async fn write_entry(
+            &self,
+            entry: rim_services::audit::dto::AuditLogEntryDto,
+        ) -> rim_services::ServiceResult<()> {
+            self.0.lock().expect("lock").push(entry);
+            Ok(())
+        }
+
+        async fn list_entries(
+            &self,
+            _caller: Actor,
+            _query: rim_services::audit::dto::ListAuditLogQuery,
+        ) -> rim_services::ServiceResult<rim_services::audit::dto::AuditLogPage> {
+            Err(ServiceError::NotFound)
+        }
+    }
+
+    /// [`owner_service`] that also writes its audit rows to `audit`.
+    fn audited_owner_service(
+        server_repo: MockServerRepository,
+        server_member_repo: MockServerMemberRepository,
+        events: Arc<Recorder>,
+        audit: Arc<AuditRecorder>,
+        direct_space: Option<ServerId>,
+    ) -> DefaultServerService {
+        owner_service(
+            server_repo,
+            server_member_repo,
+            rim_services::storage::service::MockStorageService::new(),
+            events,
+            direct_space,
+        )
+        .with_audit_log_service(audit)
+    }
+
+    fn rename(server_id: ServerId, actor: UserId, name: &str) -> RenameWorkspaceCmd {
+        RenameWorkspaceCmd {
+            actor: Actor::new(actor),
+            server_id,
+            name: name.to_string(),
+        }
+    }
+
+    /// The names of the `WorkspaceUpdated` events recorded.
+    fn renamed_to(events: &Recorder) -> Vec<String> {
+        events
+            .0
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter_map(|e| match e {
+                rim_services::events::WorkspaceEvent::WorkspaceUpdated { name, .. } => {
+                    Some(name.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_owner_renames_the_workspace_and_every_member_is_told() {
+        let (server_id, owner) = (ServerId::new(), UserId::new());
+        let mut servers = MockServerRepository::new();
+        servers
+            .expect_get_by_id()
+            .returning(|id| Ok(Some(server_named(id, "Team"))));
+        servers
+            .expect_find_owned_by_name()
+            .returning(|_, _| Ok(None));
+        servers
+            .expect_rename()
+            .times(1)
+            .withf(|_, n| n == "Platform")
+            .returning(|_, _| Ok(true));
+        let (events, audit) = (
+            Arc::new(Recorder::default()),
+            Arc::new(AuditRecorder::default()),
+        );
+        let renamed = audited_owner_service(
+            servers,
+            members(vec![(owner, ServerMemberRole::Owner)]),
+            Arc::clone(&events),
+            Arc::clone(&audit),
+            None,
+        )
+        .rename_workspace(rename(server_id, owner, "  Platform  "))
+        .await
+        .expect("renamed");
+        assert_eq!(renamed.name, "Platform");
+        assert_eq!(renamed.id, server_id);
+        assert_eq!(renamed_to(&events), ["Platform"]);
+        let rows = audit.0.lock().expect("lock").clone();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].command_id, "workspace.rename");
+        assert_eq!(rows[0].initiator, "workspace");
+        assert_eq!(rows[0].args_redacted, serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn a_case_change_is_a_rename_and_the_same_name_is_nothing() {
+        let (server_id, owner) = (ServerId::new(), UserId::new());
+        let mut servers = MockServerRepository::new();
+        servers
+            .expect_get_by_id()
+            .returning(|id| Ok(Some(server_named(id, "Team"))));
+        servers
+            .expect_find_owned_by_name()
+            .returning(move |_, _| Ok(Some(server_named(server_id, "Team"))));
+        servers
+            .expect_rename()
+            .times(1)
+            .withf(|_, n| n == "team")
+            .returning(|_, _| Ok(true));
+        let (events, audit) = (
+            Arc::new(Recorder::default()),
+            Arc::new(AuditRecorder::default()),
+        );
+        let renamed = audited_owner_service(
+            servers,
+            members(vec![(owner, ServerMemberRole::Owner)]),
+            Arc::clone(&events),
+            Arc::clone(&audit),
+            None,
+        )
+        .rename_workspace(rename(server_id, owner, "team"))
+        .await
+        .expect("renamed");
+        assert_eq!(renamed.name, "team");
+        assert_eq!(renamed_to(&events), ["team"]);
+
+        let mut servers = MockServerRepository::new();
+        servers
+            .expect_get_by_id()
+            .returning(|id| Ok(Some(server_named(id, "Team"))));
+        servers
+            .expect_find_owned_by_name()
+            .returning(move |_, _| Ok(Some(server_named(server_id, "Team"))));
+        servers.expect_rename().never();
+        let (events, audit) = (
+            Arc::new(Recorder::default()),
+            Arc::new(AuditRecorder::default()),
+        );
+        let same = audited_owner_service(
+            servers,
+            members(vec![(owner, ServerMemberRole::Owner)]),
+            Arc::clone(&events),
+            Arc::clone(&audit),
+            None,
+        )
+        .rename_workspace(rename(server_id, owner, " Team "))
+        .await
+        .expect("unchanged");
+        assert_eq!(same.name, "Team");
+        assert!(renamed_to(&events).is_empty());
+        assert!(audit.0.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_workspace_is_renamed_only_by_its_owner_to_a_free_valid_name_outside_the_direct_space()
+     {
+        let (server_id, owner, mona) = (ServerId::new(), UserId::new(), UserId::new());
+        let long = "n".repeat(129);
+        let cases: Vec<(UserId, &str, Option<ServerId>, &str)> = vec![
+            (mona, "X", None, "PermissionDenied"),
+            (owner, "   ", None, "Validation"),
+            (owner, &long, None, "Validation"),
+            (owner, "X", Some(server_id), "Validation"),
+            (owner, "design", None, "Conflict"),
+        ];
+        for (actor, name, direct, want) in cases {
+            let mut servers = MockServerRepository::new();
+            servers
+                .expect_get_by_id()
+                .returning(|id| Ok(Some(server_named(id, "Team"))));
+            servers
+                .expect_find_owned_by_name()
+                .returning(|_, _| Ok(Some(server_named(ServerId::new(), "Design"))));
+            servers.expect_rename().never();
+            let events = Arc::new(Recorder::default());
+            let err = audited_owner_service(
+                servers,
+                members(vec![
+                    (owner, ServerMemberRole::Owner),
+                    (mona, ServerMemberRole::Moderator),
+                ]),
+                Arc::clone(&events),
+                Arc::new(AuditRecorder::default()),
+                direct,
+            )
+            .rename_workspace(rename(server_id, actor, name))
+            .await
+            .expect_err("refused");
+            let got = match err {
+                ServiceError::PermissionDenied => "PermissionDenied",
+                ServiceError::Validation(_) => "Validation",
+                ServiceError::Conflict(m) => {
+                    assert_eq!(m, "you already own a workspace named \"Design\"");
+                    "Conflict"
+                }
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(got, want, "{name}");
+            assert!(renamed_to(&events).is_empty(), "{name}");
         }
     }
 }

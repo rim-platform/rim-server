@@ -40,8 +40,8 @@ use rim_services::conversation::dto::ConversationDto;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::moderation::command::{
     AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
-    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd,
-    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd,
+    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::moderation::dto::{
     MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
@@ -78,10 +78,15 @@ pub(crate) mod audit_ids {
     pub(crate) const DELETE_MESSAGE: &str = "admin.delete_message";
     /// A moderator opened a verified report's content (initiator `e2ee`).
     pub(crate) const REPORT_VIEWED: &str = "e2ee.report_viewed";
+    /// A member left the workspace (initiator `workspace`).
+    pub(crate) const LEAVE: &str = "workspace.leave";
 }
 
 /// `initiator` column value of moderation audit rows.
 pub(crate) const MODERATION_AUDIT_INITIATOR: &str = "moderation";
+
+/// `initiator` column value of a member's own workspace actions: leaving, renaming.
+pub(crate) const WORKSPACE_AUDIT_INITIATOR: &str = "workspace";
 
 /// Longest accepted report reason, in characters.
 const MAX_REPORT_REASON_CHARS: usize = 1000;
@@ -89,6 +94,12 @@ const MAX_REPORT_REASON_CHARS: usize = 1000;
 const MAX_MODERATION_REASON_CHARS: usize = 512;
 /// Maximum page size for `list_reports`.
 const MAX_REPORT_PAGE_LIMIT: u32 = 200;
+/// Why the Owner may not leave.
+const OWNER_CANNOT_LEAVE: &str =
+    "the owner cannot leave a workspace; transfer ownership or delete the workspace first";
+/// Why nobody leaves the server's default workspace.
+const DEFAULT_WORKSPACE_STAYS: &str =
+    "you cannot leave this server's default workspace; every account here belongs to it";
 
 /// One moderation action to audit.
 pub(crate) struct ModerationAuditEntry {
@@ -390,9 +401,9 @@ impl DefaultModerationService {
         Ok(target_member)
     }
 
-    /// Removes the user from the workspace and from every conversation of it (so a later
-    /// re-join does not restore private-channel access), deletes their notifications, macros and
-    /// pipelines there, then announces `MemberLeft`.
+    /// Removes the user from the workspace (a kick, a ban or their own leave) and from every
+    /// conversation of it (so a later re-join does not restore private-channel access), deletes
+    /// their notifications, macros and pipelines there, then announces `MemberLeft`.
     async fn remove_from_workspace(
         &self,
         server_id: ServerId,
@@ -762,6 +773,38 @@ impl ModerationService for DefaultModerationService {
             dangerous: true,
             typed_verb: TypedVerb::Delete,
         })
+        .await;
+        Ok(())
+    }
+
+    async fn leave(&self, cmd: LeaveWorkspaceCmd) -> ServiceResult<()> {
+        crate::util::ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
+        let member = self.actor_member(cmd.server_id, cmd.actor.user_id).await?;
+        if member.member_role == ServerMemberRole::Owner {
+            return Err(ServiceError::Validation(OWNER_CANNOT_LEAVE.to_string()));
+        }
+        if let Some(default_workspace) = &self.default_workspace
+            && default_workspace.current().await? == Some(cmd.server_id)
+        {
+            return Err(ServiceError::Validation(
+                DEFAULT_WORKSPACE_STAYS.to_string(),
+            ));
+        }
+        self.remove_from_workspace(cmd.server_id, cmd.actor.user_id, "left", None, None)
+            .await?;
+        info!(server_id = %cmd.server_id, user_id = %cmd.actor.user_id, "member left");
+        record_audit_action(
+            self.audit_log_service.as_ref(),
+            ModerationAuditEntry {
+                actor: cmd.actor.user_id,
+                server_id: cmd.server_id,
+                command_id: audit_ids::LEAVE,
+                args: serde_json::json!({ "role": member.member_role.as_str() }),
+                dangerous: false,
+                typed_verb: TypedVerb::Delete,
+            },
+            WORKSPACE_AUDIT_INITIATOR,
+        )
         .await;
         Ok(())
     }

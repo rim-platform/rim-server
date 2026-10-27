@@ -305,6 +305,15 @@ pub trait SubscriptionRepository: Send + Sync {
     /// End every subscription of a user. Returns how many were not ended already.
     async fn end_subscriptions(&self, user_id: UserId) -> RepoResult<u64>;
 
+    /// End one subscription of a user, to a host's workspace. Returns whether it was not ended
+    /// already.
+    async fn end_subscription(
+        &self,
+        user_id: UserId,
+        host_server_id: &str,
+        workspace_id: Uuid,
+    ) -> RepoResult<bool>;
+
     /// Mark active subscriptions past their expiry as lapsed. Returns how many.
     async fn lapse_expired(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 

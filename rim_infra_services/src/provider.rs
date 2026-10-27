@@ -380,7 +380,8 @@ impl DefaultAppServiceProvider {
             )
             .with_limits(limits)
             .with_storage(Arc::clone(&storage_service))
-            .with_direct_space(federation.direct_space_id),
+            .with_direct_space(federation.direct_space_id)
+            .with_audit_log_service(Arc::clone(&audit_log_service)),
         );
         let server_member_service: Arc<dyn ServerMemberService> = Arc::new(
             crate::server_member::DefaultServerMemberService::new(repos.for_server_member()),
