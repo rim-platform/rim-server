@@ -4,7 +4,7 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::server::command::{
-    CreateServerCmd, DeleteWorkspaceCmd, GetServerQuery, ListMyServersQuery,
+    CreateServerCmd, DeleteWorkspaceCmd, GetServerQuery, ListMyServersQuery, RenameWorkspaceCmd,
     TransferWorkspaceOwnershipCmd,
 };
 use crate::server::dto::ServerDto;
@@ -33,4 +33,12 @@ pub trait ServerService: Send + Sync {
     /// `PermissionDenied` unless the caller is the owner; `Validation` for the direct space or
     /// when `confirm_name` is not the workspace's name.
     async fn delete_workspace(&self, cmd: DeleteWorkspaceCmd) -> ServiceResult<bool>;
+
+    /// Rename the workspace, by the rules of `create_server`'s name; every member is told with
+    /// `WorkspaceUpdated`. The current name, trimmed, changes nothing.
+    ///
+    /// # Errors
+    /// `PermissionDenied` unless the caller is the owner; `Validation` for the direct space or a
+    /// blank or overlong name; `Conflict` when the owner owns another workspace of that name.
+    async fn rename_workspace(&self, cmd: RenameWorkspaceCmd) -> ServiceResult<ServerDto>;
 }

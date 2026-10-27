@@ -11,8 +11,8 @@ use crate::ServiceResult;
 use crate::conversation::dto::ConversationDto;
 use crate::moderation::command::{
     AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
-    ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd,
-    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd,
+    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use crate::moderation::dto::{
     MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
@@ -31,6 +31,15 @@ pub trait ModerationService: Send + Sync {
     async fn set_member_role(&self, cmd: SetMemberRoleCmd) -> ServiceResult<ServerMemberDto>;
 
     async fn kick(&self, cmd: KickMemberCmd) -> ServiceResult<()>;
+
+    /// Leave the workspace as `kick` removes a member: memberships of its conversations,
+    /// notifications, macros and pipelines go, messages stay, and `MemberLeft` with cause `left`
+    /// is announced. Audited as `workspace.leave` (initiator `workspace`).
+    ///
+    /// # Errors
+    /// `PermissionDenied` for a non-member; `Validation` for the direct space, the Owner and the
+    /// server's default workspace.
+    async fn leave(&self, cmd: LeaveWorkspaceCmd) -> ServiceResult<()>;
 
     async fn ban(&self, cmd: BanMemberCmd) -> ServiceResult<ServerBanDto>;
 

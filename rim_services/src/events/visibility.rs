@@ -204,8 +204,11 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             member_user_ids, ..
         } => member_user_ids.iter().any(|id| id.to_string() == user_id),
 
-        // Plugin registry events are visible to all workspace members, guests included.
-        WorkspaceEvent::WorkspacePluginChanged { .. } => true,
+        // Plugin registry and workspace name events are visible to all workspace members, guests
+        // included.
+        WorkspaceEvent::WorkspacePluginChanged { .. } | WorkspaceEvent::WorkspaceUpdated { .. } => {
+            true
+        }
 
         // MLS events: encrypted conversations are DMs and groups, so members only.
         WorkspaceEvent::MlsCommitAccepted {
@@ -836,6 +839,17 @@ mod tests {
         assert_eq!(json["plugin_id"], "dev.example.hello-web");
         assert_eq!(json["change"], "updated");
         assert_eq!(json.as_object().expect("object").len(), 4);
+    }
+
+    #[test]
+    fn a_rename_reaches_every_member_guests_included() {
+        let rename = WorkspaceEvent::WorkspaceUpdated {
+            workspace_id: ServerId::new(),
+            name: "Platform".to_string(),
+        };
+        let any_user = UserId::new().to_string();
+        assert!(user_can_see_event_as(&rename, &any_user, false));
+        assert!(user_can_see_event_as(&rename, &any_user, true));
     }
 
     #[test]

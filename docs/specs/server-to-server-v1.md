@@ -531,7 +531,7 @@ entity of a remote space by (host server id, id).
 |---|---|---|
 | `c:<conversationId>` | Every event with a `conversation_id` (messages, reactions, pins, threads, conversation membership, link previews, `MlsCommitAccepted`, `MlsMembershipChanged`) | 1, 2, … |
 | `u:<principalId>` | Events for one user (`NotificationDue`, `UserMentioned`, `ReadStateUpdated`, `MlsWelcomeAvailable`, `DmInvite`); for a guest, the directory events about them | 1, 2, … |
-| `w` | Other space-wide events (`MemberJoined`, `MemberLeft`, `MemberRoleChanged`, `WorkspacePluginChanged`, pipeline and workspace-state events), to non-guests | 1, 2, … |
+| `w` | Other space-wide events (`MemberJoined`, `MemberLeft`, `MemberRoleChanged`, `WorkspacePluginChanged`, `WorkspaceUpdated`, pipeline and workspace-state events), to non-guests | 1, 2, … |
 | `e` | `TypingStarted`, `PresenceChanged` | `null` |
 
 `seq` is assigned per `(workspace, stream)` in `host_event_stream`, in the transaction that writes
@@ -986,12 +986,15 @@ A relay's subscription for (user, workspace) lives while one of the user's devic
 delegation there.
 `POST /s2s/v1/subscriptions/cancel {"subscriptions":[{"workspaceId","principalId"}]}` (at most 64)
 ends the presenting relay's delegations for them → `{"cancelled":<n>}`.
-Leaving, a kick or a ban ends the user's delegations for the workspace after `MemberLeft` is sent;
-the departed member gets that `MemberLeft` on their `u:` stream, being no member of `w` any more.
-`MemberLeft` may carry `cause` (`kick`, `ban`, `workspace_deleted`, `account_deleted`) and,
-for a temporary ban, `until`. A kick or ban's optional `reason` is private: it appears only
+Leaving (`leaveWorkspace`, forwarded like any request of the space), a kick or a ban ends the
+user's delegations for the workspace after `MemberLeft` is sent; the departed member gets that
+`MemberLeft` on their `u:` stream, being no member of `w` any more.
+`MemberLeft` may carry `cause` (`left`, `kick`, `ban`, `workspace_deleted`, `account_deleted`)
+and, for a temporary ban, `until`. A kick or ban's optional `reason` is private: it appears only
 on the removed member's `u:` stream and never on `w` or another member's stream. Clients may
 keep the reason visible until dismissed.
+A relay that queues a `MemberLeft` on a subscriber's own `u:` stream ends that subscription
+(`ended`); a later join records it again.
 `join`, `join/challenge`, `subscriptions` and `subscriptions/cancel` are workspace host endpoints: a
 server running only `relay` answers `503 role_disabled`. `presence` and `revocations` are served by
 every role (a relay is the home of DMs). A relay delivers items of a workspace a user holds an

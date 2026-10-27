@@ -10,10 +10,12 @@ use rim_core::server::model::ServerId;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_infra_db::{TransactionScope, begin_transaction};
+use rim_services::audit::service::AuditLogService;
+use rim_services::command::verb::TypedVerb;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::server::command::{
-    CreateServerCmd, DeleteWorkspaceCmd, GetServerQuery, ListMyServersQuery,
+    CreateServerCmd, DeleteWorkspaceCmd, GetServerQuery, ListMyServersQuery, RenameWorkspaceCmd,
     TransferWorkspaceOwnershipCmd,
 };
 use rim_services::server::dto::ServerDto;
@@ -23,10 +25,34 @@ use rim_services::{ServiceError, ServiceResult};
 
 use crate::ServerRepos;
 use crate::clock::Clock;
+use crate::moderation::{ModerationAuditEntry, WORKSPACE_AUDIT_INITIATOR, record_audit_action};
 use crate::repos::AppRepos;
 use crate::util::{
     add_workspace_member, ensure_server_exists, ensure_server_member, ensure_workspace_features,
 };
+
+/// Pseudo command id of a rename in `command_audit_log`: a workspace was renamed (initiator
+/// `workspace`).
+const RENAME_AUDIT_ID: &str = "workspace.rename";
+
+/// `raw` trimmed, as a workspace name: not empty and at most 128 characters.
+///
+/// # Errors
+/// `Validation` for a blank or overlong name.
+fn workspace_name(raw: &str) -> ServiceResult<&str> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(ServiceError::Validation(
+            "server name cannot be empty".to_string(),
+        ));
+    }
+    if name.chars().count() > 128 {
+        return Err(ServiceError::Validation(
+            "server name is too long".to_string(),
+        ));
+    }
+    Ok(name)
+}
 
 #[derive(Clone)]
 pub struct DefaultServerService {
@@ -40,6 +66,7 @@ pub struct DefaultServerService {
     /// Where a deleted workspace's files are; `None` leaves them in place.
     storage: Option<Arc<dyn StorageService>>,
     direct_space_id: Option<ServerId>,
+    audit_log_service: Option<Arc<dyn AuditLogService>>,
 }
 
 impl DefaultServerService {
@@ -52,6 +79,7 @@ impl DefaultServerService {
             clock: Clock::default(),
             storage: None,
             direct_space_id: None,
+            audit_log_service: None,
         }
     }
 
@@ -62,6 +90,12 @@ impl DefaultServerService {
 
     pub fn with_direct_space(mut self, direct_space_id: Option<ServerId>) -> Self {
         self.direct_space_id = direct_space_id;
+        self
+    }
+
+    /// Record renames in `command_audit_log`; without it only the tracing line is written.
+    pub fn with_audit_log_service(mut self, audit_log_service: Arc<dyn AuditLogService>) -> Self {
+        self.audit_log_service = Some(audit_log_service);
         self
     }
 
@@ -222,17 +256,7 @@ async fn create_default_channels(
 impl ServerService for DefaultServerService {
     #[instrument(name = "server.create_server", skip_all, fields(actor_id = %cmd.actor.user_id))]
     async fn create_server(&self, cmd: CreateServerCmd) -> ServiceResult<ServerDto> {
-        let name = cmd.name.trim();
-        if name.is_empty() {
-            return Err(ServiceError::Validation(
-                "server name cannot be empty".to_string(),
-            ));
-        }
-        if name.chars().count() > 128 {
-            return Err(ServiceError::Validation(
-                "server name is too long".to_string(),
-            ));
-        }
+        let name = workspace_name(&cmd.name)?;
         if let Some(existing) = self
             .repos
             .server_repo
@@ -434,5 +458,53 @@ impl ServerService for DefaultServerService {
             "a workspace was deleted"
         );
         Ok(true)
+    }
+
+    #[instrument(name = "server.rename_workspace", skip_all, fields(actor_id = %cmd.actor.user_id, server_id = %cmd.server_id))]
+    async fn rename_workspace(&self, cmd: RenameWorkspaceCmd) -> ServiceResult<ServerDto> {
+        ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
+        self.ensure_owner(cmd.server_id, cmd.actor.user_id).await?;
+        let name = workspace_name(&cmd.name)?;
+        let server = ensure_server_exists(self.repos.server_repo.as_ref(), cmd.server_id).await?;
+        if server.name == name {
+            return Ok(Self::to_dto(server));
+        }
+        if let Some(existing) = self
+            .repos
+            .server_repo
+            .find_owned_by_name(cmd.actor.user_id, name)
+            .await?
+            && existing.id != cmd.server_id
+        {
+            return Err(ServiceError::Conflict(format!(
+                "you already own a workspace named \"{}\"",
+                existing.name
+            )));
+        }
+        if !self.repos.server_repo.rename(cmd.server_id, name).await? {
+            return Err(ServiceError::NotFound);
+        }
+        self.observers.emit(WorkspaceEvent::WorkspaceUpdated {
+            workspace_id: cmd.server_id,
+            name: name.to_string(),
+        });
+        info!(server_id = %cmd.server_id, "renamed workspace");
+        record_audit_action(
+            self.audit_log_service.as_ref(),
+            ModerationAuditEntry {
+                actor: cmd.actor.user_id,
+                server_id: cmd.server_id,
+                command_id: RENAME_AUDIT_ID,
+                args: serde_json::json!({}),
+                dangerous: false,
+                typed_verb: TypedVerb::Configure,
+            },
+            WORKSPACE_AUDIT_INITIATOR,
+        )
+        .await;
+        Ok(Self::to_dto(rim_core::server::model::Server {
+            name: name.to_string(),
+            ..server
+        }))
     }
 }

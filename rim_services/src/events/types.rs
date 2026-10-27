@@ -121,7 +121,8 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing, default)]
         member_user_ids: Vec<UserId>,
     },
-    /// A member left the workspace because a moderator kicked or banned them.
+    /// A member left the workspace: they left (`left`), a moderator kicked or banned them, or
+    /// the workspace or their account was deleted.
     /// Wire shape: `{"type":"MemberLeft","workspace_id","user_id"}`. Delivered to every
     /// subscriber of the workspace, including the removed user, whose subscription then ends.
     MemberLeft {
@@ -336,6 +337,13 @@ pub enum WorkspaceEvent {
         plugin_id: String,
         change: WorkspacePluginChange,
     },
+    /// The workspace's name changed. Wire shape:
+    /// `{"type":"WorkspaceUpdated","workspace_id","name"}`. Visible to every member, guests
+    /// included.
+    WorkspaceUpdated {
+        workspace_id: ServerId,
+        name: String,
+    },
     /// The server accepted a Commit of an encrypted conversation's group. `epoch` is the epoch
     /// the Commit was created in. Delivered to the conversation's members.
     MlsCommitAccepted {
@@ -500,6 +508,7 @@ impl WorkspaceEvent {
             | Self::PipelineSuspended { workspace_id, .. }
             | Self::NotificationDue { workspace_id, .. }
             | Self::WorkspacePluginChanged { workspace_id, .. }
+            | Self::WorkspaceUpdated { workspace_id, .. }
             | Self::MlsCommitAccepted { workspace_id, .. }
             | Self::MlsMembershipChanged { workspace_id, .. }
             | Self::MlsWelcomeAvailable { workspace_id, .. } => workspace_id.to_string(),
@@ -580,8 +589,8 @@ impl WorkspaceEvent {
             | Self::PipelineSuspended {
                 member_user_ids, ..
             } => Some(member_user_ids),
-            // Plugin registry events are visible to all workspace members.
-            Self::WorkspacePluginChanged { .. } => None,
+            // Plugin registry and workspace name events are visible to all workspace members.
+            Self::WorkspacePluginChanged { .. } | Self::WorkspaceUpdated { .. } => None,
             // NotificationDue is scoped to its one recipient.
             Self::NotificationDue {
                 member_user_ids, ..
@@ -715,6 +724,23 @@ mod removal_tests {
         assert_eq!(
             received.json_for_user(&removed.to_string()).unwrap()["reason"],
             "private explanation"
+        );
+    }
+
+    #[test]
+    fn workspace_updated_carries_its_name() {
+        let workspace_id = ServerId::new();
+        let event = WorkspaceEvent::WorkspaceUpdated {
+            workspace_id,
+            name: "Platform".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "type": "WorkspaceUpdated",
+                "workspace_id": workspace_id.to_string(),
+                "name": "Platform",
+            })
         );
     }
 }

@@ -36,3 +36,12 @@ pub struct DeleteWorkspaceCmd {
     /// The workspace's name, typed again to confirm.
     pub confirm_name: String,
 }
+
+/// Give the workspace a new name.
+#[derive(Debug, Clone)]
+pub struct RenameWorkspaceCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    /// The new name, as typed; trimmed by the service.
+    pub name: String,
+}

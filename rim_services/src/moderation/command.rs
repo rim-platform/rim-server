@@ -29,6 +29,14 @@ pub struct KickMemberCmd {
     pub reason: Option<String>,
 }
 
+/// The caller leaves the workspace. Anyone but its Owner, outside the direct space and the
+/// server's default workspace.
+#[derive(Debug, Clone, Copy)]
+pub struct LeaveWorkspaceCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+}
+
 /// Same targeting rules as [`KickMemberCmd`]. Removes the member (if present) and records the
 /// ban; `expires_at = None` bans until unbanned.
 #[derive(Debug, Clone)]

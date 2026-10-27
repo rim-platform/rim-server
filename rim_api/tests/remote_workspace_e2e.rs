@@ -71,6 +71,10 @@ const SEND: &str = r#"
 mutation Send($input: SendMessageInput!) { sendMessage(input: $input) { id } }"#;
 const KICK: &str = r#"
 mutation Kick($s: ID!, $u: ID!) { kickMember(serverId: $s, userId: $u) }"#;
+const LEAVE_WORKSPACE: &str = r#"
+mutation Leave($s: ID!) { leaveWorkspace(serverId: $s) }"#;
+const RENAME: &str = r#"
+mutation Rename($s: ID!, $n: String!) { renameWorkspace(serverId: $s, name: $n) { id name } }"#;
 const PRESENCE: &str = r#"
 query Presence($w: ID!) { workspacePresence(workspaceId: $w) { userId status } }"#;
 const HEADS: &str = r#"
@@ -937,6 +941,57 @@ async fn a_remote_member_joins_through_the_relay_and_channel_traffic_flows_both_
     assert_eq!(left.stream, format!("u:{}", rita.principal()));
     eventually("the kicked member's delegations ended", || async {
         (active_delegations(&h, &rita.principal()).await == 0).then_some(())
+    })
+    .await;
+    let refused = rita
+        .forward(
+            &h,
+            json!({ "query": HEADS, "variables": { "s": ws, "streams": ["w"] } }),
+        )
+        .await;
+    assert_eq!(refused.status, 403);
+    assert_eq!(refused.body["error"], "not_delegated");
+
+    h.stop().await;
+    r.stop().await;
+}
+
+/// A remote member hears of a rename on `w`, and leaves through her relay: her own stream
+/// carries the departure, the host ends her delegations and her relay ends the subscription.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_member_sees_a_rename_and_leaves_through_the_relay() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let mut rita = sign_up(&r, "rita", 2).await;
+    let (ws, _general, invite) = workspace(&h, &hannah).await;
+    let joined = rita.join(&h, &r, &ws, Some(&invite)).await;
+    assert_eq!(joined["role"], "member");
+    assert_eq!(active_delegations(&h, &rita.principal()).await, 1);
+
+    hannah.ok(RENAME, json!({ "s": ws, "n": "Renamed" })).await;
+    let renamed = rita
+        .item_of(&h, "WorkspaceUpdated", |i| i.event["name"] == "Renamed")
+        .await;
+    assert_eq!(renamed.stream, "w");
+    assert_eq!(renamed.workspace_id, ws);
+
+    let left = rita.remote(&h, LEAVE_WORKSPACE, json!({ "s": ws })).await;
+    assert_eq!(left["leaveWorkspace"], json!(true));
+    let departure = rita
+        .item_of(&h, "MemberLeft", |i| i.event["cause"] == "left")
+        .await;
+    assert_eq!(departure.stream, format!("u:{}", rita.principal()));
+    eventually("the leaver's delegations ended", || async {
+        (active_delegations(&h, &rita.principal()).await == 0).then_some(())
+    })
+    .await;
+    eventually("the relay ended the subscription", || async {
+        let subscriptions = rita.ok(SUBSCRIPTIONS, json!({})).await["remoteSubscriptions"].clone();
+        subscriptions
+            .as_array()?
+            .iter()
+            .any(|s| s["workspaceId"] == json!(ws) && s["status"] == "ended")
+            .then_some(())
     })
     .await;
     let refused = rita

@@ -210,9 +210,10 @@ async fn server_info_needs_no_session() {
     assert!(data["serverInfo"]["termsUrl"].is_null());
 }
 
-/// `serverInfo.capabilities` names `Message.editedAt`, without a session.
+/// `serverInfo.capabilities` names `Message.editedAt`, `leaveWorkspace` and
+/// `renameWorkspace`, without a session.
 #[tokio::test]
-async fn server_info_lists_message_edited_at() {
+async fn server_info_lists_its_capabilities() {
     let schema = schema_with_user_mock(MockUserService::new());
     let res = schema
         .execute(Request::new("{ serverInfo { capabilities } }"))
@@ -222,10 +223,12 @@ async fn server_info_lists_message_edited_at() {
     let capabilities = data["serverInfo"]["capabilities"]
         .as_array()
         .expect("capabilities");
-    assert!(
-        capabilities.contains(&serde_json::json!("message_edited_at")),
-        "{capabilities:?}"
-    );
+    for capability in ["message_edited_at", "workspace_leave", "workspace_rename"] {
+        assert!(
+            capabilities.contains(&serde_json::json!(capability)),
+            "{capability}: {capabilities:?}"
+        );
+    }
 }
 
 /// `serverInfo.auditRetentionDays` reports the configured audit retention.
@@ -637,13 +640,14 @@ fn account_password_sdl_matches_the_contract() {
 }
 
 /// The session key roots, appended after the account password roots and the public join link
-/// queries, and the keep choice of key signup.
+/// queries and followed by the workspace membership roots, and the keep choice of key signup.
 #[test]
 fn session_key_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
         "passwordResetFinish(resetId: ID!, registrationUpload: String!): Boolean! setReloadKey: \
-         String! reloadSession: ReloadSessionPayload! }",
+         String! reloadSession: ReloadSessionPayload! leaveWorkspace(serverId: ID!): Boolean! \
+         renameWorkspace(serverId: ID!, name: String!): Server! }",
         "myJoinRequests: [JoinRequest!]! sessionKeepKey: String }",
         "type ReloadSessionPayload { reloadKey: String! nextReloadKey: String! }",
         "confirmedMinimumAge: Int keepSignedIn: Boolean! keepKeyHeld: Boolean! }",
