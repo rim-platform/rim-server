@@ -715,6 +715,8 @@ mod tests {
         cleared_notifications: Arc<Mutex<Vec<(UserId, ConversationId)>>>,
         /// Whether the workspace is the server's default workspace.
         default_workspace: bool,
+        /// Whether the workspace is the relay's direct space.
+        direct_space: bool,
         /// The unarchived channels the workspace holds.
         channels: u64,
         /// The users each request gate call named.
@@ -743,6 +745,7 @@ mod tests {
                 events: Arc::new(RecordingBroadcaster::default()),
                 cleared_notifications: Arc::default(),
                 default_workspace: false,
+                direct_space: false,
                 channels: 0,
                 gate_calls: Arc::default(),
                 gate_refuses: vec![],
@@ -799,6 +802,12 @@ mod tests {
         /// Makes the workspace the server's default workspace.
         fn default_workspace(mut self) -> Self {
             self.default_workspace = true;
+            self
+        }
+
+        /// Makes the workspace the relay's direct space.
+        fn direct_space(mut self) -> Self {
+            self.direct_space = true;
             self
         }
 
@@ -1092,6 +1101,7 @@ mod tests {
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
             .with_e2ee_repo(Arc::new(e2ee_repo))
+            .with_direct_space(self.direct_space.then_some(self.server_id))
             .with_limits(self.limits)
             .with_default_workspace(Arc::new(default_workspace_service(
                 self.default_workspace.then_some(self.server_id),
@@ -2253,6 +2263,31 @@ mod tests {
         };
         assert!(not_ready(fx.create_encrypted(alice, group).await));
         assert!(fx.members().is_empty() && fx.pending().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_plaintext_direct_space_group_takes_nobody_from_another_server() {
+        let [alice, bob, remote] = users();
+        let fx = Fx::new(ConversationType::Group, false, &[alice, bob])
+            .direct_space()
+            .with_workspace_member(alice, ServerMemberRole::Guest)
+            .with_workspace_member(bob, ServerMemberRole::Guest)
+            .with_workspace_member(remote, ServerMemberRole::Guest)
+            .remote(&[remote]);
+
+        let result = fx.invite(alice, &[remote]).await;
+
+        assert!(matches!(
+            result,
+            Err(ServiceError::Validation(m))
+                if m == "conversations with people on other servers are encrypted"
+        ));
+        assert_eq!(fx.members(), vec![alice, bob]);
+        assert!(
+            !fx.events()
+                .iter()
+                .any(|e| matches!(e, WorkspaceEvent::MemberAddedToConversation { .. }))
+        );
     }
 
     #[tokio::test]

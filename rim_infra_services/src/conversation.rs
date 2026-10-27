@@ -1098,6 +1098,16 @@ impl ConversationService for DefaultConversationService {
             )
             .await?;
         }
+        // People on other servers only join encrypted conversations.
+        if self.is_direct_space(cmd.server_id)
+            && !conversation.is_encrypted()
+            && let Some(e2ee_repo) = &self.e2ee_repo
+            && !e2ee_repo.remote_users(&targets).await?.is_empty()
+        {
+            return Err(ServiceError::Validation(
+                "conversations with people on other servers are encrypted".to_string(),
+            ));
+        }
         if self.is_direct_space(cmd.server_id) {
             self.join_direct_space(cmd.server_id, &targets).await?;
         }

@@ -25,6 +25,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 - `myBlockedPrincipals`: the principals the caller blocked, newest first, as
   `BlockedPrincipal` with the account on this server holding each one, if any.
+- `addConversationMembers` takes `remoteMembers: [RemoteMemberInput!]`: a member of a group in
+  the direct space adds people by principal id, here or on another server, as
+  `createConversation` names them; `userIds` now defaults to an empty list. A plaintext group of
+  the direct space takes nobody from another server (`VALIDATION`).
 
 ### Changed
 

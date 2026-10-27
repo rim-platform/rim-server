@@ -389,6 +389,9 @@ space").
   are refused (`VALIDATION`, "cannot create DM with yourself"). `predecessor: { hostServerId,
   conversationId }` records the conversation a successor replaces, and `Conversation.predecessor`
   returns it.
+- `addConversationMembers(serverId: <directSpaceId>, conversationId, remoteMembers: [{
+  principalId, relayUrls }])` adds people to a group of the direct space the same way, with the
+  same rules: an encrypted group, an MLS-active device for everyone added, a published card.
 - On a relay in `pow` registration mode (`registrationMode` is `POW`; the difficulty is the
   discovery document's `registration.powBits`), `signupWithKey` takes `proofOfWork`: count from
   0, hash as in "The public relay" with the counter as the 8-byte big-endian nonce, and send the
