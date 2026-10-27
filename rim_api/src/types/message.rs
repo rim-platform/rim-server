@@ -51,6 +51,7 @@ pub struct Message {
     pub forwarded_from_message_id: Option<async_graphql::ID>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
+    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub encryption: Option<super::MessageEncryption>,
 }
 
@@ -81,6 +82,11 @@ impl From<rim_services::message::dto::MessageDto> for Message {
                 .map(|id| async_graphql::ID(id.to_string())),
             is_deleted: value.is_deleted,
             sent_at: value.sent_at,
+            edited_at: if value.is_deleted {
+                None
+            } else {
+                value.edited_at
+            },
             encryption: value.encryption.map(Into::into),
         }
     }
@@ -160,6 +166,13 @@ impl Message {
 
     async fn sent_at(&self) -> chrono::DateTime<chrono::Utc> {
         self.sent_at
+    }
+
+    /// When the text last changed, the value `MessageChange.editedAt` carries; null for a
+    /// never-edited message and for a deleted one. Listed in `serverInfo.capabilities` as
+    /// `message_edited_at`.
+    async fn edited_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.edited_at
     }
 
     #[graphql(complexity = 5)]

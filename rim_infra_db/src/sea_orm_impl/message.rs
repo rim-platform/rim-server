@@ -45,6 +45,7 @@ struct MessageSearchRow {
     parent_message_id: Option<Uuid>,
     forwarded_from_message_id: Option<Uuid>,
     sent_at: DateTimeWithTimeZone,
+    edited_at: Option<DateTimeWithTimeZone>,
     sent_by: Uuid,
     text: Option<String>,
     is_deleted: bool,
@@ -63,6 +64,7 @@ impl From<MessageSearchRow> for MessageSearchHit {
                 parent_message_id: row.parent_message_id.map(Into::into),
                 forwarded_from_message_id: row.forwarded_from_message_id.map(Into::into),
                 sent_at: row.sent_at.into(),
+                edited_at: row.edited_at.map(Into::into),
                 sent_by: row.sent_by.into(),
                 text: row.text,
                 is_deleted: row.is_deleted,
@@ -310,8 +312,8 @@ impl MessageRepository for SeaOrmMessageRepository {
 
         let sql = format!(
             r#"SELECT m.id, m.conversation_id, m.thread_id, m.parent_message_id,
-                      m.forwarded_from_message_id, m.sent_at, m.sent_by, m.text, m.is_deleted,
-                      m.has_attachments,
+                      m.forwarded_from_message_id, m.sent_at, m.edited_at, m.sent_by, m.text,
+                      m.is_deleted, m.has_attachments,
                       ts_rank(m.search_tsv, q.query) AS rank,
                       ts_headline('english', coalesce(m.text, ''), q.query,
                                   CASE WHEN char_length(coalesce(m.text, '')) <= {WHOLE_HEADLINE_MAX_CHARS}

@@ -160,7 +160,7 @@ fn server_info_sdl_matches_the_contract() {
          auditRetentionDays: Int instanceNotice: String termsUrl: String limits: ServerLimits! \
          dmInbound: DmInbound! dmOutbound: DmOutbound! \
          dmPartners: [String!]! defaultWorkspace: ID registrationFull: Boolean! \
-         abuseContact: String minimumAge: Int }"
+         abuseContact: String minimumAge: Int capabilities: [String!]! }"
     ));
     assert!(sdl.contains("enum DmInbound { OPEN REQUESTS PARTNERS NONE }"));
     assert!(sdl.contains("enum DmOutbound { ALLOWED PARTNERS NONE }"));
@@ -208,6 +208,24 @@ async fn server_info_needs_no_session() {
     assert!(data["serverInfo"]["auditRetentionDays"].is_null());
     assert!(data["serverInfo"]["instanceNotice"].is_null());
     assert!(data["serverInfo"]["termsUrl"].is_null());
+}
+
+/// `serverInfo.capabilities` names `Message.editedAt`, without a session.
+#[tokio::test]
+async fn server_info_lists_message_edited_at() {
+    let schema = schema_with_user_mock(MockUserService::new());
+    let res = schema
+        .execute(Request::new("{ serverInfo { capabilities } }"))
+        .await;
+    assert_no_errors(&res);
+    let data = res.data.into_json().expect("json");
+    let capabilities = data["serverInfo"]["capabilities"]
+        .as_array()
+        .expect("capabilities");
+    assert!(
+        capabilities.contains(&serde_json::json!("message_edited_at")),
+        "{capabilities:?}"
+    );
 }
 
 /// `serverInfo.auditRetentionDays` reports the configured audit retention.

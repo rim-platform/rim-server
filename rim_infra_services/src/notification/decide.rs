@@ -311,6 +311,7 @@ mod tests {
             parent_message_id: None,
             forwarded_from_message_id: None,
             sent_at: now(),
+            edited_at: None,
             sent_by: author,
             text: Some(text.to_string()),
             is_deleted: false,

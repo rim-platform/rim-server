@@ -346,6 +346,7 @@ mod tests {
             encryption: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
+            edited_at: None,
         }
     }
 
@@ -1073,6 +1074,7 @@ mod tests {
                         thread_root_message_id: None,
                         is_deleted: false,
                         sent_at: chrono::Utc::now(),
+                        edited_at: None,
                         encryption: None,
                     })
                 })

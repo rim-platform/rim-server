@@ -67,7 +67,8 @@ The result has one entry per requested conversation, in request order.
   state. Three edits since the cursor give one `EDITED` entry with the latest text, not three.
 - **Kind.** Judged from the current state: `DELETED` if `message.isDeleted`, else `EDITED` if
   `editedAt` is set, else `CREATED`. A client cache can treat every entry as an upsert keyed by
-  `message.id` and keep the copy with the higher `version`.
+  `message.id` and keep the copy with the higher `version`. `Message.editedAt` carries the same
+  value outside the feed.
 - **Deletes are tombstones.** A deleted message comes back with `isDeleted: true`, `text: null`
   and no `attachments` (soft delete; the row stays). Hard delete is not supported.
 - **Edits made before the feed existed.** Messages edited before migration

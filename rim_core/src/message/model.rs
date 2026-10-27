@@ -15,6 +15,8 @@ pub struct Message {
     pub parent_message_id: Option<MessageId>,
     pub forwarded_from_message_id: Option<MessageId>,
     pub sent_at: DateTime<Utc>,
+    /// When the text (or an encrypted message's envelope) last changed; `None` if never.
+    pub edited_at: Option<DateTime<Utc>>,
     pub sent_by: UserId,
     pub text: Option<String>,
     pub is_deleted: bool,

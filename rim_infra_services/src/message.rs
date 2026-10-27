@@ -603,6 +603,7 @@ impl DefaultMessageService {
             thread_root_message_id: None,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
+            edited_at: message.edited_at,
             encryption,
         })
     }
@@ -671,6 +672,7 @@ impl DefaultMessageService {
             thread_root_message_id,
             is_deleted: message.is_deleted,
             sent_at: message.sent_at,
+            edited_at: message.edited_at,
             encryption,
         }
     }

@@ -477,6 +477,61 @@ async fn edit_message_mutation_updates_text() {
     );
 }
 
+#[tokio::test]
+async fn edit_message_mutation_returns_edited_at() {
+    let actor = UserId::new();
+    let server_id = ServerId::new();
+    let conversation_id = ConversationId::new();
+    let message_id = MessageId::new();
+    let edited_at = chrono::DateTime::parse_from_rfc3339("2026-10-27T14:05:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+
+    let mut msg = MockMessageService::new();
+    msg.expect_edit_message().returning(move |_cmd| {
+        Box::pin(async move {
+            let mut dto = test_message_dto();
+            dto.id = message_id;
+            dto.server_id = server_id;
+            dto.conversation_id = conversation_id;
+            dto.author_id = actor;
+            dto.text = Some("updated text".to_string());
+            dto.edited_at = Some(edited_at);
+            Ok(dto)
+        })
+    });
+
+    let schema = schema_with_mocks(
+        MockAuthService::new(),
+        MockConversationService::new(),
+        msg,
+        MockMessageAttachmentService::new(),
+        MockThreadService::new(),
+    );
+
+    let req = authed_request(
+        r#"mutation($sid: ID!, $cid: ID!, $mid: ID!) { editMessage(input: { serverId: $sid, conversationId: $cid, messageId: $mid, text: "updated text" }) { id editedAt } }"#,
+        actor,
+    )
+    .variables(Variables::from_json(serde_json::json!({
+        "sid": server_id.to_string(),
+        "cid": conversation_id.to_string(),
+        "mid": message_id.to_string(),
+    })));
+
+    let res = schema.execute(req).await;
+    assert_no_errors(&res);
+
+    let json = res.data.into_json().unwrap();
+    let returned = json["editMessage"]["editedAt"]
+        .as_str()
+        .expect("editedAt is a string");
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(returned).unwrap(),
+        edited_at
+    );
+}
+
 // ── deleteMessage mutation ───────────────────────────────────────────
 
 #[tokio::test]

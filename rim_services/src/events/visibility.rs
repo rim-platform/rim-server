@@ -316,6 +316,7 @@ mod tests {
             forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
+            edited_at: None,
             encryption: None,
             reactions: vec![],
         };
@@ -502,6 +503,33 @@ mod tests {
         let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, ["conversation_id", "type", "workspace_id"]);
+    }
+
+    /// `MessageUpdated` carries the message's edit time as `message.edited_at`, RFC 3339, and
+    /// `null` for a message never edited.
+    #[test]
+    fn message_updated_serializes_edited_at() {
+        let mut updated = conversation_scoped_events("Channel", false, vec![UserId::new()])
+            .into_iter()
+            .find(|e| matches!(e, WorkspaceEvent::MessageUpdated { .. }))
+            .expect("MessageUpdated");
+        let json = serde_json::to_value(&updated).expect("serialize");
+        assert_eq!(json["message"]["edited_at"], serde_json::Value::Null);
+
+        let edited_at = chrono::DateTime::parse_from_rfc3339("2026-10-27T14:05:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        if let WorkspaceEvent::MessageUpdated { message, .. } = &mut updated {
+            message.edited_at = Some(edited_at);
+        }
+        let json = serde_json::to_value(&updated).expect("serialize");
+        let wire = json["message"]["edited_at"]
+            .as_str()
+            .expect("edited_at is a string");
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(wire).unwrap(),
+            edited_at
+        );
     }
 
     /// A typing event names the typist by username and display name, `null` when unset, and

@@ -457,6 +457,7 @@ fn to_simple_dto(msg: Message, server_id: rim_core::server::model::ServerId) -> 
         thread_root_message_id: None,
         is_deleted: msg.is_deleted,
         sent_at: msg.sent_at,
+        edited_at: msg.edited_at,
         encryption: None,
     }
 }

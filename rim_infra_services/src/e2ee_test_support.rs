@@ -923,6 +923,7 @@ impl E2eeRepository for FakeE2ee {
             parent_message_id: None,
             forwarded_from_message_id: message.forwarded_from_message_id,
             sent_at: message.sent_at,
+            edited_at: None,
             sent_by: message.sent_by,
             text: None,
             is_deleted: false,

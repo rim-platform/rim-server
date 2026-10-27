@@ -29,6 +29,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   the direct space adds people by principal id, here or on another server, as
   `createConversation` names them; `userIds` now defaults to an empty list. A plaintext group of
   the direct space takes nobody from another server (`VALIDATION`).
+- `Message.editedAt`: when the message's text last changed, null for a never-edited or deleted
+  message; the `MessageUpdated` event's message carries it as `edited_at`.
+- `serverInfo.capabilities`: the API additions this server has that older servers lack, by
+  name, starting with `message_edited_at`.
 
 ### Changed
 

@@ -389,6 +389,7 @@ mod tests {
             forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
+            edited_at: None,
         };
         let existing_thread = thread(conv_id);
 
@@ -527,6 +528,7 @@ mod tests {
             forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: now,
+            edited_at: None,
         };
     }
 }

@@ -39,7 +39,7 @@ use support::{TestCtx, unknown_id};
 
 const MESSAGE_FIELDS: &str = r#"
 fragment MessageFields on Message {
-  id text sentAt isDeleted threadId rootThreadId authorId
+  id text sentAt isDeleted threadId rootThreadId authorId editedAt
 }
 "#;
 
@@ -123,6 +123,7 @@ struct Msg {
     is_deleted: bool,
     thread_id: Option<String>,
     root_thread_id: Option<String>,
+    edited_at: Option<DateTime<Utc>>,
 }
 
 impl Msg {
@@ -135,6 +136,7 @@ impl Msg {
             is_deleted: v["isDeleted"].as_bool().unwrap_or(false),
             thread_id: opt_str("threadId"),
             root_thread_id: opt_str("rootThreadId"),
+            edited_at: (!v["editedAt"].is_null()).then(|| parse_ts(&v["editedAt"])),
         }
     }
 
@@ -770,6 +772,7 @@ async fn edit_and_delete_are_reflected_in_the_timeline() {
     };
     let edited = &sent[0]; // alice's
     let deleted = &sent[3]; // bob's
+    assert_eq!(edited.edited_at, None, "a sent message is not edited");
 
     let data = exec_ok(
         &f.schema,
@@ -791,6 +794,9 @@ async fn edit_and_delete_are_reflected_in_the_timeline() {
         edit_result.sent_at, edited.sent_at,
         "editing keeps the sort key"
     );
+    let edited_at = edit_result
+        .edited_at
+        .expect("an edited message has editedAt");
 
     // Only the author may edit.
     let code = exec_err_code(
@@ -846,6 +852,15 @@ async fn edit_and_delete_are_reflected_in_the_timeline() {
     let visible = f.page(&timeline, Dir::After, &Value::Null, 50, false).await;
     assert_eq!(visible.ids(), ids(&remaining));
     assert_eq!(visible.items[0].text.as_deref(), Some("edited text"));
+    assert_eq!(
+        visible.items[0].edited_at,
+        Some(edited_at),
+        "the timeline carries the edit time"
+    );
+    assert_eq!(
+        visible.items[1].edited_at, None,
+        "an unedited message has no edit time"
+    );
     assert!(visible.items.iter().all(|m| !m.is_deleted));
 
     // includeDeleted: the full list again, with the deleted message as a tombstone.

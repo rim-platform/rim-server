@@ -13,6 +13,9 @@ use rim_services::limits::InstanceLimits;
 /// changes meaning, so a client can tell it is older than the server it talks to.
 pub const API_VERSION: i32 = 1;
 
+/// API additions an older server lacks, by name, so a client asks for them only here.
+pub const CAPABILITIES: &[&str] = &["message_edited_at"];
+
 /// The running server build, the API version it speaks and the optional features it runs.
 #[derive(SimpleObject, Clone, Debug)]
 #[graphql(complex)]
@@ -165,6 +168,15 @@ impl ServerInfo {
     /// `confirmedMinimumAge`.
     async fn minimum_age(&self) -> Option<i32> {
         self.minimum_age
+    }
+
+    /// API additions this server has that an older server lacks, by name: `message_edited_at`
+    /// (`Message.editedAt`). A client ignores names it does not know.
+    async fn capabilities(&self) -> Vec<String> {
+        CAPABILITIES
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect()
     }
 }
 
