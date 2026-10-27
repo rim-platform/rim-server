@@ -321,6 +321,7 @@ mod tests {
             encryption: None,
             is_deleted: false,
             sent_at: chrono::Utc::now(),
+            edited_at: None,
         }
     }
 

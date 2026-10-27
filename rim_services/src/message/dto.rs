@@ -34,6 +34,9 @@ pub struct MessageDto {
 
     pub sent_at: chrono::DateTime<chrono::Utc>,
 
+    /// When the text last changed; `None` for a never-edited message.
+    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
+
     /// The MLS envelope of an encrypted message; `None` for plaintext.
     pub encryption: Option<MessageEncryptionDto>,
 }

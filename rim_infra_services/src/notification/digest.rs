@@ -558,6 +558,7 @@ mod tests {
             parent_message_id: None,
             forwarded_from_message_id: None,
             sent_at: now(),
+            edited_at: None,
             sent_by: UserId::new(),
             text: Some(text.to_string()),
             is_deleted: deleted,

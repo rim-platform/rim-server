@@ -398,6 +398,8 @@ pub struct MessageEventData {
     pub forwarded_from_message_id: Option<MessageId>,
     pub is_deleted: bool,
     pub sent_at: chrono::DateTime<chrono::Utc>,
+    /// When the text last changed; null for a never-edited or deleted message.
+    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub reactions: Vec<ReactionGroupData>,
     /// The envelope of an encrypted message; `None` for plaintext.
     pub encryption: Option<MessageEncryptionData>,
@@ -451,6 +453,7 @@ impl From<&MessageDto> for MessageEventData {
             forwarded_from_message_id: dto.forwarded_from_message_id,
             is_deleted: dto.is_deleted,
             sent_at: dto.sent_at,
+            edited_at: if dto.is_deleted { None } else { dto.edited_at },
             reactions: vec![],
             encryption: dto.encryption.as_ref().map(Into::into),
         }

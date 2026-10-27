@@ -714,6 +714,9 @@ each list.
 - **`minimumAge`**: the age every signup confirms the person has reached (`RIM_MINIMUM_AGE`,
   13 to 21), or null when the server asks for none. A client shows "I am at least N" at signup
   and sends N back as `confirmedMinimumAge`.
+- **`capabilities`**: the API additions this server has that an older one lacks, by name
+  (`message_edited_at`: `Message.editedAt`). A client asks for such a field only when its name
+  is listed, so it keeps working against older servers; it ignores names it does not know.
 
 The discovery document carries the same `features`, and `registrationFull` as
 `registration.full`, for a client that has not connected yet.

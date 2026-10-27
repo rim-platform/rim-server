@@ -274,6 +274,7 @@ async fn execute_command_post_message_round_trips_through_executor() {
                     thread_root_message_id: None,
                     is_deleted: false,
                     sent_at: chrono::Utc::now(),
+                    edited_at: None,
                     encryption: None,
                 })
             })

@@ -694,6 +694,10 @@ included.
 - Creating a thread from a timeline message is optional.
 - The root message remains in the main timeline after a thread is created.
 - Replies inside the thread live only in the thread view; they do not appear in the main timeline listing.
+- `Message.editedAt` is when the text last changed (for an encrypted message, its envelope), null
+  for a never-edited or deleted message, the value `MessageChange.editedAt` carries.
+  `MessageUpdated` events carry it as `message.edited_at`. A server with it lists
+  `message_edited_at` in `serverInfo.capabilities`.
 
 ## Reply Semantics
 

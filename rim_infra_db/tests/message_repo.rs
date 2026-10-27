@@ -63,6 +63,41 @@ async fn create_get_update_text_and_soft_delete() {
     assert!(matches!(err.kind(), RepoErrorKind::NotFound));
 }
 
+/// The trigger sets `edited_at` on a text change, and `update_message_text` returns it.
+#[tokio::test]
+async fn update_message_text_returns_edited_at() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-edited-at").await;
+
+    let created = repo
+        .create_message(&NewMessage {
+            conversation_id: conv.id,
+            thread_id: None,
+            parent_message_id: None,
+            sent_by: user.id,
+            text: Some("hello".to_string()),
+            forwarded_from_message_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.edited_at, None, "a new message is not edited");
+
+    let updated = repo
+        .update_message_text(created.id, "updated".to_string())
+        .await
+        .unwrap();
+    let edited_at = updated.edited_at.expect("the edit sets edited_at");
+
+    let fetched = repo.get_by_id(created.id).await.unwrap().unwrap();
+    assert_eq!(fetched.edited_at, Some(edited_at));
+}
+
 #[tokio::test]
 async fn list_messages_respects_include_deleted_and_ordering() {
     let ctx = support::TestCtx::new().await;

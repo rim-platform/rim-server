@@ -13,6 +13,7 @@ impl From<message::Model> for Message {
             parent_message_id: m.parent_message_id.map(Into::into),
             forwarded_from_message_id: m.forwarded_from_message_id.map(Into::into),
             sent_at: m.sent_at.into(),
+            edited_at: m.edited_at.map(Into::into),
             sent_by: m.sent_by.into(),
             text: m.text,
         }

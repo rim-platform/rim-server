@@ -1012,6 +1012,7 @@ mod tests {
             forwarded_from_message_id: None,
             is_deleted: false,
             sent_at: Utc::now(),
+            edited_at: None,
         }
     }
 

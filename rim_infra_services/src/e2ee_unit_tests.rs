@@ -2193,6 +2193,7 @@ mod tests {
             parent_message_id: None,
             forwarded_from_message_id: None,
             sent_at,
+            edited_at: None,
             sent_by: f.bob.user,
             text: None,
             is_deleted: false,
