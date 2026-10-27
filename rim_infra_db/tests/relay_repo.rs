@@ -1914,3 +1914,55 @@ async fn a_cleared_conversation_of_the_direct_space_stays_hidden_and_holders_are
         "someone who left holds nothing"
     );
 }
+
+#[tokio::test]
+async fn a_dm_member_blocked_by_the_other_is_named() {
+    use rim_core::conversation::model::ConversationType;
+
+    let ctx = support::TestCtx::new().await;
+    let (alice, bob, conversation) = direct_pair(&ctx, ConversationType::Direct).await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    assert!(
+        !repo
+            .blocked_by_dm_partner(alice.id, conversation.into())
+            .await
+            .unwrap()
+    );
+
+    repo.block(bob.id, "rimp1_alice").await.unwrap();
+    assert!(
+        repo.blocked_by_dm_partner(alice.id, conversation.into())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .blocked_by_dm_partner(bob.id, conversation.into())
+            .await
+            .unwrap()
+    );
+
+    repo.unblock(bob.id, "rimp1_alice").await.unwrap();
+    assert!(
+        !repo
+            .blocked_by_dm_partner(alice.id, conversation.into())
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_group_names_nobody_as_blocked_by_a_dm_partner() {
+    use rim_core::conversation::model::ConversationType;
+
+    let ctx = support::TestCtx::new().await;
+    let (alice, bob, group) = direct_pair(&ctx, ConversationType::Group).await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    repo.block(bob.id, "rimp1_alice").await.unwrap();
+    assert!(
+        !repo
+            .blocked_by_dm_partner(alice.id, group.into())
+            .await
+            .unwrap()
+    );
+}

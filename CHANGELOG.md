@@ -49,6 +49,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   invite and that item, as a first contact would. Nothing they sent while blocked comes back
   from the relay. Audited as `relay.principal_unblocked` (`scope` `user`) with
   `cleared_requests`.
+- Someone blocked by the other member of a DM this server hosts posts nothing into it:
+  `sendMessage`, `replyToMessage`, `forwardMessage`, `sendEncryptedMessage` and `toggleReaction`
+  answer `FORBIDDEN` ("they do not take direct messages from you"), as starting the DM already
+  did.
 
 ### Fixed
 

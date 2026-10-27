@@ -177,7 +177,9 @@ the request. Everything appears once they accept. They may read the conversation
 decide, but post nothing into it: while their request for it is pending or ignored, or they
 blocked whoever started it, `sendMessage`, `replyToMessage`, `forwardMessage` into it,
 `sendEncryptedMessage` and `toggleReaction` answer `FORBIDDEN` ("accept the message request
-before posting here"), and `startTyping` answers `false` without telling anyone. This server
+before posting here"), and `startTyping` answers `false` without telling anyone. Someone the other member of a DM
+blocked posts nothing into it either: the same mutations answer `FORBIDDEN` ("they do not take
+direct messages from you"), so nothing they write while blocked is stored here. This server
 enforces it for the conversations it hosts; a reply to a request for a conversation hosted
 elsewhere goes to that host through the forward path, which leaves it to the client. This needs
 server-to-server traffic to be on; with it off, conversations in the direct space are live at

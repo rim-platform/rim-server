@@ -330,6 +330,8 @@ const BLOCK: &str = "mutation($p: String!) { blockPrincipal(principalId: $p) }";
 const UNBLOCK: &str = "mutation($p: String!) { unblockPrincipal(principalId: $p) }";
 const SEND: &str = "mutation($s: ID!, $c: ID!, $t: String!) { \
      sendMessage(input: { serverId: $s, conversationId: $c, text: $t }) { id } }";
+const REACT: &str = "mutation($s: ID!, $c: ID!, $m: ID!) { \
+     toggleReaction(input: { serverId: $s, conversationId: $c, messageId: $m, emoji: \"👍\" }) { emoji } }";
 const MESSAGES: &str = r#"query($s: ID!, $c: ID!) {
   messages(serverId: $s, conversationId: $c, dir: AFTER, limit: 50, includeDeleted: true) {
     items { id text }
@@ -359,7 +361,7 @@ async fn request_ids(person: &Person, status: &str) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_unblocked_senders_next_message_is_a_new_request() {
+async fn an_unblocked_senders_next_message_is_a_new_request_without_what_the_block_refused() {
     let a = one_server(|_| {}).await;
     let alice = sign_up(&a, "alice", 1).await;
     let bob = sign_up(&a, "bob", 2).await;
@@ -367,7 +369,7 @@ async fn an_unblocked_senders_next_message_is_a_new_request() {
     let direct = direct_space(&alice).await;
 
     let conv = created(&dm(&a, &alice, &direct, &bob).await);
-    alice
+    let hello = alice
         .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
         .await;
     let request = bob.pending_request(&alice).await;
@@ -375,6 +377,27 @@ async fn an_unblocked_senders_next_message_is_a_new_request() {
     let blocked = bob.ok(BLOCK, json!({ "p": alice.principal() })).await;
     assert_eq!(blocked["blockPrincipal"], json!(true));
     assert!(request_ids(&bob, "PENDING").await.is_empty());
+
+    let refused = alice
+        .post(
+            SEND,
+            json!({ "s": direct, "c": conv, "t": "while blocked" }),
+        )
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+    assert!(
+        refused["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("they do not take direct messages from you")),
+        "{refused}"
+    );
+    let reaction = alice
+        .post(
+            REACT,
+            json!({ "s": direct, "c": conv, "m": hello["sendMessage"]["id"] }),
+        )
+        .await;
+    assert_eq!(code(&reaction), "FORBIDDEN", "{reaction}");
 
     let unblocked = bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
     assert_eq!(unblocked["unblockPrincipal"], json!(true));
@@ -411,6 +434,87 @@ async fn an_unblocked_senders_next_message_is_a_new_request() {
     assert_eq!(lifted["unblockPrincipal"], json!(true));
     let again = bob.ok(UNBLOCK, json!({ "p": carol.principal() })).await;
     assert_eq!(again["unblockPrincipal"], json!(false));
+
+    a.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_accepted_dm_takes_nothing_from_a_blocked_member_and_carries_on_after_the_unblock() {
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = direct_space(&alice).await;
+
+    let (bob_id, carol_id) = (
+        user_id(&a, &bob.principal()).await,
+        user_id(&a, &carol.principal()).await,
+    );
+    let group = alice
+        .ok(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "memberIds": [bob_id.to_string(), carol_id.to_string()],
+                "title": "group",
+            } }),
+        )
+        .await["createConversation"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let group_request = bob.pending_request(&alice).await;
+    assert_eq!(group_request["conversationId"], json!(group));
+
+    // Accepting the DM makes Alice a contact; the group request stays undecided.
+    let conv = created(&dm(&a, &alice, &direct, &bob).await);
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "before" }))
+        .await;
+    let dm_request = eventually("the DM request", || async {
+        let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+        pending["dmRequests"]
+            .as_array()
+            .and_then(|r| r.iter().find(|r| r["conversationId"] == json!(conv)))
+            .cloned()
+    })
+    .await;
+    bob.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": dm_request["id"] }),
+    )
+    .await;
+    bob.ok(BLOCK, json!({ "p": alice.principal() })).await;
+    let refused = alice
+        .post(
+            SEND,
+            json!({ "s": direct, "c": conv, "t": "while blocked" }),
+        )
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+    assert!(
+        !listed(&bob, &direct).await.contains(&conv),
+        "Alice started the DM, so a block takes it out of Bob's list"
+    );
+
+    bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
+    assert!(listed(&bob, &direct).await.contains(&conv));
+    assert_eq!(texts(&bob, &direct, &conv).await, ["before"]);
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "back" }))
+        .await;
+    assert_eq!(texts(&bob, &direct, &conv).await, ["before", "back"]);
+    assert!(
+        request_ids(&bob, "PENDING").await.is_empty(),
+        "the accepted DM files no request, and the group's waits for its next item"
+    );
+
+    alice
+        .ok(SEND, json!({ "s": direct, "c": group, "t": "hello all" }))
+        .await;
+    let again = bob.pending_request(&alice).await;
+    assert_eq!(again["conversationId"], json!(group));
+    assert_eq!(again["id"], group_request["id"]);
 
     a.stop().await;
 }

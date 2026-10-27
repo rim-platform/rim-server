@@ -848,6 +848,22 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
+    async fn blocked_by_dm_partner(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+    ) -> RepoResult<bool> {
+        self.flag(
+            r#"SELECT EXISTS (SELECT 1 FROM conversation c
+                   JOIN conversation_member m ON m.conversation_id = c.id AND m.user_id <> $1
+                   JOIN "user" me ON me.id = $1
+                   JOIN relay_block b ON b.user_id = m.user_id AND b.principal_id = me.principal_id
+                   WHERE c.id = $2 AND c.conversation_type = 'direct') AS flag"#,
+            vec![uuid(user_id), conversation_id.into()],
+        )
+        .await
+    }
+
     async fn list_contacts(&self, user_id: UserId) -> RepoResult<Vec<Contact>> {
         Ok(self
             .all::<ContactRow>(

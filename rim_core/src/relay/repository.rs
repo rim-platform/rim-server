@@ -208,6 +208,13 @@ pub trait RelayRepository: Send + Sync {
     async fn conversation_hidden(&self, user_id: UserId, conversation_id: Uuid)
     -> RepoResult<bool>;
 
+    /// Whether `user_id` is in a direct conversation whose other member blocked them.
+    async fn blocked_by_dm_partner(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+    ) -> RepoResult<bool>;
+
     /// A user's contacts, oldest first.
     async fn list_contacts(&self, user_id: UserId) -> RepoResult<Vec<Contact>>;
 
