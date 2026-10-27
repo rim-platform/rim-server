@@ -263,6 +263,28 @@ pub(super) fn resolve_conversation_id(
     })
 }
 
+/// Like [`resolve_conversation_id`], for the message: a present, non-blank `arg_name` arg is
+/// parsed strictly; otherwise the selected message (`context.selected_message_id`) is used.
+pub(super) fn resolve_message_id(
+    args: &serde_json::Map<String, Value>,
+    context: Option<&CommandContextDto>,
+    arg_name: &str,
+) -> ServiceResult<rim_core::message::model::MessageId> {
+    if let Some(raw) = args.get(arg_name).and_then(|v| v.as_str()) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            let uuid = uuid::Uuid::parse_str(trimmed)
+                .map_err(|_| ServiceError::Validation(format!("invalid uuid arg `{arg_name}`")))?;
+            return Ok(uuid.into());
+        }
+    }
+    context.and_then(|c| c.selected_message_id).ok_or_else(|| {
+        ServiceError::Validation(format!(
+            "missing message id: provide `{arg_name}` arg or `context.selected_message_id`"
+        ))
+    })
+}
+
 /// Parses a list of UUIDs from `key`. Accepts a JSON array of strings, or one string of
 /// comma-separated ids: the agent's tool schema types every command argument as a scalar,
 /// so `"a,b"` is what it sends for a list argument.
@@ -579,5 +601,43 @@ mod tests {
         let args = args_with_server_id(ws);
         let result = resolve_workspace_id::<ServerId>(&args, None, "server_id");
         assert_eq!(result.unwrap(), ws);
+    }
+
+    /// A non-blank `message_id` arg wins; a blank one falls back to the selected message; a
+    /// malformed one is refused; neither is a validation error naming both.
+    #[test]
+    fn resolve_message_id_prefers_the_arg_then_the_selection() {
+        let arg = rim_core::message::model::MessageId::new();
+        let selected = rim_core::message::model::MessageId::new();
+        let ctx = CommandContextDto {
+            selected_message_id: Some(selected),
+            ..ctx_without_workspace()
+        };
+        let with = |value: &str| {
+            let mut args = serde_json::Map::new();
+            args.insert("message_id".into(), serde_json::json!(value));
+            args
+        };
+
+        let resolved = resolve_message_id(&with(&arg.to_string()), Some(&ctx), "message_id");
+        assert_eq!(resolved.unwrap(), arg);
+        let resolved = resolve_message_id(&with("  "), Some(&ctx), "message_id");
+        assert_eq!(resolved.unwrap(), selected);
+        let resolved = resolve_message_id(&empty_args(), Some(&ctx), "message_id");
+        assert_eq!(resolved.unwrap(), selected);
+
+        let err = resolve_message_id(&with("not-a-uuid"), Some(&ctx), "message_id").unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(msg) if msg.contains("invalid uuid arg")),
+            "{err:?}"
+        );
+        let err = resolve_message_id(&empty_args(), Some(&ctx_without_workspace()), "message_id")
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(msg)
+                if msg.contains("`message_id`") && msg.contains("context.selected_message_id")),
+            "{err:?}"
+        );
+        assert!(resolve_message_id(&empty_args(), None, "message_id").is_err());
     }
 }

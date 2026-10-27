@@ -93,6 +93,84 @@ async fn search_messages_fts_matches_stemmed_terms() {
     assert_eq!(hits[0].message.id, msg.id);
 }
 
+/// A short message is its own headline: numbers and punctuation at its edges stay.
+#[tokio::test]
+async fn search_messages_fts_headline_keeps_the_edges_of_a_short_message() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("fts-user-headline-short").await;
+    for text in [
+        "unread test 0",
+        "unread test 1",
+        "please edit me (edited text)",
+    ] {
+        ctx.create_message(conv.id, user.id, text).await;
+    }
+
+    let headlines = |query: &str| {
+        let repo = &repo;
+        let params = MessageSearchParams {
+            tsquery: query.to_string(),
+            ..base_params(vec![conv.id])
+        };
+        async move {
+            let mut headlines: Vec<String> = repo
+                .search_messages_fts(params)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|hit| hit.headline.expect("headline"))
+                .collect();
+            headlines.sort();
+            headlines
+        }
+    };
+
+    assert_eq!(
+        headlines("unread").await,
+        vec!["<mark>unread</mark> test 0", "<mark>unread</mark> test 1"]
+    );
+    assert_eq!(
+        headlines("edit").await,
+        vec!["please <mark>edit</mark> me (<mark>edited</mark> text)"]
+    );
+}
+
+/// A message over 300 characters gets one excerpt around the match, not its whole text.
+#[tokio::test]
+async fn search_messages_fts_headline_of_a_long_message_is_an_excerpt() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("fts-user-headline-long").await;
+    let filler = "lorem ipsum dolor sit amet ".repeat(8);
+    let text = format!("{filler}we deploy on fridays {filler}");
+    assert!(text.chars().count() > 400);
+    ctx.create_message(conv.id, user.id, &text).await;
+
+    let hits = repo
+        .search_messages_fts(MessageSearchParams {
+            tsquery: "deploy".to_string(),
+            ..base_params(vec![conv.id])
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(hits.len(), 1);
+    let headline = hits[0].headline.as_deref().expect("headline");
+    assert!(headline.contains("<mark>deploy</mark>"), "{headline}");
+    assert!(headline.len() < text.len(), "{headline}");
+}
+
 #[tokio::test]
 async fn search_messages_fts_ranks_matches_and_orders_by_recency() {
     let ctx = support::TestCtx::new().await;

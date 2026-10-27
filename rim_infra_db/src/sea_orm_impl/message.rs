@@ -20,6 +20,9 @@ use std::collections::HashMap;
 use crate::DbHandle;
 use crate::error::map_db_err;
 
+/// Messages up to this many characters come back whole as their search snippet.
+const WHOLE_HEADLINE_MAX_CHARS: usize = 300;
+
 pub struct SeaOrmMessageRepository {
     db: DbHandle,
 }
@@ -311,7 +314,9 @@ impl MessageRepository for SeaOrmMessageRepository {
                       m.has_attachments,
                       ts_rank(m.search_tsv, q.query) AS rank,
                       ts_headline('english', coalesce(m.text, ''), q.query,
-                                  'StartSel=<mark>,StopSel=</mark>,MaxFragments=1') AS headline
+                                  CASE WHEN char_length(coalesce(m.text, '')) <= {WHOLE_HEADLINE_MAX_CHARS}
+                                       THEN 'StartSel=<mark>,StopSel=</mark>,HighlightAll=true'
+                                       ELSE 'StartSel=<mark>,StopSel=</mark>,MaxFragments=1,ShortWord=0' END) AS headline
                FROM message m,
                     websearch_to_tsquery('english', $1) AS q(query)
                WHERE m.conversation_id = ANY($2)

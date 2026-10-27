@@ -1333,3 +1333,42 @@ async fn reactions_setting_off_yields_nothing() {
     assert!(f.notification_events()[before..].is_empty());
     assert!(f.notifications(&f.bob).await.is_empty());
 }
+
+/// From the palette, with only the focused conversation in the context, posting, reading the
+/// recent messages and marking read act on that conversation.
+#[tokio::test]
+async fn palette_conversation_commands_act_on_the_focused_conversation() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+
+    let result = f
+        .execute(
+            &f.bob,
+            "chat.post_message",
+            json!({ "text": "from the palette" }),
+            Some(&f.general),
+        )
+        .await;
+    assert_eq!(result["status"], "SUCCESS", "{result}");
+    assert_eq!(result["payload"]["conversation_id"], json!(f.general));
+
+    let result = f
+        .execute(
+            &f.bob,
+            "chat.get_recent_messages",
+            json!({}),
+            Some(&f.general),
+        )
+        .await;
+    assert_eq!(result["status"], "SUCCESS", "{result}");
+    let messages = result["payload"]["messages"].as_array().expect("messages");
+    assert!(
+        messages.iter().any(|m| m["text"] == "from the palette"),
+        "{result}"
+    );
+
+    let result = f
+        .execute(&f.carol, "chat.mark_as_read", json!({}), Some(&f.general))
+        .await;
+    assert_eq!(result["status"], "SUCCESS", "{result}");
+}

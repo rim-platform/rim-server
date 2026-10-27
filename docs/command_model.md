@@ -157,7 +157,7 @@ mutating-call cap. Palette and keybind still run them in one step.
 | `state.set` | `server_id`, `key`, `value`, `scope?`, `ttl?` | `Mutating` | yes | |
 | `state.incr` | `server_id`, `key`, `delta?`, `scope?` | `Mutating` | yes | |
 | `state.delete` | `server_id`, `key`, `scope?` | `Mutating` | yes | |
-| `chat.mark_as_read` | `server_id`, `conversation_id` | `Mutating` | yes | |
+| `chat.mark_as_read` | `server_id`, `conversation_id` | `Mutating` | yes | `conversation_id` falls back to the focused conversation |
 | `chat.create_group` | `server_id`, `member_ids`, `title?` | `Mutating` | yes | `member_ids` is a JSON array or one comma-separated string |
 
 The `state.*` commands and the GraphQL roots `workspaceState`, `workspaceStateList`,
@@ -197,6 +197,13 @@ pinned by `collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs
 `list_commands_ai_surface_returns_forty_two_commands_with_caps` (`command_tests.rs`). The
 capability union the AI surface checks is `admin.manage_members`, `chat.read` and `chat.write`;
 the notification and general builtins declare none.
+
+`chat.post_message`, `chat.get_recent_messages`, `chat.pin_message` and
+`chat.toggle_reaction` take `conversation_id` from the focused conversation
+(`context.conversation_id`) when it is not given, and `chat.pin_message` and
+`chat.toggle_reaction` take `message_id` from the selected message
+(`context.selected_message_id`); an argument that is given wins. `chat.search_messages` has
+no such fallback: without `conversation_id` it searches the workspace.
 
 ### Plugin-Provided Commands
 

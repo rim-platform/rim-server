@@ -21,6 +21,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- `myBlockedPrincipals`: the principals the caller blocked, newest first, as
+  `BlockedPrincipal` with the account on this server holding each one, if any.
+
 ### Changed
 
 - The web client is versioned and deployed on its own: `RIM_WEB_VERSION` picks the rim-ui
@@ -36,6 +41,15 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 - A failed `executeMacro` names the step and its error: "Step <n> (<command title>) failed:
   <reason>", instead of "macro `<name>` failed on a step".
+- Custom emoji images load: `CustomEmoji.imageUrl` is `/api/emoji/<id>`, which the new
+  `GET /api/emoji/{id}` serves to members of the emoji's workspace (also forwarded from another
+  relay). It was a storage path nothing served; emoji uploaded before are fixed too.
+- `chat.mark_as_read`, `chat.post_message`, `chat.get_recent_messages`, `chat.pin_message` and
+  `chat.toggle_reaction` act on the focused conversation when no `conversation_id` is given, and
+  the last two on the selected message when no `message_id` is given, so they work from the
+  command palette and keybinds.
+- Search snippets (`headline`) no longer drop short words, numbers and punctuation at their
+  edges: a message of up to 300 characters comes back whole.
 
 ## [0.0.4] - 2026-10-26
 

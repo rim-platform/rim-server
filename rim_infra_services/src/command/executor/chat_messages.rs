@@ -6,7 +6,7 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 
-use super::{parse_uuid_arg, require_string_arg, resolve_workspace_id};
+use super::{require_string_arg, resolve_conversation_id, resolve_workspace_id};
 
 pub(super) async fn post_message(
     services: &CommandServices,
@@ -19,8 +19,7 @@ pub(super) async fn post_message(
         context.as_ref(),
         "server_id",
     )?;
-    let conversation_id =
-        parse_uuid_arg::<rim_core::conversation::model::ConversationId>(&args, "conversation_id")?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
     let text = require_string_arg(&args, "text")?;
 
     let message = services
@@ -271,6 +270,70 @@ mod tests {
     }
 
     // ── post_message ─────────────────────────────────────────────────────────
+
+    /// Args carrying only `text`, and `conversation_id` when given.
+    fn text_args(conv: Option<ConversationId>) -> serde_json::Map<String, serde_json::Value> {
+        let mut args = serde_json::Map::new();
+        if let Some(conv) = conv {
+            args.insert(
+                "conversation_id".to_string(),
+                serde_json::Value::String(conv.to_string()),
+            );
+        }
+        args.insert(
+            "text".to_string(),
+            serde_json::Value::String("hello".to_string()),
+        );
+        args
+    }
+
+    /// Without a `conversation_id` arg the message goes to the focused conversation.
+    #[tokio::test]
+    async fn post_message_uses_the_focused_conversation() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let mut msg_svc = MockMessageService::new();
+        msg_svc
+            .expect_send_message()
+            .withf(move |cmd| cmd.server_id == ws && cmd.conversation_id == conv)
+            .return_once(move |_| Box::pin(async move { Ok(fake_message(ws, conv)) }));
+
+        let svc = make_services(msg_svc);
+        let ctx = CommandContextDto {
+            conversation_id: Some(conv),
+            ..ctx_with(ws)
+        };
+        let result = super::post_message(&svc, actor(), text_args(None), Some(ctx))
+            .await
+            .expect("the message goes to the focused conversation");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+        assert_eq!(
+            result.payload.expect("payload")["conversation_id"],
+            serde_json::json!(conv.to_string())
+        );
+    }
+
+    /// A `conversation_id` arg wins over the focused conversation.
+    #[tokio::test]
+    async fn post_message_conversation_arg_wins_over_context() {
+        let ws = ServerId::new();
+        let arg_conv = ConversationId::new();
+        let mut msg_svc = MockMessageService::new();
+        msg_svc
+            .expect_send_message()
+            .withf(move |cmd| cmd.conversation_id == arg_conv)
+            .return_once(move |_| Box::pin(async move { Ok(fake_message(ws, arg_conv)) }));
+
+        let svc = make_services(msg_svc);
+        let ctx = CommandContextDto {
+            conversation_id: Some(ConversationId::new()),
+            ..ctx_with(ws)
+        };
+        let result = super::post_message(&svc, actor(), text_args(Some(arg_conv)), Some(ctx))
+            .await
+            .expect("the message goes to the arg conversation");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
 
     /// 1. AI path: args carry server_id — downstream sees arg UUID.
     #[tokio::test]

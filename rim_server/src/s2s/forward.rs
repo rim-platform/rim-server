@@ -16,6 +16,7 @@ use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::StorageBackend;
 use rim_infra_services::avatar_check::AvatarChecker;
 use rim_s2s::host::sign_host_response;
+use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::feature::service::FeatureGate;
 use rim_services::host::dto::{ForwardAuth, ForwardRefusal, ForwardRequest};
 use rim_services::message_attachment::service::MessageAttachmentService;
@@ -200,6 +201,7 @@ fn route_feature(method: &str, segments: &[&str]) -> Option<ServerFeature> {
             Some(ServerFeature::Attachments)
         }
         ("GET", ["api", "plugin-bundles", _, _]) => Some(ServerFeature::WorkspacePlugins),
+        ("GET", ["api", "emoji", _]) => Some(ServerFeature::CustomEmoji),
         ("POST", ["api", "files", "avatar"]) | ("GET", ["api", "files", _, ..]) => {
             Some(ServerFeature::Avatars)
         }
@@ -308,6 +310,20 @@ async fn execute(
                     server_id,
                     (*sha256).to_string(),
                     bundles.get_ref().as_ref(),
+                )
+                .await,
+            )
+            .await
+        }
+        ("GET", ["api", "emoji", id]) => {
+            let Some(emoji) = req.app_data::<web::Data<Arc<dyn CustomEmojiService>>>() else {
+                return internal("custom emoji are not configured");
+            };
+            reply_of(
+                crate::file_handlers::custom_emoji_image_as(
+                    auth.user_id,
+                    id,
+                    emoji.get_ref().as_ref(),
                 )
                 .await,
             )
@@ -452,6 +468,7 @@ mod tests {
                 "api/plugin-bundles/s/h",
                 Some(ServerFeature::WorkspacePlugins),
             ),
+            ("GET", "api/emoji/e", Some(ServerFeature::CustomEmoji)),
             ("POST", "api", None),
         ];
         for (method, path, feature) in cases {

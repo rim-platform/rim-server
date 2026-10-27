@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rim_core::key_identity::model::DeviceKeyId;
 use rim_core::relay::model::{
-    CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus, DroppedSpace, NewDmRequest,
-    NewRelayEnvelope, NewRelayItem, RelayItemRecord, RelayQueueStats,
+    BlockedPrincipal, CachedIdentity, Contact, DmRequest, DmRequestId, DmRequestStatus,
+    DroppedSpace, NewDmRequest, NewRelayEnvelope, NewRelayItem, RelayItemRecord, RelayQueueStats,
 };
 use rim_core::relay::repository::RelayRepository;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
@@ -140,6 +140,27 @@ impl From<ContactRow> for Contact {
             principal_id: row.principal_id,
             relay_urls: row.relay_urls,
             added_at: row.added_at.into(),
+        }
+    }
+}
+
+#[derive(FromQueryResult)]
+struct BlockedRow {
+    principal_id: String,
+    user_id: Option<Uuid>,
+    username: Option<String>,
+    display_name: Option<String>,
+    blocked_at: DateTimeWithTimeZone,
+}
+
+impl From<BlockedRow> for BlockedPrincipal {
+    fn from(row: BlockedRow) -> Self {
+        Self {
+            principal_id: row.principal_id,
+            user_id: row.user_id.map(Into::into),
+            username: row.username,
+            display_name: row.display_name,
+            blocked_at: row.blocked_at.into(),
         }
     }
 }
@@ -900,6 +921,23 @@ impl RelayRepository for SeaOrmRelayRepository {
             vec![uuid(user_id), principal_id.into()],
         )
         .await
+    }
+
+    async fn list_blocks(&self, user_id: UserId) -> RepoResult<Vec<BlockedPrincipal>> {
+        Ok(self
+            .all::<BlockedRow>(
+                r#"SELECT b.principal_id, b.created_at AS blocked_at, u.id AS user_id, u.username,
+                          u.display_name
+                   FROM relay_block b
+                   LEFT JOIN "user" u ON u.principal_id = b.principal_id AND u.deleted_at IS NULL
+                   WHERE b.user_id = $1
+                   ORDER BY b.created_at DESC, b.principal_id"#,
+                vec![uuid(user_id)],
+            )
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 
     async fn hosts_of_user(&self, user_id: UserId) -> RepoResult<Vec<String>> {

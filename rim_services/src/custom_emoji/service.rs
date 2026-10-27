@@ -4,7 +4,7 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::custom_emoji::command::{
-    CreateCustomEmojiCmd, DeleteCustomEmojiCmd, ListCustomEmojisQuery,
+    CreateCustomEmojiCmd, CustomEmojiImageQuery, DeleteCustomEmojiCmd, ListCustomEmojisQuery,
 };
 use crate::custom_emoji::dto::CustomEmojiDto;
 
@@ -16,4 +16,10 @@ pub trait CustomEmojiService: Send + Sync {
     async fn delete(&self, cmd: DeleteCustomEmojiCmd) -> ServiceResult<()>;
 
     async fn list(&self, query: ListCustomEmojisQuery) -> ServiceResult<Vec<CustomEmojiDto>>;
+
+    /// The stored image of an emoji, for a member of its workspace.
+    ///
+    /// # Errors
+    /// `NotFound` for an unknown emoji and for a caller who is not a member of its workspace.
+    async fn image(&self, query: CustomEmojiImageQuery) -> ServiceResult<Vec<u8>>;
 }

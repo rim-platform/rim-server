@@ -21,3 +21,10 @@ pub struct ListCustomEmojisQuery {
     pub actor: Actor,
     pub server_id: ServerId,
 }
+
+/// Read a custom emoji's stored image.
+#[derive(Debug, Clone)]
+pub struct CustomEmojiImageQuery {
+    pub actor: Actor,
+    pub emoji_id: CustomEmojiId,
+}

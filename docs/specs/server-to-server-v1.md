@@ -462,7 +462,7 @@ payload text) and `Rim-Device-Signature` (the tagged signature over
 | Field | Rule |
 |---|---|
 | `host` | The host's server id |
-| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `POST /api/files/avatar`, `GET /api/files/<path>`, `GET /api/plugin-bundles/<server>/<sha256>`); must equal the forwarded one |
+| `method`, `path` | The host-relative request (`POST /api`, `GET /api/attachments/<id>/download`, `POST /api/files/upload`, `POST /api/files/avatar`, `GET /api/files/<path>`, `GET /api/plugin-bundles/<server>/<sha256>`, `GET /api/emoji/<id>`); must equal the forwarded one |
 | `seq` | Below 2⁵³, greater than every `seq` this device used with this host; clients use `max(previous + 1, Unix time in µs)` and persist it |
 | `bodySha256` | base64url(SHA-256(exact body bytes)); the empty body's hash for `GET` |
 

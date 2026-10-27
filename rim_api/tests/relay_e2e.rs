@@ -369,6 +369,16 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
         )
         .await;
     assert_eq!(blocked["blockPrincipal"], json!(true));
+    let blocks = bob
+        .ok(
+            "query { myBlockedPrincipals { principalId blockedAt } }",
+            json!({}),
+        )
+        .await;
+    let blocks = blocks["myBlockedPrincipals"].as_array().expect("blocks");
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0]["principalId"], json!(carol.principal()));
+    assert!(blocks[0]["blockedAt"].is_string());
     let requests = bob.ok(REQUESTS, json!({ "status": "IGNORED" })).await;
     assert!(
         requests["dmRequests"]
@@ -420,9 +430,62 @@ async fn dm_requests_are_held_for_strangers_ignored_and_blocked() {
         )
         .await;
     assert_eq!(unblocked["unblockPrincipal"], json!(true));
+    let blocks = bob
+        .ok(
+            "query { myBlockedPrincipals { principalId blockedAt } }",
+            json!({}),
+        )
+        .await;
+    assert_eq!(blocks["myBlockedPrincipals"], json!([]));
 
     a.stop().await;
     b.stop().await;
+}
+
+/// A block of a principal an account here holds names that account; the list is the caller's
+/// own and needs a session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn my_blocked_principals_names_the_account_here() {
+    const BLOCKS: &str =
+        "query { myBlockedPrincipals { principalId userId username displayName blockedAt } }";
+    let (first, _) = databases_with(RESET).await;
+    let node = start(&first, open_registration).await;
+    let alice = sign_up(&node, "alice", 1).await;
+    let bob = sign_up(&node, "bob", 2).await;
+    alice
+        .ok(
+            "mutation($p: String!) { blockPrincipal(principalId: $p) }",
+            json!({ "p": bob.principal() }),
+        )
+        .await;
+
+    let me = bob
+        .ok("query { me { id username displayName } }", json!({}))
+        .await;
+    let blocks = alice.ok(BLOCKS, json!({})).await;
+    let blocks = blocks["myBlockedPrincipals"].as_array().expect("blocks");
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0]["principalId"], json!(bob.principal()));
+    assert_eq!(blocks[0]["userId"], me["me"]["id"]);
+    assert_eq!(blocks[0]["username"], me["me"]["username"]);
+    assert_eq!(blocks[0]["displayName"], me["me"]["displayName"]);
+    assert!(blocks[0]["blockedAt"].is_string());
+    assert_eq!(
+        bob.ok(BLOCKS, json!({})).await["myBlockedPrincipals"],
+        json!([])
+    );
+
+    let body: Value = reqwest::Client::new()
+        .post(format!("{}/api", node.origin))
+        .json(&json!({ "query": BLOCKS }))
+        .send()
+        .await
+        .expect("send")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(error_code(&body), "UNAUTHENTICATED", "{body}");
+    node.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1577,6 +1640,8 @@ async fn the_sdl_names_every_relay_type_and_field() {
         "remoteIdentity(principalId: String!, relayUrl: String): RemoteIdentity!",
         "contacts: [Contact!]!",
         "dmRequests(status: DmRequestStatus): [DmRequest!]!",
+        "type BlockedPrincipal",
+        "myBlockedPrincipals: [BlockedPrincipal!]!",
         "relayItems(after: ID, limit: Int): RelayItemPage!",
         "streamHeads(serverId: ID!, streams: [String!]!): [StreamHead!]!",
         "addContact(principalId: String!, relayUrls: [String!]!): Contact!",

@@ -134,6 +134,17 @@ pub struct Contact {
     pub added_at: DateTime<Utc>,
 }
 
+/// A principal a local user blocked, with the account on this server holding it, if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockedPrincipal {
+    pub principal_id: String,
+    /// The account holding the principal; `None` when no undeleted account here holds it.
+    pub user_id: Option<UserId>,
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+    pub blocked_at: DateTime<Utc>,
+}
+
 /// An identity fetched from another relay: the `principals` JSON as served.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedIdentity {

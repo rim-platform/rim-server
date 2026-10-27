@@ -96,7 +96,9 @@ A conversation in context is only ever one the actor can see: public channels fo
 member, private channels, DMs and groups for their members. Commands that take a
 `conversation_id` fall back to `context.conversation_id`, and the service re-checks access, so a
 stale or forged context id for a private channel resolves to `NOT_FOUND`, exactly like an
-unknown id.
+unknown id. A command that takes a `message_id` of the message the user acts on
+(`chat.pin_message`, `chat.toggle_reaction`) falls back to `context.selected_message_id` the
+same way.
 
 ## Decisions
 

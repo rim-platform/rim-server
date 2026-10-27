@@ -42,9 +42,10 @@ use rim_services::dm_policy::dto::DmOperatorPolicy;
 use rim_services::e2ee::command::MlsCaller;
 use rim_services::e2ee::{ACCEPTED_CIPHER_SUITES, PREFERRED_CIPHER_SUITE};
 use rim_services::relay::dto::{
-    ContactDto, DeliverItem, DeliverResponse, DmRequestDto, IdentityDocument, OutboxPage,
-    PeerClaimRequest, PeerClaimResponse, PeerKeyPackage, QueueSpace, RefusedItem, RelayCleanup,
-    RelayItemDto, RelayItemPageDto, RelayNotice, RemoteIdentityDto, RemoteServerDto, SignedJson,
+    BlockedPrincipalDto, ContactDto, DeliverItem, DeliverResponse, DmRequestDto, IdentityDocument,
+    OutboxPage, PeerClaimRequest, PeerClaimResponse, PeerKeyPackage, QueueSpace, RefusedItem,
+    RelayCleanup, RelayItemDto, RelayItemPageDto, RelayNotice, RemoteIdentityDto, RemoteServerDto,
+    SignedJson,
 };
 use rim_services::relay::service::RelayService;
 use rim_services::s2s::dto::{PeerKeysDto, PeerLookup, S2sMethod, S2sRequest};
@@ -1307,6 +1308,23 @@ impl RelayService for DefaultRelayService {
             .relay_repo
             .unblock(actor.user_id, &principal_id)
             .await?)
+    }
+
+    async fn blocked_principals(&self, actor: Actor) -> ServiceResult<Vec<BlockedPrincipalDto>> {
+        Ok(self
+            .repos
+            .relay_repo
+            .list_blocks(actor.user_id)
+            .await?
+            .into_iter()
+            .map(|b| BlockedPrincipalDto {
+                principal_id: b.principal_id,
+                user_id: b.user_id,
+                username: b.username,
+                display_name: b.display_name,
+                blocked_at: b.blocked_at,
+            })
+            .collect())
     }
 
     async fn dm_requests(

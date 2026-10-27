@@ -68,7 +68,8 @@ pub struct MessageSearchHit {
     /// `ts_rank` score against the query. Informational only — never used for ordering or
     /// pagination, since it is neither unique nor stable across concurrent inserts.
     pub rank: f32,
-    /// `ts_headline` snippet with `<mark>...</mark>` highlights around matched terms.
+    /// `ts_headline` snippet with `<mark>...</mark>` highlights around matched terms: the whole
+    /// text of a message up to 300 characters, else one excerpt.
     pub headline: Option<String>,
 }
 

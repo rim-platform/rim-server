@@ -6,7 +6,10 @@ use rim_services::{Actor, ServiceResult};
 use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 
-use super::{parse_uuid_arg, reaction_has_actor, require_string_arg, resolve_workspace_id};
+use super::{
+    reaction_has_actor, require_string_arg, resolve_conversation_id, resolve_message_id,
+    resolve_workspace_id,
+};
 
 pub(super) async fn toggle_reaction(
     services: &CommandServices,
@@ -26,9 +29,8 @@ pub(super) async fn toggle_reaction(
         context.as_ref(),
         "server_id",
     )?;
-    let conversation_id =
-        parse_uuid_arg::<rim_core::conversation::model::ConversationId>(&args, "conversation_id")?;
-    let message_id = parse_uuid_arg::<rim_core::message::model::MessageId>(&args, "message_id")?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
+    let message_id = resolve_message_id(&args, context.as_ref(), "message_id")?;
     let emoji = require_string_arg(&args, "emoji")?;
 
     let actor_user_id = actor.user_id;
@@ -182,6 +184,114 @@ mod tests {
             serde_json::Value::String(emoji.to_string()),
         );
         args
+    }
+
+    /// A context in `ws` focused on `conv` with `msg` selected.
+    fn ctx_selecting(
+        ws: ServerId,
+        conv: Option<ConversationId>,
+        msg: Option<MessageId>,
+    ) -> CommandContextDto {
+        CommandContextDto {
+            conversation_id: conv,
+            selected_message_id: msg,
+            ..ctx_with(ws)
+        }
+    }
+
+    /// Args carrying only `emoji`.
+    fn emoji_args(emoji: &str) -> serde_json::Map<String, serde_json::Value> {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "emoji".to_string(),
+            serde_json::Value::String(emoji.to_string()),
+        );
+        args
+    }
+
+    /// Without ids in the args the focused conversation's selected message gets the reaction.
+    #[tokio::test]
+    async fn toggle_reaction_uses_the_focused_conversation_and_selected_message() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let msg = MessageId::new();
+        let mut reaction = MockMessageReactionService::new();
+        reaction
+            .expect_get_reactions()
+            .withf(move |q| q.conversation_id == conv && q.message_id == msg)
+            .return_once(|_| Box::pin(async { Ok(vec![]) }));
+        reaction
+            .expect_toggle_reaction()
+            .withf(move |cmd| {
+                cmd.server_id == ws && cmd.conversation_id == conv && cmd.message_id == msg
+            })
+            .return_once(|_| Box::pin(async { Ok(vec![]) }));
+
+        let svc = make_services(reaction);
+        let result = super::toggle_reaction(
+            &svc,
+            actor(),
+            emoji_args("👍"),
+            Some(ctx_selecting(ws, Some(conv), Some(msg))),
+        )
+        .await
+        .expect("the selected message gets the reaction");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    /// `conversation_id` and `message_id` args win over the focus and the selection.
+    #[tokio::test]
+    async fn toggle_reaction_args_win_over_context() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let msg = MessageId::new();
+        let mut reaction = MockMessageReactionService::new();
+        reaction
+            .expect_get_reactions()
+            .withf(move |q| q.conversation_id == conv && q.message_id == msg)
+            .return_once(|_| Box::pin(async { Ok(vec![]) }));
+        reaction
+            .expect_toggle_reaction()
+            .withf(move |cmd| cmd.conversation_id == conv && cmd.message_id == msg)
+            .return_once(|_| Box::pin(async { Ok(vec![]) }));
+
+        let svc = make_services(reaction);
+        let result = super::toggle_reaction(
+            &svc,
+            actor(),
+            partial_reaction_args(conv, msg, "👍"),
+            Some(ctx_selecting(
+                ws,
+                Some(ConversationId::new()),
+                Some(MessageId::new()),
+            )),
+        )
+        .await
+        .expect("the arg message gets the reaction");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    /// Neither a `message_id` arg nor a selected message is a validation error naming both.
+    #[tokio::test]
+    async fn toggle_reaction_without_a_message_is_validation() {
+        let svc = make_services(MockMessageReactionService::new());
+        let err = super::toggle_reaction(
+            &svc,
+            actor(),
+            emoji_args("👍"),
+            Some(ctx_selecting(
+                ServerId::new(),
+                Some(ConversationId::new()),
+                None,
+            )),
+        )
+        .await
+        .unwrap_err();
+        let rim_services::ServiceError::Validation(msg) = err else {
+            panic!("expected Validation, got: {err:?}");
+        };
+        assert!(msg.contains("message_id"), "{msg}");
+        assert!(msg.contains("context.selected_message_id"), "{msg}");
     }
 
     /// 1. AI path: args carry server_id — downstream sees arg UUID.

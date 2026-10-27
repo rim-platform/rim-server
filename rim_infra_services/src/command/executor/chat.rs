@@ -13,7 +13,7 @@ use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandRes
 use super::{
     clamp_limit, optional_bool_arg, optional_integer_arg, optional_string_arg, parse_uuid_arg,
     parse_uuid_array_arg, require_string_arg, resolve_author_usernames, resolve_channel_titles,
-    resolve_workspace_id,
+    resolve_conversation_id, resolve_workspace_id,
 };
 
 /// Hard cap on the single-page result for `chat.list_channels`. The AI surface
@@ -169,8 +169,7 @@ pub(super) async fn mark_as_read(
         context.as_ref(),
         "server_id",
     )?;
-    let conversation_id =
-        parse_uuid_arg::<rim_core::conversation::model::ConversationId>(&args, "conversation_id")?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
 
     services
         .read_state_service
@@ -317,8 +316,7 @@ pub(super) async fn get_recent_messages(
         context.as_ref(),
         "server_id",
     )?;
-    let conversation_id =
-        parse_uuid_arg::<rim_core::conversation::model::ConversationId>(&args, "conversation_id")?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
     let limit = clamp_limit(optional_integer_arg(&args, "limit"), 30, 100);
 
     let page = services
@@ -1439,6 +1437,151 @@ mod tests {
             assert!(msg.contains("server_id"));
             assert!(msg.contains("context.workspace_id"));
         }
+    }
+
+    // ── Focused conversation ─────────────────────────────────────────────────
+
+    /// A context focused on `conv` in `ws`.
+    fn ctx_in(ws: ServerId, conv: ConversationId) -> CommandContextDto {
+        CommandContextDto {
+            conversation_id: Some(conv),
+            ..ctx_with(ws)
+        }
+    }
+
+    fn make_services_with_read(read_svc: MockReadStateService) -> CommandServices {
+        CommandServices {
+            read_state_service: Arc::new(read_svc),
+            ..make_services(MockConversationService::new(), MockMessageService::new())
+        }
+    }
+
+    fn conversation_arg(conv: ConversationId) -> serde_json::Map<String, serde_json::Value> {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "conversation_id".to_string(),
+            serde_json::Value::String(conv.to_string()),
+        );
+        args
+    }
+
+    /// Without a `conversation_id` arg the focused conversation is marked read.
+    #[tokio::test]
+    async fn mark_as_read_uses_the_focused_conversation() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let mut read_svc = MockReadStateService::new();
+        read_svc
+            .expect_mark_as_read()
+            .withf(move |cmd| cmd.workspace_id == ws && cmd.conversation_id == conv)
+            .return_once(|_| Box::pin(async { Ok(()) }));
+
+        let svc = make_services_with_read(read_svc);
+        let result = super::mark_as_read(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_in(ws, conv)),
+        )
+        .await
+        .expect("the focused conversation is marked read");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    /// A `conversation_id` arg wins over the focused conversation.
+    #[tokio::test]
+    async fn mark_as_read_conversation_arg_wins_over_context() {
+        let ws = ServerId::new();
+        let arg_conv = ConversationId::new();
+        let mut read_svc = MockReadStateService::new();
+        read_svc
+            .expect_mark_as_read()
+            .withf(move |cmd| cmd.conversation_id == arg_conv)
+            .return_once(|_| Box::pin(async { Ok(()) }));
+
+        let svc = make_services_with_read(read_svc);
+        let result = super::mark_as_read(
+            &svc,
+            actor(),
+            conversation_arg(arg_conv),
+            Some(ctx_in(ws, ConversationId::new())),
+        )
+        .await
+        .expect("the arg conversation is marked read");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    /// Neither an arg nor a focused conversation is a validation error naming both.
+    #[tokio::test]
+    async fn mark_as_read_without_a_conversation_is_validation() {
+        let svc = make_services_with_read(MockReadStateService::new());
+        let err = super::mark_as_read(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_with(ServerId::new())),
+        )
+        .await
+        .unwrap_err();
+        let rim_services::ServiceError::Validation(msg) = err else {
+            panic!("expected Validation, got: {err:?}");
+        };
+        assert!(msg.contains("conversation_id"), "{msg}");
+        assert!(msg.contains("context.conversation_id"), "{msg}");
+    }
+
+    /// Without a `conversation_id` arg the focused conversation is read.
+    #[tokio::test]
+    async fn get_recent_messages_uses_the_focused_conversation() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let mut msg_svc = MockMessageService::new();
+        msg_svc
+            .expect_list_messages()
+            .withf(move |q| q.server_id == ws && q.conversation_id == conv)
+            .return_once(|_| Box::pin(async { Ok(empty_msg_page()) }));
+        let mut user_svc = MockUserService::new();
+        user_svc
+            .expect_get_users_by_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        let svc = make_services_with_msg_and_user(msg_svc, user_svc);
+        let result = super::get_recent_messages(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_in(ws, conv)),
+        )
+        .await
+        .expect("the focused conversation is read");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    /// A `conversation_id` arg wins over the focused conversation.
+    #[tokio::test]
+    async fn get_recent_messages_conversation_arg_wins_over_context() {
+        let ws = ServerId::new();
+        let arg_conv = ConversationId::new();
+        let mut msg_svc = MockMessageService::new();
+        msg_svc
+            .expect_list_messages()
+            .withf(move |q| q.conversation_id == arg_conv)
+            .return_once(|_| Box::pin(async { Ok(empty_msg_page()) }));
+        let mut user_svc = MockUserService::new();
+        user_svc
+            .expect_get_users_by_ids()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        let svc = make_services_with_msg_and_user(msg_svc, user_svc);
+        let result = super::get_recent_messages(
+            &svc,
+            actor(),
+            conversation_arg(arg_conv),
+            Some(ctx_in(ws, ConversationId::new())),
+        )
+        .await
+        .expect("the arg conversation is read");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 
     // ── Unused imports silenced ───────────────────────────────────────────────

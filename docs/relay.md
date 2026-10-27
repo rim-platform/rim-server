@@ -231,8 +231,9 @@ the method, path and body hash, the `seq` window), and that the relay may carry 
 traffic: the relay holds an active delegation of that device for a workspace the user is still a
 member of, or the user is a member of its direct space and their newest card lists the relay's
 origin (`403 not_delegated` otherwise). It then runs GraphQL (`POST /api`), attachment downloads and
-uploads, avatar uploads (`POST /api/files/avatar`), stored-file downloads (`GET /api/files/<path>`)
-or plugin bundle downloads as that user and device, with no session, and signs every
+uploads, avatar uploads (`POST /api/files/avatar`), stored-file downloads (`GET /api/files/<path>`),
+plugin bundle downloads or custom emoji images (`GET /api/emoji/<id>`) as that user and device,
+with no session, and signs every
 answer, refusals included, with `Rim-Host-Response` and `Rim-Host-Signature`. Per-IP limits key
 on `relay:<serverId>:<principalId>`.
 
@@ -397,6 +398,9 @@ space").
   `unblockPrincipal`, `reportDmRequest` work the request inbox. A request's `heldItems` are
   host-signed envelopes to read before deciding, the `DmInvite` first; verify it to bind the
   conversation's space to its home before reading or leaving it.
+- `myBlockedPrincipals` lists the caller's blocks newest first: `principalId`, `blockedAt`, and
+  `userId`, `username` and `displayName` of the account on this server holding the principal
+  (null when none does). `unblockPrincipal` takes one off.
 - `relayStream(after)` on the existing WebSocket yields the session device's items above `after`
   (its cursor when omitted), then live ones, as JSON strings:
   `{"type":"RelayItem","id","hostServerId","workspaceId","envelope":{"payload","signature"}}`, plus

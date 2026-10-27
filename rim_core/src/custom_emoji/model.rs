@@ -10,6 +10,7 @@ pub struct CustomEmoji {
     pub id: CustomEmojiId,
     pub server_id: ServerId,
     pub name: String,
+    /// The storage key of the image, not a URL.
     pub image_url: String,
     pub uploaded_by: UserId,
     pub created_at: DateTime<Utc>,
@@ -19,6 +20,7 @@ pub struct CustomEmoji {
 pub struct NewCustomEmoji {
     pub server_id: ServerId,
     pub name: String,
+    /// The storage key of the image, not a URL.
     pub image_url: String,
     pub uploaded_by: UserId,
 }

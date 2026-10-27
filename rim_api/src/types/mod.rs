@@ -126,9 +126,9 @@ pub use public_join_link::{
     PublicJoinLinkMode, PublicJoinLinkPreview, PublicJoinLinkViewer, UpdatePublicJoinLinkInput,
 };
 pub use relay::{
-    Contact, ConversationPredecessor, DmRequest, DmRequestStatus, PredecessorInput, RelayInfo,
-    RelayItem, RelayItemPage, RemoteIdentity, RemoteMemberInput, RemotePrincipalDevice,
-    RemoteServer, StreamHead,
+    BlockedPrincipal, Contact, ConversationPredecessor, DmRequest, DmRequestStatus,
+    PredecessorInput, RelayInfo, RelayItem, RelayItemPage, RemoteIdentity, RemoteMemberInput,
+    RemotePrincipalDevice, RemoteServer, StreamHead,
 };
 pub use remote_workspace::{
     JoinRemoteWorkspaceInput, RemoteJoinChallenge, RemoteJoinResult, RemoteSubscription,
