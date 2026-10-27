@@ -851,13 +851,13 @@ impl MacroService for DefaultMacroService {
 }
 
 /// The reason a failed step gives in the macro's answer: the message a caller of the
-/// command alone would read.
+/// command alone would read, without a failed confirmation's detail.
 fn step_error_reason(error: &ServiceError) -> String {
     match error {
         ServiceError::Validation(message)
         | ServiceError::Conflict(message)
-        | ServiceError::Forbidden(message)
-        | ServiceError::ConfirmationFailed(message) => message.clone(),
+        | ServiceError::Forbidden(message) => message.clone(),
+        ServiceError::ConfirmationFailed(_) => "the step's confirmation failed".to_string(),
         other => other.to_string(),
     }
 }
@@ -2507,6 +2507,21 @@ mod tests {
 
         assert_eq!(result.status, CommandResultStatusDto::Error);
         assert_eq!(result.message, "Step 1 (Post Message) failed: boom");
+    }
+
+    #[test]
+    fn a_step_error_reads_as_the_command_alone_would_say_it() {
+        assert_eq!(
+            step_error_reason(&ServiceError::Validation(
+                "missing string arg `text`".into()
+            )),
+            "missing string arg `text`"
+        );
+        assert_eq!(
+            step_error_reason(&ServiceError::ConfirmationFailed("wrong actor".into())),
+            "the step's confirmation failed"
+        );
+        assert_eq!(step_error_reason(&ServiceError::NotFound), "not found");
     }
 
     #[tokio::test]

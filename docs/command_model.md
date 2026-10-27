@@ -233,12 +233,12 @@ commands in the same shape, enabled or not, sorted by id.
 
 Two things compose commands, and only one of them is a command:
 
-- a **user command** (`createUserCommand`, id `user.<key>`; `<key>` is one or more lowercase
-  letters, numbers, dots, dashes or underscores, and `createUserCommand` refuses any other id
-  with `VALIDATION` ("a user command id may use only lowercase letters, numbers, dots, dashes or
-  underscores after `user.`"). User commands saved before this rule keep their ids.) is a
-  command: it is listed with the others, so it shows in the palette and a keybind can name it;
-  its steps run in order, each with its own arguments, in the context the user command runs in
+- a **user command** (`createUserCommand`, id `user.<key>`) is a command: it is listed with the
+  others, so it shows in the palette and a keybind can name it; its steps run in order, each
+  with its own arguments, in the context the user command runs in. `<key>` is one or more
+  lowercase letters, numbers, dots, dashes or underscores; `createUserCommand` refuses any other
+  id with `VALIDATION` ("a user command id may use only lowercase letters, numbers, dots, dashes
+  or underscores after `user.`"), and user commands saved before this rule keep their ids
 - a **macro** (`createMacro`, `MacroDef`) is a list of up to 20 steps, each a builtin command id
   with its own arguments; a step may not name another macro or a user command, so one run
   performs at most 20 builtin steps. It is not in the command registry, so the palette does not
