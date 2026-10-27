@@ -33,6 +33,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   message; the `MessageUpdated` event's message carries it as `edited_at`.
 - `serverInfo.capabilities`: the API additions this server has that older servers lack, by
   name, starting with `message_edited_at`.
+- `leaveWorkspace(serverId: ID!): Boolean!`: a member leaves a workspace, removed as by a
+  kick (their messages stay); members get `MemberLeft` with cause `left`. Not for the owner,
+  the direct space or the server's default workspace (`VALIDATION`).
+- `renameWorkspace(serverId: ID!, name: String!): Server!`: the owner renames a workspace,
+  by `createServer`'s name rules; members get the new `WorkspaceUpdated` event (also on the
+  `w` stream of `docs/specs/server-to-server-v1.md`).
+- `serverInfo.capabilities` lists `workspace_leave` and `workspace_rename`.
 
 ### Changed
 
@@ -44,6 +51,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   run only in the client, are refused too.
 - `createUserCommand` takes only lowercase letters, numbers, dots, dashes and underscores after
   `user.`; existing user commands keep their ids.
+- A relay ends a person's subscription to a workspace elsewhere when their `MemberLeft` arrives
+  on their own stream, instead of letting it lapse (`docs/specs/server-to-server-v1.md`,
+  "Subscriptions").
 
 ### Fixed
 

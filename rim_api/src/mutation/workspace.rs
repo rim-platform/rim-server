@@ -1,7 +1,9 @@
 use async_graphql::*;
 use rim_services::Actor;
+use rim_services::moderation::command::LeaveWorkspaceCmd;
+use rim_services::moderation::service::ModerationService;
 use rim_services::server::command::{
-    CreateServerCmd, DeleteWorkspaceCmd, TransferWorkspaceOwnershipCmd,
+    CreateServerCmd, DeleteWorkspaceCmd, RenameWorkspaceCmd, TransferWorkspaceOwnershipCmd,
 };
 use rim_services::server::service::ServerService;
 
@@ -115,5 +117,63 @@ impl WorkspaceOwnerMutations {
             .await
             .map_err(map_service_error)?;
         Ok(DeleteWorkspacePayload { deleted })
+    }
+}
+
+/// A member's own way out of a workspace, and its Owner's way to rename it.
+#[derive(Default)]
+pub(crate) struct WorkspaceMembershipMutations;
+
+#[Object]
+impl WorkspaceMembershipMutations {
+    /// Leave the workspace: the caller is removed from it and from every conversation of it,
+    /// with their macros and pipelines there; their messages stay. Members get `MemberLeft`
+    /// with cause `left` and the caller's event stream for the workspace ends. They come back
+    /// only with a new invite or the public link.
+    ///
+    /// # Errors
+    ///
+    /// - `UNAUTHENTICATED`: no session.
+    /// - `FORBIDDEN`: the caller is not a member.
+    /// - `VALIDATION`: the direct space, the server's default workspace, or the caller is the
+    ///   owner, who transfers ownership or deletes the workspace instead.
+    async fn leave_workspace(&self, ctx: &Context<'_>, server_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        ctx.data::<std::sync::Arc<dyn ModerationService>>()?
+            .leave(LeaveWorkspaceCmd {
+                actor: Actor::new(actor),
+                server_id: parse_uuid_id(&server_id)?,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(true)
+    }
+
+    /// Rename the workspace: trimmed, 1 to 128 characters, not the name of another workspace
+    /// the owner owns (ignoring case). Every member gets `WorkspaceUpdated`. Returns the
+    /// workspace.
+    ///
+    /// # Errors
+    ///
+    /// - `UNAUTHENTICATED`: no session.
+    /// - `FORBIDDEN`: the caller is not the owner.
+    /// - `VALIDATION`: the direct space, or a blank or overlong name.
+    /// - `CONFLICT`: the owner owns another workspace of that name.
+    async fn rename_workspace(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        name: String,
+    ) -> Result<Server> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ServerService>>()?;
+        svc.rename_workspace(RenameWorkspaceCmd {
+            actor: Actor::new(actor),
+            server_id: parse_uuid_id(&server_id)?,
+            name,
+        })
+        .await
+        .map(Into::into)
+        .map_err(map_service_error)
     }
 }

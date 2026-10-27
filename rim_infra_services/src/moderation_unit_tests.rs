@@ -31,8 +31,8 @@ mod tests {
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::moderation::command::{
         AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery,
-        KickMemberCmd, ReportMessageCmd, ReportOutcome, ResolveReportCmd, SetChannelPostingCmd,
-        SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+        KickMemberCmd, LeaveWorkspaceCmd, ReportMessageCmd, ReportOutcome, ResolveReportCmd,
+        SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
     };
     use rim_services::moderation::service::ModerationService;
     use rim_services::{Actor, ServiceError, ServiceResult};
@@ -501,6 +501,144 @@ mod tests {
                 ("pipelines", mod_b, fx.server_id),
             ]
         );
+    }
+
+    // ── leave ────────────────────────────────────────────────────────────
+
+    fn leave(fx: &Fx, actor: UserId) -> LeaveWorkspaceCmd {
+        LeaveWorkspaceCmd {
+            actor: Actor::new(actor),
+            server_id: fx.server_id,
+        }
+    }
+
+    /// The `(user, cause, reason)` of every `MemberLeft` the fixture recorded.
+    fn departures(fx: &Fx) -> Vec<(UserId, Option<String>, Option<String>)> {
+        fx.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                WorkspaceEvent::MemberLeft {
+                    user_id,
+                    cause,
+                    reason,
+                    ..
+                } => Some((user_id, cause, reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A default-workspace service whose current default workspace is `current`.
+    fn default_workspace_at(
+        current: ServerId,
+    ) -> rim_services::default_workspace::MockDefaultWorkspaceService {
+        let mut default = rim_services::default_workspace::MockDefaultWorkspaceService::new();
+        default
+            .expect_current()
+            .returning(move || Box::pin(async move { Ok(Some(current)) }));
+        default
+    }
+
+    #[tokio::test]
+    async fn a_member_or_a_guest_leaves_with_the_kick_cleanup_and_a_workspace_audit_row() {
+        let [owner, member, guest] = users();
+        let fx = Fx::new(&[(owner, Owner), (member, Member), (guest, Guest)]);
+        let svc = fx.service(MockModerationRepository::new());
+
+        svc.leave(leave(&fx, member))
+            .await
+            .expect("a member leaves");
+        svc.leave(leave(&fx, guest)).await.expect("a guest leaves");
+
+        assert_eq!(fx.audited(), [audit_ids::LEAVE, audit_ids::LEAVE]);
+        let rows = fx.audit.0.lock().expect("lock").clone();
+        assert!(rows.iter().all(|row| row.initiator == "workspace"));
+        assert_eq!(rows[0].actor_user_id, uuid::Uuid::from(member));
+        assert_eq!(rows[0].args_redacted["role"], "member");
+        assert_eq!(rows[1].actor_user_id, uuid::Uuid::from(guest));
+        assert_eq!(rows[1].args_redacted["role"], "guest");
+        assert_eq!(
+            departures(&fx),
+            [
+                (member, Some("left".to_string()), None),
+                (guest, Some("left".to_string()), None),
+            ]
+        );
+        assert_eq!(
+            fx.cleared_notifications(),
+            [(member, fx.server_id), (guest, fx.server_id)]
+        );
+        assert_eq!(
+            fx.cleared_automations(),
+            [
+                ("macros", member, fx.server_id),
+                ("pipelines", member, fx.server_id),
+                ("macros", guest, fx.server_id),
+                ("pipelines", guest, fx.server_id),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_owner_an_outsider_the_direct_space_and_the_default_workspace_stay() {
+        let [owner, member, outsider] = users();
+        let fx = Fx::new(&[(owner, Owner), (member, Member)]);
+        let svc = fx.service(MockModerationRepository::new());
+        match svc.leave(leave(&fx, owner)).await {
+            Err(ServiceError::Validation(m)) => assert_eq!(
+                m,
+                "the owner cannot leave a workspace; transfer ownership or delete the workspace first"
+            ),
+            other => panic!("the owner leaves: {other:?}"),
+        }
+        assert!(matches!(
+            svc.leave(leave(&fx, outsider)).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+
+        let mut direct = Fx::new(&[(member, Member)]);
+        direct.direct_space = true;
+        let svc = direct.service(MockModerationRepository::new());
+        match svc.leave(leave(&direct, member)).await {
+            Err(ServiceError::Validation(m)) => {
+                assert!(m.contains("not available in the direct space"), "{m}");
+            }
+            other => panic!("a member leaves the direct space: {other:?}"),
+        }
+
+        let defaulted = Fx::new(&[(member, Member)]);
+        let svc = defaulted
+            .service(MockModerationRepository::new())
+            .with_default_workspace(Arc::new(default_workspace_at(defaulted.server_id)));
+        match svc.leave(leave(&defaulted, member)).await {
+            Err(ServiceError::Validation(m)) => assert_eq!(
+                m,
+                "you cannot leave this server's default workspace; every account here belongs to it"
+            ),
+            other => panic!("a member leaves the default workspace: {other:?}"),
+        }
+
+        for refused in [&fx, &direct, &defaulted] {
+            assert!(
+                refused.audited().is_empty(),
+                "refused leaves are not audited"
+            );
+            assert!(
+                departures(refused).is_empty(),
+                "refused leaves announce nothing"
+            );
+            assert!(refused.cleared_notifications().is_empty());
+            assert!(refused.cleared_automations().is_empty());
+        }
+
+        let elsewhere = Fx::new(&[(member, Member)]);
+        let svc = elsewhere
+            .service(MockModerationRepository::new())
+            .with_default_workspace(Arc::new(default_workspace_at(ServerId::new())));
+        svc.leave(leave(&elsewhere, member))
+            .await
+            .expect("another workspace is the default");
+        assert_eq!(elsewhere.audited(), [audit_ids::LEAVE]);
     }
 
     // ── ban ──────────────────────────────────────────────────────────────

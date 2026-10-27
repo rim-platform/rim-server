@@ -1374,6 +1374,14 @@ const CREATE_SERVER: &str = r#"
 mutation CreateServer($name: String!) { server: createServer(input: { name: $name }) { id name } }
 "#;
 
+const LEAVE_WORKSPACE: &str = r#"
+mutation LeaveWorkspace($serverId: ID!) { leaveWorkspace(serverId: $serverId) }
+"#;
+
+const RENAME_WORKSPACE: &str = r#"
+mutation RenameWorkspace($serverId: ID!, $name: String!) { renameWorkspace(serverId: $serverId, name: $name) { id name } }
+"#;
+
 /// The ids a moderation call names.
 #[derive(Clone)]
 struct Ids {
@@ -1454,7 +1462,12 @@ fn every_moderation_root(ids: &Ids) -> Vec<Call> {
 /// One call to every workspace root that names the workspace `server`.
 fn workspace_roots(server: &str) -> Vec<Call> {
     let server = json!({ "serverId": server });
-    vec![(SERVER, server.clone()), (SERVER_MEMBERS, server)]
+    vec![
+        (SERVER, server.clone()),
+        (SERVER_MEMBERS, server.clone()),
+        (LEAVE_WORKSPACE, server.clone()),
+        (RENAME_WORKSPACE, merged(server, json!({ "name": "x" }))),
+    ]
 }
 
 impl Fixture {

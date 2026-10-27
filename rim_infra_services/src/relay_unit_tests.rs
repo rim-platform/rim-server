@@ -1756,10 +1756,6 @@ fn peer_limited_relay(
     queued: Arc<Mutex<Vec<i32>>>,
     peer_bytes: u64,
 ) -> DefaultRelayService {
-    let bob = UserId::new();
-    let mut host = MockHostRepository::new();
-    host.expect_find_user()
-        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
     let mut subscriptions = MockSubscriptionRepository::new();
     subscriptions
         .expect_is_subscribed()
@@ -1767,6 +1763,22 @@ fn peer_limited_relay(
             let found = subscribed && host == PEER && workspace == Uuid::from_u128(5);
             Box::pin(async move { Ok(found) })
         });
+    relay_with_subscriptions(subscriptions, accepted_at_host, queued, peer_bytes)
+}
+
+/// A relay holding Bob with `subscriptions`, who accepted a conversation `PEER` homes or not,
+/// queueing `peer_bytes` from each peer per day; `queued` records the size of each item it
+/// queues.
+fn relay_with_subscriptions(
+    subscriptions: MockSubscriptionRepository,
+    accepted_at_host: bool,
+    queued: Arc<Mutex<Vec<i32>>>,
+    peer_bytes: u64,
+) -> DefaultRelayService {
+    let bob = UserId::new();
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
     let mut relay = MockRelayRepository::new();
     relay
         .expect_received_through()
@@ -1938,6 +1950,74 @@ async fn a_peer_past_its_daily_bytes_is_refused_as_limited() {
         "a subscriber's items are not counted"
     );
     assert_eq!(subscribed.lock().expect("lock").len(), 3);
+}
+
+/// A `MemberLeft` on the subscriber's own `u:` stream ends their subscription to that
+/// workspace; one on `w`, or another event on their stream, does not.
+#[tokio::test]
+async fn a_departure_on_the_subscribers_own_stream_ends_the_subscription() {
+    let bob_stream = format!("u:{BOB}");
+    let cases = [
+        (
+            stream_item(
+                1,
+                &bob_stream,
+                serde_json::json!({ "type": "MemberLeft", "cause": "left" }),
+            ),
+            true,
+        ),
+        (
+            stream_item(
+                2,
+                "w",
+                serde_json::json!({ "type": "MemberLeft", "cause": "left" }),
+            ),
+            false,
+        ),
+        (
+            stream_item(
+                3,
+                &bob_stream,
+                serde_json::json!({ "type": "MemberRoleChanged", "role": "guest" }),
+            ),
+            false,
+        ),
+    ];
+    for (item, ends) in cases {
+        let ended = Arc::new(Mutex::new(Vec::new()));
+        let mut subscriptions = MockSubscriptionRepository::new();
+        subscriptions
+            .expect_is_subscribed()
+            .returning(move |_, host, workspace, _| {
+                let found = host == PEER && workspace == Uuid::from_u128(5);
+                Box::pin(async move { Ok(found) })
+            });
+        let recorded = Arc::clone(&ended);
+        subscriptions
+            .expect_end_subscription()
+            .returning(move |_, host, workspace| {
+                recorded
+                    .lock()
+                    .expect("lock")
+                    .push((host.to_string(), workspace));
+                Box::pin(async { Ok(true) })
+            });
+        let queued = Arc::new(Mutex::new(Vec::new()));
+        let svc = relay_with_subscriptions(
+            subscriptions,
+            false,
+            Arc::clone(&queued),
+            QUEUED_BYTES_PER_PEER_PER_DAY,
+        );
+        assert_eq!(refusals(&svc, vec![item]).await, vec![]);
+        assert_eq!(queued.lock().expect("lock").len(), 1);
+        let want = if ends {
+            vec![(PEER.to_string(), Uuid::from_u128(5))]
+        } else {
+            vec![]
+        };
+        assert_eq!(*ended.lock().expect("lock"), want);
+    }
 }
 
 // ── Contacts ─────────────────────────────────────────────────────────────────────────────

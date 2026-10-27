@@ -1482,6 +1482,22 @@ mod tests {
     }
 
     #[test]
+    fn a_rename_goes_on_w_to_members_only() {
+        let (guest, regular) = (
+            member(ServerMemberRole::Guest),
+            member(ServerMemberRole::Member),
+        );
+        let rename = WorkspaceEvent::WorkspaceUpdated {
+            workspace_id: ServerId::new(),
+            name: "Platform".to_string(),
+        };
+        let plans = planned(&rename, &[guest, regular.clone()]);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].stream, "w");
+        assert_eq!(plans[0].recipients, vec![regular]);
+    }
+
+    #[test]
     fn removed_members_get_a_private_stream_for_their_reason() {
         let removed = member(ServerMemberRole::Member);
         let other = member(ServerMemberRole::Member);

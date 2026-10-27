@@ -362,6 +362,29 @@ The answer is given once: it clears the closing time, so a second call answers
 session. Signing out or any other end of the session ends its keep key and reload key with
 it.
 
+### Leaving or renaming a workspace
+
+`leaveWorkspace(serverId)` takes the caller out of a workspace, as `kickMember` removes a
+member: from every conversation of it, with their macros, pipelines and notifications there;
+their messages stay, and encrypted conversations they were in get their devices removed
+(`MlsMembershipChanged`). It answers `true`. Members get `MemberLeft` with cause `left` and the
+caller's event stream for the workspace ends. Anyone but the owner may leave, guests included;
+the owner hands the workspace over or deletes it first (`VALIDATION`). Nobody leaves the direct
+space or the server's default workspace (`VALIDATION`); a non-member gets `FORBIDDEN`. Coming
+back takes a new invite or the public link. A person from another server leaves the same way,
+through their relay's forward path; the host ends their delegations and their relay ends the
+subscription.
+
+`renameWorkspace(serverId, name)` is the owner's (`FORBIDDEN` for anyone else). The name follows
+`createServer`'s rules: trimmed, 1 to 128 characters (`VALIDATION`), and not the name of another
+workspace the owner owns, ignoring case (`CONFLICT`). It answers the workspace, and every member
+gets `WorkspaceUpdated`. The current name changes nothing. The direct space has no name to change
+(`VALIDATION`). A default workspace described by `RIM_DEFAULT_WORKSPACE_FILE` gets the file's
+name back at the next start.
+
+Both are audited with initiator `workspace` (`workspace.leave`, `workspace.rename`), and listed
+in `serverInfo.capabilities` as `workspace_leave` and `workspace_rename`.
+
 ### Handing over or deleting a workspace
 
 A workspace has exactly one owner. `transferWorkspaceOwnership(input: { serverId, userId })`
@@ -715,7 +738,8 @@ each list.
   13 to 21), or null when the server asks for none. A client shows "I am at least N" at signup
   and sends N back as `confirmedMinimumAge`.
 - **`capabilities`**: the API additions this server has that an older one lacks, by name
-  (`message_edited_at`: `Message.editedAt`). A client asks for such a field only when its name
+  (`message_edited_at`: `Message.editedAt`; `workspace_leave`: `leaveWorkspace`;
+  `workspace_rename`: `renameWorkspace`). A client asks for such a field only when its name
   is listed, so it keeps working against older servers; it ignores names it does not know.
 
 The discovery document carries the same `features`, and `registrationFull` as
