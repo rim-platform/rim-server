@@ -492,6 +492,66 @@ async fn a_newcomer_cannot_add_themselves_or_start_a_dm_with_themselves() {
     n.joined_as_guest().await;
 }
 
+/// A group of the direct space takes people by principal id, and every member adds people
+/// there, a guest included.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_group_member_adds_someone_here_by_principal() {
+    let n = Newcomer::new().await;
+    let other = sign_up(&n.node, "other", 2).await;
+    let third = sign_up(&n.node, "third", 3).await;
+    let fourth = sign_up(&n.node, "fourth", 4).await;
+    let fifth = sign_up(&n.node, "fifth", 5).await;
+    let member = |person: &Person| json!({ "principalId": person.principal(), "relayUrls": [n.node.origin] });
+    let created = n
+        .person
+        .ok(
+            CREATE,
+            json!({ "input": {
+                "serverId": n.direct,
+                "remoteMembers": [member(&other), member(&third)],
+            } }),
+        )
+        .await;
+    let conversation = created["createConversation"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+
+    let added = n
+        .person
+        .ok(
+            "mutation($s: ID!, $c: ID!, $r: [RemoteMemberInput!]) { addConversationMembers(serverId: $s, conversationId: $c, remoteMembers: $r) { memberIds } }",
+            json!({ "s": n.direct, "c": conversation, "r": [member(&fourth)] }),
+        )
+        .await;
+    let fourth_id: Uuid = user_id(&n.node, &fourth.principal()).await.into();
+    assert!(
+        added["addConversationMembers"]["memberIds"]
+            .as_array()
+            .expect("memberIds")
+            .contains(&json!(fourth_id.to_string())),
+        "{added}"
+    );
+    assert_eq!(n.role_of(&fourth).await.as_deref(), Some("guest"));
+
+    assert_eq!(n.role_of(&other).await.as_deref(), Some("guest"));
+    let fifth_id: Uuid = user_id(&n.node, &fifth.principal()).await.into();
+    let added = other
+        .ok(
+            "mutation($s: ID!, $c: ID!, $u: [ID!]!) { addConversationMembers(serverId: $s, conversationId: $c, userIds: $u) { memberIds } }",
+            json!({ "s": n.direct, "c": conversation, "u": [fifth_id.to_string()] }),
+        )
+        .await;
+    assert!(
+        added["addConversationMembers"]["memberIds"]
+            .as_array()
+            .expect("memberIds")
+            .contains(&json!(fifth_id.to_string())),
+        "{added}"
+    );
+    n.joined_as_guest().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn key_package_roots_answer_without_joining_the_direct_space() {
     let n = Newcomer::new().await;

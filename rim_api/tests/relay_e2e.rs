@@ -10,7 +10,9 @@
 //! signups refused, accepted and replaced by an invite; a reported DM request listed and
 //! resolved by the operator; a principal blocked on its relay signed out and refused signup,
 //! login and delivery; and a peer blocked both ways. A member's accepted row on their relay is
-//! filed again from a resent invite after it expired, and goes when they leave the group.
+//! filed again from a resent invite after it expired, and goes when they leave the group. A
+//! member on another relay is added to an encrypted group of the direct space by principal id,
+//! and a plaintext group refuses them.
 //!
 //! Run with:
 //! ```sh
@@ -1608,6 +1610,109 @@ async fn a_strangers_dm_with_a_member_of_the_home_lands_in_its_request_inbox() {
     b.stop().await;
 }
 
+const ADD_REMOTE: &str = r#"
+mutation($s: ID!, $c: ID!, $r: [RemoteMemberInput!]) {
+  addConversationMembers(serverId: $s, conversationId: $c, remoteMembers: $r) { memberIds }
+}"#;
+
+/// Alice's group of her relay's direct space with Carol, encrypted when `encrypted`.
+async fn group_with(alice: &Person, carol: &Person, relay: &Node, encrypted: bool) -> String {
+    let direct = alice.direct_space().await;
+    alice
+        .ok(
+            CREATE,
+            json!({ "input": {
+                "serverId": direct,
+                "memberIds": [],
+                "encrypted": encrypted,
+                "remoteMembers": [{ "principalId": carol.principal(), "relayUrls": [relay.origin] }],
+            } }),
+        )
+        .await["createConversation"]["id"]
+        .as_str()
+        .expect("conversation id")
+        .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_on_another_relay_is_added_to_an_encrypted_direct_space_group() {
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = alice.direct_space().await;
+    let conv = group_with(&alice, &carol, &a, true).await;
+
+    let added = alice
+        .ok(
+            ADD_REMOTE,
+            json!({ "s": direct, "c": conv, "r": [{ "principalId": bob.principal(), "relayUrls": [b.origin] }] }),
+        )
+        .await;
+    let bob_id: Uuid = user_id(&a, &bob.principal()).await.into();
+    assert!(
+        added["addConversationMembers"]["memberIds"]
+            .as_array()
+            .expect("memberIds")
+            .contains(&json!(bob_id.to_string())),
+        "{added}"
+    );
+
+    // Bob's relay files the group as a request: Alice is not his contact. Accepted, the host
+    // lists it for him.
+    let request = bob.pending_request(&alice).await;
+    assert_eq!(request["hostServerId"], json!(a.id()));
+    assert_eq!(request["conversationId"], json!(conv));
+    bob.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    let listed = bob
+        .remote(
+            &a,
+            "query($s: ID!) { inboxConversations(serverId: $s, dir: AFTER, limit: 50) { items { id } } }",
+            json!({ "s": direct }),
+        )
+        .await;
+    assert!(
+        listed["inboxConversations"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|c| c["id"] == json!(conv)),
+        "{listed}"
+    );
+
+    a.stop().await;
+    b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_plaintext_direct_space_group_refuses_someone_from_another_relay() {
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&b, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = alice.direct_space().await;
+    let conv = group_with(&alice, &carol, &a, false).await;
+
+    let body = alice
+        .post(
+            ADD_REMOTE,
+            json!({ "s": direct, "c": conv, "r": [{ "principalId": bob.principal(), "relayUrls": [b.origin] }] }),
+        )
+        .await;
+    assert_eq!(error_code(&body), "VALIDATION", "{body}");
+    assert_eq!(
+        body["errors"][0]["message"],
+        "conversations with people on other servers are encrypted"
+    );
+
+    a.stop().await;
+    b.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sdl_names_every_relay_type_and_field() {
     let (first, _) = databases_with(RESET).await;
@@ -1635,6 +1740,7 @@ async fn the_sdl_names_every_relay_type_and_field() {
         "predecessor: ConversationPredecessor",
         "remoteMembers: [RemoteMemberInput!]",
         "predecessor: PredecessorInput",
+        "addConversationMembers(serverId: ID!, conversationId: ID!, userIds: [ID!]! = [], remoteMembers: [RemoteMemberInput!]): Conversation!",
         "relayInfo: RelayInfo!",
         "remoteServer(origin: String!): RemoteServer!",
         "remoteIdentity(principalId: String!, relayUrl: String): RemoteIdentity!",

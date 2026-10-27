@@ -32,10 +32,15 @@ This document describes the backend contract for conversations, messages, thread
   by the client with `addConversationMembers` right after creation.
 - `addConversationMembers` (invite): the caller must be a member of the channel or group (for a
   public channel: join first, `FORBIDDEN` otherwise); targets must be workspace members;
-  existing members are skipped. Not valid for DMs. In the server's default workspace, which
-  every account joins, only an Owner or Moderator, or the creator of a private channel, adds
-  people to a channel (`FORBIDDEN` otherwise), and one call names at most 50 people
-  (`VALIDATION`). A group holds at most 100 members, plaintext or encrypted (`VALIDATION`).
+  existing members are skipped. In the direct space it also takes `remoteMembers` (principal id
+  and relays), resolved as `createConversation` resolves them; `userIds` may then be left out.
+  Every member of a group there adds people, guests included. A plaintext group of the direct
+  space takes nobody from another server (`VALIDATION`, "conversations with people on other
+  servers are encrypted"), and an encrypted one only people with a device set up for encryption.
+  Not valid for DMs. In the server's default workspace, which every account joins, only an Owner
+  or Moderator, or the creator of a private channel, adds people to a channel (`FORBIDDEN`
+  otherwise), and one call names at most 50 people (`VALIDATION`). A group holds at most 100
+  members, plaintext or encrypted (`VALIDATION`).
 - A channel's topic (`updateConversationTopic`) is changed by an Owner or Moderator, or by the
   creator of a private channel; anyone else gets `FORBIDDEN`. In a DM or group any member
   changes it. Anyone who may write pins a message; a message someone else pinned in a channel is
@@ -373,7 +378,8 @@ the same code, and the same modes, with these differences:
 ### Guest restrictions (enforced in the services)
 
 - Creating a channel or a group, joining a channel, inviting into a conversation
-  (`addConversationMembers`) and creating workspace invites: `FORBIDDEN`. Guests may open DMs.
+  (`addConversationMembers`) outside the direct space and creating workspace invites:
+  `FORBIDDEN`. Guests may open DMs.
 - A public channel the guest has not been added to behaves like a private channel: `NOT_FOUND`
   on every read and write, absent from `channels` (a guest's channel list is always the joined
   list, whatever `joinedOnly` says), and from `searchMessages`, and its realtime

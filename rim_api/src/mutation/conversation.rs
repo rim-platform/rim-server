@@ -171,16 +171,18 @@ impl ConversationMutations {
         Ok(true)
     }
 
-    /// Add (invite) workspace members to a channel or group the caller belongs to. In the
-    /// server's default workspace a channel takes them from an Owner, a Moderator or a private
-    /// channel's creator, a group as a DM with each would be started, and one call names at
-    /// most 50.
+    /// Add (invite) people to a channel or group the caller belongs to: workspace members by
+    /// `userIds`, and in the direct space anyone by principal id in `remoteMembers`, here or on
+    /// another server, as `createConversation` names them. In the server's default workspace a
+    /// channel takes them from an Owner, a Moderator or a private channel's creator, a group as a
+    /// DM with each would be started, and one call names at most 50.
     async fn add_conversation_members(
         &self,
         ctx: &Context<'_>,
         server_id: ID,
         conversation_id: ID,
-        user_ids: Vec<ID>,
+        #[graphql(default)] user_ids: Vec<ID>,
+        remote_members: Option<Vec<crate::types::RemoteMemberInput>>,
     ) -> Result<Conversation> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
@@ -190,6 +192,18 @@ impl ConversationMutations {
         let mut ids = Vec::with_capacity(user_ids.len());
         for id in &user_ids {
             ids.push(parse_uuid_id::<rim_core::user::model::UserId>(id)?);
+        }
+        let (remote_ids, _) = resolve_remote_members(
+            ctx,
+            actor,
+            server_id,
+            remote_members.as_deref().unwrap_or_default(),
+        )
+        .await?;
+        for id in remote_ids {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
         }
         crate::federation::ensure_may_request(ctx, actor, server_id, ids.clone(), false).await?;
 
@@ -441,6 +455,29 @@ async fn remote_member_ids(
         Some(members) if !members.is_empty() => members,
         _ => return Ok(Vec::new()),
     };
+    let (ids, any_remote) = resolve_remote_members(ctx, actor, server_id, members).await?;
+    if ids.is_empty() {
+        return Err(map_service_error(rim_services::ServiceError::Validation(
+            "cannot create DM with yourself".to_string(),
+        )));
+    }
+    ensure_encrypted_across_servers(any_remote, input.encrypted.unwrap_or(false))
+        .map_err(map_service_error)?;
+    Ok(ids)
+}
+
+/// Resolves `members`, named by principal id, to user ids in the direct space: each fetched
+/// and stored as `createConversation` does, the caller left out. Returns the ids and whether
+/// any of them lives on another server.
+async fn resolve_remote_members(
+    ctx: &Context<'_>,
+    actor: rim_core::user::model::UserId,
+    server_id: rim_core::server::model::ServerId,
+    members: &[crate::types::RemoteMemberInput],
+) -> Result<(Vec<rim_core::user::model::UserId>, bool)> {
+    if members.is_empty() {
+        return Ok((Vec::new(), false));
+    }
     let federation = crate::federation::direct_space(ctx)?;
     if server_id != federation.host.direct_space_id() {
         return Err(Error::new(
@@ -479,14 +516,7 @@ async fn remote_member_ids(
             ids.push(resolved.user_id);
         }
     }
-    if ids.is_empty() {
-        return Err(map_service_error(rim_services::ServiceError::Validation(
-            "cannot create DM with yourself".to_string(),
-        )));
-    }
-    ensure_encrypted_across_servers(any_remote, input.encrypted.unwrap_or(false))
-        .map_err(map_service_error)?;
-    Ok(ids)
+    Ok((ids, any_remote))
 }
 
 /// Answers to a pending invitation to an encrypted conversation.

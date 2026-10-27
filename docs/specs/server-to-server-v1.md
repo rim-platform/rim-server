@@ -1368,6 +1368,7 @@ type Mutation {
   renewDelegations(delegations: [SignedStatementInput!]!): [RemoteSubscription!]!
   leaveRelay: Boolean!
   applyRemoteRevocation(revocation: SignedStatementInput!): SignedStatement!  # host; no session, CSRF-exempt
+  addConversationMembers(remoteMembers: [RemoteMemberInput!])   # additive argument; userIds defaults to []
 }
 type Subscription { relayStream(after: ID): String! }                     # JSON strings, as workspaceEvents
 type User { …  handle: String }                # "Handles"; null while unknown and for deleted accounts
