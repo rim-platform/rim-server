@@ -77,6 +77,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   command palette and keybinds.
 - Search snippets (`headline`) no longer drop short words, numbers and punctuation at their
   edges: a message of up to 300 characters comes back whole.
+- A DM request keeps its held items, its invite included, as long as the request, so an ignored
+  or cleared request still holds its invite when it is filed again. Items released by accepting
+  are kept at least the retention period.
 
 ## [0.0.4] - 2026-10-26
 

@@ -484,7 +484,7 @@ impl RelayRepository for SeaOrmRelayRepository {
 
     async fn delete_expired_items(&self, now: DateTime<Utc>) -> RepoResult<u64> {
         self.execute(
-            "DELETE FROM relay_item WHERE expires_at < $1",
+            "DELETE FROM relay_item WHERE expires_at < $1 AND request_id IS NULL",
             vec![now.into()],
         )
         .await
@@ -644,10 +644,15 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
-    async fn release_held(&self, request_id: DmRequestId) -> RepoResult<u64> {
+    async fn release_held(
+        &self,
+        request_id: DmRequestId,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64> {
         self.execute(
-            "UPDATE relay_item SET request_id = NULL WHERE request_id = $1",
-            vec![uuid(request_id)],
+            "UPDATE relay_item SET request_id = NULL, expires_at = GREATEST(expires_at, $2) \
+             WHERE request_id = $1",
+            vec![uuid(request_id), expires_at.into()],
         )
         .await
     }

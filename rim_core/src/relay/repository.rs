@@ -67,6 +67,7 @@ pub trait RelayRepository: Send + Sync {
     /// Delete items every non-revoked device of their user has passed. Returns how many.
     async fn delete_acked_items(&self) -> RepoResult<u64>;
 
+    /// Delete queued items past their expiry. Items a request holds go with the request.
     async fn delete_expired_items(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 
     /// Delete envelopes no item refers to. Returns how many.
@@ -126,8 +127,13 @@ pub trait RelayRepository: Send + Sync {
         expires_at: DateTime<Utc>,
     ) -> RepoResult<Option<DmRequest>>;
 
-    /// Let a request's held items flow. Returns how many.
-    async fn release_held(&self, request_id: DmRequestId) -> RepoResult<u64>;
+    /// Release a request's held items to the queue, each kept at least until `expires_at`.
+    /// Returns how many.
+    async fn release_held(
+        &self,
+        request_id: DmRequestId,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
 
     /// Delete a request's held items but its first, the invite, which stays with the request so
     /// the app can still verify the conversation's home. Returns how many.

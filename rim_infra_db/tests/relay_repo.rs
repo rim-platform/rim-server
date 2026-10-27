@@ -693,7 +693,12 @@ async fn requests_move_from_pending_once_and_hold_their_items() {
             .is_none(),
         "a decided request stays decided"
     );
-    assert_eq!(repo.release_held(request.id).await.unwrap(), 1);
+    assert_eq!(
+        repo.release_held(request.id, Utc::now() + Duration::days(30))
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(
         repo.list_items(user.id, d.id, 0, 10).await.unwrap().len(),
         1
@@ -806,6 +811,65 @@ async fn an_expired_pending_request_cannot_be_decided() {
         .unwrap()
         .expect("a live request is decided");
     assert_eq!(decided.status, DmRequestStatus::Accepted);
+}
+
+#[tokio::test]
+async fn held_items_last_as_long_as_their_request() {
+    let ctx = support::TestCtx::new().await;
+    let user = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let request = repo
+        .insert_request(NewDmRequest {
+            status: DmRequestStatus::Pending,
+            user_id: user.id,
+            from_principal_id: "rimp1_alice".to_string(),
+            card_payload: "{}".to_string(),
+            card_signature: "ed25519:c".to_string(),
+            host_server_id: HOST.to_string(),
+            conversation_id: Uuid::now_v7(),
+            expires_at: Utc::now() + Duration::days(30),
+        })
+        .await
+        .unwrap();
+    let workspace = Uuid::now_v7();
+    let past = Utc::now() - Duration::minutes(1);
+    for (seq, request_id) in [(1, Some(request.id)), (2, Some(request.id)), (3, None)] {
+        let env = repo
+            .insert_envelope(envelope(Some(seq), workspace))
+            .await
+            .unwrap();
+        repo.insert_item(NewRelayItem {
+            request_id,
+            expires_at: past,
+            ..item(user.id, env)
+        })
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(
+        repo.delete_expired_items(Utc::now()).await.unwrap(),
+        1,
+        "only the queued item expires on its own"
+    );
+    assert_eq!(repo.held_items(request.id).await.unwrap().len(), 2);
+
+    assert_eq!(
+        repo.release_held(request.id, Utc::now() + Duration::days(30))
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(repo.delete_expired_items(Utc::now()).await.unwrap(), 0);
+    assert_eq!(
+        count(
+            &ctx.db,
+            "SELECT count(*) AS n FROM relay_item WHERE expires_at > now() + interval '29 days'"
+        )
+        .await,
+        2,
+        "released items are kept at least the retention from then"
+    );
 }
 
 #[tokio::test]

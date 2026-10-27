@@ -1415,7 +1415,10 @@ impl RelayService for DefaultRelayService {
             )
             .await?
             .ok_or_else(|| undecided(&request))?;
-        repos.relay_repo.release_held(request.id).await?;
+        repos
+            .relay_repo
+            .release_held(request.id, Utc::now() + self.settings.retention)
+            .await?;
         let relays = contact_relays(&request.card_payload);
         if !relays.is_empty() {
             repos

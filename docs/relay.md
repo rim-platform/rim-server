@@ -120,7 +120,8 @@ The count is in memory, per node.
 A relay stores each envelope once and one item per recipient. Each device reads its user's items
 above its cursor; a device added later starts at the newest item queued before it. An item is
 deleted once every non-revoked device of its user has acknowledged it, and after the retention
-period regardless. Over the per-user byte cap the oldest items go first and the devices online get
+period regardless; an item a DM request holds is kept as long as the request, and one released by
+accepting it for at least the retention period from then. Over the per-user byte cap the oldest items go first and the devices online get
 a `QueueOverflow` notice; a device offline at the time sees the gap in the stream's `seq`. Items a
 DM request holds are not counted toward that cap and are never dropped for it; the request
 inbox's own limits bound them. A relay pulls what a host still holds for it

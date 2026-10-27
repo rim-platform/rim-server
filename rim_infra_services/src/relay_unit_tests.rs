@@ -4531,3 +4531,51 @@ async fn an_item_of_an_ordinary_pending_request_is_held_without_filing_it_again(
         "{notices:?}"
     );
 }
+
+// ── Deciding a request ───────────────────────────────────────────────────────────────────
+
+/// Bob's pending request from Alice for `CONVERSATION`, holding nothing.
+fn pending_row(bob: UserId) -> rim_core::relay::model::DmRequest {
+    let mut row = accepted_row(bob, Utc::now() + Duration::days(30), false);
+    row.status = rim_core::relay::model::DmRequestStatus::Pending;
+    row.decided_at = None;
+    row
+}
+
+#[tokio::test]
+async fn accepting_releases_the_held_items_for_at_least_the_retention() {
+    use rim_core::relay::model::DmRequestStatus;
+
+    let bob = UserId::new();
+    let row = pending_row(bob);
+    let request_id = row.id;
+    let mut relay = MockRelayRepository::new();
+    let found = row.clone();
+    relay.expect_get_request().returning(move |_, _| {
+        let found = Some(found.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    relay.expect_decide_request().returning(move |_, _, _| {
+        let decided = Some(rim_core::relay::model::DmRequest {
+            status: DmRequestStatus::Accepted,
+            decided_at: Some(Utc::now()),
+            ..row.clone()
+        });
+        Box::pin(async move { Ok(decided) })
+    });
+    relay
+        .expect_release_held()
+        .withf(move |id, at| *id == request_id && *at > Utc::now() + Duration::days(29))
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(2) }));
+    relay
+        .expect_held_items()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+
+    let accepted = unblock_relay(relay)
+        .accept_dm_request(Actor::new(bob), request_id)
+        .await
+        .expect("accepted");
+
+    assert_eq!(accepted.status, DmRequestStatus::Accepted);
+}
