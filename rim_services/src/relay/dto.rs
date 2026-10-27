@@ -70,6 +70,17 @@ pub struct ContactDto {
     pub added_at: DateTime<Utc>,
 }
 
+/// A principal the caller blocked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockedPrincipalDto {
+    pub principal_id: String,
+    /// The account holding the principal; `None` when no undeleted account here holds it.
+    pub user_id: Option<UserId>,
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+    pub blocked_at: DateTime<Utc>,
+}
+
 /// A queued host event as a device reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayItemDto {

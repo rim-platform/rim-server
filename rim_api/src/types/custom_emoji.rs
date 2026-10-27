@@ -7,6 +7,7 @@ pub struct CustomEmoji {
     pub id: async_graphql::ID,
     pub server_id: async_graphql::ID,
     pub name: String,
+    /// Where a member of the workspace loads the image: `/api/emoji/<id>` on this server, with the session cookie.
     pub image_url: String,
     pub uploaded_by: async_graphql::ID,
     pub created_at: chrono::DateTime<chrono::Utc>,

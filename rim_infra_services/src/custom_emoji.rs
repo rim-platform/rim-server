@@ -7,7 +7,7 @@ use rim_core::custom_emoji::repository::CustomEmojiRepository;
 use rim_core::server::model::ServerId;
 use rim_core::server_member::repository::ServerMemberRepository;
 use rim_services::custom_emoji::command::{
-    CreateCustomEmojiCmd, DeleteCustomEmojiCmd, ListCustomEmojisQuery,
+    CreateCustomEmojiCmd, CustomEmojiImageQuery, DeleteCustomEmojiCmd, ListCustomEmojisQuery,
 };
 use rim_services::custom_emoji::dto::CustomEmojiDto;
 use rim_services::custom_emoji::service::CustomEmojiService;
@@ -171,10 +171,27 @@ impl CustomEmojiService for DefaultCustomEmojiService {
 
         Ok(emojis.into_iter().map(Into::into).collect())
     }
+
+    async fn image(&self, query: CustomEmojiImageQuery) -> ServiceResult<Vec<u8>> {
+        let emoji = self
+            .repos
+            .custom_emoji_repo
+            .find_by_id(query.emoji_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        self.ensure_workspace_features(emoji.server_id)?;
+        self.repos
+            .server_member_repo
+            .get_member(emoji.server_id, query.actor.user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        self.storage_service.download_file(&emoji.image_url).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use rim_core::custom_emoji::model::CustomEmoji;
     use rim_core::custom_emoji::repository::MockCustomEmojiRepository;
     use rim_core::repository::error::{RepoError, RepoErrorKind};
     use rim_core::server::model::ServerId;
@@ -239,6 +256,115 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Conflict(_)), "{err:?}");
+    }
+
+    fn emoji_on(server_id: ServerId, key: &str) -> CustomEmoji {
+        CustomEmoji {
+            id: CustomEmojiId::new(),
+            server_id,
+            name: "party".to_string(),
+            image_url: key.to_string(),
+            uploaded_by: UserId::new(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    fn member_repo(found: bool) -> MockServerMemberRepository {
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_get_member()
+            .returning(move |sid, uid| {
+                Ok(found.then(|| ServerMember {
+                    id: ServerMemberId::new(),
+                    server_id: sid,
+                    user_id: uid,
+                    member_role: ServerMemberRole::Member,
+                    joined_at: chrono::Utc::now(),
+                }))
+            });
+        server_member_repo
+    }
+
+    #[tokio::test]
+    async fn image_is_served_to_a_member_of_the_emojis_workspace() {
+        let emoji = emoji_on(ServerId::new(), "s/emoji/x.png");
+        let emoji_id = emoji.id;
+        let mut custom_emoji_repo = MockCustomEmojiRepository::new();
+        custom_emoji_repo
+            .expect_find_by_id()
+            .withf(move |id| *id == emoji_id)
+            .returning(move |_| {
+                let emoji = emoji.clone();
+                Box::pin(async move { Ok(Some(emoji)) })
+            });
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_download_file()
+            .withf(|key| key == "s/emoji/x.png")
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(vec![7, 8, 9]) }));
+        let svc = DefaultCustomEmojiService::new(
+            CustomEmojiRepos {
+                custom_emoji_repo: Arc::new(custom_emoji_repo),
+                server_member_repo: Arc::new(member_repo(true)),
+            },
+            Arc::new(storage),
+        );
+
+        let bytes = svc
+            .image(CustomEmojiImageQuery {
+                actor: Actor::new(UserId::new()),
+                emoji_id,
+            })
+            .await
+            .unwrap();
+        assert_eq!(bytes, vec![7, 8, 9]);
+    }
+
+    #[tokio::test]
+    async fn image_is_not_found_for_an_unknown_emoji_or_a_non_member() {
+        let mut unknown = MockCustomEmojiRepository::new();
+        unknown
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        let svc = DefaultCustomEmojiService::new(
+            CustomEmojiRepos {
+                custom_emoji_repo: Arc::new(unknown),
+                server_member_repo: Arc::new(member_repo(true)),
+            },
+            Arc::new(MockStorageService::new()),
+        );
+        let err = svc
+            .image(CustomEmojiImageQuery {
+                actor: Actor::new(UserId::new()),
+                emoji_id: CustomEmojiId::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound), "{err:?}");
+
+        let emoji = emoji_on(ServerId::new(), "s/emoji/x.png");
+        let emoji_id = emoji.id;
+        let mut known = MockCustomEmojiRepository::new();
+        known.expect_find_by_id().returning(move |_| {
+            let emoji = emoji.clone();
+            Box::pin(async move { Ok(Some(emoji)) })
+        });
+        let svc = DefaultCustomEmojiService::new(
+            CustomEmojiRepos {
+                custom_emoji_repo: Arc::new(known),
+                server_member_repo: Arc::new(member_repo(false)),
+            },
+            Arc::new(MockStorageService::new()),
+        );
+        let err = svc
+            .image(CustomEmojiImageQuery {
+                actor: Actor::new(UserId::new()),
+                emoji_id,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound), "{err:?}");
     }
 
     #[test]

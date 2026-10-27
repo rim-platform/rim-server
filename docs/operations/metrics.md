@@ -134,7 +134,7 @@ acceptance, not delivery or a human read receipt.
 | `route` | Paths |
 |---|---|
 | `api` | `/api`, `/api/ws`, `/api/sdl`, `/api/hooks/…` and anything else under `/api` not listed below |
-| `files` | `/api/files/…`, `/api/attachments/…`, `/api/reports/…`, `/api/plugin-bundles/…` |
+| `files` | `/api/files/…`, `/api/attachments/…`, `/api/reports/…`, `/api/plugin-bundles/…`, `/api/emoji/…` |
 | `remote-forward` | `/api/remote/…`, a local user's request to a space hosted elsewhere |
 | `s2s` | `/s2s/…` |
 | `wellknown` | `/.well-known/…` |

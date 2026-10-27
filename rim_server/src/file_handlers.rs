@@ -6,13 +6,17 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
+use rim_core::custom_emoji::model::CustomEmojiId;
 use rim_core::server_feature::model::ServerFeature;
 use rim_core::storage::{StorageBackend, StoredFile};
 use rim_core::user::avatar::{AvatarFormat, file_url, hashed_avatar_key, is_hashed_avatar_key};
 use rim_core::user::model::UserId;
 use rim_infra_services::avatar_check::{AvatarCheckError, AvatarChecker, AvatarVerdict};
 use rim_infra_services::avatar_image::{AvatarImageError, MAX_SOURCE_SIDE, normalize_avatar};
+use rim_services::Actor;
 use rim_services::auth::service::RequestAuthenticator;
+use rim_services::custom_emoji::command::CustomEmojiImageQuery;
+use rim_services::custom_emoji::service::CustomEmojiService;
 use rim_services::feature::service::FeatureGate;
 use rim_services::message_attachment::service::MessageAttachmentService;
 use rim_services::moderation::command::AuthorizeReportAttachmentQuery;
@@ -412,6 +416,53 @@ pub(crate) async fn file_download_as(
             format!("attachment; filename=\"{}\"", safe_name),
         ))
         .body(data)
+}
+
+/// `Cache-Control` of a custom emoji image: an id's image never changes.
+const EMOJI_CACHE_CONTROL: &str = "private, max-age=31536000, immutable";
+
+/// GET /api/emoji/{emoji_id}
+pub async fn handle_custom_emoji_image(
+    req: HttpRequest,
+    path: web::Path<String>,
+    service: web::Data<Arc<dyn CustomEmojiService>>,
+    features: web::Data<Arc<dyn FeatureGate>>,
+) -> HttpResponse {
+    if let Err(resp) = require_feature(features.get_ref().as_ref(), ServerFeature::CustomEmoji) {
+        return resp;
+    }
+    let user_id = match require_download_auth(&req).await {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    custom_emoji_image_as(user_id, &path.into_inner(), service.get_ref().as_ref()).await
+}
+
+/// Serve a custom emoji's image to `user_id` if they are a member of its workspace: the
+/// session path above and forwarded requests from another relay share it.
+pub(crate) async fn custom_emoji_image_as(
+    user_id: UserId,
+    emoji_id: &str,
+    service: &dyn CustomEmojiService,
+) -> HttpResponse {
+    let Ok(emoji_id) = emoji_id.parse::<uuid::Uuid>().map(CustomEmojiId::from) else {
+        return map_service_error_to_response(rim_services::ServiceError::NotFound);
+    };
+    match service
+        .image(CustomEmojiImageQuery {
+            actor: Actor::new(user_id),
+            emoji_id,
+        })
+        .await
+    {
+        Ok(data) => HttpResponse::Ok()
+            .content_type("image/png")
+            .insert_header((header::CACHE_CONTROL, EMOJI_CACHE_CONTROL))
+            .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+            .insert_header(("Content-Disposition", "attachment"))
+            .body(data),
+        Err(e) => map_service_error_to_response(e),
+    }
 }
 
 /// GET /api/attachments/{attachment_id}/download
@@ -845,6 +896,7 @@ mod tests {
     use rim_services::ServiceError;
     use rim_services::auth::dto::RequestAuthResultDto;
     use rim_services::auth::service::MockRequestAuthenticator;
+    use rim_services::custom_emoji::service::MockCustomEmojiService;
     use rim_services::message_attachment::dto::{AttachmentDto, AttachmentStatus};
     use rim_services::message_attachment::service::MockMessageAttachmentService;
     use rim_services::moderation::dto::ReportAttachmentDto;
@@ -931,6 +983,7 @@ mod tests {
         disabled: Vec<ServerFeature>,
         checker: Option<Arc<AvatarChecker>>,
         abuse: MockRelayAbuseService,
+        emoji: MockCustomEmojiService,
     }
 
     impl Deps {
@@ -944,6 +997,7 @@ mod tests {
                 disabled: Vec::new(),
                 checker: None,
                 abuse: MockRelayAbuseService::new(),
+                emoji: MockCustomEmojiService::new(),
             }
         }
     }
@@ -965,6 +1019,10 @@ mod tests {
                     .service(
                         web::resource("/api/files/{path:.*}")
                             .route(web::get().to(handle_file_download)),
+                    )
+                    .service(
+                        web::resource("/api/emoji/{emoji_id}")
+                            .route(web::get().to(handle_custom_emoji_image)),
                     )
                     .service(
                         web::resource("/api/attachments/{attachment_id}/download")
@@ -990,6 +1048,9 @@ mod tests {
                     .app_data(web::Data::new(deps.checker))
                     .app_data(web::Data::new(
                         Arc::new(deps.abuse) as Arc<dyn RelayAbuseService>
+                    ))
+                    .app_data(web::Data::new(
+                        Arc::new(deps.emoji) as Arc<dyn CustomEmojiService>
                     ))
                     .app_data(web::Data::new(Arc::new(Files) as Arc<dyn StorageBackend>))
                     .app_data(web::Data::new(Arc::new(
@@ -1340,6 +1401,20 @@ mod tests {
             assert_eq!(body["code"], "FEATURE_DISABLED");
             assert_eq!(body["feature"], "avatars");
         }
+    }
+
+    /// With custom emoji off, an emoji image answers 403 with the feature before the session is
+    /// looked at, and the service is never reached.
+    #[actix_web::test]
+    async fn a_disabled_feature_refuses_custom_emoji_images() {
+        let mut deps = Deps::new();
+        deps.disabled = vec![ServerFeature::CustomEmoji];
+        let app = app!(deps);
+        let path = format!("/api/emoji/{}", CustomEmojiId::new());
+        let (status, body) = status_and_body!(&app, get(&path, true));
+        assert_eq!(status, 403);
+        assert_eq!(body["code"], "FEATURE_DISABLED");
+        assert_eq!(body["feature"], "custom_emoji");
     }
 
     /// Without a CSRF pair, upload and avatar upload answer 403 without a feature code.
@@ -1734,6 +1809,62 @@ mod tests {
         let files = files.lock().unwrap();
         assert_eq!(files.len(), 1);
         assert!(files.contains_key(urls[1].strip_prefix("/api/files/").unwrap()));
+    }
+
+    /// A member's emoji image is a PNG that never changes, served as an attachment and never
+    /// sniffed; the service is asked for the parsed id on behalf of the caller.
+    #[actix_web::test]
+    async fn custom_emoji_image_is_served_as_an_immutable_png() {
+        let mut deps = Deps::new();
+        let user_id = deps.user_id;
+        let emoji_id = CustomEmojiId::new();
+        deps.emoji
+            .expect_image()
+            .withf(move |q| q.actor.user_id == user_id && q.emoji_id == emoji_id)
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(PNG.to_vec()) }));
+        let app = app!(deps);
+        let resp = actix_test::call_service(
+            &app,
+            get(&format!("/api/emoji/{emoji_id}"), true).to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 200);
+        let headers = resp.headers();
+        assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "image/png");
+        assert_eq!(
+            headers.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(),
+            "nosniff"
+        );
+        assert_eq!(
+            headers.get(header::CONTENT_DISPOSITION).unwrap(),
+            "attachment"
+        );
+        assert_eq!(
+            headers.get(header::CACHE_CONTROL).unwrap(),
+            "private, max-age=31536000, immutable"
+        );
+        assert_eq!(actix_test::read_body(resp).await.as_ref(), PNG);
+    }
+
+    /// A malformed id is 404 without reaching the service, the service's `NotFound` is 404, and
+    /// a signed-out request is 401.
+    #[actix_web::test]
+    async fn custom_emoji_image_refusals() {
+        let mut deps = Deps::new();
+        deps.emoji
+            .expect_image()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(ServiceError::NotFound) }));
+        let app = app!(deps);
+        let (status, _) = status_and_body!(&app, get("/api/emoji/not-a-uuid", true));
+        assert_eq!(status, 404);
+        let path = format!("/api/emoji/{}", CustomEmojiId::new());
+        let (status, body) = status_and_body!(&app, get(&path, true));
+        assert_eq!(status, 404);
+        assert_eq!(body, json!({"error": "not found"}));
+        let (status, _) = status_and_body!(&app, get(&path, false));
+        assert_eq!(status, 401);
     }
 
     #[actix_web::test]

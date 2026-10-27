@@ -27,7 +27,8 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "conversation_id".to_string(),
                     title: "Conversation".to_string(),
-                    description: "Target conversation identifier.".to_string(),
+                    description: "Conversation to post to; defaults to the focused conversation."
+                        .to_string(),
                     argument_type: CommandArgumentTypeDto::ConversationId,
                     required: true,
                     default_value: None,

@@ -26,6 +26,7 @@ needs the `X-CSRF-Token` header (see "Sessions and CSRF").
 | `POST` | `/api/files/upload` | Session (with its secret), CSRF | Upload the bytes of an attachment. |
 | `POST` | `/api/files/avatar` | Session (with its secret), CSRF | Upload the caller's avatar. |
 | `GET` | `/api/files/{path}` | Session | Download a stored avatar. |
+| `GET` | `/api/emoji/{id}` | Session | A custom emoji's image, for members of its workspace. |
 | `GET` | `/api/attachments/{id}/download` | Session | Download an attachment. |
 | `POST` | `/api/plugin-bundles/{server_id}` | Session (with its secret), CSRF | Upload a web plugin bundle to a workspace. |
 | `GET` | `/api/plugin-bundles/{server_id}/{sha256}` | Session | Download a web plugin bundle. |
@@ -202,6 +203,10 @@ The file routes are plain HTTP, not GraphQL. They answer JSON errors of the form
 - **`GET /api/files/{path}`** serves a stored avatar to any signed-in user, as an attachment
   with the type its extension implies and `X-Content-Type-Options: nosniff`. Any path outside
   `avatars/` is refused with 403. Off when the `avatars` feature is not enabled.
+- **`GET /api/emoji/{id}`** serves a custom emoji's image to a member of its workspace as
+  `image/png` with `X-Content-Type-Options: nosniff` and `Cache-Control: private,
+  max-age=31536000, immutable`; an unknown id, and any caller outside the workspace, get 404.
+  `CustomEmoji.imageUrl` is this path. Off when the `custom_emoji` feature is not enabled.
 - **`GET /api/attachments/{id}/download`** serves an attachment to a member of its conversation.
   The blob of an encrypted conversation is served as `application/octet-stream` named
   `encrypted.bin`; the client checks its hash and decrypts it. Off when the `attachments` feature
@@ -332,7 +337,7 @@ cookie makes the request anonymous; a field that needs a session then answers
   WebSocket's `connection_init`. A request with the cookie and without the right secret is
   anonymous. Three kinds of request need no secret: a batch whose every operation is a
   mutation of only `reloadSession` and `logout`, the WebSocket upgrade (the secret comes in
-  `connection_init`), and the plain `GET` downloads (`/api/files/...`,
+  `connection_init`), and the plain `GET` downloads (`/api/files/...`, `/api/emoji/{id}`,
   `/api/attachments/{id}/download`, `/api/plugin-bundles/...`, `/api/reports/...`), which an
   `<img>` tag or a link makes without headers. Those downloads therefore still answer to the
   cookie alone.

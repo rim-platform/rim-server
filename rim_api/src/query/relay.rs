@@ -6,8 +6,8 @@ use crate::errors::map_service_error;
 use crate::federation::{federation, relay};
 use crate::ids::parse_uuid_id;
 use crate::types::{
-    Contact, DmRequest, DmRequestStatus, RelayInfo, RelayItemPage, RemoteIdentity, RemoteServer,
-    StreamHead,
+    BlockedPrincipal, Contact, DmRequest, DmRequestStatus, RelayInfo, RelayItemPage,
+    RemoteIdentity, RemoteServer, StreamHead,
 };
 
 /// Default and largest `relayItems` page.
@@ -96,6 +96,20 @@ impl RelayQueries {
         Ok(relay
             .relay
             .dm_requests(Actor::new(actor), status.map(Into::into))
+            .await
+            .map_err(map_service_error)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
+    /// The principals the caller blocked, newest first.
+    async fn my_blocked_principals(&self, ctx: &Context<'_>) -> Result<Vec<BlockedPrincipal>> {
+        let actor = require_actor(ctx)?;
+        let relay = relay(ctx)?;
+        Ok(relay
+            .relay
+            .blocked_principals(Actor::new(actor))
             .await
             .map_err(map_service_error)?
             .into_iter()

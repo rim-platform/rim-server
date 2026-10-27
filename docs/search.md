@@ -34,7 +34,8 @@ it (see "Visibility" below).
 Search results are **paginated by recency** (`sentAt`, `id` — the same cursor contract as every
 other message list; see `docs/pagination.md`), not by relevance. Each result also carries a `rank`
 (`ts_rank` score) and an optional `headline` (`ts_headline` snippet with `<mark>...</mark>`
-highlights) for client-side display or secondary sort.
+highlights: the whole text of a message up to 300 characters, otherwise one excerpt around the
+matches) for client-side display or secondary sort.
 
 This is a deliberate tradeoff: cursor pagination requires a stable total order with a unique
 tie-breaker. `ts_rank` is neither unique nor stable across concurrent inserts, so paginating by

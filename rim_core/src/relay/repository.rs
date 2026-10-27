@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use crate::key_identity::model::DeviceKeyId;
 use crate::relay::model::{
-    AbuseReport, AbuseReportFilter, AbuseReportId, CachedIdentity, Contact, DmRequest, DmRequestId,
-    DmRequestStatus, DroppedSpace, DueFanout, FanoutStatus, NewAbuseReport, NewDmRequest,
-    NewRelayEnvelope, NewRelayItem, PrincipalBlock, RelayItemRecord, RelayQueueStats,
+    AbuseReport, AbuseReportFilter, AbuseReportId, BlockedPrincipal, CachedIdentity, Contact,
+    DmRequest, DmRequestId, DmRequestStatus, DroppedSpace, DueFanout, FanoutStatus, NewAbuseReport,
+    NewDmRequest, NewRelayEnvelope, NewRelayItem, PrincipalBlock, RelayItemRecord, RelayQueueStats,
     RelaySubscription, RevocationFanout, SubscriptionStatus,
 };
 use crate::repository::error::RepoResult;
@@ -221,6 +221,9 @@ pub trait RelayRepository: Send + Sync {
     async fn unblock(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
 
     async fn is_blocked(&self, user_id: UserId, principal_id: &str) -> RepoResult<bool>;
+
+    /// A user's blocks, newest first, each with the undeleted account here holding the principal.
+    async fn list_blocks(&self, user_id: UserId) -> RepoResult<Vec<BlockedPrincipal>>;
 
     /// Hosts that queued items or sent requests for a user, or hold an active subscription of
     /// theirs.

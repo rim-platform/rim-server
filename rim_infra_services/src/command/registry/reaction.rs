@@ -32,7 +32,9 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "conversation_id".to_string(),
                     title: "Conversation".to_string(),
-                    description: "Channel/conversation containing the message.".to_string(),
+                    description:
+                        "Channel/conversation containing the message; defaults to the focused conversation."
+                            .to_string(),
                     argument_type: CommandArgumentTypeDto::ConversationId,
                     required: true,
                     default_value: None,
@@ -41,7 +43,8 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "message_id".to_string(),
                     title: "Message".to_string(),
-                    description: "Identifier of the message to react to.".to_string(),
+                    description: "Identifier of the message to react to; defaults to the selected message."
+                        .to_string(),
                     argument_type: CommandArgumentTypeDto::MessageId,
                     required: true,
                     default_value: None,

@@ -70,6 +70,7 @@ pub(crate) fn route_class(path: &str) -> &'static str {
         || under("/api/attachments")
         || under("/api/reports")
         || under("/api/plugin-bundles")
+        || under("/api/emoji")
     {
         "files"
     } else if under("/api") {
@@ -425,6 +426,7 @@ mod tests {
             ("/api/attachments/1/download", "files"),
             ("/api/reports/1/attachments/abc", "files"),
             ("/api/plugin-bundles/rims1_x/abc", "files"),
+            ("/api/emoji/e", "files"),
             ("/apifoo", "other"),
             ("/s2s/v1/deliver", "s2s"),
             ("/s2s/v1/forward/api", "s2s"),

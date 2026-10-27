@@ -12,10 +12,15 @@ mod support;
 use std::path::PathBuf;
 
 use base64::Engine;
+use sea_orm::EntityTrait;
 use serde_json::{Value, json};
 
 use rim_api::AppSchema;
+use rim_core::custom_emoji::model::CustomEmojiId;
+use rim_services::ServiceError;
 use rim_services::auth::dto::RegistrationMode;
+use rim_services::custom_emoji::command::CustomEmojiImageQuery;
+use rim_services::{Actor, ServiceResult};
 
 use support::graphql::{
     Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
@@ -56,7 +61,7 @@ const MAX_IMAGE_BYTES: usize = 256 * 1024;
 struct Fixture {
     schema: AppSchema,
     ws: Roles,
-    _ctx: TestCtx,
+    ctx: TestCtx,
 }
 
 async fn setup() -> Fixture {
@@ -64,7 +69,7 @@ async fn setup() -> Fixture {
     Fixture {
         ws: ctx.roles("emoji").await,
         schema: ctx.build_schema(RegistrationMode::InviteOnly).await,
-        _ctx: ctx,
+        ctx,
     }
 }
 
@@ -81,15 +86,35 @@ fn delete_vars(emoji_id: &str) -> Value {
     json!({ "emojiId": emoji_id })
 }
 
-fn stored_file(emoji: &Value) -> PathBuf {
-    PathBuf::from(STORAGE_ROOT).join(emoji["imageUrl"].as_str().expect("imageUrl"))
-}
-
 fn id(emoji: &Value) -> &str {
     emoji["id"].as_str().expect("emoji id")
 }
 
 impl Fixture {
+    /// Where the emoji's image is stored: its row's storage key under the storage root.
+    async fn stored_file(&self, emoji: &Value) -> PathBuf {
+        let emoji_id: uuid::Uuid = id(emoji).parse().expect("emoji uuid");
+        let row = entity::custom_emoji::Entity::find_by_id(emoji_id)
+            .one(&self.ctx.conn)
+            .await
+            .expect("emoji row query")
+            .expect("emoji row");
+        PathBuf::from(STORAGE_ROOT).join(row.image_url)
+    }
+
+    /// The emoji's image as `who` reads it through the service.
+    async fn image(&self, who: &Caller, emoji_id: &str) -> ServiceResult<Vec<u8>> {
+        let emoji_id = CustomEmojiId::from(emoji_id.parse::<uuid::Uuid>().expect("emoji uuid"));
+        self.ctx
+            .build_provider()
+            .custom_emoji_service()
+            .image(CustomEmojiImageQuery {
+                actor: Actor::new(who.user_id),
+                emoji_id,
+            })
+            .await
+    }
+
     fn create_request(
         &self,
         who: &Caller,
@@ -172,7 +197,7 @@ async fn custom_emoji_roots_refuse_non_members() {
 }
 
 /// Any member, a guest included, may add an emoji. The answer carries every field, the image is
-/// stored under the workspace, and every member lists it.
+/// stored under the workspace and named by its route, and every member lists it.
 #[tokio::test]
 async fn create_custom_emoji_returns_the_emoji_and_lists_it_for_members() {
     let f = setup().await;
@@ -182,10 +207,18 @@ async fn create_custom_emoji_returns_the_emoji_and_lists_it_for_members() {
     assert!(emoji["id"].is_string());
     assert_eq!(emoji["serverId"], json!(f.ws.server_id));
     assert_eq!(emoji["name"], json!("party_parrot"));
-    let image_url = emoji["imageUrl"].as_str().expect("imageUrl");
+    assert_eq!(
+        emoji["imageUrl"],
+        json!(format!("/api/emoji/{}", id(&emoji)))
+    );
+    let stored = f.stored_file(&emoji).await;
     assert!(
-        image_url.starts_with(&format!("{}/emoji/", f.ws.server_id)) && image_url.ends_with(".png"),
-        "{image_url}"
+        stored.starts_with(
+            PathBuf::from(STORAGE_ROOT)
+                .join(&f.ws.server_id)
+                .join("emoji")
+        ),
+        "{stored:?}"
     );
     assert_eq!(emoji["uploadedBy"], json!(f.ws.bob.user_id.to_string()));
     let created_at: chrono::DateTime<chrono::Utc> = emoji["createdAt"]
@@ -195,7 +228,7 @@ async fn create_custom_emoji_returns_the_emoji_and_lists_it_for_members() {
         .expect("RFC 3339");
     assert!(created_at >= before - chrono::Duration::seconds(1));
     assert_eq!(
-        std::fs::read(stored_file(&emoji)).expect("stored image"),
+        std::fs::read(stored).expect("stored image"),
         vec![0x89u8; 16]
     );
 
@@ -288,19 +321,40 @@ async fn delete_custom_emoji_is_for_the_uploader_and_the_owner() {
     let bobs = f.create(&f.ws.bob, "bobs").await;
     let carols = f.create(&f.ws.carol, "carols").await;
 
+    let bobs_file = f.stored_file(&bobs).await;
+
     for who in [&f.ws.mona, &f.ws.carol, &f.ws.gina] {
         assert_eq!(f.delete_code(who, id(&bobs)).await, "FORBIDDEN");
     }
-    assert!(stored_file(&bobs).exists());
+    assert!(bobs_file.exists());
 
     f.delete(&f.ws.bob, id(&bobs)).await;
-    assert!(!stored_file(&bobs).exists());
+    assert!(!bobs_file.exists());
     f.delete(&f.ws.alice, id(&carols)).await;
     assert!(f.list(&f.ws.alice).await.is_empty());
 
     assert_eq!(f.delete_code(&f.ws.bob, id(&bobs)).await, "NOT_FOUND");
     let unknown = unknown_id();
     assert_eq!(f.delete_code(&f.ws.alice, &unknown).await, "NOT_FOUND");
+}
+
+/// A member, a guest included, reads an emoji's image; an outsider, and anyone once the emoji
+/// is deleted, gets `NotFound`.
+#[tokio::test]
+async fn custom_emoji_image_is_served_to_members_only() {
+    let f = setup().await;
+    let emoji = f.create(&f.ws.bob, "party").await;
+
+    assert_eq!(
+        f.image(&f.ws.gina, id(&emoji)).await.expect("guest reads"),
+        vec![0x89u8; 16]
+    );
+    let err = f.image(&f.ws.olive, id(&emoji)).await.unwrap_err();
+    assert!(matches!(err, ServiceError::NotFound), "{err:?}");
+
+    f.delete(&f.ws.bob, id(&emoji)).await;
+    let err = f.image(&f.ws.bob, id(&emoji)).await.unwrap_err();
+    assert!(matches!(err, ServiceError::NotFound), "{err:?}");
 }
 
 /// A `:name:` reaction works for a custom emoji of the workspace and answers `VALIDATION` for a
@@ -342,7 +396,7 @@ async fn a_shortcode_reaction_names_one_of_the_workspace_custom_emoji() {
     );
 
     let disabled = f
-        ._ctx
+        .ctx
         .build_schema_with_disabled(&[rim_core::server_feature::model::ServerFeature::CustomEmoji]);
     assert_eq!(
         exec_err_code(&disabled, react(":party:")).await,

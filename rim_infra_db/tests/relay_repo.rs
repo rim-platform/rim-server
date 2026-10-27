@@ -858,6 +858,61 @@ async fn contacts_blocks_and_hosts_of_a_user() {
     assert!(repo.hosts_of_user(user.id).await.unwrap().is_empty());
 }
 
+/// Blocks list newest first; a principal an undeleted account here holds carries that account,
+/// any other principal none.
+#[tokio::test]
+async fn blocks_are_listed_newest_first_with_the_holding_account() {
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let alice = ctx.create_key_only_user("alice", "rimp1_alice").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    assert!(repo.block(bob.id, "rimp1_alice").await.unwrap());
+    assert!(repo.block(bob.id, "rimp1_stranger").await.unwrap());
+    ctx.db
+        .execute_unprepared(
+            "UPDATE relay_block SET created_at = now() - interval '1 hour' \
+             WHERE principal_id = 'rimp1_alice'",
+        )
+        .await
+        .unwrap();
+
+    let blocks = repo.list_blocks(bob.id).await.unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].principal_id, "rimp1_stranger");
+    assert_eq!(
+        (
+            blocks[0].user_id,
+            blocks[0].username.as_deref(),
+            blocks[0].display_name.as_deref()
+        ),
+        (None, None, None)
+    );
+    assert_eq!(blocks[1].principal_id, "rimp1_alice");
+    assert_eq!(blocks[1].user_id, Some(alice.id));
+    assert_eq!(blocks[1].username.as_deref(), Some("alice"));
+    assert!(blocks[0].blocked_at > blocks[1].blocked_at);
+
+    ctx.db
+        .execute_unprepared(&format!(
+            "UPDATE \"user\" SET deleted_at = now() WHERE id = '{}'",
+            Uuid::from(alice.id)
+        ))
+        .await
+        .unwrap();
+    let blocks = repo.list_blocks(bob.id).await.unwrap();
+    assert_eq!(blocks[1].principal_id, "rimp1_alice");
+    assert_eq!(
+        (
+            blocks[1].user_id,
+            blocks[1].username.as_deref(),
+            blocks[1].display_name.as_deref()
+        ),
+        (None, None, None)
+    );
+
+    assert!(repo.list_blocks(alice.id).await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn people_know_each_other_through_mutual_contacts_or_an_accepted_request() {
     let ctx = support::TestCtx::new().await;

@@ -9,8 +9,8 @@ use tokio::sync::broadcast;
 use crate::e2ee::command::MlsCaller;
 use crate::operator::OperatorCaller;
 use crate::relay::dto::{
-    AbuseReportDto, ContactDto, DeliverItem, DeliverResponse, DmRequestDto, FileAbuseReport,
-    IdentityDocument, PeerClaimRequest, PeerClaimResponse, PrincipalBlockDto,
+    AbuseReportDto, BlockedPrincipalDto, ContactDto, DeliverItem, DeliverResponse, DmRequestDto,
+    FileAbuseReport, IdentityDocument, PeerClaimRequest, PeerClaimResponse, PrincipalBlockDto,
     PrincipalBlockOutcome, PrincipalRecordDto, PrincipalUnblockOutcome, ProfileClearOutcome,
     RelayCleanup, RelayItemPageDto, RelayNotice, RemoteIdentityDto, RemoteServerDto, SignedJson,
 };
@@ -38,6 +38,9 @@ pub trait RelayService: Send + Sync {
     async fn block_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool>;
 
     async fn unblock_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool>;
+
+    /// The principals the caller blocked, newest first.
+    async fn blocked_principals(&self, actor: Actor) -> ServiceResult<Vec<BlockedPrincipalDto>>;
 
     async fn dm_requests(
         &self,

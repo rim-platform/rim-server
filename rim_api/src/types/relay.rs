@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use rim_core::relay::model::DmRequestStatus as CoreDmRequestStatus;
 use rim_services::host::dto::{ConversationPredecessorDto, StreamHeadDto};
 use rim_services::relay::dto::{
-    ContactDto, DmRequestDto, IdentityDevice, RelayInfoDto, RelayItemDto, RelayItemPageDto,
-    RemoteIdentityDto, RemoteServerDto, SignedJson,
+    BlockedPrincipalDto, ContactDto, DmRequestDto, IdentityDevice, RelayInfoDto, RelayItemDto,
+    RelayItemPageDto, RemoteIdentityDto, RemoteServerDto, SignedJson,
 };
 
 use super::SignedStatement;
@@ -118,6 +118,35 @@ impl From<ContactDto> for Contact {
             principal_id: dto.principal_id,
             relay_urls: dto.relay_urls,
             added_at: dto.added_at,
+        }
+    }
+}
+
+/// A principal the caller blocked: its DM requests are ignored and its invites and key
+/// package claims refused.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct BlockedPrincipal {
+    /// The blocked principal's id.
+    pub principal_id: String,
+    /// The account on this server that holds the principal; null when none does.
+    pub user_id: Option<ID>,
+    /// That account's username; null when no account here holds the principal.
+    pub username: Option<String>,
+    /// That account's display name; null when it has none or no account here holds the
+    /// principal.
+    pub display_name: Option<String>,
+    /// When the caller blocked the principal.
+    pub blocked_at: DateTime<Utc>,
+}
+
+impl From<BlockedPrincipalDto> for BlockedPrincipal {
+    fn from(dto: BlockedPrincipalDto) -> Self {
+        Self {
+            principal_id: dto.principal_id,
+            user_id: dto.user_id.map(|id| ID(id.to_string())),
+            username: dto.username,
+            display_name: dto.display_name,
+            blocked_at: dto.blocked_at,
         }
     }
 }

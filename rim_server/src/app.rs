@@ -71,6 +71,7 @@ pub struct AppRuntime {
     pub moderation_service: Arc<dyn rim_services::moderation::service::ModerationService>,
     pub plugin_bundle_service:
         Arc<dyn rim_services::workspace_plugin::service::PluginBundleService>,
+    pub custom_emoji_service: Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>,
     /// The instance's feature switches, for the upload routes and the discovery document.
     pub feature_gate: Arc<dyn FeatureGate>,
     /// Sign-in and signups; the discovery document asks it whether registration is full.
@@ -1031,6 +1032,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     ));
     let moderation_service = service_provider.moderation_service();
     let plugin_bundle_service = service_provider.plugin_bundle_service();
+    let custom_emoji_service = service_provider.custom_emoji_service();
 
     if registration_mode == rim_services::auth::dto::RegistrationMode::Open {
         tracing::warn!(
@@ -1100,6 +1102,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         message_attachment_service,
         moderation_service,
         plugin_bundle_service,
+        custom_emoji_service,
         feature_gate,
         auth_service,
         s2s,
