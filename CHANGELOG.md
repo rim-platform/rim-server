@@ -64,6 +64,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   or the default workspace too, not only in the direct space: it leaves your conversation list,
   live events, notifications and unread counts, and you post nothing into it. Channels are not
   affected.
+- Blocking someone also silences the DMs and groups they started on another server, or added you
+  to there: from then on the relay drops every item of such a conversation, and acknowledges it
+  so their server does not send it again, until the unblock. Conversations someone else started
+  keep flowing. The history stays at their server.
 - A relay ends a person's subscription to a workspace elsewhere when their `MemberLeft` arrives
   on their own stream, instead of letting it lapse (`docs/specs/server-to-server-v1.md`,
   "Subscriptions").

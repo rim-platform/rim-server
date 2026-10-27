@@ -3502,6 +3502,9 @@ fn accepted_relay(
         let found = row(bob);
         Box::pin(async move { Ok(found) })
     });
+    relay
+        .expect_is_blocked()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
     let log = Arc::clone(&calls);
     relay
         .expect_refresh_request()
@@ -3585,6 +3588,131 @@ async fn deliver_accepted(
     let refused = response.refused.into_iter().map(|r| r.reason).collect();
     let calls = calls.lock().expect("lock").clone();
     (refused, calls)
+}
+
+/// Bob's relay holding a row of `status` from Alice for `CONVERSATION` at `PEER`, holding
+/// nothing. Whether Bob blocked Alice is answered by `blocked` (`None` fails the test when
+/// asked); `inserted` records the request each queued item is held by.
+fn silencing_relay(
+    status: rim_core::relay::model::DmRequestStatus,
+    blocked: Option<bool>,
+    inserted: Arc<Mutex<Vec<Option<rim_core::relay::model::DmRequestId>>>>,
+) -> DefaultRelayService {
+    let bob = UserId::new();
+    let mut row = accepted_row(bob, Utc::now() + Duration::days(30), true);
+    row.status = status;
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay.expect_find_request().returning(move |_, _, _| {
+        let found = Some(row.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    match blocked {
+        Some(blocked) => {
+            relay
+                .expect_is_blocked()
+                .withf(move |user_id, principal| *user_id == bob && principal == ALICE)
+                .returning(move |_, _| Box::pin(async move { Ok(blocked) }));
+        }
+        None => {
+            relay.expect_is_blocked().never();
+        }
+    }
+    relay
+        .expect_count_held()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_request_held_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_user_held_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_refresh_request()
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay.expect_insert_item().returning(move |item| {
+        inserted.lock().expect("lock").push(item.request_id);
+        Box::pin(async { Ok(1) })
+    });
+    relay
+        .expect_queued_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&host_signer(40), 0), None),
+        MockS2sClient::new(),
+    )
+}
+
+/// What [`silencing_relay`] queues of a message of `CONVERSATION` from `PEER`, which it
+/// acknowledges without refusing.
+async fn queued_of_a_message(
+    status: rim_core::relay::model::DmRequestStatus,
+    blocked: Option<bool>,
+) -> Vec<Option<rim_core::relay::model::DmRequestId>> {
+    let inserted = Arc::default();
+    let svc = silencing_relay(status, blocked, Arc::clone(&inserted));
+    let response = svc
+        .deliver(
+            PEER.to_string(),
+            vec![conversation_item(
+                &format!("c:{CONVERSATION}"),
+                serde_json::json!({ "type": "NewMessage", "conversation_id": CONVERSATION }),
+            )],
+        )
+        .await
+        .expect("delivered");
+    assert!(response.refused.is_empty(), "{:?}", response.refused);
+    inserted.lock().expect("lock").clone()
+}
+
+#[tokio::test]
+async fn what_a_blocked_sender_started_elsewhere_is_dropped_and_acknowledged() {
+    use rim_core::relay::model::DmRequestStatus;
+    assert!(
+        queued_of_a_message(DmRequestStatus::Accepted, Some(true))
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn what_someone_not_blocked_started_flows() {
+    use rim_core::relay::model::DmRequestStatus;
+    assert_eq!(
+        queued_of_a_message(DmRequestStatus::Accepted, Some(false)).await,
+        vec![None]
+    );
+}
+
+#[tokio::test]
+async fn a_pending_requests_item_does_not_ask_about_blocks() {
+    use rim_core::relay::model::DmRequestStatus;
+    let held = queued_of_a_message(DmRequestStatus::Pending, None).await;
+    assert!(
+        matches!(held.as_slice(), [Some(_)]),
+        "held by the request: {held:?}"
+    );
 }
 
 #[tokio::test]

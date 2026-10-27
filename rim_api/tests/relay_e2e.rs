@@ -12,7 +12,8 @@
 //! login and delivery; and a peer blocked both ways. A member's accepted row on their relay is
 //! filed again from a resent invite after it expired, and goes when they leave the group. A
 //! member on another relay is added to an encrypted group of the direct space by principal id,
-//! and a plaintext group refuses them.
+//! and a plaintext group refuses them. What someone a user blocked started on another server
+//! stops reaching the user's queue until the unblock.
 //!
 //! Run with:
 //! ```sh
@@ -2559,6 +2560,139 @@ async fn a_members_accepted_row_is_filed_again_after_it_expires_and_goes_when_th
         accepted_row(&b, &group).await.is_none().then_some(())
     })
     .await;
+
+    a.stop().await;
+    b.stop().await;
+}
+
+/// Wait until Bob holds `conversation` accepted on `relay`, accepting its request when it
+/// arrives as one.
+async fn accept_conversation(bob: &Person, relay: &Node, conversation: &str) {
+    eventually("the conversation to be accepted", || async {
+        if accepted_row(relay, conversation).await.is_some() {
+            return Some(());
+        }
+        let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+        let request = pending["dmRequests"]
+            .as_array()
+            .and_then(|r| {
+                r.iter()
+                    .find(|r| r["conversationId"] == json!(conversation))
+            })
+            .cloned()?;
+        bob.ok(
+            "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+            json!({ "id": request["id"] }),
+        )
+        .await;
+        Some(())
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_a_blocked_person_started_on_another_server_stops_reaching_the_queue() {
+    const BLOCK: &str = "mutation($p: String!) { blockPrincipal(principalId: $p) }";
+    const UNBLOCK: &str = "mutation($p: String!) { unblockPrincipal(principalId: $p) }";
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    let direct = anonymous_direct_space(&a).await;
+
+    let dm = alice.start_dm(&bob, &b, true).await;
+    accept_conversation(&bob, &b, &dm).await;
+    let alices = group_with(&alice, &bob, &b, true).await;
+    accept_conversation(&bob, &b, &alices).await;
+    let carols = group_with(&carol, &bob, &b, true).await;
+    accept_conversation(&bob, &b, &carols).await;
+
+    let event = |kind: &str, conversation: &str| json!({ "type": kind, "workspace_id": direct, "conversation_id": conversation });
+    assert_eq!(
+        deliver_as(&a, &b, &bob, 1001, event("NewMessage", &dm)).await,
+        Vec::<String>::new()
+    );
+    bob.item_of(&a, "NewMessage", |i| {
+        i.event["conversation_id"] == json!(dm)
+    })
+    .await;
+
+    bob.ok(BLOCK, json!({ "p": alice.principal() })).await;
+    let notification = json!({
+        "type": "NotificationDue",
+        "workspace_id": direct,
+        "conversation_id": dm,
+        "reason": "direct",
+    });
+    for (seq, item) in [
+        (1002, event("NewMessage", &dm)),
+        (1003, notification),
+        (1004, event("ReactionsUpdated", &dm)),
+        (1005, event("NewMessage", &alices)),
+        (1006, event("MlsCommitAccepted", &alices)),
+        (1007, event("NewMessage", &carols)),
+    ] {
+        assert_eq!(
+            deliver_as(&a, &b, &bob, seq, item).await,
+            Vec::<String>::new(),
+            "item {seq} is acknowledged"
+        );
+    }
+    // The items delivered above, by their seq on Bob's own stream.
+    let delivered = async |bob: &Person| -> Vec<(u64, String, Value)> {
+        bob.items(&a, None)
+            .await
+            .into_iter()
+            .filter(|i| i.stream == format!("u:{}", bob.principal()))
+            .filter_map(|i| {
+                let seq = i.seq.filter(|s| (1001..=1009).contains(s))?;
+                Some((
+                    seq,
+                    i.event["type"].as_str().unwrap_or_default().to_string(),
+                    i.event["conversation_id"].clone(),
+                ))
+            })
+            .collect()
+    };
+    assert_eq!(
+        delivered(&bob).await,
+        vec![
+            (1001, "NewMessage".to_string(), json!(dm)),
+            (1007, "NewMessage".to_string(), json!(carols)),
+        ],
+        "a group the blocked person did not start keeps flowing; theirs are silenced"
+    );
+
+    // The host still lists the DM for Bob; the relay only stops what it queues.
+    let listed = bob
+        .remote(
+            &a,
+            "query($s: ID!) { inboxConversations(serverId: $s, dir: AFTER, limit: 50) { items { id } } }",
+            json!({ "s": direct }),
+        )
+        .await;
+    assert!(
+        listed["inboxConversations"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|c| c["id"] == json!(dm)),
+        "{listed}"
+    );
+
+    bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
+    for (seq, conversation) in [(1008, &dm), (1009, &alices)] {
+        assert_eq!(
+            deliver_as(&a, &b, &bob, seq, event("NewMessage", conversation)).await,
+            Vec::<String>::new()
+        );
+    }
+    let after: Vec<u64> = delivered(&bob)
+        .await
+        .into_iter()
+        .map(|(s, _, _)| s)
+        .collect();
+    assert_eq!(after, vec![1001, 1007, 1008, 1009]);
 
     a.stop().await;
     b.stop().await;

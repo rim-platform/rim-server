@@ -722,6 +722,7 @@ impl DefaultRelayService {
                     .unwrap_or(i64::MAX)
             },
             blocked: false,
+            silenced: false,
             policy: DmPolicy::Request,
             request: None,
             pending_for_user: 0,
@@ -749,6 +750,17 @@ impl DefaultRelayService {
             };
             facts.request = Some((request.id, request.status, held));
             found = Some(request);
+        }
+        // What someone the user blocked started elsewhere brings them nothing until the unblock.
+        if let Some(request) = &found
+            && !read.local
+            && read.invite.is_none()
+            && request.status == DmRequestStatus::Accepted
+        {
+            facts.silenced = repos
+                .relay_repo
+                .is_blocked(user_id, &request.from_principal_id)
+                .await?;
         }
         if let Some(invite) = &read.invite {
             let from = invite.from_principal_id.as_str();
