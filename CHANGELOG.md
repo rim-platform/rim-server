@@ -41,9 +41,6 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 - A failed `executeMacro` names the step and its error: "Step <n> (<command title>) failed:
   <reason>", instead of "macro `<name>` failed on a step".
-
-### Fixed
-
 - Custom emoji images load: `CustomEmoji.imageUrl` is `/api/emoji/<id>`, which the new
   `GET /api/emoji/{id}` serves to members of the emoji's workspace (also forwarded from another
   relay). It was a storage path nothing served; emoji uploaded before are fixed too.
