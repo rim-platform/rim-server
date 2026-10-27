@@ -339,10 +339,11 @@ impl DefaultPipelineService {
         Ok(())
     }
 
-    /// Refuses more than [`MAX_ACTIONS`] actions, or an action that names a user command or a
-    /// macro, has a command id longer than 256 bytes, or has arguments that serialize to more
-    /// than [`MAX_STEP_ARGS_BYTES`]. A user command is refused because each action runs with its
-    /// own budget of builtin steps, which a user command could fill on every firing.
+    /// Refuses more than [`MAX_ACTIONS`] actions, or an action that names a user command, a
+    /// macro or no builtin command, has a command id longer than 256 bytes, or has arguments
+    /// that serialize to more than [`MAX_STEP_ARGS_BYTES`]. A user command is refused because
+    /// each action runs with its own budget of builtin steps, which a user command could fill on
+    /// every firing.
     ///
     /// # Errors
     ///
@@ -359,6 +360,11 @@ impl DefaultPipelineService {
                 return Err(ServiceError::Validation(COMPOSED_ACTION.to_string()));
             }
             ensure_command_id_size(command_id, "a pipeline action's command id")?;
+            if !crate::command::registry::is_builtin_command(command_id) {
+                return Err(ServiceError::Validation(format!(
+                    "Unknown command: {command_id}"
+                )));
+            }
             ensure_args_size(
                 args.as_ref(),
                 MAX_STEP_ARGS_BYTES,
@@ -1179,7 +1185,7 @@ mod tests {
                 },
                 filter: None,
                 actions: vec![PipelineActionDto::ExecuteCommand {
-                    command_id: "test.cmd".to_string(),
+                    command_id: "chat.post_message".to_string(),
                     args: None,
                 }],
                 cooldown_secs: None,
@@ -1229,7 +1235,7 @@ mod tests {
                     },
                     filter: None,
                     actions: vec![PipelineActionDto::ExecuteCommand {
-                        command_id: "test.cmd".to_string(),
+                        command_id: "chat.post_message".to_string(),
                         args: None,
                     }],
                     cooldown_secs: None,
@@ -1299,7 +1305,7 @@ mod tests {
                     },
                     filter: None,
                     actions: vec![PipelineActionDto::ExecuteCommand {
-                        command_id: "test.cmd".to_string(),
+                        command_id: "chat.post_message".to_string(),
                         args: None,
                     }],
                     cooldown_secs: None,
@@ -1347,7 +1353,7 @@ mod tests {
                     },
                     filter: None,
                     actions: vec![PipelineActionDto::ExecuteCommand {
-                        command_id: "test.cmd".to_string(),
+                        command_id: "chat.post_message".to_string(),
                         args: None,
                     }],
                     cooldown_secs: None,
@@ -2542,6 +2548,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn create_and_update_refuse_an_unknown_command() {
+        let mut repo = MockPipelineRepository::new();
+        repo.expect_create().never();
+        repo.expect_update().never();
+        let creator = UserId::new();
+        let stored = make_pipeline(ServerId::new(), creator);
+        let stored_id = stored.id;
+        repo.expect_get_by_id()
+            .returning(move |_| Ok(Some(stored.clone())));
+        let mut members = make_member_repo();
+        members
+            .expect_get_member_standing()
+            .returning(|_, _| Ok(Some(MemberStanding::new(ServerMemberRole::Member))));
+        let svc = make_service(repo, members);
+
+        let err = svc
+            .create(create_cmd(vec![action("chat.nope", None)]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == "Unknown command: chat.nope"),
+            "{err:?}"
+        );
+
+        let cmd = create_cmd(vec![action("plugin.dev.example.x", None)]);
+        let err = svc
+            .update(UpdatePipelineCmd {
+                actor: Actor::new(creator),
+                pipeline_id: stored_id,
+                name: cmd.name,
+                description: cmd.description,
+                trigger: cmd.trigger,
+                filter: cmd.filter,
+                actions: cmd.actions,
+                cooldown_secs: cmd.cooldown_secs,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == "Unknown command: plugin.dev.example.x"),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

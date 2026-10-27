@@ -213,9 +213,10 @@ impl DefaultMacroService {
     }
 
     /// Refuses `steps` when there are none or more than [`MAX_STEPS`], or when a step names a
-    /// macro or a user command, has a command id longer than 256 bytes, or has arguments that
-    /// serialize to more than [`MAX_STEP_ARGS_BYTES`]. A user command step is refused because
-    /// each step runs with its own budget of builtin steps, which a user command could fill.
+    /// macro, a user command or no builtin command, has a command id longer than 256 bytes, or
+    /// has arguments that serialize to more than [`MAX_STEP_ARGS_BYTES`]. A user command step is
+    /// refused because each step runs with its own budget of builtin steps, which a user command
+    /// could fill.
     ///
     /// # Errors
     ///
@@ -241,6 +242,12 @@ impl DefaultMacroService {
                 return Err(ServiceError::Validation(USER_COMMAND_STEP.to_string()));
             }
             ensure_command_id_size(&step.command_id, "a macro step's command id")?;
+            if !crate::command::registry::is_builtin_command(&step.command_id) {
+                return Err(ServiceError::Validation(format!(
+                    "Unknown command: {}",
+                    step.command_id
+                )));
+            }
             ensure_args_size(
                 step.args.as_ref(),
                 MAX_STEP_ARGS_BYTES,
@@ -616,7 +623,7 @@ impl MacroService for DefaultMacroService {
         let dangerous = effective_sensitivity.is_mutating();
 
         let mut payload = serde_json::Map::new();
-        let mut failed_at_step: Option<u32> = None;
+        let mut failure: Option<(u32, String)> = None;
 
         for (step_index, step) in steps.iter().enumerate() {
             // When the outer proof was verified, issue a per-step
@@ -659,17 +666,18 @@ impl MacroService for DefaultMacroService {
                 })
                 .await;
 
-            // Inner ConfirmationRequired is a hard failure — the step
-            // did not execute. Treat it as MacroPartialFailure rather than Ok.
-            let result = result.and_then(|r| {
-                if r.status == CommandResultStatusDto::ConfirmationRequired {
-                    Err(ServiceError::Internal(Some(anyhow::anyhow!(
-                        "step returned ConfirmationRequired despite outer proof"
-                    ))))
-                } else {
-                    Ok(r)
-                }
-            });
+            // A step fails when it errors or answers anything but Success; an inner
+            // ConfirmationRequired is a failure too, since the step did not execute.
+            let step_failure: Option<String> = match &result {
+                Ok(r) => match r.status {
+                    CommandResultStatusDto::Success => None,
+                    CommandResultStatusDto::ConfirmationRequired => {
+                        Some("the step needs a confirmation".to_string())
+                    }
+                    CommandResultStatusDto::Error => Some(r.message.clone()),
+                },
+                Err(e) => Some(step_error_reason(e)),
+            };
 
             // ── Emit a per-step child audit row carrying parent_audit_id.
             if let Some(audit_svc) = &self.services.audit_log_service {
@@ -688,12 +696,12 @@ impl MacroService for DefaultMacroService {
                     dangerous,
                     confirmation_kind: if step_had_token { "in_band" } else { "none" }.to_string(),
                     typed_verb: None,
-                    outcome: if result.is_ok() {
+                    outcome: if step_failure.is_none() {
                         AuditOutcome::Success
                     } else {
                         AuditOutcome::StepError
                     },
-                    error_kind: if result.is_err() {
+                    error_kind: if step_failure.is_some() {
                         Some(AuditOutcome::StepError.as_str().to_string())
                     } else {
                         None
@@ -713,20 +721,26 @@ impl MacroService for DefaultMacroService {
                 }
             }
 
-            match result {
-                Ok(r) => {
-                    if let Some(sp) = r.payload {
-                        payload.insert(step.command_id.clone(), sp);
-                    }
-                }
-                Err(_) => {
-                    failed_at_step = Some(step_index as u32);
-                    break;
-                }
+            if let Some(reason) = step_failure {
+                let title = step_definitions
+                    .iter()
+                    .find(|(id, _)| id == &step.command_id)
+                    .map(|(_, d)| d.title.as_str())
+                    .unwrap_or(step.command_id.as_str());
+                failure = Some((
+                    step_index as u32,
+                    format!("Step {} ({}) failed: {}", step_index + 1, title, reason),
+                ));
+                break;
+            }
+            if let Ok(r) = result
+                && let Some(sp) = r.payload
+            {
+                payload.insert(step.command_id.clone(), sp);
             }
         }
 
-        let (outcome, final_status) = if failed_at_step.is_some() {
+        let (outcome, final_status) = if failure.is_some() {
             (
                 AuditOutcome::MacroPartialFailure,
                 CommandResultStatusDto::Error,
@@ -750,7 +764,7 @@ impl MacroService for DefaultMacroService {
                 confirmation_kind: confirmation_kind.to_string(),
                 typed_verb: None,
                 outcome,
-                error_kind: failed_at_step.map(|i| format!("step_error_at_{i}")),
+                error_kind: failure.as_ref().map(|(i, _)| format!("step_error_at_{i}")),
                 capability_check_outcome: None,
                 confirmation_outcome: None,
                 parent_audit_id: None,
@@ -765,10 +779,10 @@ impl MacroService for DefaultMacroService {
             }
         }
 
-        if failed_at_step.is_some() {
+        if let Some((_, message)) = failure {
             return Ok(CommandResultDto {
                 status: final_status,
-                message: format!("macro `{}` failed on a step", macro_def.name),
+                message,
                 payload: Some(serde_json::Value::Object(payload)),
                 follow_up_commands: vec![],
                 pipeline_stages: None,
@@ -833,6 +847,18 @@ impl MacroService for DefaultMacroService {
             .collect();
 
         Ok(defs)
+    }
+}
+
+/// The reason a failed step gives in the macro's answer: the message a caller of the
+/// command alone would read, without a failed confirmation's detail.
+fn step_error_reason(error: &ServiceError) -> String {
+    match error {
+        ServiceError::Validation(message)
+        | ServiceError::Conflict(message)
+        | ServiceError::Forbidden(message) => message.clone(),
+        ServiceError::ConfirmationFailed(_) => "the step's confirmation failed".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -2046,6 +2072,10 @@ mod tests {
             CommandResultStatusDto::Error,
             "inner step returning ConfirmationRequired must be Error (MacroPartialFailure), not Success"
         );
+        assert_eq!(
+            result.message,
+            "Step 1 (cmd.gated) failed: the step needs a confirmation"
+        );
     }
 
     // ── Up-front confirmation rule ───────────────────────────────────────────
@@ -2345,6 +2375,203 @@ mod tests {
 
         assert!(
             matches!(&err, ServiceError::Validation(m) if m == USER_COMMAND_STEP),
+            "{err:?}"
+        );
+    }
+
+    /// A command service whose `get_command` answers a definition titled "Post Message".
+    fn post_message_definition(cmd_svc: &mut MockCommandService) {
+        cmd_svc.expect_get_command().returning(|query| {
+            let (_, mut definition) =
+                step_definition(&query.command_id, false, CommandSensitivityDto::Mutating);
+            definition.title = "Post Message".to_string();
+            Box::pin(async move { Ok(Some(definition)) })
+        });
+    }
+
+    fn run_macro(actor: Actor, macro_id: MacroId) -> ExecuteMacroCmd {
+        ExecuteMacroCmd {
+            actor,
+            macro_id,
+            command_context: None,
+            confirmation: None,
+            initiator: rim_services::command::initiator::CommandInitiator::Palette,
+        }
+    }
+
+    fn step_result(status: CommandResultStatusDto, message: &str) -> CommandResultDto {
+        CommandResultDto {
+            status,
+            message: message.to_string(),
+            payload: None,
+            follow_up_commands: vec![],
+            pipeline_stages: None,
+            confirmation_required: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_macro_names_the_failing_step_and_its_reason() {
+        let actor = Actor::new(UserId::new());
+        let macro_id = MacroId::new();
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(stored_macro(
+                macro_id,
+                actor.user_id,
+                serde_json::json!([
+                    { "commandId": "chat.post_message", "args": { "text": "hello" } },
+                    { "commandId": "chat.post_message", "args": null }
+                ]),
+            )))
+        });
+        let mut cmd_svc = MockCommandService::new();
+        post_message_definition(&mut cmd_svc);
+        let mut calls = 0;
+        cmd_svc
+            .expect_execute_command()
+            .times(2)
+            .returning(move |_| {
+                calls += 1;
+                let result = if calls == 1 {
+                    Ok(step_result(CommandResultStatusDto::Success, "ok"))
+                } else {
+                    Err(ServiceError::Validation(
+                        "missing string arg `text`".to_string(),
+                    ))
+                };
+                Box::pin(async move { result })
+            });
+        let svc = service(repo, cmd_svc);
+
+        let result = svc.execute_macro(run_macro(actor, macro_id)).await.unwrap();
+
+        assert_eq!(result.status, CommandResultStatusDto::Error);
+        assert_eq!(
+            result.message,
+            "Step 2 (Post Message) failed: missing string arg `text`"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_macro_names_an_unknown_step_by_its_id() {
+        let actor = Actor::new(UserId::new());
+        let macro_id = MacroId::new();
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(stored_macro(
+                macro_id,
+                actor.user_id,
+                serde_json::json!([{ "commandId": "chat.gone", "args": null }]),
+            )))
+        });
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        cmd_svc
+            .expect_execute_command()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(ServiceError::NotFound) }));
+        let svc = service(repo, cmd_svc);
+
+        let result = svc.execute_macro(run_macro(actor, macro_id)).await.unwrap();
+
+        assert_eq!(result.status, CommandResultStatusDto::Error);
+        assert_eq!(result.message, "Step 1 (chat.gone) failed: not found");
+    }
+
+    #[tokio::test]
+    async fn execute_macro_stops_at_a_step_that_answers_error() {
+        let actor = Actor::new(UserId::new());
+        let macro_id = MacroId::new();
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(stored_macro(
+                macro_id,
+                actor.user_id,
+                serde_json::json!([
+                    { "commandId": "chat.post_message", "args": { "text": "one" } },
+                    { "commandId": "chat.post_message", "args": { "text": "two" } }
+                ]),
+            )))
+        });
+        let mut cmd_svc = MockCommandService::new();
+        post_message_definition(&mut cmd_svc);
+        cmd_svc.expect_execute_command().times(1).returning(|_| {
+            Box::pin(async { Ok(step_result(CommandResultStatusDto::Error, "boom")) })
+        });
+        let svc = service(repo, cmd_svc);
+
+        let result = svc.execute_macro(run_macro(actor, macro_id)).await.unwrap();
+
+        assert_eq!(result.status, CommandResultStatusDto::Error);
+        assert_eq!(result.message, "Step 1 (Post Message) failed: boom");
+    }
+
+    #[test]
+    fn a_step_error_reads_as_the_command_alone_would_say_it() {
+        assert_eq!(
+            step_error_reason(&ServiceError::Validation(
+                "missing string arg `text`".into()
+            )),
+            "missing string arg `text`"
+        );
+        assert_eq!(
+            step_error_reason(&ServiceError::ConfirmationFailed("wrong actor".into())),
+            "the step's confirmation failed"
+        );
+        assert_eq!(step_error_reason(&ServiceError::NotFound), "not found");
+    }
+
+    #[tokio::test]
+    async fn create_and_update_macro_refuse_an_unknown_command() {
+        let svc = service(MockMacroRepository::new(), MockCommandService::new());
+        let err = svc
+            .create_macro(macro_cmd(vec![
+                post_step(None),
+                MacroStepDto {
+                    command_id: "chat.nope".to_string(),
+                    args: None,
+                },
+            ]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == "Unknown command: chat.nope"),
+            "{err:?}"
+        );
+
+        let actor = Actor::new(UserId::new());
+        let macro_id = MacroId::new();
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(stored_macro(
+                macro_id,
+                actor.user_id,
+                serde_json::json!([{ "commandId": "chat.post_message", "args": null }]),
+            )))
+        });
+        let svc = service(repo, MockCommandService::new());
+        let err = svc
+            .update_macro(UpdateMacroCmd {
+                actor,
+                macro_id,
+                name: "Bounded".to_string(),
+                description: None,
+                steps: vec![MacroStepDto {
+                    command_id: "plugin.dev.example.x".to_string(),
+                    args: None,
+                }],
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: CommandSensitivityDto::Safe,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == "Unknown command: plugin.dev.example.x"),
             "{err:?}"
         );
     }

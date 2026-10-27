@@ -21,6 +21,17 @@ pub(super) fn user_command_exists_locally(command_id: &str) -> bool {
     command_id.starts_with("user.")
 }
 
+/// Whether `command_key` is `user.` followed by one or more lowercase letters, digits, `.`,
+/// `_` or `-`.
+pub(super) fn is_valid_user_command_key(command_key: &str) -> bool {
+    command_key.strip_prefix("user.").is_some_and(|key| {
+        !key.is_empty()
+            && key.bytes().all(|b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+            })
+    })
+}
+
 /// Refuses `steps` for the user command `command_key` when there are none, more than
 /// [`DefaultCommandService::MAX_USER_COMMAND_STEPS`], one without a command id or with one
 /// longer than 256 bytes, one whose arguments serialize to more than [`MAX_STEP_ARGS_BYTES`],
@@ -330,6 +341,18 @@ mod tests {
         assert!(user_command_exists_locally("user.my_command"));
         assert!(!user_command_exists_locally("chat.post_message"));
         assert!(!user_command_exists_locally(""));
+    }
+
+    #[test]
+    fn user_command_keys_take_lowercase_letters_digits_dots_dashes_and_underscores() {
+        assert!(is_valid_user_command_key("user.greet"));
+        assert!(is_valid_user_command_key("user.a-b_c.1"));
+        assert!(!is_valid_user_command_key("user."));
+        assert!(!is_valid_user_command_key("user.Bad"));
+        assert!(!is_valid_user_command_key("user.bad id"));
+        assert!(!is_valid_user_command_key("user.bad!"));
+        assert!(!is_valid_user_command_key("user.é"));
+        assert!(!is_valid_user_command_key("greet"));
     }
 
     #[test]

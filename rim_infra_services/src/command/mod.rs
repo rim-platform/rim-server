@@ -472,6 +472,11 @@ impl CommandService for DefaultCommandService {
             ));
         }
         ensure_command_id_size(key, "a user command id")?;
+        if !user_commands::is_valid_user_command_key(key) {
+            return Err(ServiceError::Validation(
+                "a user command id may use only lowercase letters, numbers, dots, dashes or underscores after `user.`".to_string(),
+            ));
+        }
         Self::validate_user_command_text(&cmd.title, &cmd.description)?;
         Self::validate_user_command_steps(key, &cmd.steps)?;
         if self

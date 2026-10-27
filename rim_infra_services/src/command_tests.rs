@@ -207,6 +207,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_user_command_refuses_an_id_with_other_characters() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let svc = service(
+            MockUserCommandRepository::new(),
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let err = svc
+            .create_user_command(CreateUserCommandCmd {
+                actor,
+                command_key: "user.Bad ID!".to_string(),
+                title: "Bad".to_string(),
+                description: "desc".to_string(),
+                steps: vec![UserCommandStepDto {
+                    command_id: "chat.post_message".to_string(),
+                    args: None,
+                }],
+            })
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                ServiceError::Validation(message)
+                    if message == "a user command id may use only lowercase letters, numbers, dots, dashes or underscores after `user.`"
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_command_keeps_working_for_a_stored_id_with_capitals() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let existing = UserCommand {
+            id: rim_core::command::model::UserCommandId::new(),
+            owner_user_id: actor.user_id,
+            command_key: "user.Old".to_string(),
+            title: "Old".to_string(),
+            description: "desc".to_string(),
+            steps_json: serde_json::json!([{ "command_id": "chat.create_group", "args": null }]),
+            is_enabled: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let updated = UserCommand {
+            title: "Old Updated".to_string(),
+            ..existing.clone()
+        };
+        let mut repo = MockUserCommandRepository::new();
+        let existing_for_lookup = existing.clone();
+        repo.expect_get_by_key_for_user()
+            .return_once(move |_, command_key| {
+                assert_eq!(command_key, "user.Old");
+                Ok(Some(existing_for_lookup))
+            });
+        repo.expect_list_for_user().returning(|_| Ok(vec![]));
+        let updated_for_return = updated.clone();
+        repo.expect_update_user_command()
+            .return_once(move |_, _| Ok(updated_for_return));
+        let svc = service(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+        );
+
+        let result = svc
+            .update_user_command(UpdateUserCommandCmd {
+                actor,
+                command_id: "user.Old".to_string(),
+                title: "Old Updated".to_string(),
+                description: "desc".to_string(),
+                steps: vec![UserCommandStepDto {
+                    command_id: "chat.create_group".to_string(),
+                    args: None,
+                }],
+                is_enabled: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.title, "Old Updated");
+        assert_eq!(result.command_key, "user.Old");
+    }
+
+    #[tokio::test]
     async fn execute_builtin_backend_command_posts_message() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let actor_user_id = actor.user_id;
