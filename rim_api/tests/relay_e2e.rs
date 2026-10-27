@@ -13,7 +13,8 @@
 //! filed again from a resent invite after it expired, and goes when they leave the group. A
 //! member on another relay is added to an encrypted group of the direct space by principal id,
 //! and a plaintext group refuses them. What someone a user blocked started on another server
-//! stops reaching the user's queue until the unblock.
+//! stops reaching the user's queue until the unblock, and an operator's unblock clears the
+//! requests its block ignored.
 //!
 //! Run with:
 //! ```sh
@@ -2693,6 +2694,89 @@ async fn what_a_blocked_person_started_on_another_server_stops_reaching_the_queu
         .map(|(s, _, _)| s)
         .collect();
     assert_eq!(after, vec![1001, 1007, 1008, 1009]);
+
+    a.stop().await;
+    b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operators_unblock_clears_the_requests_its_block_ignored() {
+    let (first, second) = databases_with(RESET).await;
+    let a = start(&first, open_registration).await;
+    let b = start(&second, open_registration).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&b, "bob", 2).await;
+    let carol = sign_up(&b, "carol", 3).await;
+    let dave = sign_up(&b, "dave", 4).await;
+    let ids = async |person: &Person, status: &str| -> Vec<Value> {
+        person.ok(REQUESTS, json!({ "status": status })).await["dmRequests"]
+            .as_array()
+            .expect("requests")
+            .iter()
+            .map(|r| r["id"].clone())
+            .collect()
+    };
+
+    let bobs_conv = alice.start_dm(&bob, &b, true).await;
+    let to_bob = bob.pending_request(&alice).await;
+    alice.start_dm(&carol, &b, true).await;
+    let to_carol = carol.pending_request(&alice).await;
+    alice.start_dm(&dave, &b, true).await;
+    let to_dave = dave.pending_request(&alice).await;
+    dave.ok(
+        "mutation($id: ID!) { ignoreDmRequest(id: $id) { status } }",
+        json!({ "id": to_dave["id"] }),
+    )
+    .await;
+
+    let blocked = operator(
+        &second,
+        "principal",
+        &["block", &alice.principal(), "--reason", "spam"],
+    )
+    .await;
+    assert!(
+        blocked.contains("ignored 2 pending DM requests from it"),
+        "{blocked}"
+    );
+    carol
+        .ok(
+            "mutation($p: String!) { blockPrincipal(principalId: $p) }",
+            json!({ "p": alice.principal() }),
+        )
+        .await;
+    let unblocked = operator(&second, "principal", &["unblock", &alice.principal()]).await;
+    assert!(unblocked.contains("unblocked"), "{unblocked}");
+    assert!(
+        unblocked.contains("cleared 1 DM requests its block ignored"),
+        "{unblocked}"
+    );
+    assert!(ids(&bob, "PENDING").await.is_empty());
+    assert!(ids(&bob, "IGNORED").await.is_empty());
+    assert!(ids(&carol, "IGNORED").await.contains(&to_carol["id"]));
+    assert!(ids(&dave, "IGNORED").await.contains(&to_dave["id"]));
+
+    assert_eq!(
+        deliver_as(
+            &a,
+            &b,
+            &bob,
+            1001,
+            json!({
+                "type": "NewMessage",
+                "workspace_id": anonymous_direct_space(&a).await,
+                "conversation_id": bobs_conv,
+                "conversation_type": "direct",
+            })
+        )
+        .await,
+        Vec::<String>::new()
+    );
+    let again = bob.pending_request(&alice).await;
+    assert_eq!(again["id"], to_bob["id"]);
+    let held = again["heldItems"].as_array().expect("held");
+    assert_eq!(held.len(), 2, "{again}");
+    assert_eq!(verify_item(&a, &held[0]).event["type"], json!("DmInvite"));
 
     a.stop().await;
     b.stop().await;

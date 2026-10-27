@@ -2411,3 +2411,59 @@ async fn a_dm_or_group_a_blocked_person_started_is_hidden_in_any_space() {
     let listed = inbox().await;
     assert!(listed.contains(&dm) && listed.contains(&group));
 }
+
+#[tokio::test]
+async fn a_users_unblock_clears_nothing_while_the_operator_blocks() {
+    use rim_core::relay::repository::RelayAbuseRepository;
+    use rim_infra_db::sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository;
+
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let abuse = SeaOrmRelayAbuseRepository::new(ctx.db.clone());
+    let in_30_days = Utc::now() + Duration::days(30);
+    let request = repo
+        .insert_request(NewDmRequest {
+            status: DmRequestStatus::Pending,
+            user_id: bob.id,
+            from_principal_id: "rimp1_alice".to_string(),
+            card_payload: "{}".to_string(),
+            card_signature: "ed25519:c".to_string(),
+            host_server_id: HOST.to_string(),
+            conversation_id: Uuid::now_v7(),
+            expires_at: in_30_days,
+        })
+        .await
+        .unwrap();
+    let env = repo
+        .insert_envelope(envelope(Some(1), Uuid::now_v7()))
+        .await
+        .unwrap();
+    repo.insert_item(NewRelayItem {
+        request_id: Some(request.id),
+        ..item(bob.id, env)
+    })
+    .await
+    .unwrap();
+    repo.block(bob.id, "rimp1_alice").await.unwrap();
+    repo.ignore_pending_from(bob.id, "rimp1_alice", in_30_days)
+        .await
+        .unwrap();
+    abuse.block_principal("rimp1_alice", "spam").await.unwrap();
+    repo.unblock(bob.id, "rimp1_alice").await.unwrap();
+
+    assert_eq!(
+        repo.clear_ignored_from(bob.id, "rimp1_alice", in_30_days)
+            .await
+            .unwrap(),
+        0,
+        "the operator still blocks the principal"
+    );
+    abuse.unblock_principal("rimp1_alice").await.unwrap();
+    assert_eq!(
+        repo.clear_ignored_from(bob.id, "rimp1_alice", in_30_days)
+            .await
+            .unwrap(),
+        1
+    );
+}

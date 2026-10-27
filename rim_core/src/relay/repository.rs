@@ -164,7 +164,8 @@ pub trait RelayRepository: Send + Sync {
 
     /// Clear every ignored request from a principal that still holds its invite: pending again,
     /// decided as it is filed so it is neither listed nor counted, expiring at `expires_at`. The
-    /// next item of its conversation files it again ([`Self::refile_request`]). Returns how many.
+    /// next item of its conversation files it again ([`Self::refile_request`]). Nothing while the
+    /// operator blocks the principal. Returns how many.
     async fn clear_ignored_from(
         &self,
         user_id: UserId,
@@ -436,6 +437,16 @@ pub trait RelayAbuseRepository: Send + Sync {
     /// Ignore every pending DM request from a principal, for every local user, deleting their
     /// held items but each request's invite. Returns how many requests.
     async fn ignore_requests_from(
+        &self,
+        principal_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
+
+    /// Clear the requests a principal's block ignored: ignored since the block began, still
+    /// holding their invite, for every user who has not blocked the principal themselves. Pending
+    /// again, decided as filed, expiring at `expires_at`; the next item of such a conversation files
+    /// it again. Run before the block is lifted. Returns how many.
+    async fn clear_requests_ignored_by_block(
         &self,
         principal_id: &str,
         expires_at: DateTime<Utc>,

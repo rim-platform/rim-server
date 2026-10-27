@@ -158,6 +158,25 @@ impl RelayAbuseRepository for SeaOrmRelayAbuseRepository {
         .await
     }
 
+    async fn clear_requests_ignored_by_block(
+        &self,
+        principal_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64> {
+        self.execute(
+            "UPDATE relay_dm_request r SET status = 'pending', created_at = now(), \
+             decided_at = now(), expires_at = $2 \
+             FROM relay_principal_block pb \
+             WHERE pb.principal_id = $1 AND r.from_principal_id = $1 AND r.status = 'ignored' \
+               AND r.decided_at >= pb.created_at \
+               AND EXISTS (SELECT 1 FROM relay_item i WHERE i.request_id = r.id) \
+               AND NOT EXISTS (SELECT 1 FROM relay_block b \
+                               WHERE b.user_id = r.user_id AND b.principal_id = $1)",
+            vec![principal_id.into(), expires_at.into()],
+        )
+        .await
+    }
+
     async fn insert_report(&self, report: NewAbuseReport) -> RepoResult<AbuseReport> {
         let reporter: Option<Uuid> = report.reporter_user_id.map(Into::into);
         let request: Option<Uuid> = report.request_id.map(Into::into);

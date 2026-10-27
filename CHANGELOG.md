@@ -68,6 +68,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   to there: from then on the relay drops every item of such a conversation, and acknowledges it
   so their server does not send it again, until the unblock. Conversations someone else started
   keep flowing. The history stays at their server.
+- `rim_server principal unblock` (and `instanceUnblockPrincipal`) clears the DM requests the block
+  ignored, for every recipient who has not blocked the principal themselves: the next item of
+  such a conversation files it again as a request. The command prints the count, and
+  `relay.principal_unblocked` records it as `cleared_requests`. A user's `unblockPrincipal`
+  clears nothing while the operator blocks the principal.
 - A relay ends a person's subscription to a workspace elsewhere when their `MemberLeft` arrives
   on their own stream, instead of letting it lapse (`docs/specs/server-to-server-v1.md`,
   "Subscriptions").

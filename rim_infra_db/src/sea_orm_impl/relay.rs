@@ -746,7 +746,9 @@ impl RelayRepository for SeaOrmRelayRepository {
             "UPDATE relay_dm_request r SET status = 'pending', created_at = now(), \
              decided_at = now(), expires_at = $3 \
              WHERE r.user_id = $1 AND r.from_principal_id = $2 AND r.status = 'ignored' \
-             AND EXISTS (SELECT 1 FROM relay_item i WHERE i.request_id = r.id)",
+             AND EXISTS (SELECT 1 FROM relay_item i WHERE i.request_id = r.id) \
+             AND NOT EXISTS (SELECT 1 FROM relay_principal_block pb \
+                             WHERE pb.principal_id = r.from_principal_id)",
             vec![uuid(user_id), principal_id.into(), expires_at.into()],
         )
         .await
