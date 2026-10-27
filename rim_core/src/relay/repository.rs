@@ -235,7 +235,7 @@ pub trait RelayRepository: Send + Sync {
     async fn request_pending(&self, user_id: UserId, conversation_id: Uuid) -> RepoResult<bool>;
 
     /// Whether a conversation stays out of a local user's list: their request for it is pending
-    /// or ignored, or they blocked the direct-space conversation's creator.
+    /// or ignored, or it is a DM or group whose creator they blocked.
     async fn conversation_hidden(&self, user_id: UserId, conversation_id: Uuid)
     -> RepoResult<bool>;
 

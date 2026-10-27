@@ -2282,3 +2282,132 @@ async fn posting_takes_back_a_cleared_request_only() {
             .unwrap()
     );
 }
+
+#[tokio::test]
+async fn a_dm_or_group_a_blocked_person_started_is_hidden_in_any_space() {
+    use rim_core::conversation::model::{ConversationType, NewConversation};
+    use rim_core::conversation::repository::ConversationRepository;
+    use rim_core::conversation_member::repository::ConversationMemberRepository;
+    use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
+    use rim_core::notification::model::{
+        DigestFrequency, NewUserNotification, NotificationReason, UserNotificationSettings,
+    };
+    use rim_core::notification::repository::NotificationRepository;
+    use rim_core::repository::pagination::PageDir;
+    use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
+    use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
+    use rim_infra_db::sea_orm_impl::conversation_read_state::SeaOrmConversationReadStateRepository;
+    use rim_infra_db::sea_orm_impl::notification::SeaOrmNotificationRepository;
+
+    let ctx = support::TestCtx::new().await;
+    let acme = ctx.create_server("Acme").await.id;
+    let alice = ctx.create_key_only_user("alice", "rimp1_alice").await;
+    let bob = ctx.create_user("bob").await;
+    let conversations = SeaOrmConversationRepository::new(ctx.db.clone());
+    let members = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+    let notifications = SeaOrmNotificationRepository::new(ctx.db.clone());
+    notifications
+        .upsert_settings(UserNotificationSettings {
+            digest: DigestFrequency::Hourly,
+            ..UserNotificationSettings::defaults(bob.id, acme, Utc::now())
+        })
+        .await
+        .unwrap();
+    let mut created = Vec::new();
+    for (kind, creator) in [
+        (ConversationType::Direct, alice.id),
+        (ConversationType::Group, alice.id),
+        (ConversationType::Channel, alice.id),
+        (ConversationType::Group, bob.id),
+    ] {
+        let conversation = conversations
+            .create_conversation(NewConversation {
+                server_id: acme,
+                conversation_type: kind,
+                title: None,
+                is_private: kind != ConversationType::Channel,
+                created_by: Some(creator),
+                encrypted: false,
+            })
+            .await
+            .unwrap();
+        members.add_member(conversation.id, bob.id).await.unwrap();
+        let message = ctx
+            .create_message(conversation.id, alice.id, "hello <@bob>")
+            .await;
+        notifications
+            .create_notifications(
+                &[NewUserNotification {
+                    user_id: bob.id,
+                    server_id: acme,
+                    conversation_id: conversation.id,
+                    message_id: message.id,
+                    reason: NotificationReason::Direct,
+                }],
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        created.push(conversation.id);
+    }
+    let [dm, group, channel, bobs] = created[..] else {
+        unreachable!("four conversations");
+    };
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let reads = SeaOrmConversationReadStateRepository::new(ctx.db.clone());
+    // Whether each of `dm`, `group`, `channel` and `bobs` is hidden, then what Bob sees of the
+    // four together: notifications listed, the bell, digest rows and the unread conversations.
+    let seen = async || {
+        let mut hidden = Vec::new();
+        for id in [dm, group, channel, bobs] {
+            hidden.push(repo.conversation_hidden(bob.id, id.into()).await.unwrap());
+        }
+        let (listed, bell, digest_rows, _, _) = visible_signals(&ctx.db, bob.id, acme, dm).await;
+        let unread: HashSet<_> = reads
+            .get_unread_counts(bob.id, &[dm, group, channel, bobs])
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|(_, n)| *n > 0)
+            .map(|(id, _)| id)
+            .collect();
+        (hidden, (listed, bell, digest_rows), unread)
+    };
+    let inbox = async || -> Vec<rim_core::conversation::model::ConversationId> {
+        conversations
+            .list_inbox_conversations_for_user(bob.id, acme, 50, PageDir::After, None)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    };
+    let (hidden, signals, unread) = seen().await;
+    assert_eq!(hidden, [false; 4]);
+    assert_eq!(signals, (4, 4, 4));
+    assert_eq!(unread, HashSet::from([dm, group, channel, bobs]));
+    let listed = inbox().await;
+    assert!(listed.contains(&dm) && listed.contains(&group) && listed.contains(&bobs));
+
+    repo.block(bob.id, "rimp1_alice").await.unwrap();
+    let (hidden, signals, unread) = seen().await;
+    assert_eq!(
+        hidden,
+        [true, true, false, false],
+        "her DM and group are hidden, her channel and Bob's group are not"
+    );
+    assert_eq!(signals, (2, 2, 2));
+    assert_eq!(unread, HashSet::from([channel, bobs]));
+    let listed = inbox().await;
+    assert!(listed.contains(&bobs));
+    assert!(!listed.contains(&dm) && !listed.contains(&group));
+
+    repo.unblock(bob.id, "rimp1_alice").await.unwrap();
+    let (hidden, signals, unread) = seen().await;
+    assert_eq!(hidden, [false; 4]);
+    assert_eq!(signals, (4, 4, 4));
+    assert_eq!(unread.len(), 4);
+    let listed = inbox().await;
+    assert!(listed.contains(&dm) && listed.contains(&group));
+}

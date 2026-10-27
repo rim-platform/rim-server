@@ -60,6 +60,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   `sendMessage`, `replyToMessage`, `forwardMessage`, `sendEncryptedMessage` and `toggleReaction`
   answer `FORBIDDEN` ("they do not take direct messages from you"), as starting the DM already
   did.
+- A DM or group started by someone you blocked is hidden until you unblock them, in a workspace
+  or the default workspace too, not only in the direct space: it leaves your conversation list,
+  live events, notifications and unread counts, and you post nothing into it. Channels are not
+  affected.
 - A relay ends a person's subscription to a workspace elsewhere when their `MemberLeft` arrives
   on their own stream, instead of letting it lapse (`docs/specs/server-to-server-v1.md`,
   "Subscriptions").

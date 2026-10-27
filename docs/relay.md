@@ -175,7 +175,7 @@ events out of their `workspaceEvents`, and its notifications, mentions and unrea
 notification list, the bell, `unreadCounts` and the email digest; its first events are held with the
 request. Everything appears once they accept. They may read the conversation before they decide, but
 post nothing into it: while their request for it is pending or ignored, or they blocked whoever
-started it, `sendMessage`, `replyToMessage`, `forwardMessage` into it, `sendEncryptedMessage` and
+started it (in any space here, for DMs and groups: "What a blocked person started"), `sendMessage`, `replyToMessage`, `forwardMessage` into it, `sendEncryptedMessage` and
 `toggleReaction` answer `FORBIDDEN` ("accept the message request before posting here"), and
 `startTyping` answers `false` without telling anyone. Someone the other member of a DM blocked posts
 nothing into it either: the same mutations answer `FORBIDDEN` ("they do not take direct messages
@@ -192,6 +192,17 @@ on; with it off, conversations in the direct space are live at once.
 | `unblockPrincipal` | The block lifted; every ignored request from the principal that still keeps its invite, ignored by hand or by the block, is cleared: listed and counted nowhere, until the next item of its conversation files it again as a new pending request holding that item. Nothing dropped while it was ignored comes back. A conversation hosted elsewhere keeps at its host what they wrote meanwhile, which reading it there shows. Unblocking someone not blocked changes nothing |
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored. Once per user and request: a second report is `CONFLICT` |
 | Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request; for a conversation this server hosts, see below |
+
+**What a blocked person started.** DMs and groups someone the user blocked started are hidden and
+silenced until the unblock, wherever they are hosted. Channels are not.
+
+**Here,** in any space this server hosts (the direct space, a workspace or the default
+workspace), the conversation's creator decides. It is left out of the user's `inboxConversations`
+and `workspaceEvents`, and out of their notifications, bell, digest and unread counts. The user
+posts nothing into it: the posting mutations answer `FORBIDDEN` as for an undecided request, and
+`startTyping` answers `false`. The person they blocked still sees the conversation. In a group
+they still post, for its other members. In a DM their posts are refused ("they do not take
+direct messages from you").
 
 A request of a conversation this server hosts never lapses into a conversation. Its recipient is
 a member from the start, and only the request keeps the conversation out of their view. When such

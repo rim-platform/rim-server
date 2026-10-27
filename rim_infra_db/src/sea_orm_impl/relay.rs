@@ -172,8 +172,8 @@ struct HolderRow {
 }
 
 /// SQL that is true when the conversation `conversation_id` stays out of the user `user_id`'s
-/// view: their request for it is pending or ignored, or they blocked the creator of a
-/// direct-space conversation. Both arguments are SQL expressions (a placeholder or a column).
+/// view: their request for it is pending or ignored, or it is a DM or group whose creator they
+/// blocked. Both arguments are SQL expressions (a placeholder or a column).
 pub fn hidden(user_id: &str, conversation_id: &str) -> String {
     format!(
         r#"(EXISTS (SELECT 1 FROM relay_dm_request r
@@ -182,8 +182,7 @@ pub fn hidden(user_id: &str, conversation_id: &str) -> String {
     OR EXISTS (SELECT 1 FROM relay_block b
         JOIN "user" cu ON cu.principal_id = b.principal_id
         JOIN conversation hc ON hc.id = {conversation_id} AND hc.created_by = cu.id
-        JOIN server s ON s.id = hc.server_id AND s.kind = 'direct'
-        WHERE b.user_id = {user_id}))"#
+        WHERE b.user_id = {user_id} AND hc.conversation_type IN ('direct', 'group')))"#
     )
 }
 

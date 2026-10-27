@@ -110,25 +110,12 @@ impl Subscription {
         let rx = broadcaster.subscribe();
         let ws_id = workspace_id.to_string();
         let subscriber_user_id = actor.to_string();
-        // A conversation in the subscriber's request inbox (in the direct space also one from a
-        // creator they blocked) stays quiet until they accept it. In a workspace only its DMs,
-        // and in the default workspace its groups too, go through the inbox: events of the
-        // other conversations are not checked.
+        // A DM or group in the subscriber's request inbox, or one whose creator they blocked,
+        // stays quiet until they accept it or lift the block; channels are not checked.
         let federation = ctx.data::<crate::federation::FederationContext>().ok();
         let in_direct_space =
             federation.is_some_and(|f| f.info.direct_space_id.to_string() == ws_id);
         let inbox = federation.map(|f| Arc::clone(&f.relay));
-        let in_default_workspace =
-            match ctx.data::<Arc<dyn rim_services::default_workspace::DefaultWorkspaceService>>() {
-                Ok(default_workspace) => {
-                    default_workspace
-                        .current()
-                        .await
-                        .map_err(crate::errors::map_service_error)?
-                        == Some(server_id)
-                }
-                Err(_) => false,
-            };
 
         // The raw receiver is read directly so a lag can recheck the membership and keep the
         // stream open for a subscriber who is still a member.
@@ -166,8 +153,7 @@ impl Subscription {
                                 let through_inbox = in_direct_space
                                     || event.conversation_type().is_none_or(|t| {
                                         t == rim_core::conversation::model::ConversationType::Direct.as_str()
-                                            || (in_default_workspace
-                                                && t == rim_core::conversation::model::ConversationType::Group.as_str())
+                                            || t == rim_core::conversation::model::ConversationType::Group.as_str()
                                     });
                                 let conversation_id = inbox.as_ref().filter(|_| through_inbox).and_then(|_| {
                                     serde_json::to_value(&event)
