@@ -262,7 +262,7 @@ async fn create_pipeline_returns_an_enabled_pipeline_with_every_field() {
         ] },
         "actions": [
             { "commandId": "chat.post_message", "args": { "text": "seen" } },
-            { "commandId": "chat.react" },
+            { "commandId": "chat.toggle_reaction" },
         ],
         "cooldownSecs": 30,
     });
@@ -292,7 +292,7 @@ async fn create_pipeline_returns_an_enabled_pipeline_with_every_field() {
         json!([
             { "actionType": "ExecuteCommand", "commandId": "chat.post_message",
               "args": { "text": "seen" } },
-            { "actionType": "ExecuteCommand", "commandId": "chat.react", "args": null },
+            { "actionType": "ExecuteCommand", "commandId": "chat.toggle_reaction", "args": null },
         ])
     );
     assert_eq!(p["enabled"], true);
@@ -538,7 +538,7 @@ async fn update_pipeline_replaces_the_definition_and_keeps_state_and_authorship(
     let body = json!({
         "name": "after",
         "trigger": { "kind": "MESSAGE_DELETED" },
-        "actions": [{ "commandId": "chat.react", "args": { "emoji": "x" } }],
+        "actions": [{ "commandId": "chat.toggle_reaction", "args": { "emoji": "x" } }],
     });
     let data = f.ok(&f.ws.alice, f.update_call(&id, body)).await;
     let updated = &data["pipeline"];
@@ -557,7 +557,7 @@ async fn update_pipeline_replaces_the_definition_and_keeps_state_and_authorship(
     );
     assert_eq!(
         updated["actions"],
-        json!([{ "actionType": "ExecuteCommand", "commandId": "chat.react",
+        json!([{ "actionType": "ExecuteCommand", "commandId": "chat.toggle_reaction",
                  "args": { "emoji": "x" } }])
     );
     assert_eq!(
@@ -609,6 +609,45 @@ async fn update_pipeline_validates_like_create() {
         )
     );
     assert_eq!(f.list_names(&f.ws.alice, None).await, ["p"]);
+}
+
+/// `createPipeline` and `updatePipeline` refuse an action naming no builtin command, a plugin
+/// command included, with `VALIDATION` naming the id; the stored actions stay as they were.
+#[tokio::test]
+async fn create_and_update_pipeline_refuse_an_unknown_command() {
+    let f = setup().await;
+    let unknown = |command_id: &str| {
+        with(
+            minimal_body("p"),
+            json!({ "actions": [{ "commandId": command_id }] }),
+        )
+    };
+    let err = exec_err(
+        &f.schema,
+        f.ws.alice.call(f.create_call(unknown("chat.react"))),
+    )
+    .await;
+    assert_eq!(
+        err,
+        (
+            "VALIDATION".to_string(),
+            "Unknown command: chat.react".to_string()
+        )
+    );
+
+    let created = f.create(&f.ws.alice, minimal_body("p")).await;
+    let call = f.update_call(&id_of(&created), unknown("plugin.dev.example.x"));
+    let err = exec_err(&f.schema, f.ws.alice.call(call)).await;
+    assert_eq!(
+        err,
+        (
+            "VALIDATION".to_string(),
+            "Unknown command: plugin.dev.example.x".to_string()
+        )
+    );
+    let listed = f.list(&f.ws.alice).await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["actions"], created["actions"]);
 }
 
 #[tokio::test]

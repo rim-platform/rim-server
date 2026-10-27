@@ -16,11 +16,11 @@ use std::time::Duration;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
+use support::TestCtx;
 use support::graphql::{Call, Caller, exec_ok};
 use support::nodes::{Node, S2S_TABLES, start};
 use support::relay::eventually;
 use support::roles::{Roles, create_channel};
-use support::{TestCtx, unknown_id};
 
 const CREATE_PIPELINE: &str = r#"
 mutation Create($input: CreatePipelineInput!) { pipeline: createPipeline(input: $input) { id } }
@@ -316,7 +316,7 @@ async fn the_eleventh_firing_within_a_minute_disables_the_pipeline() {
 async fn a_failing_action_does_not_stop_the_other_pipelines() {
     let f = setup().await;
     let broken = f
-        .pipeline(&f.ws.alice, &unknown_id(), json!({}), json!({}))
+        .pipeline(&f.ws.alice, "state.set", json!({}), json!({}))
         .await;
     let probe = f.probe(json!({})).await;
 

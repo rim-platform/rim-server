@@ -1,4 +1,5 @@
-//! Through-the-stack e2e tests for reading user commands: `userCommand` and `userCommands`.
+//! Through-the-stack e2e tests for user commands: the ids `createUserCommand` takes, and
+//! reading them with `userCommand` and `userCommands`.
 //!
 //! Run with:
 //! ```sh
@@ -14,7 +15,7 @@ use rim_api::AppSchema;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::TestCtx;
-use support::graphql::{Caller, anonymous_request, assert_each_refused, exec_ok};
+use support::graphql::{Caller, anonymous_request, assert_each_refused, exec_err, exec_ok};
 use support::roles::Roles;
 
 const CREATE_USER_COMMAND: &str = r#"
@@ -180,6 +181,30 @@ async fn user_commands_lists_the_callers_commands_sorted() {
         .map(|command| command["id"].clone())
         .collect();
     assert_eq!(ids, [json!("user.alpha"), json!("user.zulu")]);
+}
+
+/// `createUserCommand` refuses an id with capitals or spaces after `user.` with `VALIDATION`.
+#[tokio::test]
+async fn create_user_command_refuses_capitals_and_spaces() {
+    let f = setup().await;
+    let input = json!({
+        "commandId": "user.Bad ID", "title": "Bad", "description": "Bad id",
+        "steps": greet_steps(),
+    });
+    let err = exec_err(
+        &f.schema,
+        f.ws.bob
+            .request(CREATE_USER_COMMAND, json!({ "input": input })),
+    )
+    .await;
+    assert_eq!(
+        err,
+        (
+            "VALIDATION".to_string(),
+            "a user command id may use only lowercase letters, numbers, dots, dashes or underscores after `user.`".to_string()
+        )
+    );
+    assert_eq!(f.user_commands(&f.ws.bob).await, json!([]));
 }
 
 /// Both reads answer `UNAUTHENTICATED` without a session.

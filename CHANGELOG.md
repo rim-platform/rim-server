@@ -26,6 +26,16 @@ tag `v<version>`, the version every crate in the workspace carries.
 - The web client is versioned and deployed on its own: `RIM_WEB_VERSION` picks the rim-ui
   release (unset: `RIM_VERSION`), rim-deploy also follows rim-ui releases and deploys the web
   container alone, and upgrade.sh no longer needs a rim-web image at the server's version.
+- `createMacro`, `updateMacro`, `createPipeline` and `updatePipeline` refuse a step or action
+  naming no builtin command with `VALIDATION` "Unknown command: <id>"; plugin commands, which
+  run only in the client, are refused too.
+- `createUserCommand` takes only lowercase letters, numbers, dots, dashes and underscores after
+  `user.`; existing user commands keep their ids.
+
+### Fixed
+
+- A failed `executeMacro` names the step and its error: "Step <n> (<command title>) failed:
+  <reason>", instead of "macro `<name>` failed on a step".
 
 ## [0.0.4] - 2026-10-26
 

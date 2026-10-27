@@ -233,9 +233,12 @@ commands in the same shape, enabled or not, sorted by id.
 
 Two things compose commands, and only one of them is a command:
 
-- a **user command** (`createUserCommand`, id `user.<key>`) is a command: it is listed with the
-  others, so it shows in the palette and a keybind can name it; its steps run in order, each
-  with its own arguments, in the context the user command runs in
+- a **user command** (`createUserCommand`, id `user.<key>`; `<key>` is one or more lowercase
+  letters, numbers, dots, dashes or underscores, and `createUserCommand` refuses any other id
+  with `VALIDATION` ("a user command id may use only lowercase letters, numbers, dots, dashes or
+  underscores after `user.`"). User commands saved before this rule keep their ids.) is a
+  command: it is listed with the others, so it shows in the palette and a keybind can name it;
+  its steps run in order, each with its own arguments, in the context the user command runs in
 - a **macro** (`createMacro`, `MacroDef`) is a list of up to 20 steps, each a builtin command id
   with its own arguments; a step may not name another macro or a user command, so one run
   performs at most 20 builtin steps. It is not in the command registry, so the palette does not
@@ -275,7 +278,13 @@ that names no command.
 
 `createMacro` and `updateMacro` refuse a step naming a user command with a `VALIDATION` error,
 "macro steps must not reference user commands"; `executeMacro` refuses a stored macro with such
-a step the same way, before any of its steps runs.
+a step the same way, before any of its steps runs. A step must name a builtin command:
+`createMacro` and `updateMacro` refuse any other id, a plugin command included, since plugin
+commands run only in the client, with `VALIDATION` "Unknown command: <id>". A step that fails
+stops the run: later steps do not run, and `executeMacro` answers `ERROR` with the message
+`Step <n> (<title>) failed: <reason>`, where `n` counts from 1, the title is the command's
+registry title (its id when the registry has none) and the reason is the step's own error. A
+macro saved before the check with an unknown step fails at that step the same way.
 
 A macro run asks for one confirmation up front when the macro's own `sensitivity` is
 `Restricted` or when any step needs one under the confirmation gate below, judged with the
@@ -307,8 +316,10 @@ JSON>}`.
 A pipeline action may not name a user command or a macro: each action runs as its own command
 call with its own budget of 100 builtin steps, and a pipeline fires on events other people cause.
 `createPipeline` and `updatePipeline` refuse such an action with "pipeline actions must not
-reference user commands or macros". A pipeline saved before these limits runs at most its first
-10 actions and skips an action naming a user command or a macro.
+reference user commands or macros". An action must name a builtin command: `createPipeline` and
+`updatePipeline` refuse any other id, a plugin command included, with `VALIDATION` "Unknown
+command: <id>". A pipeline saved before these limits runs at most its first 10 actions and skips
+an action naming a user command or a macro.
 
 The server keeps at most 32 unanswered confirmation challenges per user; issuing one more drops
 that user's challenge closest to expiry, which then answers `CONFIRMATION_STALE`. A pipeline's

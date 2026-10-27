@@ -16,8 +16,8 @@ use rim_core::server_feature::model::ServerFeature;
 use rim_services::auth::dto::RegistrationMode;
 
 use support::graphql::{
-    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err_code, exec_ok,
-    merged,
+    Caller, anonymous_request, assert_each_refused, assert_each_refused_as, exec_err,
+    exec_err_code, exec_ok, merged,
 };
 use support::roles::{Roles, create_channel};
 use support::{TestCtx, unknown_id};
@@ -293,7 +293,7 @@ async fn macro_roots_refuse_non_members() {
 async fn create_macro_returns_the_macro_and_lists_it_for_its_author() {
     let f = setup().await;
     let before = chrono::Utc::now();
-    let steps = json!([f.post_step("standup"), { "commandId": "chat.mark_read" }]);
+    let steps = json!([f.post_step("standup"), { "commandId": "chat.mark_as_read" }]);
     let created = f
         .create_with(
             &f.ws.bob,
@@ -315,7 +315,7 @@ async fn create_macro_returns_the_macro_and_lists_it_for_its_author() {
     assert_eq!(created["description"], json!("post the standup note"));
     assert_eq!(
         created["steps"],
-        json!([f.post_step("standup"), { "commandId": "chat.mark_read", "args": null }])
+        json!([f.post_step("standup"), { "commandId": "chat.mark_as_read", "args": null }])
     );
     assert_eq!(created["aiCallable"], json!(true));
     assert_eq!(created["nlDescription"], json!("posts the standup note"));
@@ -384,6 +384,19 @@ async fn create_macro_validates_name_and_steps() {
     f.create(&f.ws.bob, &"n".repeat(128), f.post_steps(20))
         .await;
     assert_eq!(f.mine(&f.ws.bob).await.len(), 1);
+}
+
+/// `createMacro` refuses a step naming no builtin command with `VALIDATION`, naming the id,
+/// and saves nothing.
+#[tokio::test]
+async fn create_macro_refuses_an_unknown_command() {
+    let f = setup().await;
+    let steps = json!([f.post_step("x"), { "commandId": "chat.mark_read" }]);
+    let vars = f.create_vars("unknown", steps, json!({}));
+    let (code, message) = exec_err(&f.schema, f.ws.bob.request(CREATE_MACRO, vars)).await;
+    assert_eq!(code, "VALIDATION");
+    assert_eq!(message, "Unknown command: chat.mark_read");
+    assert!(f.mine(&f.ws.bob).await.is_empty());
 }
 
 /// A second macro with the same name for the same user in the same workspace answers
@@ -518,20 +531,27 @@ async fn execute_macro_runs_every_step() {
     assert_eq!(f.channel_texts().await, vec!["first", "second"]);
 }
 
-/// A step that fails stops the macro: the answer is `ERROR` and later steps do not run.
+/// A step that fails stops the macro: the answer is `ERROR`, its message names the step and
+/// its error, and later steps do not run.
 #[tokio::test]
 async fn execute_macro_stops_at_the_first_failing_step() {
     let f = setup().await;
     let steps = json!([
         f.post_step("before"),
-        { "commandId": "no.such_command" },
+        {
+            "commandId": "chat.post_message",
+            "args": { "server_id": f.ws.server_id, "conversation_id": f.channel_id },
+        },
         f.post_step("after"),
     ]);
     let created = f.create(&f.ws.bob, "broken", steps).await;
 
     let result = f.execute(id(&created), json!({})).await;
     assert_eq!(result["status"], json!("ERROR"));
-    assert_eq!(result["message"], json!("macro `broken` failed on a step"));
+    assert_eq!(
+        result["message"],
+        json!("Step 2 (Post Message) failed: missing string arg `text`")
+    );
     assert_eq!(f.channel_texts().await, vec!["before"]);
 }
 

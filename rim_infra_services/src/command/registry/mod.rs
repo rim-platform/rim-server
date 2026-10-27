@@ -28,6 +28,13 @@ pub(crate) fn builtin_commands() -> Vec<CommandDefinitionDto> {
     defs
 }
 
+/// Whether `command_id` names a builtin command.
+pub(crate) fn is_builtin_command(command_id: &str) -> bool {
+    builtin_commands()
+        .iter()
+        .any(|definition| definition.id == command_id)
+}
+
 /// Returns the IDs of every command flagged `ai_callable: true`,
 /// in registration order. Pure helper so the audit emission can be tested
 /// without capturing a tracing subscriber.
@@ -158,6 +165,15 @@ mod tests {
                     "{required:?} {role} in the direct space"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn is_builtin_command_knows_only_registry_ids() {
+        assert!(is_builtin_command("chat.post_message"));
+        assert!(is_builtin_command("workspace.toggle_sidebar"));
+        for id in ["chat.nope", "user.x", "macro.x", "plugin.a.b", ""] {
+            assert!(!is_builtin_command(id), "{id}");
         }
     }
 
