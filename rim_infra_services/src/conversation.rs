@@ -1098,9 +1098,6 @@ impl ConversationService for DefaultConversationService {
             )
             .await?;
         }
-        if self.is_direct_space(cmd.server_id) {
-            self.join_direct_space(cmd.server_id, &targets).await?;
-        }
         // People on other servers only join encrypted conversations.
         if self.is_direct_space(cmd.server_id)
             && !conversation.is_encrypted()
@@ -1110,6 +1107,9 @@ impl ConversationService for DefaultConversationService {
             return Err(ServiceError::Validation(
                 "conversations with people on other servers are encrypted".to_string(),
             ));
+        }
+        if self.is_direct_space(cmd.server_id) {
+            self.join_direct_space(cmd.server_id, &targets).await?;
         }
         for &user_id in &targets {
             if !self
