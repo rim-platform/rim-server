@@ -187,11 +187,23 @@ on; with it off, conversations in the direct space are live at once.
 | Action | Effect |
 |---|---|
 | `acceptDmRequest` | Held items released; later items flow; the sender becomes a contact |
-| `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days |
+| `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days (for a conversation this server hosts, the request is cleared instead, below) |
 | `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused |
 | `unblockPrincipal` | The block lifted; every ignored request from the principal that still keeps its invite, ignored by hand or by the block, is cleared: listed and counted nowhere, until the next item of its conversation files it again as a new pending request holding that item. Nothing dropped while it was ignored comes back. A conversation hosted elsewhere keeps at its host what they wrote meanwhile, which reading it there shows. Unblocking someone not blocked changes nothing |
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored. Once per user and request: a second report is `CONFLICT` |
-| Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request |
+| Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request; for a conversation this server hosts, see below |
+
+A request of a conversation this server hosts never lapses into a conversation. Its recipient is
+a member from the start, and only the request keeps the conversation out of their view. When such
+a request expires, unanswered or 30 days after an Ignore, while its recipient is still a member,
+the relay clears it instead of deleting it. A cleared request is listed and counted nowhere and
+holds nothing. It still keeps the conversation out of their view, and their posts out of it. The
+conversation's next event first sends its `DmInvite` again, from whoever sent the first, and the
+request is filed anew holding that invite and the event, with a `DmRequestReceived` notice. A
+request from someone the user or the operator blocked is not cleared: it stays ignored for another
+retention period. The recipient takes a cleared conversation back by posting into it (the
+mutations above), which accepts it. A request of a conversation hosted elsewhere is deleted when
+it expires; its host sends the invite again with the next item.
 
 Limits: 100 pending requests per recipient, `RIM_RELAY_DM_REQUESTS_PER_DAY` (20) per sender
 principal per day on this relay, 1,000 per delivering host per day whichever principals it names,

@@ -2030,3 +2030,255 @@ async fn a_group_names_nobody_as_blocked_by_a_dm_partner() {
             .unwrap()
     );
 }
+
+#[tokio::test]
+async fn a_lapsed_request_of_a_conversation_here_is_cleared_while_its_recipient_is_a_member() {
+    use rim_core::conversation::model::{ConversationType, NewConversation};
+    use rim_core::conversation::repository::ConversationRepository;
+    use rim_core::conversation_member::repository::ConversationMemberRepository;
+    use rim_core::relay::repository::RelayAbuseRepository;
+    use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
+    use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
+    use rim_infra_db::sea_orm_impl::relay_abuse::SeaOrmRelayAbuseRepository;
+
+    let ctx = support::TestCtx::new().await;
+    let direct = SeaOrmHostRepository::new(ctx.db.clone())
+        .ensure_direct_space("Direct messages")
+        .await
+        .unwrap();
+    let alice = ctx.create_key_only_user("alice", "rimp1_alice").await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let dan = ctx.create_key_only_user("dan", "rimp1_dan").await;
+    let erin = ctx.create_key_only_user("erin", "rimp1_erin").await;
+    let conversations = SeaOrmConversationRepository::new(ctx.db.clone());
+    let members = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+    let create = async |kind, member_ids: &[UserId]| {
+        let conversation = conversations
+            .create_conversation(NewConversation {
+                server_id: direct,
+                conversation_type: kind,
+                title: None,
+                is_private: true,
+                created_by: Some(alice.id),
+                encrypted: false,
+            })
+            .await
+            .unwrap();
+        for member in member_ids {
+            members.add_member(conversation.id, *member).await.unwrap();
+        }
+        Uuid::from(conversation.id)
+    };
+    let dm = create(ConversationType::Direct, &[alice.id, bob.id]).await;
+    let group = create(ConversationType::Group, &[alice.id, bob.id, dan.id]).await;
+    let dm2 = create(ConversationType::Direct, &[alice.id, dan.id]).await;
+
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let mut seq = 0;
+    let mut request = async |user: UserId, conversation_id, from: &str, host: &str, held| {
+        let request = repo
+            .insert_request(NewDmRequest {
+                status: DmRequestStatus::Pending,
+                user_id: user,
+                from_principal_id: from.to_string(),
+                card_payload: "{}".to_string(),
+                card_signature: "ed25519:c".to_string(),
+                host_server_id: host.to_string(),
+                conversation_id,
+                expires_at: Utc::now() + Duration::days(30),
+            })
+            .await
+            .unwrap();
+        for _ in 0..held {
+            seq += 1;
+            let env = repo
+                .insert_envelope(envelope(Some(seq), Uuid::now_v7()))
+                .await
+                .unwrap();
+            repo.insert_item(NewRelayItem {
+                request_id: Some(request.id),
+                ..item(user, env)
+            })
+            .await
+            .unwrap();
+        }
+        request.id
+    };
+    let in_30_days = Utc::now() + Duration::days(30);
+    let bobs_dm = request(bob.id, dm, "rimp1_alice", "rims1_here", 2).await;
+    let dans_group = request(dan.id, group, "rimp1_alice", "rims1_here", 1).await;
+    repo.decide_request(dans_group, DmRequestStatus::Ignored, in_30_days)
+        .await
+        .unwrap()
+        .expect("pending");
+    let bobs_group = request(bob.id, group, "rimp1_carol", "rims1_here", 1).await;
+    repo.block(bob.id, "rimp1_carol").await.unwrap();
+    repo.ignore_pending_from(bob.id, "rimp1_carol", in_30_days)
+        .await
+        .unwrap();
+    request(erin.id, group, "rimp1_alice", "rims1_here", 0).await;
+    request(bob.id, Uuid::now_v7(), "rimp1_alice", "rims1_elsewhere", 0).await;
+    let dans_dm2 = request(dan.id, dm2, "rimp1_op", "rims1_here", 1).await;
+    SeaOrmRelayAbuseRepository::new(ctx.db.clone())
+        .block_principal("rimp1_op", "x")
+        .await
+        .unwrap();
+
+    assert!(repo.conversation_hidden(bob.id, dm).await.unwrap());
+    let now = Utc::now();
+    assert_eq!(
+        repo.rearm_expired_local_requests(
+            "rims1_here",
+            now + Duration::days(31),
+            now + Duration::days(61)
+        )
+        .await
+        .unwrap(),
+        4,
+        "the members' rows here, cleared or kept ignored"
+    );
+    let find = |user: UserId, id| {
+        let repo = &repo;
+        async move { repo.get_request(user, id).await.unwrap().expect("row") }
+    };
+    for (user, id) in [(bob.id, bobs_dm), (dan.id, dans_group)] {
+        let row = find(user, id).await;
+        assert_eq!(row.status, DmRequestStatus::Pending);
+        assert!(row.is_cleared());
+        assert_eq!(repo.count_held(id).await.unwrap(), 0);
+    }
+    let blocked = find(bob.id, bobs_group).await;
+    assert_eq!(blocked.status, DmRequestStatus::Ignored);
+    assert_eq!(repo.count_held(bobs_group).await.unwrap(), 1);
+    assert!(blocked.expires_at > now + Duration::days(60));
+    let op_blocked = find(dan.id, dans_dm2).await;
+    assert_eq!(
+        op_blocked.status,
+        DmRequestStatus::Ignored,
+        "the operator's block keeps it ignored"
+    );
+    assert_eq!(repo.count_held(dans_dm2).await.unwrap(), 1);
+
+    assert_eq!(
+        repo.delete_expired_requests(now + Duration::days(31))
+            .await
+            .unwrap(),
+        2,
+        "a non-member's row and a row of a conversation elsewhere expire"
+    );
+    assert!(
+        repo.conversation_hidden(bob.id, dm).await.unwrap(),
+        "a lapsed request keeps its conversation out of the list"
+    );
+    let listed: Vec<_> = repo
+        .list_requests(bob.id, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert!(!listed.contains(&bobs_dm));
+    assert_eq!(repo.count_pending_requests(bob.id).await.unwrap(), 0);
+
+    assert_eq!(
+        repo.uninvited_holders(dm).await.unwrap(),
+        vec![(bob.id, "rimp1_bob".to_string())]
+    );
+    let env = repo
+        .insert_envelope(envelope(Some(100), Uuid::now_v7()))
+        .await
+        .unwrap();
+    repo.insert_item(NewRelayItem {
+        request_id: Some(bobs_dm),
+        ..item(bob.id, env)
+    })
+    .await
+    .unwrap();
+    assert!(
+        repo.uninvited_holders(dm).await.unwrap().is_empty(),
+        "a request holding its invite again is not invited again"
+    );
+}
+
+#[tokio::test]
+async fn posting_takes_back_a_cleared_request_only() {
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let in_30_days = Utc::now() + Duration::days(30);
+    let mut seq = 0;
+    let mut request = async |from: &str| {
+        let conversation_id = Uuid::now_v7();
+        let request = repo
+            .insert_request(NewDmRequest {
+                status: DmRequestStatus::Pending,
+                user_id: bob.id,
+                from_principal_id: from.to_string(),
+                card_payload: "{}".to_string(),
+                card_signature: "ed25519:c".to_string(),
+                host_server_id: HOST.to_string(),
+                conversation_id,
+                expires_at: in_30_days,
+            })
+            .await
+            .unwrap();
+        seq += 1;
+        let env = repo
+            .insert_envelope(envelope(Some(seq), Uuid::now_v7()))
+            .await
+            .unwrap();
+        repo.insert_item(NewRelayItem {
+            request_id: Some(request.id),
+            ..item(bob.id, env)
+        })
+        .await
+        .unwrap();
+        (request.id, conversation_id)
+    };
+    let (cleared, cleared_conversation) = request("rimp1_alice").await;
+    repo.ignore_pending_from(bob.id, "rimp1_alice", in_30_days)
+        .await
+        .unwrap();
+    repo.clear_ignored_from(bob.id, "rimp1_alice", in_30_days)
+        .await
+        .unwrap();
+    let (_, pending_conversation) = request("rimp1_carol").await;
+    let (ignored, ignored_conversation) = request("rimp1_dan").await;
+    repo.decide_request(ignored, DmRequestStatus::Ignored, in_30_days)
+        .await
+        .unwrap()
+        .expect("pending");
+
+    let forever = Utc::now() + Duration::days(36500);
+    assert!(
+        repo.accept_cleared(bob.id, cleared_conversation, forever)
+            .await
+            .unwrap()
+    );
+    let taken = repo.get_request(bob.id, cleared).await.unwrap().unwrap();
+    assert_eq!(taken.status, DmRequestStatus::Accepted);
+    assert_eq!(taken.decided_at, Some(taken.created_at));
+    assert!(
+        !repo
+            .list_requests(bob.id, Some(DmRequestStatus::Accepted))
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.id == cleared),
+        "taken back as if accepted when filed"
+    );
+    assert_eq!(repo.count_held(cleared).await.unwrap(), 0);
+    assert!(
+        !repo
+            .accept_cleared(bob.id, pending_conversation, forever)
+            .await
+            .unwrap(),
+        "a listed request is decided in the inbox"
+    );
+    assert!(
+        !repo
+            .accept_cleared(bob.id, ignored_conversation, forever)
+            .await
+            .unwrap()
+    );
+}

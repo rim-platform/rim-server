@@ -178,6 +178,18 @@ pub trait RelayRepository: Send + Sync {
 
     async fn delete_expired_requests(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 
+    /// Clear, instead of letting them expire, the requests not accepted of conversations
+    /// `own_server_id` hosts that expired before `now` while their user is still a member: pending,
+    /// decided as filed, holding nothing, expiring at `expires_at`. One from a principal the user
+    /// or the operator blocked stays ignored, keeps what it holds and expires at `expires_at`.
+    /// Returns how many.
+    async fn rearm_expired_local_requests(
+        &self,
+        own_server_id: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
+
     /// How many of a user's conversations from a host are accepted.
     async fn count_accepted_requests(
         &self,
@@ -205,6 +217,19 @@ pub trait RelayRepository: Send + Sync {
     /// Local users still members of a conversation of this server's direct space whose request
     /// for it is pending, with their principal ids.
     async fn pending_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
+
+    /// Local users still members of a conversation whose cleared request for it holds nothing,
+    /// with their principal ids: the conversation's next event sends them its invite again.
+    async fn uninvited_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
+
+    /// Accept a user's cleared request for a conversation as if accepted when filed, deleting
+    /// what it holds, expiring at `expires_at`. Returns whether there was one.
+    async fn accept_cleared(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<bool>;
 
     /// Whether a local user's request for a conversation is pending.
     async fn request_pending(&self, user_id: UserId, conversation_id: Uuid) -> RepoResult<bool>;

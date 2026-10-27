@@ -772,6 +772,39 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
+    async fn rearm_expired_local_requests(
+        &self,
+        own_server_id: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64> {
+        self.execute(
+            "WITH due AS ( \
+                 SELECT r.id, \
+                        EXISTS (SELECT 1 FROM relay_block b \
+                                WHERE b.user_id = r.user_id \
+                                  AND b.principal_id = r.from_principal_id) \
+                        OR EXISTS (SELECT 1 FROM relay_principal_block pb \
+                                WHERE pb.principal_id = r.from_principal_id) AS blocked \
+                 FROM relay_dm_request r \
+                 WHERE r.host_server_id = $1 AND r.status <> 'accepted' AND r.expires_at < $2 \
+                   AND EXISTS (SELECT 1 FROM conversation_member m \
+                               WHERE m.conversation_id = r.conversation_id \
+                                 AND m.user_id = r.user_id)), \
+             gone AS (DELETE FROM relay_item i USING due \
+                      WHERE i.request_id = due.id AND NOT due.blocked) \
+             UPDATE relay_dm_request r SET \
+                 status = CASE WHEN due.blocked THEN 'ignored' ELSE 'pending' END, \
+                 created_at = CASE WHEN due.blocked THEN r.created_at ELSE now() END, \
+                 decided_at = CASE WHEN due.blocked THEN COALESCE(r.decided_at, now()) \
+                                   ELSE now() END, \
+                 expires_at = $3 \
+             FROM due WHERE r.id = due.id",
+            vec![own_server_id.into(), now.into(), expires_at.into()],
+        )
+        .await
+    }
+
     async fn count_accepted_requests(
         &self,
         user_id: UserId,
@@ -830,6 +863,47 @@ impl RelayRepository for SeaOrmRelayRepository {
             .into_iter()
             .map(|r| (r.user_id.into(), r.principal_id))
             .collect())
+    }
+
+    async fn uninvited_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>> {
+        Ok(self
+            .all::<HolderRow>(
+                r#"SELECT r.user_id, u.principal_id FROM relay_dm_request r
+                   JOIN "user" u ON u.id = r.user_id
+                   JOIN conversation_member m
+                     ON m.conversation_id = r.conversation_id AND m.user_id = r.user_id
+                   WHERE r.conversation_id = $1 AND r.status = 'pending'
+                     AND r.decided_at = r.created_at
+                     AND u.kind = 'local' AND u.principal_id IS NOT NULL
+                     AND NOT EXISTS (SELECT 1 FROM relay_item i WHERE i.request_id = r.id)"#,
+                vec![conversation_id.into()],
+            )
+            .await?
+            .into_iter()
+            .map(|r| (r.user_id.into(), r.principal_id))
+            .collect())
+    }
+
+    async fn accept_cleared(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<bool> {
+        Ok(self
+            .count(
+                "WITH taken AS ( \
+                     UPDATE relay_dm_request SET status = 'accepted', created_at = now(), \
+                         decided_at = now(), expires_at = $3 \
+                     WHERE user_id = $1 AND conversation_id = $2 AND status = 'pending' \
+                       AND decided_at = created_at \
+                     RETURNING id), \
+                 gone AS (DELETE FROM relay_item i USING taken WHERE i.request_id = taken.id) \
+                 SELECT count(*) AS n FROM taken",
+                vec![uuid(user_id), conversation_id.into(), expires_at.into()],
+            )
+            .await?
+            == 1)
     }
 
     async fn request_pending(&self, user_id: UserId, conversation_id: Uuid) -> RepoResult<bool> {

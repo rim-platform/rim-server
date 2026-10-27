@@ -292,6 +292,8 @@ pub struct RelayCleanup {
     pub acked_items: u64,
     pub expired_items: u64,
     pub orphan_envelopes: u64,
+    /// Expired requests of conversations here cleared instead of deleted.
+    pub rearmed_requests: u64,
     pub expired_requests: u64,
 }
 

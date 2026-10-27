@@ -77,6 +77,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   command palette and keybinds.
 - Search snippets (`headline`) no longer drop short words, numbers and punctuation at their
   edges: a message of up to 300 characters comes back whole.
+- A message request for a conversation this server hosts no longer turns into an ordinary
+  conversation when it expires unanswered or 30 days after Ignore. It stays out of the
+  recipient's list, and the sender's next message files it again as a new request with a fresh
+  invite. A recipient who posts into such a conversation takes it back. A request from someone
+  blocked stays ignored.
 - A DM request keeps its held items, its invite included, as long as the request, so an ignored
   or cleared request still holds its invite when it is filed again. Items released by accepting
   are kept at least the retention period.

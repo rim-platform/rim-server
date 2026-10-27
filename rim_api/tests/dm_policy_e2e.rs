@@ -10,7 +10,8 @@
 //! they accepted keeps no accepted request for it; a group of the default workspace reaches each
 //! member as their DM settings say, and never one who blocked its starter; the recipient of a DM
 //! request reads it first and posts nothing into it, nor reacts or types there, until they
-//! accept it.
+//! accept it; a request of a conversation here that lapses keeps it out of view until the
+//! sender's next message files it again or the recipient posts into it.
 //!
 //! Run with:
 //! ```sh
@@ -23,6 +24,8 @@ mod support;
 use std::time::Duration;
 
 use rim_server::config::RIMConfig;
+use rim_services::relay::service::RelayService;
+use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 
 use support::nodes::{Node, databases_with, start};
@@ -515,6 +518,137 @@ async fn an_accepted_dm_takes_nothing_from_a_blocked_member_and_carries_on_after
     let again = bob.pending_request(&alice).await;
     assert_eq!(again["conversationId"], json!(group));
     assert_eq!(again["id"], group_request["id"]);
+
+    a.stop().await;
+}
+
+/// Expire every request of `conversation` and run the relay's cleanup at once.
+async fn lapse(node: &Node, conversation: &str) {
+    node.db
+        .execute_unprepared(&format!(
+            "UPDATE relay_dm_request SET expires_at = now() - interval '1 second' \
+             WHERE conversation_id = '{conversation}'"
+        ))
+        .await
+        .expect("expire");
+    node.s2s.relay.cleanup().await.expect("cleanup");
+}
+
+/// `person`'s pending request from `from` once it holds `held` items.
+async fn holding(person: &Person, from: &Person, held: usize) -> Value {
+    eventually("a request holding its items", || async {
+        let request = person.pending_request(from).await;
+        (request["heldItems"].as_array().map(Vec::len) == Some(held)).then_some(request)
+    })
+    .await
+}
+
+/// Assert that the first item `request` holds is the invite of `conversation` from `host`.
+fn holds_the_invite_first(host: &Node, request: &Value, conversation: &str) {
+    let invite = verify_item(host, &request["heldItems"][0]);
+    assert_eq!(invite.event["type"], json!("DmInvite"), "{request}");
+    assert_eq!(invite.event["conversation_id"], json!(conversation));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unanswered_request_here_never_surfaces_its_conversation() {
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let direct = direct_space(&bob).await;
+
+    let conv = created(&dm(&a, &alice, &direct, &bob).await);
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
+        .await;
+    let request = bob.pending_request(&alice).await;
+
+    lapse(&a, &conv).await;
+    assert!(request_ids(&bob, "PENDING").await.is_empty());
+    assert!(request_ids(&bob, "IGNORED").await.is_empty());
+    assert!(
+        !listed(&bob, &direct).await.contains(&conv),
+        "a lapsed request does not surface its conversation"
+    );
+    let stale = bob
+        .post(
+            "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+            json!({ "id": request["id"] }),
+        )
+        .await;
+    assert_eq!(code(&stale), "NOT_FOUND", "{stale}");
+    assert_eq!(request_pending(&alice, &direct, &conv).await, json!(true));
+
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "again" }))
+        .await;
+    let again = holding(&bob, &alice, 2).await;
+    assert_eq!(again["id"], request["id"]);
+    holds_the_invite_first(&a, &again, &conv);
+    assert_eq!(texts(&bob, &direct, &conv).await, ["hello", "again"]);
+
+    bob.ok(
+        "mutation($id: ID!) { ignoreDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    lapse(&a, &conv).await;
+    assert!(!listed(&bob, &direct).await.contains(&conv));
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "third" }))
+        .await;
+    let third = holding(&bob, &alice, 2).await;
+    holds_the_invite_first(&a, &third, &conv);
+
+    lapse(&a, &conv).await;
+    bob.ok(SEND, json!({ "s": direct, "c": conv, "t": "hi" }))
+        .await;
+    assert!(
+        listed(&bob, &direct).await.contains(&conv),
+        "posting takes the conversation back"
+    );
+    assert!(request_ids(&bob, "PENDING").await.is_empty());
+    assert_eq!(request_pending(&alice, &direct, &conv).await, json!(false));
+
+    a.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lapsed_request_from_someone_blocked_stays_ignored() {
+    let a = one_server(|_| {}).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = direct_space(&bob).await;
+
+    let conv = created(&dm(&a, &carol, &direct, &bob).await);
+    carol
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
+        .await;
+    let request = bob.pending_request(&carol).await;
+    bob.ok(BLOCK, json!({ "p": carol.principal() })).await;
+
+    lapse(&a, &conv).await;
+    assert!(
+        request_ids(&bob, "IGNORED").await.contains(&request["id"]),
+        "a request from someone blocked stays ignored"
+    );
+    assert!(!listed(&bob, &direct).await.contains(&conv));
+    let refused = carol
+        .post(SEND, json!({ "s": direct, "c": conv, "t": "spam" }))
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+
+    bob.ok(UNBLOCK, json!({ "p": carol.principal() })).await;
+    assert!(
+        !request_ids(&bob, "IGNORED").await.contains(&request["id"]),
+        "the unblock found its invite and cleared it"
+    );
+    carol
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "after" }))
+        .await;
+    let again = holding(&bob, &carol, 2).await;
+    assert_eq!(again["id"], request["id"]);
+    holds_the_invite_first(&a, &again, &conv);
 
     a.stop().await;
 }
