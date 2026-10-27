@@ -19,12 +19,12 @@ pub(crate) const DM_NOT_TAKEN: &str = "they do not take direct messages from you
 
 /// `Ok` unless `conversation_id` stays out of `user_id`'s list
 /// ([`RelayRepository::conversation_hidden`]): their message request for it is pending or
-/// ignored, or they blocked the person who started the DM or group. They may read such a conversation first,
-/// and post nothing into it until they accept. A cleared request (listed nowhere) is accepted by
-/// posting, and the post goes through unless the conversation stays hidden for another reason.
-/// Also not `Ok` when it is a direct conversation
-/// whose other member blocked `user_id` ([`RelayRepository::blocked_by_dm_partner`]), so
-/// nothing they write while blocked is stored. Always `Ok` without a relay repository.
+/// ignored, or they blocked the person who started the DM or group. They may read such a
+/// conversation first, and post nothing into it until they accept. A cleared request (listed
+/// nowhere) is accepted by posting, and the post goes through unless the conversation stays
+/// hidden for another reason. Also not `Ok` when it is a direct conversation whose other member
+/// blocked `user_id` ([`RelayRepository::blocked_by_dm_partner`]), so nothing they write while
+/// blocked is stored. Always `Ok` without a relay repository.
 ///
 /// # Errors
 /// `Forbidden` with [`REQUEST_UNDECIDED`] for a conversation kept out of the list, and with
