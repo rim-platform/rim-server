@@ -269,10 +269,30 @@ pub(crate) fn resolve_secure_flag(
     false
 }
 
+/// The `SameSite` attribute of the session and CSRF cookies for `req`.
+///
+/// `None` when the request's `Origin` is one of the packaged desktop app's and the cookies are
+/// `Secure`: the desktop app's page is on another site than the server, and a browser keeps and
+/// sends a `Lax` cookie on such a request only for top-level navigations. `Lax` otherwise,
+/// including over plain http, where a browser refuses `SameSite=None` without `Secure`.
+fn session_same_site(req: &HttpRequest, secure: bool) -> actix_web::cookie::SameSite {
+    let desktop = req
+        .headers()
+        .get(actix_web::http::header::ORIGIN)
+        .and_then(|origin| origin.to_str().ok())
+        .is_some_and(crate::origin::is_desktop_origin);
+    if desktop && secure {
+        actix_web::cookie::SameSite::None
+    } else {
+        actix_web::cookie::SameSite::Lax
+    }
+}
+
 /// Apply session / CSRF cookies from the resolved [`AuthIntent`] onto the response.
 ///
 /// Uses [`resolve_secure_flag`] to determine the `Secure` attribute so that the
-/// flag is set correctly for both direct-TLS and proxied deployments. A kept session's cookies
+/// flag is set correctly for both direct-TLS and proxied deployments, and
+/// [`session_same_site`] for the `SameSite` attribute. A kept session's cookies
 /// last `session_ttl_days`; an unkept session's have no `Max-Age`, so the browser drops them
 /// when it closes.
 pub fn apply_auth_cookies(
@@ -284,6 +304,7 @@ pub fn apply_auth_cookies(
     force_secure_cookies: bool,
 ) -> GraphQLResponse {
     let secure = resolve_secure_flag(req, trust_forwarded_headers, force_secure_cookies);
+    let same_site = session_same_site(req, secure);
 
     let mut resp = gql_resp;
     let Some(intent) = intent_ctx.take() else {
@@ -301,14 +322,14 @@ pub fn apply_auth_cookies(
             let mut c1 = actix_web::cookie::Cookie::build(COOKIE_SESSION, session_token)
                 .path("/")
                 .http_only(true)
-                .same_site(actix_web::cookie::SameSite::Lax)
+                .same_site(same_site)
                 .secure(secure)
                 .finish();
 
             let mut c2 = actix_web::cookie::Cookie::build(COOKIE_CSRF, csrf_token)
                 .path("/")
                 .http_only(false)
-                .same_site(actix_web::cookie::SameSite::Lax)
+                .same_site(same_site)
                 .secure(secure)
                 .finish();
             if let Some(max_age) = max_age {
@@ -323,7 +344,7 @@ pub fn apply_auth_cookies(
             let mut c1 = actix_web::cookie::Cookie::build(COOKIE_SESSION, "")
                 .path("/")
                 .http_only(true)
-                .same_site(actix_web::cookie::SameSite::Lax)
+                .same_site(same_site)
                 .secure(secure)
                 .finish();
             c1.make_removal();
@@ -331,7 +352,7 @@ pub fn apply_auth_cookies(
             let mut c2 = actix_web::cookie::Cookie::build(COOKIE_CSRF, "")
                 .path("/")
                 .http_only(false)
-                .same_site(actix_web::cookie::SameSite::Lax)
+                .same_site(same_site)
                 .secure(secure)
                 .finish();
             c2.make_removal();
@@ -800,25 +821,12 @@ fragment Inner on Mutation {
     /// The `Set-Cookie` values `apply_auth_cookies` adds for a new session that is `kept` or
     /// not, with a 30-day TTL.
     fn session_cookies(kept: bool) -> Vec<String> {
-        let intent = AuthIntentCtx::default();
-        intent.set(AuthIntent::SetSession {
+        let intent = AuthIntent::SetSession {
             session_token: "rim_sess_t".to_string(),
             csrf_token: "rim_csrf_t".to_string(),
             kept,
-        });
-        let response =
-            GraphQLResponse::from(async_graphql::Response::new(async_graphql::Value::Null));
-        let req = TestRequest::default().to_http_request();
-        let response = apply_auth_cookies(response, &intent, &req, 30, false, false);
-        let async_graphql::BatchResponse::Single(response) = response.0 else {
-            panic!("a single response");
         };
-        response
-            .http_headers
-            .get_all("set-cookie")
-            .iter()
-            .map(|v| v.to_str().expect("ascii").to_string())
-            .collect()
+        auth_cookies_for(intent, None, false)
     }
 
     #[test]
@@ -835,6 +843,110 @@ fragment Inner on Mutation {
         for cookie in &unkept {
             assert!(!cookie.contains("Max-Age"), "{cookie}");
             assert!(!cookie.contains("Expires"), "{cookie}");
+        }
+    }
+
+    /// The `Set-Cookie` values `apply_auth_cookies` adds for `intent` on a request with the
+    /// given `Origin` header, with `Secure` forced or not.
+    fn auth_cookies_for(intent: AuthIntent, origin: Option<&str>, secure: bool) -> Vec<String> {
+        let ctx = AuthIntentCtx::default();
+        ctx.set(intent);
+        let response =
+            GraphQLResponse::from(async_graphql::Response::new(async_graphql::Value::Null));
+        let mut req = TestRequest::default();
+        if let Some(origin) = origin {
+            req = req.insert_header(("origin", origin));
+        }
+        let response =
+            apply_auth_cookies(response, &ctx, &req.to_http_request(), 30, false, secure);
+        let async_graphql::BatchResponse::Single(response) = response.0 else {
+            panic!("a single response");
+        };
+        response
+            .http_headers
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().expect("ascii").to_string())
+            .collect()
+    }
+
+    /// A new kept session's intent.
+    fn new_session() -> AuthIntent {
+        AuthIntent::SetSession {
+            session_token: "rim_sess_t".to_string(),
+            csrf_token: "rim_csrf_t".to_string(),
+            kept: true,
+        }
+    }
+
+    #[test]
+    fn a_desktop_origin_over_https_gets_cross_site_session_cookies() {
+        for origin in [
+            "http://tauri.localhost",
+            "tauri://localhost",
+            " TAURI://LOCALHOST ",
+        ] {
+            let cookies = auth_cookies_for(new_session(), Some(origin), true);
+            assert_eq!(cookies.len(), 2, "{origin}");
+            assert!(cookies[0].starts_with("rim_session=rim_sess_t"));
+            assert!(cookies[1].starts_with("rim_csrf=rim_csrf_t"));
+            for cookie in &cookies {
+                assert!(cookie.contains("SameSite=None"), "{cookie}");
+                assert!(cookie.contains("Secure"), "{cookie}");
+                assert!(!cookie.contains("SameSite=Lax"), "{cookie}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_desktop_origin_without_secure_keeps_lax_cookies() {
+        let cookies = auth_cookies_for(new_session(), Some("http://tauri.localhost"), false);
+        assert_eq!(cookies.len(), 2);
+        for cookie in &cookies {
+            assert!(cookie.contains("SameSite=Lax"), "{cookie}");
+            assert!(!cookie.contains("Secure"), "{cookie}");
+        }
+    }
+
+    #[test]
+    fn a_web_origin_or_no_origin_keeps_lax_cookies() {
+        for origin in [
+            Some("https://relay.example.org"),
+            Some("http://localhost:1420"),
+            Some("https://tauri.localhost.example.org"),
+            None,
+        ] {
+            let cookies = auth_cookies_for(new_session(), origin, true);
+            assert_eq!(cookies.len(), 2, "{origin:?}");
+            for cookie in &cookies {
+                assert!(cookie.contains("SameSite=Lax"), "{cookie}");
+                assert!(cookie.contains("Secure"), "{cookie}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_desktop_sign_out_over_https_clears_cross_site_cookies() {
+        let cookies = auth_cookies_for(
+            AuthIntent::ClearSession,
+            Some("http://tauri.localhost"),
+            true,
+        );
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies[0].starts_with("rim_session=;"), "{}", cookies[0]);
+        assert!(cookies[1].starts_with("rim_csrf=;"), "{}", cookies[1]);
+        for cookie in &cookies {
+            assert!(cookie.contains("SameSite=None"), "{cookie}");
+            assert!(cookie.contains("Secure"), "{cookie}");
+            assert!(cookie.contains("Max-Age=0"), "{cookie}");
+        }
+        let web = auth_cookies_for(
+            AuthIntent::ClearSession,
+            Some("https://relay.example.org"),
+            true,
+        );
+        for cookie in &web {
+            assert!(cookie.contains("SameSite=Lax"), "{cookie}");
         }
     }
 

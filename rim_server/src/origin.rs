@@ -77,7 +77,7 @@ impl AllowedOrigins {
 
 /// Whether `origin` is one of the packaged desktop app's origins, compared whole and without
 /// case, since the Tauri scheme has no URL origin to normalize.
-fn is_desktop_origin(origin: &str) -> bool {
+pub(crate) fn is_desktop_origin(origin: &str) -> bool {
     let origin = origin.trim().to_ascii_lowercase();
     DESKTOP_ORIGINS.contains(&origin.as_str())
 }

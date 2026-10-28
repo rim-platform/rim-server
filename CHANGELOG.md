@@ -21,6 +21,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Fixed
+
+- The desktop app on Windows stays signed in after sign-up or sign-in; before, every request
+  after it failed and the app showed "Failed to load workspaces". Over HTTPS, the session and
+  CSRF cookies set for the desktop app's origins are `SameSite=None`.
+
 ## [0.0.5] - 2026-10-28
 
 ### Added
