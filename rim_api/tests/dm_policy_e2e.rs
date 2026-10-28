@@ -563,7 +563,9 @@ async fn an_unanswered_request_here_never_surfaces_its_conversation() {
     alice
         .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
         .await;
-    let request = bob.pending_request(&alice).await;
+    // The invite, the conversation's creation and the message are all held before the request
+    // lapses, so no event of the conversation reaches the inbox after it is cleared.
+    let request = holding(&bob, &alice, 3).await;
 
     lapse(&a, &conv).await;
     assert!(request_ids(&bob, "PENDING").await.is_empty());
