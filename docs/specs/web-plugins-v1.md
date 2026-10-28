@@ -551,7 +551,7 @@ the module loaded is not lost.
 | Threat | Stopped? | How, or why not |
 |---|---|---|
 | Reading the host page, the RIM session cookie, the CSRF token, device keys | Yes | Opaque origin, no `allow-same-origin`. Device keys are non-extractable `CryptoKey`s in the host origin's IndexedDB. |
-| Calling GraphQL as the user | Yes | A request from an opaque origin is cross-site, so the `SameSite=Lax` session cookie is not sent; the frame cannot read the CSRF token; the RIM origins are never in its policy. |
+| Calling GraphQL as the user | Yes | A request from an opaque origin is cross-site, so the `SameSite=Lax` session cookie is not sent; in the desktop app, whose cookies are `SameSite=None` over HTTPS, the server refuses the `null` origin with 400; the frame cannot read the CSRF token; the RIM origins are never in its policy. |
 | Reading files, running programs | Yes | The browser |
 | Reading another plugin's data | Yes | Each frame has its own opaque origin; the host scopes panel state, storage and settings by the plugin id it takes from the iframe or the port, never from a message. |
 | Drawing over the host, clickjacking host controls | Yes | The iframe's box. Host dialogs render above frames, and frames are `inert` while one is open. |

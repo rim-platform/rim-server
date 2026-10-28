@@ -252,7 +252,13 @@ calls them.
 
 A session is the `rim_session` cookie: `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` when
 `RIM_FORCE_SECURE_COOKIES=true` or when a trusted proxy (`RIM_TRUST_FORWARDED_HEADERS=true`)
-reports `https`. These mutations set it, and need no session or CSRF header:
+reports `https`. The packaged desktop app is the exception: its page (`tauri://localhost`,
+`http://tauri.localhost`) is on another site than the server, so every request it makes is
+cross-site, and a browser engine keeps and sends a `Lax` cookie on such a request only for a
+top-level navigation. When the request that signs in or out carries one of those origins and
+the cookies are `Secure`, the `rim_session` and `rim_csrf` cookies are `SameSite=None`. Without
+`Secure` they stay `Lax`, since a browser refuses `SameSite=None` without it. These mutations
+set it, and need no session or CSRF header:
 
 - **Key login.** `keyLoginChallenge` returns `{ challengeId, nonce, expiresAt }`. The client
   signs a `login` statement over the nonce with its device key and calls `loginWithKey(proof)`.

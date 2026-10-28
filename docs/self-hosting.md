@@ -98,7 +98,10 @@ allowed`, with two exceptions: the packaged desktop app's origins (`tauri://loca
 and Linux, `http://tauri.localhost` on Windows), which no web page can carry, and one extra
 origin named by `RIM_CORS_ALLOWED_ORIGIN`, such as a client served from another domain or the
 desktop development app at `http://localhost:1420`. Left out of `deploy/.env` there is none, or
-the web domain's origin when `RIM_WEB_DOMAIN` is set (next section).
+the web domain's origin when `RIM_WEB_DOMAIN` is set (next section). The desktop app on
+Windows stays signed in only to a server on HTTPS whose cookies are `Secure`, since its requests
+are cross-site and need `SameSite=None` cookies (`docs/api.md`, "The session cookie"); the
+shipped compose deploy sets `RIM_FORCE_SECURE_COOKIES: "true"` in `deploy/compose.yml`.
 
 ### The web client on its own domain
 
