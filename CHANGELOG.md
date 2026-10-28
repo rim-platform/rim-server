@@ -21,6 +21,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-10-28
+
 ### Fixed
 
 - The desktop app on Windows stays signed in after sign-up or sign-in; before, every request
@@ -1037,7 +1039,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
   `docs/self-hosting.md` shows how to pass a file in instead.
 
-[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/rim-platform/rim-server/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/rim-platform/rim-server/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/rim-platform/rim-server/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/rim-platform/rim-server/compare/v0.0.2...v0.0.3
