@@ -18,7 +18,7 @@ members = [
 # The one release version every crate carries; `rim-server --version`, `/healthz` and
 # `serverInfo.version` report it.
 [workspace.package]
-version = "0.0.4"
+version = "0.0.5"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/rim-platform/rim-server"
