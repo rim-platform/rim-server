@@ -37,6 +37,8 @@ use crate::repos::AppRepos;
 const MAX_REASON_CHARS: usize = 1000;
 /// How long a request ignored by a block is kept, so its conversation stays dropped.
 const IGNORED_REQUEST_TTL: Duration = Duration::days(30);
+/// How long a request an unblock cleared waits for its conversation's next item.
+const CLEARED_REQUEST_TTL: Duration = Duration::days(30);
 /// The days a cleared profile may be locked for.
 const PROFILE_LOCK_DAYS: std::ops::RangeInclusive<u32> = 1..=365;
 
@@ -435,6 +437,11 @@ impl RelayAbuseService for DefaultRelayAbuseService {
         self.check(by).await?;
         check_principal(&principal_id)?;
         let (scope, repos) = self.begin().await?;
+        // Cleared while the block row still says when the block began.
+        let cleared_requests = repos
+            .relay_abuse_repo
+            .clear_requests_ignored_by_block(&principal_id, Utc::now() + CLEARED_REQUEST_TTL)
+            .await?;
         let lifted = repos
             .relay_abuse_repo
             .unblock_principal(&principal_id)
@@ -457,12 +464,14 @@ impl RelayAbuseService for DefaultRelayAbuseService {
                 actor_id = %by,
                 principal_id = %principal_id,
                 email_unblocked,
+                cleared_requests,
                 "an operator unblocked a principal on this server"
             );
         }
         Ok(PrincipalUnblockOutcome {
             lifted,
             email_unblocked,
+            cleared_requests,
         })
     }
 
@@ -805,6 +814,13 @@ mod tests {
                 Box::pin(async { Ok(3) })
             });
             let log = Arc::clone(&self.log);
+            abuse
+                .expect_clear_requests_ignored_by_block()
+                .returning(move |p, _| {
+                    log.lock().unwrap().push(format!("clear requests {p}"));
+                    Box::pin(async { Ok(2) })
+                });
+            let log = Arc::clone(&self.log);
             abuse.expect_insert_report().returning(move |r| {
                 log.lock().unwrap().push(format!(
                     "report {}: {}",
@@ -1078,7 +1094,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unblocking_lifts_the_principal_and_the_email_but_nothing_else() {
+    async fn unblocking_clears_what_the_block_ignored_and_lifts_the_principal_and_the_email() {
         let w = World::new();
         let outcome = w
             .service()
@@ -1090,11 +1106,13 @@ mod tests {
             PrincipalUnblockOutcome {
                 lifted: true,
                 email_unblocked: true,
+                cleared_requests: 2,
             }
         );
         assert_eq!(
             w.calls(),
             vec![
+                format!("clear requests {ADA}"),
                 format!("unblock {ADA}"),
                 "unblock email ada@example.com".to_string()
             ]

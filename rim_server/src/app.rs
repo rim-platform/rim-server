@@ -1198,6 +1198,7 @@ async fn run_relay_cleanup(
             acked_items = done.acked_items,
             expired_items = done.expired_items,
             orphan_envelopes = done.orphan_envelopes,
+            rearmed_requests = done.rearmed_requests,
             expired_requests = done.expired_requests,
             "relay cleanup"
         ),

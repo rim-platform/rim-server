@@ -655,6 +655,13 @@ impl HostEventWriter {
             && let Route::Conversation(conversation_id) = route(event, &event_json)
             && let Some(relay) = &self.relay
         {
+            // A local member whose request lapsed gets the invite again first, so the event that
+            // follows files their request anew.
+            for principal_id in relay.uninvited_holders(conversation_id).await? {
+                rows += self
+                    .invite_again_locally(workspace_id, conversation_id, &principal_id)
+                    .await?;
+            }
             let holders = relay.pending_holders(conversation_id).await?;
             if !holders.is_empty() {
                 let stream = format!("c:{conversation_id}");
@@ -958,6 +965,58 @@ impl HostEventWriter {
             info!(conversation_id = %conversation_id, "sent a conversation's invite again to a member whose relay no longer held it");
             self.wake.notify_one();
         }
+        Ok(rows)
+    }
+
+    /// Send the `DmInvite` of a conversation of `workspace_id` again to a local member whose
+    /// cleared request for it holds nothing, so their request inbox files it anew with the event
+    /// that follows. It comes from whoever the first invite came from (see [`Self::reinviter`]).
+    /// Nothing is sent for a conversation gone or a principal who is not a local user. Returns
+    /// how many outbox rows were added.
+    async fn invite_again_locally(
+        &self,
+        workspace_id: ServerId,
+        conversation_id: Uuid,
+        principal_id: &str,
+    ) -> ServiceResult<usize> {
+        let Some(conversation) = self
+            .repos
+            .conversation_repo
+            .get_by_id(conversation_id.into())
+            .await?
+        else {
+            return Ok(0);
+        };
+        let Some((user_id, UserKind::Local)) = self.repos.host_repo.find_user(principal_id).await?
+        else {
+            return Ok(0);
+        };
+        let Some((inviter, from_principal_id)) = self.reinviter(&conversation, user_id).await?
+        else {
+            return Ok(0);
+        };
+        let member_ids = self
+            .repos
+            .conversation_member_repo
+            .list_member_ids(conversation.id)
+            .await?;
+        let users = self.repos.user_repo.get_by_ids(&member_ids).await?;
+        let Some(invite) = self
+            .invite_event(&conversation, inviter, &from_principal_id, &users)
+            .await?
+        else {
+            return Ok(0);
+        };
+        let planned = Planned {
+            stream: format!("u:{principal_id}"),
+            recipients: Vec::new(),
+            device_id: None,
+            local: vec![principal_id.to_string()],
+        };
+        let rows = self
+            .append(workspace_id, &planned, &invite.to_string(), None)
+            .await?;
+        info!(conversation_id = %conversation_id, "sent a conversation's invite again to a local member whose request lapsed");
         Ok(rows)
     }
 

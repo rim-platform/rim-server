@@ -3502,6 +3502,9 @@ fn accepted_relay(
         let found = row(bob);
         Box::pin(async move { Ok(found) })
     });
+    relay
+        .expect_is_blocked()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
     let log = Arc::clone(&calls);
     relay
         .expect_refresh_request()
@@ -3585,6 +3588,131 @@ async fn deliver_accepted(
     let refused = response.refused.into_iter().map(|r| r.reason).collect();
     let calls = calls.lock().expect("lock").clone();
     (refused, calls)
+}
+
+/// Bob's relay holding a row of `status` from Alice for `CONVERSATION` at `PEER`, holding
+/// nothing. Whether Bob blocked Alice is answered by `blocked` (`None` fails the test when
+/// asked); `inserted` records the request each queued item is held by.
+fn silencing_relay(
+    status: rim_core::relay::model::DmRequestStatus,
+    blocked: Option<bool>,
+    inserted: Arc<Mutex<Vec<Option<rim_core::relay::model::DmRequestId>>>>,
+) -> DefaultRelayService {
+    let bob = UserId::new();
+    let mut row = accepted_row(bob, Utc::now() + Duration::days(30), true);
+    row.status = status;
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay.expect_find_request().returning(move |_, _, _| {
+        let found = Some(row.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    match blocked {
+        Some(blocked) => {
+            relay
+                .expect_is_blocked()
+                .withf(move |user_id, principal| *user_id == bob && principal == ALICE)
+                .returning(move |_, _| Box::pin(async move { Ok(blocked) }));
+        }
+        None => {
+            relay.expect_is_blocked().never();
+        }
+    }
+    relay
+        .expect_count_held()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_request_held_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_user_held_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_refresh_request()
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay.expect_insert_item().returning(move |item| {
+        inserted.lock().expect("lock").push(item.request_id);
+        Box::pin(async { Ok(1) })
+    });
+    relay
+        .expect_queued_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&host_signer(40), 0), None),
+        MockS2sClient::new(),
+    )
+}
+
+/// What [`silencing_relay`] queues of a message of `CONVERSATION` from `PEER`, which it
+/// acknowledges without refusing.
+async fn queued_of_a_message(
+    status: rim_core::relay::model::DmRequestStatus,
+    blocked: Option<bool>,
+) -> Vec<Option<rim_core::relay::model::DmRequestId>> {
+    let inserted = Arc::default();
+    let svc = silencing_relay(status, blocked, Arc::clone(&inserted));
+    let response = svc
+        .deliver(
+            PEER.to_string(),
+            vec![conversation_item(
+                &format!("c:{CONVERSATION}"),
+                serde_json::json!({ "type": "NewMessage", "conversation_id": CONVERSATION }),
+            )],
+        )
+        .await
+        .expect("delivered");
+    assert!(response.refused.is_empty(), "{:?}", response.refused);
+    inserted.lock().expect("lock").clone()
+}
+
+#[tokio::test]
+async fn what_a_blocked_sender_started_elsewhere_is_dropped_and_acknowledged() {
+    use rim_core::relay::model::DmRequestStatus;
+    assert!(
+        queued_of_a_message(DmRequestStatus::Accepted, Some(true))
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn what_someone_not_blocked_started_flows() {
+    use rim_core::relay::model::DmRequestStatus;
+    assert_eq!(
+        queued_of_a_message(DmRequestStatus::Accepted, Some(false)).await,
+        vec![None]
+    );
+}
+
+#[tokio::test]
+async fn a_pending_requests_item_does_not_ask_about_blocks() {
+    use rim_core::relay::model::DmRequestStatus;
+    let held = queued_of_a_message(DmRequestStatus::Pending, None).await;
+    assert!(
+        matches!(held.as_slice(), [Some(_)]),
+        "held by the request: {held:?}"
+    );
 }
 
 #[tokio::test]
@@ -3791,6 +3919,9 @@ fn removal_writer(
     let mut relay_side = MockRelayRepository::new();
     relay_side
         .expect_pending_holders()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    relay_side
+        .expect_uninvited_holders()
         .returning(|_| Box::pin(async { Ok(Vec::new()) }));
     let relay_service = relay_service(
         RelayRepos {
@@ -4256,6 +4387,9 @@ fn default_workspace_writer(
     relay
         .expect_pending_holders()
         .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    relay
+        .expect_uninvited_holders()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
     let mut default_workspace = rim_services::default_workspace::MockDefaultWorkspaceService::new();
     default_workspace
         .expect_current()
@@ -4355,6 +4489,210 @@ async fn a_group_of_the_default_workspace_reaches_its_local_members_as_an_invite
             assert!(filed.is_empty(), "{filed:?}");
         }
     }
+}
+
+/// A writer for a server whose direct space is `direct`, holding a DM Ada (`ALICE`) created
+/// with Bob (`BOB`), both local. Its relay names `uninvited` as members whose cleared request
+/// holds nothing, Bob as holding a pending request, and records in `filed` each
+/// `(recipients, event type, inviter)` it is handed.
+fn lapsed_writer(
+    direct: ServerId,
+    dm: rim_core::conversation::model::Conversation,
+    uninvited: Vec<String>,
+    filed: FiledLocally,
+) -> crate::host::outbox::HostEventWriter {
+    use rim_core::conversation_member::model::Membership;
+    use rim_core::user::model::User;
+
+    use crate::host::outbox::{HostEventWriter, PeerBacklogs, RefusalCache};
+
+    let (ada, bob) = (dm.created_by.expect("creator"), UserId::new());
+    let mut host = MockHostRepository::new();
+    host.expect_next_stream_seq()
+        .returning(|_, _| Box::pin(async { Ok(1) }));
+    host.expect_remote_members()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+    host.expect_find_user().returning(move |principal| {
+        let found = (principal == BOB).then_some((bob, UserKind::Local));
+        Box::pin(async move { Ok(found) })
+    });
+    let stored = dm.clone();
+    let mut conversations = MockConversationRepository::new();
+    conversations.expect_get_by_id().returning(move |id| {
+        let found = (id == stored.id).then(|| stored.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    let mut members = MockConversationMemberRepository::new();
+    members
+        .expect_invited_by()
+        .returning(|_, _| Box::pin(async { Ok(None) }));
+    members
+        .expect_membership()
+        .returning(|_, _| Box::pin(async { Ok(Some(Membership::Active)) }));
+    members
+        .expect_list_member_ids()
+        .returning(move |_| Box::pin(async move { Ok(vec![ada, bob]) }));
+    let user = |id: UserId, principal: &str| User {
+        id,
+        username: principal.to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        last_login_at: None,
+        display_name: None,
+        avatar_url: None,
+        status_text: None,
+        bio: None,
+        email: None,
+        timezone: None,
+        principal_id: Some(principal.to_string()),
+        deletion_scheduled_for: None,
+        profile_locked_until: None,
+        handle: rim_core::user::model::UserHandle::Local,
+    };
+    let mut users = MockUserRepository::new();
+    let all = vec![user(ada, ALICE), user(bob, BOB)];
+    let by_id = all.clone();
+    users
+        .expect_get_by_id()
+        .returning(move |id| Ok(by_id.iter().find(|u| u.id == id).cloned()));
+    users.expect_get_by_ids().returning(move |ids| {
+        Ok(all
+            .iter()
+            .filter(|u| ids.contains(&u.id))
+            .cloned()
+            .collect())
+    });
+    let mut keys = MockKeyIdentityRepository::new();
+    keys.expect_get_profile_card().returning(move |user_id| {
+        Box::pin(async move {
+            Ok(Some(StoredProfileCard {
+                user_id,
+                version: 1,
+                payload: "{}".to_string(),
+                signature: "ed25519:c".to_string(),
+                updated_at: Utc::now(),
+            }))
+        })
+    });
+    let mut relay = rim_services::relay::service::MockRelayService::new();
+    relay
+        .expect_file_local()
+        .returning(move |envelope, recipients| {
+            let event = rim_s2s::host::read_host_event(&rim_identity::SignedStatement {
+                payload: envelope.payload,
+                signature: envelope.signature,
+            })
+            .expect("host event");
+            let kind = event.event["type"].as_str().unwrap_or_default().to_string();
+            let from = event.event["from_principal_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            filed.lock().expect("lock").push((recipients, kind, from));
+            Box::pin(async { Ok(()) })
+        });
+    relay
+        .expect_uninvited_holders()
+        .times(1)
+        .returning(move |_| {
+            let uninvited = uninvited.clone();
+            Box::pin(async move { Ok(uninvited) })
+        });
+    relay
+        .expect_pending_holders()
+        .returning(|_| Box::pin(async { Ok(vec![BOB.to_string()]) }));
+    HostEventWriter::new(
+        HostRepos {
+            host_repo: Arc::new(host),
+            relay_repo: Arc::new(MockRelayRepository::new()),
+            key_identity_repo: Arc::new(keys),
+            e2ee_repo: Arc::new(MockE2eeRepository::new()),
+            user_repo: Arc::new(users),
+            conversation_repo: Arc::new(conversations),
+            conversation_member_repo: Arc::new(members),
+            server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            delegation_repo: Arc::new(MockDelegationRepository::new()),
+            session_repo: Arc::new(rim_core::auth::repository::MockSessionRepository::new()),
+            relay_abuse_repo: Arc::new(blocks(&[])),
+            dm_policy_repo: Arc::new(MockDmPolicyRepository::new()),
+        },
+        None,
+        identity(30),
+        direct,
+        Arc::new(RefusalCache::default()),
+        Arc::new(PeerBacklogs::new(Duration::hours(24))),
+        Arc::new(tokio::sync::Notify::new()),
+    )
+    .with_relay(Arc::new(relay))
+}
+
+/// What `filed` records when a message is written into a direct-space DM by [`lapsed_writer`]
+/// with `uninvited`.
+async fn filed_for_a_message(uninvited: Vec<String>) -> Vec<(Vec<String>, String, String)> {
+    use rim_core::conversation::model::ConversationType;
+    use rim_core::message::model::MessageId;
+    use rim_services::events::{MessageEventData, WorkspaceEvent};
+
+    let direct = ServerId::from(Uuid::from_u128(5));
+    let mut dm = group_in(direct);
+    dm.conversation_type = ConversationType::Direct;
+    dm.encrypted_at = None;
+    let ada = dm.created_by.expect("creator");
+    let filed = FiledLocally::default();
+    let writer = lapsed_writer(direct, dm.clone(), uninvited, Arc::clone(&filed));
+    writer
+        .write(&WorkspaceEvent::NewMessage {
+            workspace_id: direct,
+            conversation_id: dm.id,
+            conversation_type: ConversationType::Direct.as_str().to_string(),
+            member_user_ids: vec![ada],
+            is_private: true,
+            message: MessageEventData {
+                id: MessageId::new(),
+                server_id: direct,
+                conversation_id: dm.id,
+                thread_id: None,
+                root_thread_id: None,
+                author_id: ada,
+                text: Some("again".to_string()),
+                has_attachments: false,
+                parent_message_id: None,
+                forwarded_from_message_id: None,
+                is_deleted: false,
+                sent_at: Utc::now(),
+                edited_at: None,
+                reactions: Vec::new(),
+                encryption: None,
+            },
+        })
+        .await
+        .expect("written");
+    filed.lock().expect("lock").clone()
+}
+
+#[tokio::test]
+async fn a_local_member_whose_request_lapsed_gets_the_invite_again_before_the_next_event() {
+    let filed = filed_for_a_message(vec![BOB.to_string()]).await;
+    let to_bob =
+        |kind: &str, from: &str| (vec![BOB.to_string()], kind.to_string(), from.to_string());
+    assert_eq!(
+        filed,
+        vec![to_bob("DmInvite", ALICE), to_bob("NewMessage", "")],
+        "the invite comes first, so the message files the request anew"
+    );
+}
+
+#[tokio::test]
+async fn a_local_member_holding_an_invite_is_not_invited_again() {
+    let filed = filed_for_a_message(Vec::new()).await;
+    assert_eq!(
+        filed,
+        vec![(
+            vec![BOB.to_string()],
+            "NewMessage".to_string(),
+            String::new()
+        )]
+    );
 }
 
 // ── Unblocking ───────────────────────────────────────────────────────────────────────────
@@ -4530,4 +4868,122 @@ async fn an_item_of_an_ordinary_pending_request_is_held_without_filing_it_again(
             .any(|n| matches!(n, RelayNotice::DmRequestReceived { .. })),
         "{notices:?}"
     );
+}
+
+// ── Deciding a request ───────────────────────────────────────────────────────────────────
+
+/// Bob's pending request from Alice for `CONVERSATION`, holding nothing.
+fn pending_row(bob: UserId) -> rim_core::relay::model::DmRequest {
+    let mut row = accepted_row(bob, Utc::now() + Duration::days(30), false);
+    row.status = rim_core::relay::model::DmRequestStatus::Pending;
+    row.decided_at = None;
+    row
+}
+
+#[tokio::test]
+async fn accepting_releases_the_held_items_for_at_least_the_retention() {
+    use rim_core::relay::model::DmRequestStatus;
+
+    let bob = UserId::new();
+    let row = pending_row(bob);
+    let request_id = row.id;
+    let mut relay = MockRelayRepository::new();
+    let found = row.clone();
+    relay.expect_get_request().returning(move |_, _| {
+        let found = Some(found.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    relay.expect_decide_request().returning(move |_, _, _| {
+        let decided = Some(rim_core::relay::model::DmRequest {
+            status: DmRequestStatus::Accepted,
+            decided_at: Some(Utc::now()),
+            ..row.clone()
+        });
+        Box::pin(async move { Ok(decided) })
+    });
+    relay
+        .expect_release_held()
+        .withf(move |id, at| *id == request_id && *at > Utc::now() + Duration::days(29))
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(2) }));
+    relay
+        .expect_held_items()
+        .returning(|_| Box::pin(async { Ok(Vec::new()) }));
+
+    let accepted = unblock_relay(relay)
+        .accept_dm_request(Actor::new(bob), request_id)
+        .await
+        .expect("accepted");
+
+    assert_eq!(accepted.status, DmRequestStatus::Accepted);
+}
+
+#[tokio::test]
+async fn a_cleared_request_cannot_be_decided() {
+    let bob = UserId::new();
+    let mut row = pending_row(bob);
+    row.decided_at = Some(row.created_at);
+    let request_id = row.id;
+    let mut relay = MockRelayRepository::new();
+    relay.expect_get_request().returning(move |_, _| {
+        let found = Some(row.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    relay.expect_decide_request().never();
+    let svc = unblock_relay(relay);
+    let actor = Actor::new(bob);
+
+    assert!(matches!(
+        svc.accept_dm_request(actor, request_id).await,
+        Err(ServiceError::NotFound)
+    ));
+    assert!(matches!(
+        svc.ignore_dm_request(actor, request_id).await,
+        Err(ServiceError::NotFound)
+    ));
+    assert!(matches!(
+        svc.report_dm_request(actor, request_id, "spam".to_string())
+            .await,
+        Err(ServiceError::NotFound)
+    ));
+}
+
+// ── Cleanup ──────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn cleanup_clears_lapsed_requests_here_before_deleting_expired_ones() {
+    let own_id = identity(30).current().server_id().to_string();
+    let mut order = mockall::Sequence::new();
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_delete_acked_items()
+        .times(1)
+        .in_sequence(&mut order)
+        .returning(|| Box::pin(async { Ok(0) }));
+    relay
+        .expect_delete_expired_items()
+        .times(1)
+        .in_sequence(&mut order)
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_rearm_expired_local_requests()
+        .withf(move |own, _, at| own == own_id && *at > Utc::now() + Duration::days(29))
+        .times(1)
+        .in_sequence(&mut order)
+        .returning(|_, _, _| Box::pin(async { Ok(2) }));
+    relay
+        .expect_delete_expired_requests()
+        .times(1)
+        .in_sequence(&mut order)
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_delete_orphan_envelopes()
+        .times(1)
+        .in_sequence(&mut order)
+        .returning(|| Box::pin(async { Ok(0) }));
+
+    let done = unblock_relay(relay).cleanup().await.expect("cleaned up");
+
+    assert_eq!(done.rearmed_requests, 2);
+    assert_eq!(done.expired_requests, 1);
 }

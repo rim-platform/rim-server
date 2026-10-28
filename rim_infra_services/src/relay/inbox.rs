@@ -76,6 +76,9 @@ pub(crate) struct InboxFacts {
     pub peer_bytes_left: i64,
     /// The recipient blocked the invite's sender.
     pub blocked: bool,
+    /// The item's conversation, hosted elsewhere, was accepted by the recipient from someone they
+    /// blocked since: whoever started it or brought them into it.
+    pub silenced: bool,
     /// How the recipient's effective DM setting takes the invite's sender.
     pub policy: DmPolicy,
     /// The recipient's request for the item's conversation, and how many items it holds.
@@ -142,6 +145,9 @@ fn place(facts: &InboxFacts) -> Filing {
     if facts.is_invite && facts.blocked {
         return Filing::Refuse("blocked");
     }
+    if facts.silenced {
+        return Filing::Drop;
+    }
     match facts.request {
         Some((_, DmRequestStatus::Accepted, _)) => Filing::Deliver,
         Some((_, DmRequestStatus::Ignored, _)) => Filing::Drop,
@@ -199,6 +205,7 @@ mod tests {
             join_decided: false,
             peer_bytes_left: i64::MAX,
             blocked: false,
+            silenced: false,
             policy: DmPolicy::Request,
             request: None,
             pending_for_user: 0,
@@ -217,6 +224,25 @@ mod tests {
             is_invite: false,
             request,
             ..invite()
+        }
+    }
+
+    #[test]
+    fn what_a_blocked_sender_started_is_dropped_whatever_was_decided() {
+        let id = DmRequestId::new();
+        for request in [
+            Some((id, DmRequestStatus::Accepted, 0)),
+            Some((id, DmRequestStatus::Pending, 0)),
+            None,
+        ] {
+            assert_eq!(
+                file(&InboxFacts {
+                    silenced: true,
+                    ..message(request)
+                }),
+                Filing::Drop,
+                "{request:?}"
+            );
         }
     }
 
@@ -547,6 +573,16 @@ mod tests {
         }
         assert_eq!(
             file(&left(message(Some((id, DmRequestStatus::Ignored, 0))), 0)),
+            Filing::Drop
+        );
+        assert_eq!(
+            file(&left(
+                InboxFacts {
+                    silenced: true,
+                    ..message(Some((id, DmRequestStatus::Accepted, 0)))
+                },
+                0
+            )),
             Filing::Drop
         );
         assert_eq!(

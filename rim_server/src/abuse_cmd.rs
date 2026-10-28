@@ -477,6 +477,11 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
                 .map_err(|e| e.to_string())?;
             if outcome.lifted {
                 let _ = writeln!(out, "unblocked {principal_id}");
+                let _ = writeln!(
+                    out,
+                    "    cleared {} DM requests its block ignored",
+                    outcome.cleared_requests
+                );
             } else {
                 let _ = writeln!(out, "{principal_id} was not blocked");
             }

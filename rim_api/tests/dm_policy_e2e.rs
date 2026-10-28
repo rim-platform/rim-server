@@ -10,7 +10,9 @@
 //! they accepted keeps no accepted request for it; a group of the default workspace reaches each
 //! member as their DM settings say, and never one who blocked its starter; the recipient of a DM
 //! request reads it first and posts nothing into it, nor reacts or types there, until they
-//! accept it.
+//! accept it; a request of a conversation here that lapses keeps it out of view until the
+//! sender's next message files it again or the recipient posts into it; a workspace DM or group
+//! started by someone the user blocked leaves their list and live events until the unblock.
 //!
 //! Run with:
 //! ```sh
@@ -23,6 +25,8 @@ mod support;
 use std::time::Duration;
 
 use rim_server::config::RIMConfig;
+use rim_services::relay::service::RelayService;
+use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 
 use support::nodes::{Node, databases_with, start};
@@ -30,6 +34,7 @@ use support::relay::{
     CREATE, Person, REQUESTS, RESET, eventually, open_registration, sign_up, sign_up_without_card,
     user_id, verify_item,
 };
+use support::ws::Socket;
 
 const CREATE_SERVER: &str =
     r#"mutation Create($input: CreateServerInput!) { createServer(input: $input) { id } }"#;
@@ -515,6 +520,315 @@ async fn an_accepted_dm_takes_nothing_from_a_blocked_member_and_carries_on_after
     let again = bob.pending_request(&alice).await;
     assert_eq!(again["conversationId"], json!(group));
     assert_eq!(again["id"], group_request["id"]);
+
+    a.stop().await;
+}
+
+/// Expire every request of `conversation` and run the relay's cleanup at once.
+async fn lapse(node: &Node, conversation: &str) {
+    node.db
+        .execute_unprepared(&format!(
+            "UPDATE relay_dm_request SET expires_at = now() - interval '1 second' \
+             WHERE conversation_id = '{conversation}'"
+        ))
+        .await
+        .expect("expire");
+    node.s2s.relay.cleanup().await.expect("cleanup");
+}
+
+/// `person`'s pending request from `from` once it holds `held` items.
+async fn holding(person: &Person, from: &Person, held: usize) -> Value {
+    eventually("a request holding its items", || async {
+        let request = person.pending_request(from).await;
+        (request["heldItems"].as_array().map(Vec::len) == Some(held)).then_some(request)
+    })
+    .await
+}
+
+/// Assert that the first item `request` holds is the invite of `conversation` from `host`.
+fn holds_the_invite_first(host: &Node, request: &Value, conversation: &str) {
+    let invite = verify_item(host, &request["heldItems"][0]);
+    assert_eq!(invite.event["type"], json!("DmInvite"), "{request}");
+    assert_eq!(invite.event["conversation_id"], json!(conversation));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unanswered_request_here_never_surfaces_its_conversation() {
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let direct = direct_space(&bob).await;
+
+    let conv = created(&dm(&a, &alice, &direct, &bob).await);
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
+        .await;
+    let request = bob.pending_request(&alice).await;
+
+    lapse(&a, &conv).await;
+    assert!(request_ids(&bob, "PENDING").await.is_empty());
+    assert!(request_ids(&bob, "IGNORED").await.is_empty());
+    assert!(
+        !listed(&bob, &direct).await.contains(&conv),
+        "a lapsed request does not surface its conversation"
+    );
+    let stale = bob
+        .post(
+            "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+            json!({ "id": request["id"] }),
+        )
+        .await;
+    assert_eq!(code(&stale), "NOT_FOUND", "{stale}");
+    assert_eq!(request_pending(&alice, &direct, &conv).await, json!(true));
+
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "again" }))
+        .await;
+    let again = holding(&bob, &alice, 2).await;
+    assert_eq!(again["id"], request["id"]);
+    holds_the_invite_first(&a, &again, &conv);
+    assert_eq!(texts(&bob, &direct, &conv).await, ["hello", "again"]);
+
+    bob.ok(
+        "mutation($id: ID!) { ignoreDmRequest(id: $id) { status } }",
+        json!({ "id": request["id"] }),
+    )
+    .await;
+    lapse(&a, &conv).await;
+    assert!(!listed(&bob, &direct).await.contains(&conv));
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "third" }))
+        .await;
+    let third = holding(&bob, &alice, 2).await;
+    holds_the_invite_first(&a, &third, &conv);
+
+    lapse(&a, &conv).await;
+    bob.ok(SEND, json!({ "s": direct, "c": conv, "t": "hi" }))
+        .await;
+    assert!(
+        listed(&bob, &direct).await.contains(&conv),
+        "posting takes the conversation back"
+    );
+    assert!(request_ids(&bob, "PENDING").await.is_empty());
+    assert_eq!(request_pending(&alice, &direct, &conv).await, json!(false));
+
+    a.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lapsed_request_from_someone_blocked_stays_ignored() {
+    let a = one_server(|_| {}).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = direct_space(&bob).await;
+
+    let conv = created(&dm(&a, &carol, &direct, &bob).await);
+    carol
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
+        .await;
+    let request = bob.pending_request(&carol).await;
+    bob.ok(BLOCK, json!({ "p": carol.principal() })).await;
+
+    lapse(&a, &conv).await;
+    assert!(
+        request_ids(&bob, "IGNORED").await.contains(&request["id"]),
+        "a request from someone blocked stays ignored"
+    );
+    assert!(!listed(&bob, &direct).await.contains(&conv));
+    let refused = carol
+        .post(SEND, json!({ "s": direct, "c": conv, "t": "spam" }))
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+
+    bob.ok(UNBLOCK, json!({ "p": carol.principal() })).await;
+    assert!(
+        !request_ids(&bob, "IGNORED").await.contains(&request["id"]),
+        "the unblock found its invite and cleared it"
+    );
+    carol
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "after" }))
+        .await;
+    let again = holding(&bob, &carol, 2).await;
+    assert_eq!(again["id"], request["id"]);
+    holds_the_invite_first(&a, &again, &conv);
+
+    a.stop().await;
+}
+
+const CREATE_CHANNEL: &str = "mutation($s: ID!, $title: String!) { \
+     createConversation(input: { serverId: $s, isChannel: true, title: $title }) { id } }";
+const JOIN_CHANNEL: &str =
+    "mutation($s: ID!, $c: ID!) { joinChannel(serverId: $s, conversationId: $c) { id } }";
+const UNREAD: &str = "query($s: ID!) { myUnreadNotificationCount(serverId: $s) }";
+
+/// A group in `server` that `creator` starts with `members`.
+async fn group(node: &Node, creator: &Person, server: &str, members: &[&Person]) -> String {
+    let mut ids = Vec::new();
+    for member in members {
+        ids.push(user_id(node, &member.principal()).await.to_string());
+    }
+    created(
+        &creator
+            .post(
+                CREATE,
+                json!({ "input": { "serverId": server, "memberIds": ids } }),
+            )
+            .await,
+    )
+}
+
+/// `person`'s `workspaceEvents` of `server` on a socket of its own.
+async fn events_of(node: &Node, person: &Person, server: &str) -> Socket {
+    let mut socket = Socket::connect(&node.origin, &person.session).await;
+    socket
+        .subscribe(
+            "events",
+            "subscription($id: ID!) { workspaceEvents(workspaceId: $id) }",
+            json!({ "id": server }),
+        )
+        .await;
+    socket
+}
+
+/// The events `socket` streams until one contains `marker`, which is not among them.
+async fn events_until(socket: &mut Socket, marker: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    loop {
+        let answer = socket.receive().await;
+        let text = answer["payload"]["data"]["workspaceEvents"]
+            .as_str()
+            .unwrap_or_else(|| panic!("an event: {answer}"))
+            .to_string();
+        if text.contains(marker) {
+            return seen;
+        }
+        seen.push(text);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workspace_dm_and_group_a_blocked_person_started_are_hidden_until_the_unblock() {
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let acme = workspace(&alice, "Acme", &[&bob, &carol]).await;
+
+    let dm = created(&dm(&a, &alice, &acme, &bob).await);
+    let alices = group(&a, &alice, &acme, &[&bob, &carol]).await;
+    let channel = alice
+        .ok(CREATE_CHANNEL, json!({ "s": acme, "title": "lounge" }))
+        .await["createConversation"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    bob.ok(JOIN_CHANNEL, json!({ "s": acme, "c": channel }))
+        .await;
+    let carols = group(&a, &carol, &acme, &[&alice, &bob]).await;
+    for conversation in [&dm, &alices] {
+        alice
+            .ok(SEND, json!({ "s": acme, "c": conversation, "t": "hi" }))
+            .await;
+    }
+    let listed_before = listed(&bob, &acme).await;
+    for conversation in [&dm, &alices, &carols] {
+        assert!(listed_before.contains(conversation), "{listed_before:?}");
+    }
+    let unread_before = eventually("Bob's notifications", || async {
+        let n = bob.ok(UNREAD, json!({ "s": acme })).await["myUnreadNotificationCount"]
+            .as_i64()
+            .expect("count");
+        (n > 0).then_some(n)
+    })
+    .await;
+
+    bob.ok(BLOCK, json!({ "p": alice.principal() })).await;
+    let bobs_list = listed(&bob, &acme).await;
+    assert!(!bobs_list.contains(&dm) && !bobs_list.contains(&alices));
+    assert!(bobs_list.contains(&carols));
+    assert!(listed(&carol, &acme).await.contains(&alices));
+    let refused = bob
+        .post(SEND, json!({ "s": acme, "c": alices, "t": "from bob" }))
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+    assert!(
+        refused["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("accept the message request")),
+        "{refused}"
+    );
+    bob.ok(SEND, json!({ "s": acme, "c": carols, "t": "in carols" }))
+        .await;
+    bob.ok(
+        SEND,
+        json!({ "s": acme, "c": channel, "t": "in the lounge" }),
+    )
+    .await;
+    let refused = alice
+        .post(SEND, json!({ "s": acme, "c": dm, "t": "while blocked" }))
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+    assert!(
+        refused["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("they do not take direct messages from you")),
+        "{refused}"
+    );
+    let unread_after = bob.ok(UNREAD, json!({ "s": acme })).await["myUnreadNotificationCount"]
+        .as_i64()
+        .expect("count");
+    assert!(
+        unread_after < unread_before,
+        "the hidden DM's notification is not counted: {unread_before} then {unread_after}"
+    );
+
+    // Live events: Alice's message into her group reaches Carol but not Bob.
+    let mut bobs_events = events_of(&a, &bob, &acme).await;
+    let mut carols_events = events_of(&a, &carol, &acme).await;
+    for (n, socket) in [&mut bobs_events, &mut carols_events]
+        .into_iter()
+        .enumerate()
+    {
+        let marker = format!("listening {n}");
+        let mut heard = false;
+        for _ in 0..50 {
+            carol
+                .ok(SEND, json!({ "s": acme, "c": carols, "t": marker }))
+                .await;
+            if let Some(answer) = socket
+                .receive_within(Duration::from_millis(300))
+                .await
+                .filter(|a| a.to_string().contains(&marker))
+            {
+                assert_eq!(answer["type"], "next", "{answer}");
+                heard = true;
+                break;
+            }
+        }
+        assert!(heard, "the subscription listens");
+    }
+    alice
+        .ok(SEND, json!({ "s": acme, "c": alices, "t": "secret plans" }))
+        .await;
+    carol
+        .ok(
+            SEND,
+            json!({ "s": acme, "c": carols, "t": "visible marker" }),
+        )
+        .await;
+    let bob_saw = events_until(&mut bobs_events, "visible marker").await;
+    assert!(
+        !bob_saw.iter().any(|e| e.contains(&alices)),
+        "nothing of the hidden group reaches Bob: {bob_saw:?}"
+    );
+    events_until(&mut carols_events, "secret plans").await;
+    assert_eq!(texts(&carol, &acme, &alices).await, ["hi", "secret plans"]);
+
+    bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
+    let bobs_list = listed(&bob, &acme).await;
+    assert!(bobs_list.contains(&dm) && bobs_list.contains(&alices));
+    bob.ok(SEND, json!({ "s": acme, "c": alices, "t": "back" }))
+        .await;
 
     a.stop().await;
 }

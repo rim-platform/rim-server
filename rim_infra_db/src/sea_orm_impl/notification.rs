@@ -36,7 +36,8 @@ impl SeaOrmNotificationRepository {
     }
 }
 
-/// Leaves out a user's notifications for conversations hidden from them by the request inbox.
+/// Leaves out a user's notifications for conversations hidden from them by the request inbox or
+/// a block.
 fn not_hidden(user_id: UserId) -> sea_orm::sea_query::SimpleExpr {
     sea_orm::sea_query::Expr::cust_with_values(
         format!(

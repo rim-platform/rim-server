@@ -292,6 +292,8 @@ pub struct RelayCleanup {
     pub acked_items: u64,
     pub expired_items: u64,
     pub orphan_envelopes: u64,
+    /// Expired requests of conversations here cleared instead of deleted.
+    pub rearmed_requests: u64,
     pub expired_requests: u64,
 }
 
@@ -355,6 +357,8 @@ pub struct PrincipalUnblockOutcome {
     pub lifted: bool,
     /// Whether the account's email was blocked and is no longer.
     pub email_unblocked: bool,
+    /// DM requests the block ignored, cleared for their recipients.
+    pub cleared_requests: u64,
 }
 
 /// An account in an invite tree, at `depth` 1 for one the root's invites created.

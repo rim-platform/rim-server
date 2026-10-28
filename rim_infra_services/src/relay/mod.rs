@@ -91,7 +91,7 @@ const ACCEPTED_REQUEST_TTL: Duration = Duration::days(400);
 /// row is not written for every item.
 const ACCEPTED_REFRESH_AFTER: Duration = Duration::days(1);
 /// When an accepted conversation's row expires if nothing is delivered for it from `now` on.
-fn accepted_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
+pub(crate) fn accepted_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
     now + ACCEPTED_REQUEST_TTL
 }
 
@@ -434,13 +434,14 @@ impl DefaultRelayService {
         })
     }
 
-    /// The actor's request `id`, or `NotFound` when there is none or it has expired.
+    /// The actor's request `id`, or `NotFound` when there is none, it has expired, or it is
+    /// cleared.
     async fn own_request(&self, actor: Actor, id: DmRequestId) -> ServiceResult<DmRequest> {
         self.repos
             .relay_repo
             .get_request(actor.user_id, id)
             .await?
-            .filter(|request| request.expires_at > Utc::now())
+            .filter(|request| request.expires_at > Utc::now() && !request.is_cleared())
             .ok_or(ServiceError::NotFound)
     }
 
@@ -721,6 +722,7 @@ impl DefaultRelayService {
                     .unwrap_or(i64::MAX)
             },
             blocked: false,
+            silenced: false,
             policy: DmPolicy::Request,
             request: None,
             pending_for_user: 0,
@@ -748,6 +750,17 @@ impl DefaultRelayService {
             };
             facts.request = Some((request.id, request.status, held));
             found = Some(request);
+        }
+        // What someone the user blocked started elsewhere brings them nothing until the unblock.
+        if let Some(request) = &found
+            && !read.local
+            && read.invite.is_none()
+            && request.status == DmRequestStatus::Accepted
+        {
+            facts.silenced = repos
+                .relay_repo
+                .is_blocked(user_id, &request.from_principal_id)
+                .await?;
         }
         if let Some(invite) = &read.invite {
             let from = invite.from_principal_id.as_str();
@@ -1415,7 +1428,10 @@ impl RelayService for DefaultRelayService {
             )
             .await?
             .ok_or_else(|| undecided(&request))?;
-        repos.relay_repo.release_held(request.id).await?;
+        repos
+            .relay_repo
+            .release_held(request.id, Utc::now() + self.settings.retention)
+            .await?;
         let relays = contact_relays(&request.card_payload);
         if !relays.is_empty() {
             repos
@@ -2021,6 +2037,17 @@ impl RelayService for DefaultRelayService {
             .collect())
     }
 
+    async fn uninvited_holders(&self, conversation_id: Uuid) -> ServiceResult<Vec<String>> {
+        Ok(self
+            .repos
+            .relay_repo
+            .uninvited_holders(conversation_id)
+            .await?
+            .into_iter()
+            .map(|(_, principal_id)| principal_id)
+            .collect())
+    }
+
     async fn pull_outbox(&self, peer_server_id: String) -> ServiceResult<u64> {
         let after = self
             .repos
@@ -2099,11 +2126,20 @@ impl RelayService for DefaultRelayService {
         let expired_items = self.repos.relay_repo.delete_expired_items(now).await?;
         metrics::counter!("rim_relay_removed_items_total", "reason" => "expired")
             .increment(expired_items);
+        // Requests of conversations here are cleared before the expired ones are deleted.
+        let rearmed_requests = self
+            .repos
+            .relay_repo
+            .rearm_expired_local_requests(&self.own_id(), now, now + self.settings.retention)
+            .await?;
+        let expired_requests = self.repos.relay_repo.delete_expired_requests(now).await?;
+        let orphan_envelopes = self.repos.relay_repo.delete_orphan_envelopes().await?;
         Ok(RelayCleanup {
             acked_items,
             expired_items,
-            expired_requests: self.repos.relay_repo.delete_expired_requests(now).await?,
-            orphan_envelopes: self.repos.relay_repo.delete_orphan_envelopes().await?,
+            rearmed_requests,
+            expired_requests,
+            orphan_envelopes,
         })
     }
 }

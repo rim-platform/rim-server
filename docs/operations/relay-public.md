@@ -465,6 +465,8 @@ Signs: `relay.registration_pow` far above normal, many reports, DM requests from
 7. Lower the settings again a day after the wave ends.
 
 `rim-relay principal unblock <principalId>` lifts a block and its email block after a review.
+It also clears the DM requests the block ignored, for everyone who has not blocked the person
+themselves: their next message in such a conversation arrives as a request again.
 It does not bring back the sessions or the invites the block ended, and it lifts one account:
 unblock each account a cascade blocked.
 
@@ -640,7 +642,7 @@ moderation"). A blocked account or one scheduled for deletion cannot be granted 
 
 Every one is audited (`target` `audit`): `relay.principal_blocked` (`scope` `server`, one per
 account a block reaches, `cascade` true for those after the first),
-`relay.principal_unblocked`, `relay.profile_cleared` (`scope` `server`, with the `user_id`,
+`relay.principal_unblocked` (with `cleared_requests`), `relay.profile_cleared` (`scope` `server`, with the `user_id`,
 `locked_until` and `reason`), `s2s.peer_blocked`, `s2s.peer_unblocked`, `s2s.peer_reset`,
 `relay.abuse_report_filed`, `relay.abuse_report_resolved`, `server_key.rotated`,
 `server_key.recovered`, `instance_invite_issued`,

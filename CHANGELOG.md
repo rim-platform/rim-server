@@ -60,6 +60,19 @@ tag `v<version>`, the version every crate in the workspace carries.
   `sendMessage`, `replyToMessage`, `forwardMessage`, `sendEncryptedMessage` and `toggleReaction`
   answer `FORBIDDEN` ("they do not take direct messages from you"), as starting the DM already
   did.
+- A DM or group started by someone you blocked is hidden until you unblock them, in a workspace
+  or the default workspace too, not only in the direct space: it leaves your conversation list,
+  live events, notifications and unread counts, and you post nothing into it. Channels are not
+  affected.
+- Blocking someone also silences the DMs and groups they started on another server, or added you
+  to there: from then on the relay drops every item of such a conversation, and acknowledges it
+  so their server does not send it again, until the unblock. Conversations someone else started
+  keep flowing. The history stays at their server.
+- `rim_server principal unblock` (and `instanceUnblockPrincipal`) clears the DM requests the block
+  ignored, for every recipient who has not blocked the principal themselves: the next item of
+  such a conversation files it again as a request. The command prints the count, and
+  `relay.principal_unblocked` records it as `cleared_requests`. A user's `unblockPrincipal`
+  clears nothing while the operator blocks the principal.
 - A relay ends a person's subscription to a workspace elsewhere when their `MemberLeft` arrives
   on their own stream, instead of letting it lapse (`docs/specs/server-to-server-v1.md`,
   "Subscriptions").
@@ -77,6 +90,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   command palette and keybinds.
 - Search snippets (`headline`) no longer drop short words, numbers and punctuation at their
   edges: a message of up to 300 characters comes back whole.
+- A message request for a conversation this server hosts no longer turns into an ordinary
+  conversation when it expires unanswered or 30 days after Ignore. It stays out of the
+  recipient's list, and the sender's next message files it again as a new request with a fresh
+  invite. A recipient who posts into such a conversation takes it back. A request from someone
+  blocked stays ignored.
+- A DM request keeps its held items, its invite included, as long as the request, so an ignored
+  or cleared request still holds its invite when it is filed again. Items released by accepting
+  are kept at least the retention period.
 
 ## [0.0.4] - 2026-10-26
 

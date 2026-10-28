@@ -146,7 +146,7 @@ pub trait RelayService: Send + Sync {
     async fn file_local(&self, envelope: SignedJson, recipients: Vec<String>) -> ServiceResult<()>;
 
     /// Whether a conversation stays out of a local user's list and live events: its request is
-    /// pending or ignored, or the user blocked the direct-space conversation's creator.
+    /// pending or ignored, or the user blocked whoever started the DM or group.
     async fn conversation_hidden(
         &self,
         user_id: UserId,
@@ -163,6 +163,10 @@ pub trait RelayService: Send + Sync {
     /// Local users whose request for a direct-space conversation is pending, by principal id.
     async fn pending_holders(&self, conversation_id: uuid::Uuid) -> ServiceResult<Vec<String>>;
 
+    /// Local users, by principal id, still members of a conversation whose cleared request holds
+    /// nothing: its next event sends them its invite again.
+    async fn uninvited_holders(&self, conversation_id: uuid::Uuid) -> ServiceResult<Vec<String>>;
+
     /// Pull what a host's outbox holds above what was received from it. Returns how many items
     /// were taken.
     async fn pull_outbox(&self, peer_server_id: String) -> ServiceResult<u64>;
@@ -171,7 +175,8 @@ pub trait RelayService: Send + Sync {
     /// devices or key log.
     async fn identity_changed(&self, user_id: UserId) -> ServiceResult<()>;
 
-    /// Delete acked and expired items, orphaned envelopes and expired requests.
+    /// Delete acked and expired items, orphaned envelopes and expired requests, clearing instead
+    /// the expired requests of conversations here whose user is still a member.
     async fn cleanup(&self) -> ServiceResult<RelayCleanup>;
 }
 

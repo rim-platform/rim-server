@@ -1,7 +1,8 @@
 #![cfg(feature = "db-tests")]
 
 //! Principal blocks and abuse reports against a real database: blocks replace their reason,
-//! a block ignores pending requests for every recipient, reports resolve once and outlive
+//! a block ignores pending requests for every recipient and its lifting clears them again for
+//! those who did not block the principal themselves, reports resolve once and outlive
 //! their reporter and request, and the migration refuses `down` while blocks or reports exist.
 
 mod support;
@@ -192,6 +193,61 @@ async fn a_block_ignores_pending_requests_for_every_recipient_and_keeps_their_in
         .unwrap();
     assert_eq!(friend.status, DmRequestStatus::Pending);
     assert_eq!(relay.count_held(from_friend.id).await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn an_unblock_clears_what_the_block_ignored_and_leaves_the_rest() {
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let carol = ctx.create_key_only_user("carol", "rimp1_carol").await;
+    let dave = ctx.create_key_only_user("dave", "rimp1_dave").await;
+    let relay = SeaOrmRelayRepository::new(ctx.db.clone());
+    let abuse = SeaOrmRelayAbuseRepository::new(ctx.db.clone());
+    let in_30_days = Utc::now() + Duration::days(30);
+    let by_hand = pending_request(&relay, dave.id, SPAMMER, 1).await;
+    relay
+        .decide_request(by_hand.id, DmRequestStatus::Ignored, in_30_days)
+        .await
+        .unwrap()
+        .expect("pending");
+    let to_bob = pending_request(&relay, bob.id, SPAMMER, 3).await;
+    let to_carol = pending_request(&relay, carol.id, SPAMMER, 2).await;
+    abuse.block_principal(SPAMMER, "spam").await.unwrap();
+    assert_eq!(
+        abuse
+            .ignore_requests_from(SPAMMER, in_30_days)
+            .await
+            .unwrap(),
+        2
+    );
+    relay.block(carol.id, SPAMMER).await.unwrap();
+
+    assert_eq!(
+        abuse
+            .clear_requests_ignored_by_block(SPAMMER, in_30_days)
+            .await
+            .unwrap(),
+        1,
+        "only Bob's: Carol blocked the principal herself, Dave ignored it before the block"
+    );
+    let bobs = relay.get_request(bob.id, to_bob.id).await.unwrap().unwrap();
+    assert_eq!(bobs.status, DmRequestStatus::Pending);
+    assert!(bobs.is_cleared());
+    assert_eq!(relay.count_held(to_bob.id).await.unwrap(), 1);
+    for (user, request) in [(carol.id, &to_carol), (dave.id, &by_hand)] {
+        let stored = relay.get_request(user, request.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, DmRequestStatus::Ignored);
+    }
+
+    assert!(abuse.unblock_principal(SPAMMER).await.unwrap());
+    assert_eq!(
+        abuse
+            .clear_requests_ignored_by_block(SPAMMER, in_30_days)
+            .await
+            .unwrap(),
+        0,
+        "nothing is cleared once the block is lifted"
+    );
 }
 
 #[tokio::test]

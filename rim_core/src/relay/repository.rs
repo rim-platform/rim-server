@@ -67,6 +67,7 @@ pub trait RelayRepository: Send + Sync {
     /// Delete items every non-revoked device of their user has passed. Returns how many.
     async fn delete_acked_items(&self) -> RepoResult<u64>;
 
+    /// Delete queued items past their expiry. Items a request holds go with the request.
     async fn delete_expired_items(&self, now: DateTime<Utc>) -> RepoResult<u64>;
 
     /// Delete envelopes no item refers to. Returns how many.
@@ -126,8 +127,13 @@ pub trait RelayRepository: Send + Sync {
         expires_at: DateTime<Utc>,
     ) -> RepoResult<Option<DmRequest>>;
 
-    /// Let a request's held items flow. Returns how many.
-    async fn release_held(&self, request_id: DmRequestId) -> RepoResult<u64>;
+    /// Release a request's held items to the queue, each kept at least until `expires_at`.
+    /// Returns how many.
+    async fn release_held(
+        &self,
+        request_id: DmRequestId,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
 
     /// Delete a request's held items but its first, the invite, which stays with the request so
     /// the app can still verify the conversation's home. Returns how many.
@@ -158,7 +164,8 @@ pub trait RelayRepository: Send + Sync {
 
     /// Clear every ignored request from a principal that still holds its invite: pending again,
     /// decided as it is filed so it is neither listed nor counted, expiring at `expires_at`. The
-    /// next item of its conversation files it again ([`Self::refile_request`]). Returns how many.
+    /// next item of its conversation files it again ([`Self::refile_request`]). Nothing while the
+    /// operator blocks the principal. Returns how many.
     async fn clear_ignored_from(
         &self,
         user_id: UserId,
@@ -171,6 +178,18 @@ pub trait RelayRepository: Send + Sync {
     async fn refile_request(&self, id: DmRequestId, expires_at: DateTime<Utc>) -> RepoResult<bool>;
 
     async fn delete_expired_requests(&self, now: DateTime<Utc>) -> RepoResult<u64>;
+
+    /// Clear, instead of letting them expire, the requests not accepted of conversations
+    /// `own_server_id` hosts that expired before `now` while their user is still a member: pending,
+    /// decided as filed, holding nothing, expiring at `expires_at`. One from a principal the user
+    /// or the operator blocked stays ignored, keeps what it holds and expires at `expires_at`.
+    /// Returns how many.
+    async fn rearm_expired_local_requests(
+        &self,
+        own_server_id: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
 
     /// How many of a user's conversations from a host are accepted.
     async fn count_accepted_requests(
@@ -200,11 +219,24 @@ pub trait RelayRepository: Send + Sync {
     /// for it is pending, with their principal ids.
     async fn pending_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
 
+    /// Local users still members of a conversation whose cleared request for it holds nothing,
+    /// with their principal ids: the conversation's next event sends them its invite again.
+    async fn uninvited_holders(&self, conversation_id: Uuid) -> RepoResult<Vec<(UserId, String)>>;
+
+    /// Accept a user's cleared request for a conversation as if accepted when filed, deleting
+    /// what it holds, expiring at `expires_at`. Returns whether there was one.
+    async fn accept_cleared(
+        &self,
+        user_id: UserId,
+        conversation_id: Uuid,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<bool>;
+
     /// Whether a local user's request for a conversation is pending.
     async fn request_pending(&self, user_id: UserId, conversation_id: Uuid) -> RepoResult<bool>;
 
     /// Whether a conversation stays out of a local user's list: their request for it is pending
-    /// or ignored, or they blocked the direct-space conversation's creator.
+    /// or ignored, or it is a DM or group whose creator they blocked.
     async fn conversation_hidden(&self, user_id: UserId, conversation_id: Uuid)
     -> RepoResult<bool>;
 
@@ -405,6 +437,16 @@ pub trait RelayAbuseRepository: Send + Sync {
     /// Ignore every pending DM request from a principal, for every local user, deleting their
     /// held items but each request's invite. Returns how many requests.
     async fn ignore_requests_from(
+        &self,
+        principal_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
+
+    /// Clear the requests a principal's block ignored: ignored since the block began, still
+    /// holding their invite, for every user who has not blocked the principal themselves. Pending
+    /// again, decided as filed, expiring at `expires_at`; the next item of such a conversation files
+    /// it again. Run before the block is lifted. Returns how many.
+    async fn clear_requests_ignored_by_block(
         &self,
         principal_id: &str,
         expires_at: DateTime<Utc>,
