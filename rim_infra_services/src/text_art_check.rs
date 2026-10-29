@@ -11,9 +11,11 @@ use crate::s2s::net::http_client;
 
 /// How long one check may take, connection included.
 const TIMEOUT: Duration = Duration::from_secs(10);
-/// The fewest non-blank lines a text art message has.
+/// The fewest non-whitespace characters a text art line has.
+const MIN_LINE_CHARS: usize = 8;
+/// The fewest non-blank lines a text art block has.
 const MIN_LINES: usize = 6;
-/// The fewest non-whitespace characters a text art message has.
+/// The fewest non-whitespace characters a text art block has.
 const MIN_CHARS: usize = 120;
 /// The category of the service's answer the check reads.
 const SEXUAL: &str = "sexual";
@@ -87,21 +89,76 @@ impl TextScorer for TextArtChecker {
     }
 }
 
-/// Whether `text` looks like text art: at least 6 non-blank lines, at least 120 non-whitespace
-/// characters, and fewer than half of those letters or digits. Braille, block and box-drawing
-/// characters are neither; code, logs and prose are mostly letters.
-pub fn looks_like_text_art(text: &str) -> bool {
-    let lines = text.lines().filter(|l| !l.trim().is_empty()).count();
-    if lines < MIN_LINES {
-        return false;
+/// The longest run of text art lines in `text`, or `None` when the message holds no picture big
+/// enough to check. A line is text art when it has at least 8 non-whitespace characters and
+/// fewer than half of them are letters or digits; braille, block and box-drawing characters are
+/// neither, while code, logs and prose are mostly letters. Blank lines and short lines of symbols
+/// stay inside a run; a line of mostly letters or digits ends it. The run needs at least 6
+/// non-blank lines and 120 non-whitespace characters; the first of equally long runs wins.
+pub fn art_block(text: &str) -> Option<String> {
+    let mut best: Vec<&str> = Vec::new();
+    let mut run: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        match line_kind(line) {
+            LineKind::Art => run.push(line),
+            LineKind::Filler => {
+                if !run.is_empty() {
+                    run.push(line);
+                }
+            }
+            LineKind::Text => keep_longest(&mut best, &mut run),
+        }
     }
-    let (chars, alphanumeric) = text
+    keep_longest(&mut best, &mut run);
+    let lines = non_blank(&best);
+    let chars = best
+        .iter()
+        .flat_map(|l| l.chars())
+        .filter(|c| !c.is_whitespace())
+        .count();
+    (lines >= MIN_LINES && chars >= MIN_CHARS).then(|| best.join("\n"))
+}
+
+/// What a line is to a text art block.
+enum LineKind {
+    /// At least 8 non-whitespace characters, fewer than half of them letters or digits.
+    Art,
+    /// Blank, or a few characters that are mostly not letters or digits (`||`, `/\`): kept inside
+    /// a block, never the start of one.
+    Filler,
+    /// Mostly letters or digits: ends a block.
+    Text,
+}
+
+fn line_kind(line: &str) -> LineKind {
+    let (chars, alphanumeric) = line
         .chars()
         .filter(|c| !c.is_whitespace())
         .fold((0usize, 0usize), |(n, a), c| {
             (n + 1, a + usize::from(c.is_alphanumeric()))
         });
-    chars >= MIN_CHARS && alphanumeric * 2 < chars
+    if chars > 0 && alphanumeric * 2 >= chars {
+        LineKind::Text
+    } else if chars >= MIN_LINE_CHARS {
+        LineKind::Art
+    } else {
+        LineKind::Filler
+    }
+}
+
+/// Ends `run`, without its trailing blank lines: it replaces `best` when it has more lines.
+fn keep_longest<'a>(best: &mut Vec<&'a str>, run: &mut Vec<&'a str>) {
+    while run.last().is_some_and(|l| l.trim().is_empty()) {
+        run.pop();
+    }
+    if run.len() > best.len() {
+        *best = std::mem::take(run);
+    }
+    run.clear();
+}
+
+fn non_blank(lines: &[&str]) -> usize {
+    lines.iter().filter(|l| !l.trim().is_empty()).count()
 }
 
 #[cfg(test)]
@@ -145,12 +202,12 @@ mod tests {
     }
 
     #[test]
-    fn a_braille_drawing_is_text_art() {
-        assert!(looks_like_text_art(&braille(40)));
+    fn a_braille_drawing_is_its_own_block() {
+        assert_eq!(art_block(&braille(40)), Some(braille(40)));
     }
 
     #[test]
-    fn an_ascii_figure_is_text_art() {
+    fn an_ascii_figure_is_a_block() {
         let figure = r"
             /\_/\    /\_/\    /\_/\
            ( o.o )  ( -.- )  ( ^.^ )
@@ -163,7 +220,24 @@ mod tests {
           \__/ \__/\__/ \__/\__/ \__/
            ||   ||  ||   ||  ||   ||
         ";
-        assert!(looks_like_text_art(figure));
+        assert!(art_block(figure).is_some_and(|b| b.lines().count() == 10));
+    }
+
+    #[test]
+    fn short_symbol_lines_stay_inside_a_block() {
+        let figure = r"
+            /\_/\    /\_/\    /\_/\
+           ( o.o )  ( -.- )  ( ^.^ )
+            > ^ <    > ^ <    > ^ <
+                    ||
+           /|   |\  /|   |\  /|   |\
+          (_|   |_)(_|   |_)(_|   |_)
+                    ||
+            |___|    |___|    |___|
+           /\   /\  /\   /\  /\   /\
+          /__\_/__\/__\_/__\/__\_/__\
+        ";
+        assert!(art_block(figure).is_some_and(|b| b.lines().count() == 10));
     }
 
     #[test]
@@ -184,7 +258,7 @@ mod tests {
             }
         "#;
         assert!(code.lines().filter(|l| !l.trim().is_empty()).count() >= 12);
-        assert!(!looks_like_text_art(code));
+        assert!(art_block(code).is_none());
     }
 
     #[test]
@@ -197,7 +271,7 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!looks_like_text_art(&logs));
+        assert!(art_block(&logs).is_none());
     }
 
     #[test]
@@ -207,14 +281,77 @@ mod tests {
             for the third quarter if you have them. We will go through the budget first, then \
             the hiring plan, and finish with questions. Coffee is on the second floor."
             .repeat(3);
-        assert!(!looks_like_text_art(&prose));
+        assert!(art_block(&prose).is_none());
         let paragraphs = [prose.as_str(); 6].join("\n\n");
-        assert!(!looks_like_text_art(&paragraphs));
+        assert!(art_block(&paragraphs).is_none());
     }
 
     #[test]
     fn a_short_braille_snippet_is_not_text_art() {
-        assert!(!looks_like_text_art(&braille(3)));
+        assert!(art_block(&braille(3)).is_none());
+    }
+
+    const FIGURE: &str = r"/\_/\    /\_/\    /\_/\
+( o.o )  ( -.- )  ( ^.^ )
+ > ^ <    > ^ <    > ^ <
+/|   |\  /|   |\  /|   |\
+(_|   |_)(_|   |_)(_|   |_)
+  |___|    |___|    |___|
+ /\   /\  /\   /\  /\   /\
+/__\_/__\/__\_/__\/__\_/__\
+\__/ \__/\__/ \__/\__/ \__/
+ ||   ||  ||   ||  ||   ||";
+
+    fn paragraph() -> String {
+        "The meeting moved to Thursday because half of the team is travelling this week, so \
+         please read the notes from last time before you come and bring the numbers for the \
+         third quarter if you have them. We will go through the budget first, then the hiring \
+         plan, and finish with questions. Coffee is on the second floor of the main building, \
+         next to the printers, and there is tea in the kitchen as well as plenty of biscuits \
+         for everybody who arrives early enough to get one before they are gone."
+            .repeat(2)
+    }
+
+    #[test]
+    fn an_intro_line_is_left_out_of_the_block() {
+        let text = format!("hey here is my new picture:\n{}", braille(40));
+        assert_eq!(art_block(&text), Some(braille(40)));
+    }
+
+    #[test]
+    fn a_figure_next_to_a_paragraph_is_found() {
+        let paragraph = paragraph();
+        assert!(paragraph.len() >= 600);
+        let before = format!("{paragraph}\n{FIGURE}");
+        assert_eq!(art_block(&before).as_deref(), Some(FIGURE));
+        let after = format!("{FIGURE}\n{paragraph}");
+        assert_eq!(art_block(&after).as_deref(), Some(FIGURE));
+    }
+
+    #[test]
+    fn the_longer_of_two_blocks_wins() {
+        let text = format!("{}\nand another one\n{}", braille(7), braille(9));
+        assert_eq!(art_block(&text), Some(braille(9)));
+        let text = format!("{}\nand another one\n{}", braille(9), braille(7));
+        assert_eq!(art_block(&text), Some(braille(9)));
+    }
+
+    #[test]
+    fn blank_lines_stay_inside_a_block_and_trailing_ones_go() {
+        let drawing = braille(8);
+        let lines: Vec<&str> = drawing.lines().collect();
+        let text = format!(
+            "{}\n\n  \n{}\n\n\n",
+            lines[..4].join("\n"),
+            lines[4..].join("\n")
+        );
+        let expected = format!("{}\n\n  \n{}", lines[..4].join("\n"), lines[4..].join("\n"));
+        assert_eq!(art_block(&text), Some(expected));
+    }
+
+    #[test]
+    fn plain_chat_has_no_block() {
+        assert_eq!(art_block("hey whats up?"), None);
     }
 
     #[tokio::test]

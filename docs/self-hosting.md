@@ -451,10 +451,11 @@ pictures are then stored unchecked, and the server logs a warning saying so at e
 
 The same service scores messages that look like text art: drawings made of braille, block,
 box-drawing or ASCII characters (`docs/messaging.md`, "Flagged messages", says which messages
-count). The server sends the message's text and nothing else, only for messages it can read in
-a workspace: never an encrypted message and never a DM or group of the direct space. The text
-goes to `RIM_AVATAR_CHECK_URL` over the internal network and leaves the host no further; the
-service keeps nothing.
+count). The server sends the message's art block (the picture inside the text, without the
+words around it) and nothing else, only for messages it can read in a workspace: never an
+encrypted message and never a DM or group of the direct space. The block goes to
+`RIM_AVATAR_CHECK_URL` over the internal network and leaves the host no further; the service
+keeps nothing.
 
 | Setting | Default | At or above it |
 |---|---|---|
