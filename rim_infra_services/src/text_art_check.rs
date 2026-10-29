@@ -92,21 +92,21 @@ impl TextScorer for TextArtChecker {
 /// The longest run of text art lines in `text`, or `None` when the message holds no picture big
 /// enough to check. A line is text art when it has at least 8 non-whitespace characters and
 /// fewer than half of them are letters or digits; braille, block and box-drawing characters are
-/// neither, while code, logs and prose are mostly letters. Blank lines stay inside a run, any
-/// other line ends it. The run needs at least 6 non-blank lines and 120 non-whitespace
-/// characters; the first of equally long runs wins.
+/// neither, while code, logs and prose are mostly letters. Blank lines and short lines of symbols
+/// stay inside a run; a line of mostly letters or digits ends it. The run needs at least 6
+/// non-blank lines and 120 non-whitespace characters; the first of equally long runs wins.
 pub fn art_block(text: &str) -> Option<String> {
     let mut best: Vec<&str> = Vec::new();
     let mut run: Vec<&str> = Vec::new();
     for line in text.lines() {
-        if line.trim().is_empty() {
-            if !run.is_empty() {
-                run.push(line);
+        match line_kind(line) {
+            LineKind::Art => run.push(line),
+            LineKind::Filler => {
+                if !run.is_empty() {
+                    run.push(line);
+                }
             }
-        } else if is_art_line(line) {
-            run.push(line);
-        } else {
-            keep_longest(&mut best, &mut run);
+            LineKind::Text => keep_longest(&mut best, &mut run),
         }
     }
     keep_longest(&mut best, &mut run);
@@ -119,15 +119,31 @@ pub fn art_block(text: &str) -> Option<String> {
     (lines >= MIN_LINES && chars >= MIN_CHARS).then(|| best.join("\n"))
 }
 
-/// Whether `line` is a text art line.
-fn is_art_line(line: &str) -> bool {
+/// What a line is to a text art block.
+enum LineKind {
+    /// At least 8 non-whitespace characters, fewer than half of them letters or digits.
+    Art,
+    /// Blank, or a few characters that are mostly not letters or digits (`||`, `/\`): kept inside
+    /// a block, never the start of one.
+    Filler,
+    /// Mostly letters or digits: ends a block.
+    Text,
+}
+
+fn line_kind(line: &str) -> LineKind {
     let (chars, alphanumeric) = line
         .chars()
         .filter(|c| !c.is_whitespace())
         .fold((0usize, 0usize), |(n, a), c| {
             (n + 1, a + usize::from(c.is_alphanumeric()))
         });
-    chars >= MIN_LINE_CHARS && alphanumeric * 2 < chars
+    if chars > 0 && alphanumeric * 2 >= chars {
+        LineKind::Text
+    } else if chars >= MIN_LINE_CHARS {
+        LineKind::Art
+    } else {
+        LineKind::Filler
+    }
 }
 
 /// Ends `run`, without its trailing blank lines: it replaces `best` when it has more lines.
@@ -203,6 +219,23 @@ mod tests {
           /__\_/__\/__\_/__\/__\_/__\
           \__/ \__/\__/ \__/\__/ \__/
            ||   ||  ||   ||  ||   ||
+        ";
+        assert!(art_block(figure).is_some_and(|b| b.lines().count() == 10));
+    }
+
+    #[test]
+    fn short_symbol_lines_stay_inside_a_block() {
+        let figure = r"
+            /\_/\    /\_/\    /\_/\
+           ( o.o )  ( -.- )  ( ^.^ )
+            > ^ <    > ^ <    > ^ <
+                    ||
+           /|   |\  /|   |\  /|   |\
+          (_|   |_)(_|   |_)(_|   |_)
+                    ||
+            |___|    |___|    |___|
+           /\   /\  /\   /\  /\   /\
+          /__\_/__\/__\_/__\/__\_/__\
         ";
         assert!(art_block(figure).is_some_and(|b| b.lines().count() == 10));
     }

@@ -479,8 +479,9 @@ block, box-drawing or ASCII characters), and flags those that score high.
   message (the server cannot read it), never a message of the direct space (DMs and groups), and
   only text that holds an art block. The art block is the longest run of text art lines in the
   message (the first when two are equally long). A line is text art when it has at least 8
-  non-whitespace characters and fewer than half of them are letters or digits; blank lines stay
-  inside a run, any other line ends it. A run counts when it has at least 6 non-blank lines and
+  non-whitespace characters and fewer than half of them are letters or digits; blank lines and
+  short lines of symbols (fewer than 8 characters, like `||`) stay inside a run, and a line of
+  mostly letters or digits ends it. A run counts when it has at least 6 non-blank lines and
   at least 120 non-whitespace characters. Code, logs and prose are mostly letters and are not
   checked; a picture inside a longer message is found and the words around it are ignored.
 - **When.** After the message is stored, whatever stored it: `sendMessage`, a command, a
