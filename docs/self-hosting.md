@@ -413,20 +413,22 @@ another server keeps showing the display name in its copy of the person's signed
 
 ## Optional features
 
-Attachments, link previews, email, custom emoji, workspace plugins, the AI command surface and
-avatars can be switched off with `RIM_FEATURES_DISABLED` in `deploy/.env`;
+Attachments, link previews, email, custom emoji, workspace plugins, the AI command surface,
+avatars, pinned plugin link fetches and the text art check can be switched off with `RIM_FEATURES_DISABLED` in `deploy/.env`;
 `docs/operations/features.md` lists what each one covers and what clients see.
 `RIM_LINK_PREVIEW_CONCURRENCY` (default 8) caps the link preview fetches running at once.
 Outgoing requests ignore proxy environment variables.
 
-## Profile picture check
+## Content check
+
+### Profile pictures
 
 `deploy/compose.yml` runs `imagecheck` next to the server: a small service, built from
 `imagecheck/` in this repository and published as `ghcr.io/rim-platform/rim-imagecheck`, that
 scores every uploaded profile picture for sexual content, gore and violence, each from 0 to 1.
-It runs two models on the CPU, a trained nsfw classifier and CLIP, holds them in about 320 MB
-of memory (its limit is 1 GB and 2 CPUs) and takes about a tenth of a second a picture. It is on
-the internal network only and reaches nothing; `imagecheck/README.md` describes the models, their
+It runs two models on the CPU, a trained nsfw classifier and CLIP, and takes about a tenth of a
+second a picture; with the text art model (below) it holds about 825 MiB of memory (its limit is
+1536 MiB and 2 CPUs). It is on the internal network only and reaches nothing; `imagecheck/README.md` describes the models, their
 licences and the scores of ordinary pictures.
 
 The server holds the highest of the three scores against two thresholds:
@@ -444,6 +446,29 @@ boot. Below both the picture is stored. Nobody approves a picture before it is s
 picture uploads answer 503 and everything else works. To run without it, set
 `RIM_AVATAR_CHECK_URL=` (empty) in `deploy/.env` and leave the `imagecheck` service stopped;
 pictures are then stored unchecked, and the server logs a warning saying so at every start.
+
+### Text art
+
+The same service scores messages that look like text art: drawings made of braille, block,
+box-drawing or ASCII characters (`docs/messaging.md`, "Flagged messages", says which messages
+count). The server sends the message's text and nothing else, only for messages it can read in
+a workspace: never an encrypted message and never a DM or group of the direct space. The text
+goes to `RIM_AVATAR_CHECK_URL` over the internal network and leaves the host no further; the
+service keeps nothing.
+
+| Setting | Default | At or above it |
+|---|---|---|
+| `RIM_TEXT_ART_CHECK_FLAG` | 0.60 | the message is flagged: clients cover it, the workspace's Owner and Moderators get an automatic report and the operators an abuse report |
+
+It is in (0, 1], or the server stops at boot. The check runs after the message is stored and
+never delays or refuses it; at most two messages are scored at once, and one that waits more
+than 30 seconds for its turn, or that the service cannot score, stays unflagged with a warning
+in the log. An Owner or Moderator clears a flag with `clearMessageFlag`.
+
+`text_art_check` in `RIM_FEATURES_DISABLED` turns the text check off and leaves the picture
+check on. Without `RIM_AVATAR_CHECK_URL` both are off, and `serverInfo.features` shows
+`text_art_check` as unavailable. The text model takes memory beside the picture models;
+`imagecheck/README.md`, "Resources", has the numbers to size the service's limit by.
 
 ## Notice and terms
 

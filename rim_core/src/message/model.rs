@@ -23,6 +23,8 @@ pub struct Message {
     pub has_attachments: bool,
     /// The MLS envelope of an encrypted message, whose `text` is always `None`.
     pub encryption: Option<MessageEncryption>,
+    /// When the automatic text art check flagged the message; `None` while it is not flagged.
+    pub flagged_at: Option<DateTime<Utc>>,
 }
 
 /// The MLS envelope of an encrypted message row.

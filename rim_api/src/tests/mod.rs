@@ -278,6 +278,7 @@ fn test_message_dto() -> rim_services::message::dto::MessageDto {
         sent_at: chrono::Utc::now(),
         edited_at: None,
         encryption: None,
+        flagged_at: None,
     }
 }
 

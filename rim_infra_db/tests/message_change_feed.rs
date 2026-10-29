@@ -115,6 +115,30 @@ async fn a_write_that_changes_nothing_keeps_the_version() {
 }
 
 #[tokio::test]
+async fn a_flag_change_bumps_the_version_and_is_not_an_edit() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    let user = ctx.create_user("feed-user-flag").await;
+    let m = ctx.create_message(conv.id, user.id, "art").await;
+
+    assert!(repo.set_flagged_at(m.id, Some(Utc::now())).await.unwrap());
+    let all = repo.list_message_changes(conv.id, 0, 10).await.unwrap();
+    assert_eq!(versions(&all), vec![2]);
+    assert!(all[0].message.flagged_at.is_some());
+    assert!(all[0].edited_at.is_none(), "a flag is not an edit");
+
+    assert!(repo.set_flagged_at(m.id, None).await.unwrap());
+    let all = repo.list_message_changes(conv.id, 0, 10).await.unwrap();
+    assert_eq!(versions(&all), vec![3]);
+    assert!(all[0].message.flagged_at.is_none());
+}
+
+#[tokio::test]
 async fn returns_up_to_limit_plus_one_rows_after_the_cursor() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmMessageRepository::new(ctx.db.clone());

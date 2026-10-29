@@ -929,6 +929,7 @@ impl E2eeRepository for FakeE2ee {
             is_deleted: false,
             has_attachments: false,
             encryption: Some(message.envelope),
+            flagged_at: None,
         };
         state.messages.insert(stored.id, stored.clone());
         Ok(stored)

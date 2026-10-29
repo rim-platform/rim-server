@@ -10,9 +10,10 @@ use rim_core::user::model::UserId;
 use crate::ServiceResult;
 use crate::conversation::dto::ConversationDto;
 use crate::moderation::command::{
-    AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
-    LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd,
-    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    AuthorizeReportAttachmentQuery, BanMemberCmd, ClearMessageFlagCmd, ClearTimeoutCmd,
+    GetReportQuery, KickMemberCmd, LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery,
+    ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd,
+    TimeoutMemberCmd, UnbanMemberCmd,
 };
 use crate::moderation::dto::{
     MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
@@ -96,6 +97,14 @@ pub trait ModerationService: Send + Sync {
         server_id: ServerId,
         user_id: UserId,
     ) -> ServiceResult<Option<DateTime<Utc>>>;
+
+    /// Clear the automatic text art check's flag on a message. Clearing a message that is not
+    /// flagged succeeds. Audited (`admin.clear_message_flag`) when a flag was cleared.
+    ///
+    /// # Errors
+    /// `PermissionDenied` for anyone but the workspace's Owner or a Moderator; `NotFound` when
+    /// the conversation is not in the workspace or the message not in the conversation.
+    async fn clear_message_flag(&self, cmd: ClearMessageFlagCmd) -> ServiceResult<()>;
 }
 
 #[cfg(any(test, feature = "mocks"))]

@@ -230,7 +230,7 @@ async fn reports_are_unique_paginated_and_resolved_once() {
                 server_id: server.id,
                 conversation_id: channel.id,
                 message_id: message.id,
-                reporter_user_id: reporter,
+                reporter_user_id: Some(reporter),
                 reason: format!("reason {i}"),
                 franked: None,
             })
@@ -244,7 +244,7 @@ async fn reports_are_unique_paginated_and_resolved_once() {
             server_id: server.id,
             conversation_id: channel.id,
             message_id: reports[0].message_id,
-            reporter_user_id: reporter,
+            reporter_user_id: Some(reporter),
             reason: "again".to_string(),
             franked: None,
         })
@@ -520,4 +520,52 @@ async fn role_migration_turns_existing_guests_into_members() {
     .await
     .expect("insert with default role");
     assert_eq!(role(newcomer).await, ServerMemberRole::Member);
+}
+
+#[tokio::test]
+async fn the_automatic_check_files_one_report_per_message_beside_member_reports() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmModerationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("automatic").await;
+    let author = ctx.create_user("author").await.id;
+    let reporter = ctx.create_user("reporter").await.id;
+    let channel = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    let message = ctx.create_message(channel.id, author, "⣿⣿⣿").await;
+    let report = |reporter_user_id, reason: &str| NewMessageReport {
+        server_id: server.id,
+        conversation_id: channel.id,
+        message_id: message.id,
+        reporter_user_id,
+        reason: reason.to_string(),
+        franked: None,
+    };
+
+    let automatic = repo
+        .create_report(report(None, "automatic text art check: sexual 0.80"))
+        .await
+        .unwrap();
+    assert_eq!(automatic.reporter_user_id, None);
+    let stored = repo.get_report(automatic.id).await.unwrap().unwrap();
+    assert_eq!(stored.reporter_user_id, None);
+    assert_eq!(stored.reason, "automatic text art check: sexual 0.80");
+
+    let again = repo
+        .create_report(report(None, "automatic text art check: sexual 0.90"))
+        .await
+        .unwrap_err();
+    assert_eq!(again.kind(), RepoErrorKind::Conflict);
+
+    let member = repo
+        .create_report(report(Some(reporter), "spam"))
+        .await
+        .unwrap();
+    assert_eq!(member.reporter_user_id, Some(reporter));
+    let twice = repo
+        .create_report(report(Some(reporter), "spam again"))
+        .await
+        .unwrap_err();
+    assert_eq!(twice.kind(), RepoErrorKind::Conflict);
+    assert!(repo.has_report(server.id, message.id).await.unwrap());
 }

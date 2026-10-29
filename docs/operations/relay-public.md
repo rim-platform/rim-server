@@ -596,9 +596,9 @@ reference"):
   status FROM message_report WHERE server_id = (SELECT id FROM server WHERE kind = 'direct')
   AND status = 'open'"` lists the open ones without the app.
 - **Messages in a workspace** go to that workspace's owners and moderators, not to the
-  operators.
+  operators, except the ones the text art check flags (below).
 
-The profile picture check (`docs/self-hosting.md`, "Profile picture check") files its reports
+The profile picture check (`docs/self-hosting.md`, "Content check") files its reports
 into that list too, as the server: a picture scoring at `RIM_AVATAR_CHECK_REPORT` (0.60) is
 stored and reported against the uploader's principal, with a reason starting "automatic profile
 picture check", the category, the score and the picture's URL, such as `automatic profile
@@ -609,6 +609,15 @@ profile ("An abusive profile"): the picture is already shown. A picture at
 `avatar.refused` with the user, the category and the score. When automatic reports of harmless
 pictures pile up, raise `RIM_AVATAR_CHECK_REPORT`; when refusals hit harmless pictures, raise
 `RIM_AVATAR_CHECK_BLOCK`. Both go in `deploy/.env` and apply at the next start.
+
+The text art check (`docs/self-hosting.md`, "Content check"; `docs/messaging.md`, "Flagged
+messages") files one into the same list, as the server, for each workspace message it flags:
+against the author's principal, with the score and the message's ids, such as `automatic text
+art check: sexual 0.80 — message <message id> in conversation <conversation id> of workspace
+<workspace id>`. The audit line is `relay.abuse_report_filed` with `actor_id` `server`. The
+workspace's owners and moderators get their own report of the message and may clear its flag;
+the operator's report stays open until it is resolved. When harmless drawings are flagged,
+raise `RIM_TEXT_ART_CHECK_FLAG` in `deploy/.env`.
 
 Reports from the abuse address go into the same list as the DM requests:
 

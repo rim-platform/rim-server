@@ -97,15 +97,16 @@ impl FromStr for MessageReportStatus {
     }
 }
 
-/// A member's report of a message to the workspace moderators. One per
-/// `(message_id, reporter_user_id)`.
+/// A report of a message to the workspace moderators: a member's, one per
+/// `(message_id, reporter_user_id)`, or the automatic text art check's, one per message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageReport {
     pub id: MessageReportId,
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
     pub message_id: MessageId,
-    pub reporter_user_id: UserId,
+    /// The member who filed the report; `None` for the automatic text art check.
+    pub reporter_user_id: Option<UserId>,
     pub reason: String,
     pub status: MessageReportStatus,
     pub resolved_by: Option<UserId>,
@@ -130,7 +131,8 @@ pub struct NewMessageReport {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
     pub message_id: MessageId,
-    pub reporter_user_id: UserId,
+    /// The member who filed the report; `None` for the automatic text art check.
+    pub reporter_user_id: Option<UserId>,
     pub reason: String,
     /// The verified content of a franked report of an encrypted message.
     pub franked: Option<NewFrankedReport>,

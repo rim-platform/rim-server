@@ -16,6 +16,7 @@ impl From<message::Model> for Message {
             edited_at: m.edited_at.map(Into::into),
             sent_by: m.sent_by.into(),
             text: m.text,
+            flagged_at: m.flagged_at.map(Into::into),
         }
     }
 }

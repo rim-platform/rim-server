@@ -105,6 +105,10 @@ pub(crate) mod session_key;
 pub mod session_revocation;
 pub(crate) mod signup;
 pub mod storage;
+/// Public for `rim_server`, whose composition root builds the text art check's client.
+pub mod text_art_check;
+/// Public for `rim_server`, whose composition root runs the text art check on message events.
+pub mod text_art_moderation;
 pub(crate) mod thread;
 /// Public for `rim_server`, whose per-address, per-session and WebSocket limits use it.
 pub mod token_bucket;

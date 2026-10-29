@@ -302,17 +302,14 @@ mod tests {
             let shared_reports = Arc::clone(reports);
             moderation.expect_create_report().returning(move |report| {
                 let mut reports = shared_reports.lock().expect("reports");
+                let reporter = report.reporter_user_id.expect("a member's report");
                 let duplicate = reports
                     .iter()
-                    .any(|(m, u, _)| *m == report.message_id && *u == report.reporter_user_id);
+                    .any(|(m, u, _)| *m == report.message_id && *u == reporter);
                 let result = if duplicate {
                     Err(RepoError::new(RepoErrorKind::Conflict))
                 } else {
-                    reports.push((
-                        report.message_id,
-                        report.reporter_user_id,
-                        report.franked.clone(),
-                    ));
+                    reports.push((report.message_id, reporter, report.franked.clone()));
                     Ok(MessageReport {
                         id: MessageReportId::new(),
                         server_id: report.server_id,
@@ -2207,6 +2204,7 @@ mod tests {
                 franking_receipt: receipt.to_vec(),
                 franking_key_id: 1,
             }),
+            flagged_at: None,
         }
     }
 

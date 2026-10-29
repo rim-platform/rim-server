@@ -14,7 +14,12 @@ use rim_services::limits::InstanceLimits;
 pub const API_VERSION: i32 = 1;
 
 /// API additions an older server lacks, by name, so a client asks for them only here.
-pub const CAPABILITIES: &[&str] = &["message_edited_at", "workspace_leave", "workspace_rename"];
+pub const CAPABILITIES: &[&str] = &[
+    "message_edited_at",
+    "workspace_leave",
+    "workspace_rename",
+    "message_flag",
+];
 
 /// The running server build, the API version it speaks and the optional features it runs.
 #[derive(SimpleObject, Clone, Debug)]
@@ -219,8 +224,8 @@ impl ServerInfo {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ServerFeatureInfo {
     /// The feature's name, as `RIM_FEATURES_DISABLED` takes it: `attachments`, `link_previews`,
-    /// `email`, `custom_emoji`, `workspace_plugins`, `ai_commands`, `avatars` or `plugin_link_fetch`. A client
-    /// ignores a name it does not know.
+    /// `email`, `custom_emoji`, `workspace_plugins`, `ai_commands`, `avatars`, `plugin_link_fetch`
+    /// or `text_art_check`. A client ignores a name it does not know.
     pub key: String,
     pub state: ServerFeatureState,
     /// Why an unavailable feature is unavailable; null otherwise.

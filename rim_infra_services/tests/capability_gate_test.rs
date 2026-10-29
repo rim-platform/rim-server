@@ -174,6 +174,7 @@ async fn execute_command_proceeds_when_capability_check_passes() {
                     sent_at: chrono::Utc::now(),
                     edited_at: None,
                     encryption: None,
+                    flagged_at: None,
                 })
             })
         });

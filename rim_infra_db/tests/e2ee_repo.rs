@@ -1334,10 +1334,11 @@ async fn the_revision_migration_records_existing_messages_as_revision_0() {
         .position(|n| n == "m20261010_000142_add_message_franking_revision")
         .expect("migration must be registered");
     let steps = u32::try_from(names.len() - index).expect("step count fits u32");
+    // Stored through the current schema, then the revisions table goes away with it.
+    let message = insert_message(&f.repo, &f, 1, b"before").await;
     Migrator::down(&conn, Some(steps))
         .await
         .expect("roll back add_message_franking_revision");
-    let message = insert_message(&f.repo, &f, 1, b"before").await;
     Migrator::up(&conn, None)
         .await
         .expect("re-apply add_message_franking_revision");
@@ -1355,7 +1356,7 @@ fn franked_report(f: &Fixture, message: MessageId, reporter: &Member) -> NewMess
         server_id: f.server.id,
         conversation_id: f.conv.id,
         message_id: message,
-        reporter_user_id: reporter.user.id,
+        reporter_user_id: Some(reporter.user.id),
         reason: "abuse".to_string(),
         franked: Some(NewFrankedReport {
             content: b"{\"body\":\"hi\"}".to_vec(),

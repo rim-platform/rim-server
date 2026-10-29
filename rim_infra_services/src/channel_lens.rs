@@ -459,6 +459,7 @@ fn to_simple_dto(msg: Message, server_id: rim_core::server::model::ServerId) -> 
         sent_at: msg.sent_at,
         edited_at: msg.edited_at,
         encryption: None,
+        flagged_at: msg.flagged_at,
     }
 }
 

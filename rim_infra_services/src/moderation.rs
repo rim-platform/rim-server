@@ -39,9 +39,10 @@ use rim_services::command::verb::TypedVerb;
 use rim_services::conversation::dto::ConversationDto;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::moderation::command::{
-    AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery, KickMemberCmd,
-    LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery, ReportMessageCmd, ResolveReportCmd,
-    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    AuthorizeReportAttachmentQuery, BanMemberCmd, ClearMessageFlagCmd, ClearTimeoutCmd,
+    GetReportQuery, KickMemberCmd, LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery,
+    ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd,
+    TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::moderation::dto::{
     MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
@@ -76,6 +77,7 @@ pub(crate) mod audit_ids {
     pub(crate) const RESOLVE_REPORT: &str = "admin.resolve_report";
     pub(crate) const SET_MEMBER_ROLE: &str = "admin.set_member_role";
     pub(crate) const DELETE_MESSAGE: &str = "admin.delete_message";
+    pub(crate) const CLEAR_MESSAGE_FLAG: &str = "admin.clear_message_flag";
     /// A moderator opened a verified report's content (initiator `e2ee`).
     pub(crate) const REPORT_VIEWED: &str = "e2ee.report_viewed";
     /// A member left the workspace (initiator `workspace`).
@@ -1241,7 +1243,7 @@ impl ModerationService for DefaultModerationService {
                 server_id: cmd.server_id,
                 conversation_id: cmd.conversation_id,
                 message_id: cmd.message_id,
-                reporter_user_id: cmd.actor.user_id,
+                reporter_user_id: Some(cmd.actor.user_id),
                 reason: reason.to_string(),
                 franked: None,
             })
@@ -1443,5 +1445,60 @@ impl ModerationService for DefaultModerationService {
             .get_active_timeout(server_id, user_id, Utc::now())
             .await?
             .map(|t| t.until))
+    }
+
+    async fn clear_message_flag(&self, cmd: ClearMessageFlagCmd) -> ServiceResult<()> {
+        // Role first: a non-moderator learns nothing about which ids exist.
+        self.actor_moderator(cmd.server_id, cmd.actor.user_id)
+            .await?;
+        let conversation = ensure_conversation_in_server(
+            self.repos.conversation_repo.as_ref(),
+            cmd.conversation_id,
+            cmd.server_id,
+        )
+        .await?;
+        let message = self
+            .repos
+            .message_repo
+            .get_by_id(cmd.message_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if message.conversation_id != conversation.id {
+            return Err(ServiceError::NotFound);
+        }
+        if !self
+            .repos
+            .message_repo
+            .set_flagged_at(message.id, None)
+            .await?
+        {
+            return Ok(());
+        }
+        info!(message_id = %message.id, "cleared a message's flag");
+
+        self.audit(ModerationAuditEntry {
+            actor: cmd.actor.user_id,
+            server_id: cmd.server_id,
+            command_id: audit_ids::CLEAR_MESSAGE_FLAG,
+            args: serde_json::json!({
+                "conversation_id": cmd.conversation_id.to_string(),
+                "message_id": cmd.message_id.to_string(),
+            }),
+            dangerous: false,
+            typed_verb: TypedVerb::Write,
+        })
+        .await;
+
+        let dto = self.to_conversation_dto(conversation).await?;
+        self.observers.emit(WorkspaceEvent::MessageFlagChanged {
+            workspace_id: dto.server_id,
+            conversation_id: dto.id,
+            message_id: message.id,
+            flagged: false,
+            conversation_type: dto.conversation_type.as_str().to_string(),
+            is_private: dto.is_private,
+            member_user_ids: dto.member_ids,
+        });
+        Ok(())
     }
 }

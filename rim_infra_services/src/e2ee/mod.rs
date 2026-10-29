@@ -2232,7 +2232,7 @@ impl E2eeService for DefaultE2eeService {
                 server_id: conversation.server_id,
                 conversation_id: conversation.id,
                 message_id: message.id,
-                reporter_user_id: cmd.actor.user_id,
+                reporter_user_id: Some(cmd.actor.user_id),
                 reason: reason.to_string(),
                 franked: Some(NewFrankedReport {
                     content,

@@ -13,7 +13,7 @@ pub struct Model {
     #[sea_orm(unique_key = "idx_message_report_message_reporter_unique")]
     pub message_id: Uuid,
     #[sea_orm(unique_key = "idx_message_report_message_reporter_unique")]
-    pub reporter_user_id: Uuid,
+    pub reporter_user_id: Option<Uuid>,
     #[sea_orm(column_type = "Text")]
     pub reason: String,
     pub status: MessageReportStatus,

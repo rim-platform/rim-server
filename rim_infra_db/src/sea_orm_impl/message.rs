@@ -50,6 +50,7 @@ struct MessageSearchRow {
     text: Option<String>,
     is_deleted: bool,
     has_attachments: bool,
+    flagged_at: Option<DateTimeWithTimeZone>,
     rank: f32,
     headline: Option<String>,
 }
@@ -70,6 +71,7 @@ impl From<MessageSearchRow> for MessageSearchHit {
                 is_deleted: row.is_deleted,
                 has_attachments: row.has_attachments,
                 encryption: None,
+                flagged_at: row.flagged_at.map(Into::into),
             },
             rank: row.rank,
             headline: row.headline,
@@ -313,7 +315,7 @@ impl MessageRepository for SeaOrmMessageRepository {
         let sql = format!(
             r#"SELECT m.id, m.conversation_id, m.thread_id, m.parent_message_id,
                       m.forwarded_from_message_id, m.sent_at, m.edited_at, m.sent_by, m.text,
-                      m.is_deleted, m.has_attachments,
+                      m.is_deleted, m.has_attachments, m.flagged_at,
                       ts_rank(m.search_tsv, q.query) AS rank,
                       ts_headline('english', coalesce(m.text, ''), q.query,
                                   CASE WHEN char_length(coalesce(m.text, '')) <= {WHOLE_HEADLINE_MAX_CHARS}
@@ -414,6 +416,28 @@ impl MessageRepository for SeaOrmMessageRepository {
         active.update(&self.db).await.map_err(map_db_err)?;
 
         Ok(())
+    }
+
+    async fn set_flagged_at(
+        &self,
+        message_id: MessageId,
+        flagged_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> RepoResult<bool> {
+        let result = self
+            .db
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "UPDATE message SET flagged_at = $2 \
+                 WHERE id = $1 AND is_deleted = false \
+                   AND (($2::timestamptz IS NULL) <> (flagged_at IS NULL))",
+                [
+                    Value::Uuid(Some(Uuid::from(message_id))),
+                    Value::ChronoDateTimeUtc(flagged_at),
+                ],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        Ok(result.rows_affected() > 0)
     }
 
     async fn list_message_changes(

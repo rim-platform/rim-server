@@ -1151,6 +1151,7 @@ mod tests {
             is_deleted: false,
             sent_at: Utc::now(),
             edited_at: None,
+            flagged_at: None,
         }
     }
 
@@ -1160,7 +1161,7 @@ mod tests {
             server_id: fx.server_id,
             conversation_id: message.conversation_id,
             message_id: message.id,
-            reporter_user_id: reporter,
+            reporter_user_id: Some(reporter),
             reason: "spam".to_string(),
             status: MessageReportStatus::Open,
             resolved_by: None,

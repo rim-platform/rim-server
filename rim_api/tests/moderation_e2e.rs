@@ -201,6 +201,28 @@ mutation Resolve($serverId: ID!, $reportId: ID!, $outcome: ReportOutcome!) {
 }
 "#;
 
+const CLEAR_MESSAGE_FLAG: &str = r#"
+mutation ClearFlag($serverId: ID!, $conversationId: ID!, $messageId: ID!) {
+  cleared: clearMessageFlag(serverId: $serverId, conversationId: $conversationId,
+                            messageId: $messageId)
+}
+"#;
+
+const FLAGGED_QUERY: &str = r#"
+query Flagged($serverId: ID!, $conversationId: ID!) {
+  page: messages(serverId: $serverId, conversationId: $conversationId, dir: AFTER, limit: 50,
+                 includeDeleted: false) { items { id flagged } }
+}
+"#;
+
+const AUTOMATIC_REPORTS: &str = r#"
+query Reports($serverId: ID!) {
+  page: messageReports(serverId: $serverId, dir: AFTER, limit: 20) {
+    items { id messageId reporterUserId automatic reason }
+  }
+}
+"#;
+
 const EXECUTE: &str = r#"
 mutation Exec($serverId: ID!, $args: JSON!, $commandId: String! = "chat.post_message") {
   executeCommand(input: {
@@ -1046,6 +1068,122 @@ async fn report_list_and_resolve() {
     assert_eq!(f.audit_rows("admin.resolve_report").await.len(), 1);
 }
 
+impl Fixture {
+    /// Whether `message_id` of the channel reads as flagged to `who`.
+    async fn flagged(&self, who: &Caller, message_id: &str) -> bool {
+        let data = exec_ok(
+            &self.schema,
+            who.request(
+                FLAGGED_QUERY,
+                json!({ "serverId": self.server_id, "conversationId": self.channel_id }),
+            ),
+        )
+        .await;
+        data["page"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|m| m["id"] == json!(message_id))
+            .expect("message listed")["flagged"]
+            .as_bool()
+            .expect("flagged")
+    }
+}
+
+#[tokio::test]
+async fn moderators_clear_a_flag_and_read_the_automatic_report() {
+    use rim_core::message::repository::MessageRepository;
+    use rim_core::moderation::model::NewMessageReport;
+    use rim_core::moderation::repository::ModerationRepository;
+    use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
+    use rim_infra_db::sea_orm_impl::moderation::SeaOrmModerationRepository;
+
+    let f = setup().await;
+    let message_id = f.send(&f.bob, &f.channel_id, "⣿⣿⣿⣿").await;
+    let message_uuid: rim_core::message::model::MessageId =
+        uuid::Uuid::parse_str(&message_id).expect("uuid").into();
+    let channel_uuid: rim_core::conversation::model::ConversationId =
+        uuid::Uuid::parse_str(&f.channel_id).expect("uuid").into();
+    assert!(!f.flagged(&f.carol, &message_id).await);
+
+    let messages = SeaOrmMessageRepository::new(f.ctx.db.clone());
+    assert!(
+        messages
+            .set_flagged_at(message_uuid, Some(chrono::Utc::now()))
+            .await
+            .expect("flag")
+    );
+    SeaOrmModerationRepository::new(f.ctx.db.clone())
+        .create_report(NewMessageReport {
+            server_id: f.server.id,
+            conversation_id: channel_uuid,
+            message_id: message_uuid,
+            reporter_user_id: None,
+            reason: "automatic text art check: sexual 0.80".to_string(),
+            franked: None,
+        })
+        .await
+        .expect("automatic report");
+    assert!(f.flagged(&f.carol, &message_id).await);
+
+    let reports = exec_ok(
+        &f.schema,
+        f.mona
+            .request(AUTOMATIC_REPORTS, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    let report = &reports["page"]["items"][0];
+    assert_eq!(report["messageId"], json!(message_id));
+    assert_eq!(report["automatic"], json!(true));
+    assert_eq!(report["reporterUserId"], Value::Null);
+    assert_eq!(
+        report["reason"],
+        json!("automatic text art check: sexual 0.80")
+    );
+
+    let vars = json!({
+        "serverId": f.server_id,
+        "conversationId": f.channel_id,
+        "messageId": message_id,
+    });
+    for who in [&f.bob, &f.carol, &f.gina] {
+        let code = exec_err_code(&f.schema, who.request(CLEAR_MESSAGE_FLAG, vars.clone())).await;
+        assert_eq!(code, "FORBIDDEN");
+    }
+    assert!(f.flagged(&f.carol, &message_id).await);
+
+    let data = exec_ok(&f.schema, f.mona.request(CLEAR_MESSAGE_FLAG, vars.clone())).await;
+    assert_eq!(data["cleared"], json!(true));
+    assert!(!f.flagged(&f.carol, &message_id).await);
+    let data = exec_ok(&f.schema, f.alice.request(CLEAR_MESSAGE_FLAG, vars)).await;
+    assert_eq!(
+        data["cleared"],
+        json!(true),
+        "clearing an unflagged message succeeds"
+    );
+    assert_eq!(f.audit_rows("admin.clear_message_flag").await.len(), 1);
+
+    // A member's report beside it is still a member's.
+    exec_ok(
+        &f.schema,
+        f.carol.request(
+            REPORT,
+            json!({ "serverId": f.server_id, "conversationId": f.channel_id,
+                    "messageId": message_id, "reason": "spam" }),
+        ),
+    )
+    .await;
+    let reports = exec_ok(
+        &f.schema,
+        f.mona
+            .request(AUTOMATIC_REPORTS, json!({ "serverId": f.server_id })),
+    )
+    .await;
+    let member = &reports["page"]["items"][0];
+    assert_eq!(member["automatic"], json!(false));
+    assert_eq!(member["reporterUserId"], json!(f.carol.user_id.to_string()));
+}
+
 #[tokio::test]
 async fn set_member_role_matrix() {
     let f = setup().await;
@@ -1341,6 +1479,9 @@ async fn sdl_exposes_the_role_enum_and_moderation_surface() {
         "setSlowMode(",
         "reportMessage(",
         "resolveReport(",
+        "clearMessageFlag(",
+        "automatic: Boolean!",
+        "flagged: Boolean!",
         "serverBans(",
         "messageReports(",
     ] {
@@ -1432,8 +1573,15 @@ fn moderator_roots(ids: &Ids) -> Vec<Call> {
         (
             SET_SLOW_MODE,
             merged(
-                server,
+                server.clone(),
                 json!({ "conversationId": ids.conversation, "seconds": 60 }),
+            ),
+        ),
+        (
+            CLEAR_MESSAGE_FLAG,
+            merged(
+                server,
+                json!({ "conversationId": ids.conversation, "messageId": ids.message }),
             ),
         ),
     ];

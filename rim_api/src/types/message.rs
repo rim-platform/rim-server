@@ -53,6 +53,7 @@ pub struct Message {
     pub sent_at: chrono::DateTime<chrono::Utc>,
     pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub encryption: Option<super::MessageEncryption>,
+    pub flagged_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<rim_services::message::dto::MessageDto> for Message {
@@ -88,6 +89,11 @@ impl From<rim_services::message::dto::MessageDto> for Message {
                 value.edited_at
             },
             encryption: value.encryption.map(Into::into),
+            flagged_at: if value.is_deleted {
+                None
+            } else {
+                value.flagged_at
+            },
         }
     }
 }
@@ -162,6 +168,13 @@ impl Message {
 
     async fn is_deleted(&self) -> bool {
         self.is_deleted
+    }
+
+    /// Whether the automatic text art check flagged the message and no Owner or Moderator has
+    /// cleared it. False for a deleted message. Listed in `serverInfo.capabilities` as
+    /// `message_flag`.
+    async fn flagged(&self) -> bool {
+        self.flagged_at.is_some()
     }
 
     async fn sent_at(&self) -> chrono::DateTime<chrono::Utc> {

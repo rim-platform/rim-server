@@ -139,6 +139,7 @@ fn message(conversation_id: ConversationId, author: UserId, text: &str) -> Messa
         is_deleted: false,
         has_attachments: false,
         encryption: None,
+        flagged_at: None,
     }
 }
 

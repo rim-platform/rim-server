@@ -269,6 +269,7 @@ mod tests {
                 has_attachments: bool,
             ) -> RepoResult<Message>;
             async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
+            async fn set_flagged_at(&self, message_id: MessageId, flagged_at: Option<chrono::DateTime<chrono::Utc>>) -> RepoResult<bool>;
             async fn list_message_changes(&self, conversation_id: ConversationId, after_version: i64, limit: u32) -> RepoResult<Vec<rim_core::message::repository::MessageChange>>;
             async fn latest_change_version(&self, conversation_id: ConversationId) -> RepoResult<i64>;
             async fn last_sent_at_by_author(&self, conversation_id: ConversationId, author: UserId) -> RepoResult<Option<chrono::DateTime<chrono::Utc>>>;
@@ -347,6 +348,7 @@ mod tests {
             is_deleted: false,
             sent_at: chrono::Utc::now(),
             edited_at: None,
+            flagged_at: None,
         }
     }
 
@@ -1076,6 +1078,7 @@ mod tests {
                         sent_at: chrono::Utc::now(),
                         edited_at: None,
                         encryption: None,
+                        flagged_at: None,
                     })
                 })
             });

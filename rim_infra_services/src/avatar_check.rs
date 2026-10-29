@@ -45,6 +45,36 @@ struct CheckAnswer {
     scores: BTreeMap<String, f64>,
 }
 
+/// The scores of the service's `response` to a check, shared by every check of the service.
+///
+/// # Errors
+/// What went wrong when the status is not 200, the answer is over 16 KiB, or it holds no
+/// scores, a score outside 0 to 1 or a category that is not a short lowercase name.
+pub(crate) async fn read_scores(
+    response: reqwest::Response,
+) -> Result<BTreeMap<String, f64>, String> {
+    if response.status() != StatusCode::OK {
+        return Err(format!("answered {}", response.status()));
+    }
+    let body = read_capped(response, MAX_ANSWER_BYTES)
+        .await
+        .map_err(|e| e.to_string())?;
+    let answer: CheckAnswer =
+        serde_json::from_slice(&body).map_err(|e| format!("bad answer: {e}"))?;
+    let valid = |category: &str, score: f64| {
+        (0.0..=1.0).contains(&score)
+            && !category.is_empty()
+            && category.len() <= MAX_CATEGORY_CHARS
+            && category
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b == b'_')
+    };
+    if answer.scores.is_empty() || answer.scores.iter().any(|(c, s)| !valid(c, *s)) {
+        return Err("bad answer: no valid scores".to_string());
+    }
+    Ok(answer.scores)
+}
+
 /// A client of the image check service with the thresholds its scores are held against.
 pub struct AvatarChecker {
     client: reqwest::Client,
@@ -94,32 +124,13 @@ impl AvatarChecker {
             .send()
             .await
             .map_err(|e| unavailable(e.to_string()))?;
-        if response.status() != StatusCode::OK {
-            return Err(unavailable(format!("answered {}", response.status())));
-        }
-        let body = read_capped(response, MAX_ANSWER_BYTES)
-            .await
-            .map_err(|e| unavailable(e.to_string()))?;
-        let answer: CheckAnswer =
-            serde_json::from_slice(&body).map_err(|e| unavailable(format!("bad answer: {e}")))?;
-        self.verdict(&answer.scores)
+        let scores = read_scores(response).await.map_err(unavailable)?;
+        self.verdict(&scores)
             .ok_or_else(|| unavailable("bad answer: no valid scores".to_string()))
     }
 
-    /// The verdict from the highest of `scores`; `None` when there is none, a score is outside
-    /// 0 to 1 or a category is not a short lowercase name.
+    /// The verdict from the highest of `scores`; `None` when there is none.
     fn verdict(&self, scores: &BTreeMap<String, f64>) -> Option<AvatarVerdict> {
-        let valid = |category: &str, score: f64| {
-            (0.0..=1.0).contains(&score)
-                && !category.is_empty()
-                && category.len() <= MAX_CATEGORY_CHARS
-                && category
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b == b'_')
-        };
-        if scores.iter().any(|(c, s)| !valid(c, *s)) {
-            return None;
-        }
         let (category, score) =
             scores
                 .iter()
