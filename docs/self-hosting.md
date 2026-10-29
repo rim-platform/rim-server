@@ -426,9 +426,9 @@ Outgoing requests ignore proxy environment variables.
 `deploy/compose.yml` runs `imagecheck` next to the server: a small service, built from
 `imagecheck/` in this repository and published as `ghcr.io/rim-platform/rim-imagecheck`, that
 scores every uploaded profile picture for sexual content, gore and violence, each from 0 to 1.
-It runs two models on the CPU, a trained nsfw classifier and CLIP, holds them in about 320 MB
-of memory (its limit is 1536 MiB and 2 CPUs) and takes about a tenth of a second a picture. It is on
-the internal network only and reaches nothing; `imagecheck/README.md` describes the models, their
+It runs two models on the CPU, a trained nsfw classifier and CLIP, and takes about a tenth of a
+second a picture; with the text art model (below) it holds about 825 MiB of memory (its limit is
+1536 MiB and 2 CPUs). It is on the internal network only and reaches nothing; `imagecheck/README.md` describes the models, their
 licences and the scores of ordinary pictures.
 
 The server holds the highest of the three scores against two thresholds:
