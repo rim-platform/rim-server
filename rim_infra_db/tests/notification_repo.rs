@@ -672,6 +672,65 @@ async fn deleting_a_message_drops_unread_rows_and_retention_purges_old_ones() {
     );
 }
 
+/// The bulk form deletes the unread rows of every listed message, keeps read rows and the
+/// rows of other messages, and does nothing for an empty list.
+#[tokio::test]
+async fn delete_unread_for_messages_keeps_read_ones_and_other_messages() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmNotificationRepository::new(ctx.db.clone());
+    let server = ctx.create_server("bulk").await;
+    let alice = ctx.create_user("alice").await.id;
+    let bob = ctx.create_user("bob").await.id;
+    let author = ctx.create_user("author").await.id;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    let first = ctx.create_message(conv.id, author, "one").await;
+    let second = ctx.create_message(conv.id, author, "two").await;
+    let kept = ctx.create_message(conv.id, author, "three").await;
+    let rows = repo
+        .create_notifications(
+            &[
+                new_row(alice, server.id, &conv, first.id, NotificationReason::All),
+                new_row(bob, server.id, &conv, first.id, NotificationReason::All),
+                new_row(bob, server.id, &conv, second.id, NotificationReason::All),
+                new_row(bob, server.id, &conv, kept.id, NotificationReason::All),
+            ],
+            t(0),
+        )
+        .await
+        .unwrap();
+    let alice_row = rows.iter().find(|n| n.user_id == alice).unwrap().id;
+    repo.mark_read_by_ids(alice, server.id, &[alice_row], t(0))
+        .await
+        .unwrap();
+
+    assert_eq!(repo.delete_unread_for_messages(&[]).await.unwrap(), 0);
+    assert_eq!(
+        repo.delete_unread_for_messages(&[first.id, second.id])
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        repo.unread_count(bob, server.id).await.unwrap(),
+        1,
+        "the other message's row stays"
+    );
+    let alice_page = repo
+        .list_notifications(ListUserNotificationsParams {
+            user_id: alice,
+            server_id: server.id,
+            unread_only: false,
+            limit: 10,
+            dir: PageDir::After,
+            cursor: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(alice_page.items.len(), 1, "the read row stays");
+}
+
 #[tokio::test]
 async fn losing_access_deletes_a_users_rows_by_workspace_or_conversation() {
     let ctx = support::TestCtx::new().await;

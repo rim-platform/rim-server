@@ -224,6 +224,46 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 TypedVerb::Configure,
             )
         },
+        CommandDefinitionDto {
+            dangerous: true,
+            ..admin_command(
+                "admin.delete_member_messages",
+                "Delete Member's Messages",
+                "Delete a person's messages in the workspace's channels from the last hour, day \
+                 or week, or all of them (Owner/Moderator); at most 1000 per run.",
+                vec![
+                    workspace_arg(),
+                    member_arg("User id of the person whose messages to delete."),
+                    CommandArgumentDto {
+                        allowed_values: Some(vec![
+                            "1h".to_string(),
+                            "24h".to_string(),
+                            "7d".to_string(),
+                            "all".to_string(),
+                        ]),
+                        ..arg(
+                            "window",
+                            "Window",
+                            "How far back: 1h, 24h, 7d or all.",
+                            CommandArgumentTypeDto::Enum,
+                            true,
+                        )
+                    },
+                    CommandArgumentDto {
+                        default_value: Some(serde_json::Value::Bool(false)),
+                        ..arg(
+                            "include_unjoined_private",
+                            "Also private channels you are not in",
+                            "Also delete in private channels you are not a member of. Defaults \
+                             to false.",
+                            CommandArgumentTypeDto::Boolean,
+                            false,
+                        )
+                    },
+                ],
+                TypedVerb::Delete,
+            )
+        },
         agent_callable(
             moderation_command(
                 "chat.set_slow_mode",

@@ -167,6 +167,30 @@ pub struct ClearMessageFlagCmd {
     pub message_id: MessageId,
 }
 
+/// Counts `user_id`'s messages in the workspace's channels sent at or after `since` (every
+/// message when `None`). Same targeting rules as `KickMemberCmd`; the target need not be a
+/// member.
+#[derive(Debug, Clone)]
+pub struct MemberMessageCountsQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+    pub since: Option<DateTime<Utc>>,
+}
+
+/// Deletes `user_id`'s messages in the workspace's channels sent at or after `since` (every
+/// message when `None`); private channels the actor is not in only with
+/// `include_unjoined_private`. Same targeting rules as `KickMemberCmd`; the target need not be a
+/// member.
+#[derive(Debug, Clone)]
+pub struct DeleteMemberMessagesCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub user_id: UserId,
+    pub since: Option<DateTime<Utc>>,
+    pub include_unjoined_private: bool,
+}
+
 /// Owner/Moderator, or an instance operator for the direct space; the report must belong to
 /// `server_id` and still be open.
 #[derive(Debug, Clone)]

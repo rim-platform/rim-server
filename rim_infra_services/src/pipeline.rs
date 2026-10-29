@@ -1751,6 +1751,38 @@ mod tests {
         ));
     }
 
+    /// A bulk delete fires no pipeline: one moderation action would otherwise run a
+    /// `MESSAGE_DELETED` pipeline once per deleted message.
+    #[test]
+    fn a_bulk_delete_fires_no_message_deleted_pipeline() {
+        let scene = Scene::new();
+        let bulk = WorkspaceEvent::MessagesDeleted {
+            workspace_id: scene.server_id,
+            conversation_id: scene.conv_id,
+            conversation_type: "Channel".to_string(),
+            member_user_ids: vec![],
+            is_private: false,
+            message_ids: vec![rim_core::message::model::MessageId::new()],
+            thread_ids: vec![],
+        };
+        let kinds = [
+            PipelineTriggerKind::NewMessage,
+            PipelineTriggerKind::MessageUpdated,
+            PipelineTriggerKind::MessageDeleted,
+            PipelineTriggerKind::ReactionsUpdated,
+            PipelineTriggerKind::MemberJoined,
+            PipelineTriggerKind::WorkspaceStateChanged,
+        ];
+        for kind in kinds {
+            for scope in [None, Some(scene.conv_id)] {
+                assert!(
+                    !DefaultPipelineService::matches_trigger(&scene.pipeline(kind, scope), &bulk),
+                    "{kind:?} {scope:?}"
+                );
+            }
+        }
+    }
+
     /// A triggered pipeline whose filter fails is reported as skipped and runs no action.
     #[tokio::test]
     async fn evaluate_reports_a_failed_filter_and_runs_no_action() {

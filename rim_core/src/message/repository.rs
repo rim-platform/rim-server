@@ -3,6 +3,7 @@ use crate::message::model::{Message, MessageId, NewMessage};
 use crate::message_thread::model::MessageThreadId;
 use crate::repository::error::RepoResult;
 use crate::repository::pagination::{Page, PageDir, SortOrder};
+use crate::server::model::ServerId;
 use crate::user::model::UserId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -88,6 +89,40 @@ pub struct MessageChange {
     pub edited_at: Option<DateTime<Utc>>,
 }
 
+/// One author's messages in a workspace's channels, from `since` on, split by whether `viewer`
+/// reads the channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthorChannelScope {
+    pub server_id: ServerId,
+    pub author: UserId,
+    /// Inclusive lower bound on `sent_at`; `None` for every message.
+    pub since: Option<DateTime<Utc>>,
+    /// Public channels and private channels `viewer` is a (non-pending) member of are readable.
+    pub viewer: UserId,
+}
+
+/// How many messages, in how many channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MessageTally {
+    pub messages: u64,
+    pub channels: u64,
+}
+
+/// An author's channel messages split into the channels the viewer reads and the private
+/// channels the viewer is not in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AuthorChannelCounts {
+    pub readable: MessageTally,
+    pub unjoined_private: MessageTally,
+}
+
+/// A message a bulk delete removed, with the thread it was a reply in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeletedMessage {
+    pub id: MessageId,
+    pub thread_id: Option<MessageThreadId>,
+}
+
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait MessageRepository: Send + Sync {
@@ -168,4 +203,32 @@ pub trait MessageRepository: Send + Sync {
         &self,
         thread_id: crate::message_thread::model::MessageThreadId,
     ) -> RepoResult<Vec<UserId>>;
+
+    /// Counts `scope.author`'s messages in the workspace's channels that are neither archived
+    /// nor encrypted (undeleted, unencrypted, sent at or after `scope.since` when set), split into
+    /// channels `scope.viewer` reads and private channels the viewer is not in.
+    async fn count_author_channel_messages(
+        &self,
+        scope: AuthorChannelScope,
+    ) -> RepoResult<AuthorChannelCounts>;
+
+    /// Channels holding at least one message [`Self::count_author_channel_messages`] counts,
+    /// newest matching message first; private channels `viewer` is not in only when
+    /// `include_unjoined_private`.
+    async fn list_author_channels(
+        &self,
+        scope: AuthorChannelScope,
+        include_unjoined_private: bool,
+    ) -> RepoResult<Vec<ConversationId>>;
+
+    /// Soft-deletes up to `limit` of `author`'s undeleted, unencrypted messages in the channel
+    /// sent at or after `since` when set, newest first, in one statement; nothing when the
+    /// channel is archived, encrypted or not a channel. Returns the ids deleted with their thread.
+    async fn soft_delete_author_channel_messages(
+        &self,
+        conversation_id: ConversationId,
+        author: UserId,
+        since: Option<DateTime<Utc>>,
+        limit: u32,
+    ) -> RepoResult<Vec<DeletedMessage>>;
 }

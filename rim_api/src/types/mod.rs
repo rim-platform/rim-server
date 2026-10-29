@@ -102,8 +102,9 @@ pub use message::{
     SearchMessagesInput, SearchResultMessage,
 };
 pub use moderation::{
-    MemberTimeout, MessageReport, MessageReportCursorInput, MessageReportCursorOutput,
-    MessageReportPage, MessageReportStatus, ReportOutcome, ServerBan,
+    DeletedMemberMessages, MemberMessageCounts, MemberTimeout, MessageReport,
+    MessageReportCursorInput, MessageReportCursorOutput, MessageReportPage, MessageReportStatus,
+    MessageTally, ReportOutcome, ServerBan,
 };
 pub use notification::{
     ConversationNotificationLevel, DigestFrequency, DndWindow, DndWindowInput, Notification,

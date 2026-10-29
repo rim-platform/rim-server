@@ -122,6 +122,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | `admin.unban` | `server_id`, `user_id` | no | no | Owner/Moderator |
 | `admin.timeout` | `server_id`, `user_id`, `minutes` (1..=43200), `reason?` | yes | no | Owner/Moderator |
 | `admin.set_role` | `server_id`, `user_id`, `role` (`moderator`/`member`/`guest`) | no | yes | Owner: any but owner; Moderator: member/guest; confirmation required |
+| `admin.delete_member_messages` | `server_id`, `user_id`, `window` (`1h`/`24h`/`7d`/`all`), `include_unjoined_private?` (default false) | no | yes | Owner/Moderator; target need not be a member; at most 1000 per run; confirmation required |
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.set_channel_posting` | `server_id`, `conversation_id`, `policy` (`everyone`/`moderators`), `allows_threads?` (default true) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
@@ -570,7 +571,8 @@ context names a workspace the caller is a member of, their role there may run it
 required capabilities passes the capability gate; a user command needs the role every step
 needs. The role a builtin needs is the one the service behind it enforces: the Owner for
 `admin.invite_member`; an Owner or Moderator for `admin.kick`, `admin.ban`, `admin.unban`,
-`admin.timeout`, `admin.set_role`, `chat.set_slow_mode`, `chat.set_channel_posting`,
+`admin.timeout`, `admin.set_role`, `admin.delete_member_messages`, `chat.set_slow_mode`,
+`chat.set_channel_posting`,
 `chat.archive_channel` and `chat.unarchive_channel`; a member (not a guest) for `chat.create_channel`, `chat.create_group`
 and `chat.invite_to_conversation`; a member, or a guest in the direct space, for
 `chat.join_channel`; any member, guests included, for the rest. In the direct space, where

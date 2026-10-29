@@ -1,8 +1,9 @@
 //! Roles and moderation.
 //!
-//! [`DefaultModerationService`] implements role changes, kick, ban, timeout, slow mode and
-//! message reports. [`record_moderation_action`] is the one place a moderation action is
-//! written to `command_audit_log`; the message service uses it too, for moderator deletes.
+//! [`DefaultModerationService`] implements role changes, kick, ban, timeout, slow mode, message
+//! reports and the bulk delete of one person's channel messages. [`record_moderation_action`] is
+//! the one place a moderation action is written to `command_audit_log`; the message service uses
+//! it too, for moderator deletes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use rim_core::conversation::model::{Conversation, ConversationId, ConversationTy
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::macro_def::repository::MacroRepository;
-use rim_core::message::repository::MessageRepository;
+use rim_core::message::repository::{AuthorChannelScope, MessageRepository};
 use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::moderation::model::{
     MemberTimeout, MessageReport, MessageReportStatus, NewMessageReport, ServerBan,
@@ -40,16 +41,18 @@ use rim_services::conversation::dto::ConversationDto;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::moderation::command::{
     AuthorizeReportAttachmentQuery, BanMemberCmd, ClearMessageFlagCmd, ClearTimeoutCmd,
-    GetReportQuery, KickMemberCmd, LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery,
-    ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd,
-    TimeoutMemberCmd, UnbanMemberCmd,
+    DeleteMemberMessagesCmd, GetReportQuery, KickMemberCmd, LeaveWorkspaceCmd, ListBansQuery,
+    ListReportsQuery, MemberMessageCountsQuery, ReportMessageCmd, ResolveReportCmd,
+    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::moderation::dto::{
-    MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
+    DeletedMemberMessagesDto, MemberMessageCountsDto, MemberTimeoutDto, MessageReportDto,
+    ReportAttachmentDto, ReportPageCursor, ServerBanDto,
 };
 use rim_services::moderation::service::ModerationService;
 use rim_services::moderation::{
-    FRANKED_CONTENT_RETENTION_DAYS, MAX_SLOW_MODE_SECONDS, MAX_TIMEOUT_DAYS,
+    FRANKED_CONTENT_RETENTION_DAYS, MAX_MEMBER_MESSAGES_PER_DELETE, MAX_SLOW_MODE_SECONDS,
+    MAX_TIMEOUT_DAYS,
 };
 use rim_services::operator::OperatorCaller;
 use rim_services::server_member::dto::ServerMemberDto;
@@ -78,6 +81,7 @@ pub(crate) mod audit_ids {
     pub(crate) const SET_MEMBER_ROLE: &str = "admin.set_member_role";
     pub(crate) const DELETE_MESSAGE: &str = "admin.delete_message";
     pub(crate) const CLEAR_MESSAGE_FLAG: &str = "admin.clear_message_flag";
+    pub(crate) const DELETE_MEMBER_MESSAGES: &str = "admin.delete_member_messages";
     /// A moderator opened a verified report's content (initiator `e2ee`).
     pub(crate) const REPORT_VIEWED: &str = "e2ee.report_viewed";
     /// A member left the workspace (initiator `workspace`).
@@ -271,6 +275,13 @@ pub(crate) fn content_blob_hashes(content: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// Running totals of one `delete_member_messages` call.
+#[derive(Debug, Default)]
+struct BulkProgress {
+    deleted: u64,
+    channels: u64,
+}
+
 pub struct DefaultModerationService {
     repos: ModerationRepos,
     db: Option<sea_orm::DatabaseConnection>,
@@ -401,6 +412,94 @@ impl DefaultModerationService {
             ensure_can_moderate(actor_member.member_role, target_member.member_role)?;
         }
         Ok(target_member)
+    }
+
+    /// Prologue of the bulk delete and its count: a workspace other than the direct space, then
+    /// [`Self::authorize_target`]; a target who is no member must still be a known user.
+    /// Returns the target's membership, if any.
+    ///
+    /// # Errors
+    /// `Validation` in the direct space or for oneself, `PermissionDenied` as
+    /// [`Self::authorize_target`], `NotFound` for an unknown user.
+    async fn authorize_bulk_target(
+        &self,
+        server_id: ServerId,
+        actor: UserId,
+        target: UserId,
+    ) -> ServiceResult<Option<ServerMember>> {
+        crate::util::ensure_workspace_features(self.direct_space_id, server_id)?;
+        let member = self.authorize_target(server_id, actor, target).await?;
+        if member.is_none() && self.repos.user_repo.get_by_id(target).await?.is_none() {
+            return Err(ServiceError::NotFound);
+        }
+        Ok(member)
+    }
+
+    /// Deletes the target's messages channel by channel, in `ids` order, until the per-call cap
+    /// is reached: one statement per channel, then its unread notifications go and one
+    /// `MessagesDeleted` is emitted. Channels missing from `convs` are skipped. `progress` holds
+    /// what was deleted even when an error stops the loop.
+    ///
+    /// # Errors
+    /// A repository failure while deleting or listing a channel's members.
+    async fn delete_in_batches(
+        &self,
+        cmd: &DeleteMemberMessagesCmd,
+        ids: &[ConversationId],
+        convs: &HashMap<ConversationId, Conversation>,
+        progress: &mut BulkProgress,
+    ) -> ServiceResult<()> {
+        for id in ids {
+            let budget = u64::from(MAX_MEMBER_MESSAGES_PER_DELETE).saturating_sub(progress.deleted);
+            if budget == 0 {
+                break;
+            }
+            let Some(conv) = convs.get(id) else {
+                continue;
+            };
+            let budget = u32::try_from(budget).unwrap_or(MAX_MEMBER_MESSAGES_PER_DELETE);
+            let deleted = self
+                .repos
+                .message_repo
+                .soft_delete_author_channel_messages(*id, cmd.user_id, cmd.since, budget)
+                .await?;
+            if deleted.is_empty() {
+                continue;
+            }
+            progress.deleted += deleted.len() as u64;
+            progress.channels += 1;
+            let message_ids: Vec<_> = deleted.iter().map(|m| m.id).collect();
+            if let Err(e) = self
+                .repos
+                .notification_repo
+                .delete_unread_for_messages(&message_ids)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    conversation_id = %id,
+                    "unread notifications of deleted messages not removed"
+                );
+            }
+            let mut thread_ids: Vec<_> = deleted.iter().filter_map(|m| m.thread_id).collect();
+            thread_ids.sort_by_key(|t| uuid::Uuid::from(*t));
+            thread_ids.dedup();
+            let member_user_ids = self
+                .repos
+                .conversation_member_repo
+                .list_member_ids(*id)
+                .await?;
+            self.observers.emit(WorkspaceEvent::MessagesDeleted {
+                workspace_id: cmd.server_id,
+                conversation_id: *id,
+                conversation_type: conv.conversation_type.as_str().to_string(),
+                member_user_ids,
+                is_private: conv.is_private,
+                message_ids,
+                thread_ids,
+            });
+        }
+        Ok(())
     }
 
     /// Removes the user from the workspace (a kick, a ban or their own leave) and from every
@@ -1500,5 +1599,118 @@ impl ModerationService for DefaultModerationService {
             member_user_ids: dto.member_ids,
         });
         Ok(())
+    }
+
+    async fn member_message_counts(
+        &self,
+        query: MemberMessageCountsQuery,
+    ) -> ServiceResult<MemberMessageCountsDto> {
+        self.authorize_bulk_target(query.server_id, query.actor.user_id, query.user_id)
+            .await?;
+        let counts = self
+            .repos
+            .message_repo
+            .count_author_channel_messages(AuthorChannelScope {
+                server_id: query.server_id,
+                author: query.user_id,
+                since: query.since,
+                viewer: query.actor.user_id,
+            })
+            .await?;
+        Ok(counts.into())
+    }
+
+    async fn delete_member_messages(
+        &self,
+        cmd: DeleteMemberMessagesCmd,
+    ) -> ServiceResult<DeletedMemberMessagesDto> {
+        let target = self
+            .authorize_bulk_target(cmd.server_id, cmd.actor.user_id, cmd.user_id)
+            .await?;
+        let was_member = target.is_some();
+        let scope = AuthorChannelScope {
+            server_id: cmd.server_id,
+            author: cmd.user_id,
+            since: cmd.since,
+            viewer: cmd.actor.user_id,
+        };
+        let ids = self
+            .repos
+            .message_repo
+            .list_author_channels(scope, cmd.include_unjoined_private)
+            .await?;
+        let convs: HashMap<ConversationId, Conversation> = if ids.is_empty() {
+            HashMap::new()
+        } else {
+            self.repos
+                .conversation_repo
+                .get_by_ids(&ids)
+                .await?
+                .into_iter()
+                .map(|c| (c.id, c))
+                .collect()
+        };
+
+        let mut progress = BulkProgress::default();
+        let outcome = self
+            .delete_in_batches(&cmd, &ids, &convs, &mut progress)
+            .await;
+        // Only a call that used its whole cap can have left matching messages behind.
+        let recount = match &outcome {
+            Ok(()) if progress.deleted >= u64::from(MAX_MEMBER_MESSAGES_PER_DELETE) => Some(
+                self.repos
+                    .message_repo
+                    .count_author_channel_messages(scope)
+                    .await,
+            ),
+            _ => None,
+        };
+        let has_more = match &recount {
+            Some(Ok(left)) => {
+                let unjoined = if cmd.include_unjoined_private {
+                    left.unjoined_private.messages
+                } else {
+                    0
+                };
+                left.readable.messages + unjoined > 0
+            }
+            _ => false,
+        };
+
+        if progress.deleted > 0 {
+            self.audit(ModerationAuditEntry {
+                actor: cmd.actor.user_id,
+                server_id: cmd.server_id,
+                command_id: audit_ids::DELETE_MEMBER_MESSAGES,
+                args: serde_json::json!({
+                    "user_id": cmd.user_id.to_string(),
+                    "since": cmd.since.map(|t| t.to_rfc3339()),
+                    "include_unjoined_private": cmd.include_unjoined_private,
+                    "deleted": progress.deleted,
+                    "channels": progress.channels,
+                    "has_more": has_more,
+                    "was_member": was_member,
+                    "complete": outcome.is_ok(),
+                }),
+                dangerous: true,
+                typed_verb: TypedVerb::Delete,
+            })
+            .await;
+        }
+        info!(
+            server_id = %cmd.server_id,
+            user_id = %cmd.user_id,
+            deleted = progress.deleted,
+            "deleted a member's channel messages"
+        );
+        outcome?;
+        if let Some(Err(e)) = recount {
+            return Err(e.into());
+        }
+        Ok(DeletedMemberMessagesDto {
+            deleted: progress.deleted,
+            channels: progress.channels,
+            has_more,
+        })
     }
 }

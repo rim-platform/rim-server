@@ -2,9 +2,9 @@ use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::moderation::command::{
-    BanMemberCmd, ClearMessageFlagCmd, ClearTimeoutCmd, KickMemberCmd, ReportMessageCmd,
-    ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd,
-    UnbanMemberCmd,
+    BanMemberCmd, ClearMessageFlagCmd, ClearTimeoutCmd, DeleteMemberMessagesCmd, KickMemberCmd,
+    ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd,
+    TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::moderation::service::ModerationService;
 
@@ -12,8 +12,8 @@ use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
-    Conversation, MemberTimeout, MessageReport, PostingPolicyGql, ReportOutcome, ServerBan,
-    ServerMember, ServerMemberRoleGql,
+    Conversation, DeletedMemberMessages, MemberTimeout, MessageReport, PostingPolicyGql,
+    ReportOutcome, ServerBan, ServerMember, ServerMemberRoleGql,
 };
 
 #[derive(Default)]
@@ -281,5 +281,36 @@ impl ModerationMutations {
             .await
             .map_err(map_service_error)?;
         Ok(true)
+    }
+
+    /// Delete a person's messages in the workspace's channels, thread replies included, sent at
+    /// or after `since` (all of them when null); private channels the caller is not in only
+    /// with `includeUnjoinedPrivate`. Owner/Moderator, with the targeting rules of `kickMember`;
+    /// works for a former member. Never touches DMs, groups, the direct space, encrypted or
+    /// archived conversations. Deletes at most 1000 messages per call: call again while
+    /// `hasMore`. Each channel gets one `MessagesDeleted` event; audited
+    /// (`admin.delete_member_messages`) when any was deleted. Listed in
+    /// `serverInfo.capabilities` as `delete_member_messages`.
+    async fn delete_member_messages(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        user_id: ID,
+        since: Option<DateTime<Utc>>,
+        include_unjoined_private: bool,
+    ) -> Result<DeletedMemberMessages> {
+        let actor = require_actor(ctx)?;
+        let (server_id, user_id) = server_and_user(&server_id, &user_id)?;
+        let deleted = moderation(ctx)?
+            .delete_member_messages(DeleteMemberMessagesCmd {
+                actor: Actor::new(actor),
+                server_id,
+                user_id,
+                since,
+                include_unjoined_private,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(deleted.into())
     }
 }

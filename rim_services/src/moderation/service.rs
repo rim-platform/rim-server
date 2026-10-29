@@ -11,12 +11,13 @@ use crate::ServiceResult;
 use crate::conversation::dto::ConversationDto;
 use crate::moderation::command::{
     AuthorizeReportAttachmentQuery, BanMemberCmd, ClearMessageFlagCmd, ClearTimeoutCmd,
-    GetReportQuery, KickMemberCmd, LeaveWorkspaceCmd, ListBansQuery, ListReportsQuery,
-    ReportMessageCmd, ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd,
-    TimeoutMemberCmd, UnbanMemberCmd,
+    DeleteMemberMessagesCmd, GetReportQuery, KickMemberCmd, LeaveWorkspaceCmd, ListBansQuery,
+    ListReportsQuery, MemberMessageCountsQuery, ReportMessageCmd, ResolveReportCmd,
+    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use crate::moderation::dto::{
-    MemberTimeoutDto, MessageReportDto, ReportAttachmentDto, ReportPageCursor, ServerBanDto,
+    DeletedMemberMessagesDto, MemberMessageCountsDto, MemberTimeoutDto, MessageReportDto,
+    ReportAttachmentDto, ReportPageCursor, ServerBanDto,
 };
 use crate::server_member::dto::ServerMemberDto;
 
@@ -105,6 +106,29 @@ pub trait ModerationService: Send + Sync {
     /// `PermissionDenied` for anyone but the workspace's Owner or a Moderator; `NotFound` when
     /// the conversation is not in the workspace or the message not in the conversation.
     async fn clear_message_flag(&self, cmd: ClearMessageFlagCmd) -> ServiceResult<()>;
+
+    /// How many of `user_id`'s workspace channel messages sent at or after `since` a delete
+    /// would reach: in channels the actor reads, and in private channels the actor is not in
+    /// (numbers only).
+    ///
+    /// # Errors
+    /// `Validation` in the direct space or for oneself; `PermissionDenied` for a non-moderator or
+    /// a protected target; `NotFound` for an unknown user.
+    async fn member_message_counts(
+        &self,
+        query: MemberMessageCountsQuery,
+    ) -> ServiceResult<MemberMessageCountsDto>;
+
+    /// Soft-delete up to `MAX_MEMBER_MESSAGES_PER_DELETE` of them (private channels the actor is
+    /// not in only when asked), with one `MessagesDeleted` event per channel and one
+    /// `admin.delete_member_messages` audit row when any was deleted.
+    ///
+    /// # Errors
+    /// The same as [`Self::member_message_counts`].
+    async fn delete_member_messages(
+        &self,
+        cmd: DeleteMemberMessagesCmd,
+    ) -> ServiceResult<DeletedMemberMessagesDto>;
 }
 
 #[cfg(any(test, feature = "mocks"))]

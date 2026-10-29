@@ -1,11 +1,12 @@
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
 use rim_core::conversation::model::PostingPolicy;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 use rim_services::moderation::command::{
-    BanMemberCmd, KickMemberCmd, ReportMessageCmd, SetChannelPostingCmd, SetMemberRoleCmd,
-    SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    BanMemberCmd, DeleteMemberMessagesCmd, KickMemberCmd, ReportMessageCmd, SetChannelPostingCmd,
+    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -189,6 +190,58 @@ pub(super) async fn set_role(
         serde_json::json!({
             "user_id": user_id.to_string(),
             "role": member.member_role.as_str(),
+        }),
+    ))
+}
+
+/// The lower bound on `sent_at` an `admin.delete_member_messages` window names: `1h`, `24h` and
+/// `7d` reach back that far from `now`, `all` has none.
+///
+/// # Errors
+/// `Validation` for any other value.
+fn window_since(raw: &str, now: DateTime<Utc>) -> ServiceResult<Option<DateTime<Utc>>> {
+    match raw.trim() {
+        "1h" => Ok(Some(now - Duration::hours(1))),
+        "24h" => Ok(Some(now - Duration::hours(24))),
+        "7d" => Ok(Some(now - Duration::days(7))),
+        "all" => Ok(None),
+        _ => Err(ServiceError::Validation(
+            "arg `window` must be one of 1h, 24h, 7d, all".to_string(),
+        )),
+    }
+}
+
+pub(super) async fn delete_member_messages(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, user_id) = target(&args, context.as_ref())?;
+    let since = window_since(&require_string_arg(&args, "window")?, Utc::now())?;
+    let include_unjoined_private =
+        optional_bool_arg(&args, "include_unjoined_private").unwrap_or(false);
+    let outcome = services
+        .moderation_service
+        .delete_member_messages(DeleteMemberMessagesCmd {
+            actor,
+            server_id,
+            user_id,
+            since,
+            include_unjoined_private,
+        })
+        .await?;
+    Ok(success(
+        if outcome.has_more {
+            "messages deleted; more remain"
+        } else {
+            "messages deleted"
+        },
+        serde_json::json!({
+            "user_id": user_id.to_string(),
+            "deleted": outcome.deleted,
+            "channels": outcome.channels,
+            "has_more": outcome.has_more,
         }),
     ))
 }

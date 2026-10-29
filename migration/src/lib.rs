@@ -130,6 +130,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261026_120000_add_conversation_posting::Migration),
             Box::new(m20261026_120342_add_user_profile_locked_until::Migration),
             Box::new(m20261029_084741_add_message_flag::Migration),
+            Box::new(m20261029_163002_add_message_author_index::Migration),
         ]
     }
 }
@@ -247,3 +248,4 @@ mod m20261024_174153_remove_password_accounts;
 mod m20261026_120000_add_conversation_posting;
 mod m20261026_120342_add_user_profile_locked_until;
 mod m20261029_084741_add_message_flag;
+mod m20261029_163002_add_message_author_index;

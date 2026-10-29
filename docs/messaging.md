@@ -392,9 +392,10 @@ the same code, and the same modes, with these differences:
 
 ### Kick, ban, timeout
 
-Who may target whom (kick, ban, timeout, clear timeout): the actor must be Owner or Moderator;
-nobody can target the Owner; a Moderator cannot target another Moderator; nobody targets
-themselves (`VALIDATION`). Otherwise `FORBIDDEN`.
+Who may target whom (kick, ban, timeout, clear timeout, deleting a person's messages): the actor
+must be Owner or Moderator; nobody can target the Owner; a Moderator cannot target another
+Moderator; nobody targets themselves (`VALIDATION`). Otherwise `FORBIDDEN`. A person who is no
+longer a member may be targeted by the Owner or any Moderator (a ban, deleting their messages).
 
 - `kickMember`: removes the member from the workspace and from every conversation of it, deletes
   their macros and pipelines there, emits `MemberLeft`. They can re-join with a new invite.
@@ -470,6 +471,21 @@ conversation (a moderator outside a private channel gets `NOT_FOUND`, like any r
 moderator delete writes an `admin.delete_message` audit row with the message id and author (no
 text). `MessageDeleted` is unchanged.
 
+`deleteMemberMessages` deletes one person's messages in the workspace's channels at once, for
+the Owner or a Moderator under the targeting rules above; the person need not be a member any
+more. It reaches timeline messages and thread replies in channels, never DMs, groups, the direct
+space, encrypted messages or conversations, or archived channels. `memberMessageCounts` first
+tells the caller how many it would reach, split into channels the caller reads (public channels
+and private channels the caller is a member of) and private channels the caller is not in, as
+numbers only: the names of those channels are not shown. `includeUnjoinedPrivate` decides
+whether the latter are touched. `since` limits both to messages sent at or after it (null: all of
+them). One call deletes at most 1,000 messages, newest first channel by channel, and answers
+`hasMore` while matching messages remain; the client calls again until it is false. Each message
+gets the same tombstone as `deleteMessage`: it reads as deleted, its unread notifications go,
+and its pins, reactions, attachments, reports and flag stay hidden behind the deleted message. Each
+channel gets one `MessagesDeleted` event instead of a `MessageDeleted` per message, and no
+`MESSAGE_DELETED` pipeline runs for a bulk delete.
+
 ### Flagged messages
 
 The server checks the messages it can read for sexual text art (drawings made of braille,
@@ -543,9 +559,11 @@ Every moderation action writes one `command_audit_log` row (initiator `moderatio
 shared helper, whether it came from GraphQL or a command: `admin.set_member_role`, `admin.kick`,
 `admin.ban`, `admin.unban`, `admin.timeout`, `admin.clear_timeout`, `chat.set_slow_mode`,
 `chat.set_channel_posting`, `chat.report_message`, `admin.resolve_report`,
-`admin.delete_message`, `admin.clear_message_flag` (only when a flag was cleared). Arguments
-hold ids and
-flags only, never reasons or message text. An action run as a command also gets the generic
+`admin.delete_message`, `admin.clear_message_flag` (only when a flag was cleared),
+`admin.delete_member_messages` (only when at least one message was deleted; with `user_id`,
+`since`, `include_unjoined_private`, the `deleted` and `channels` counts, `has_more`,
+`was_member` and `complete`, false when an error stopped the call part way). Arguments hold ids
+and flags only, never reasons or message text. An action run as a command also gets the generic
 command-execution row. Refused actions are not audited by the helper.
 
 The public link writes rows with initiator `public_link`: `public_link.enabled`,
@@ -581,6 +599,11 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   "…", "flagged": true}`: the automatic text art check flagged a message (`true`), or an
   Owner, a Moderator or a later check cleared its flag (`false`). Delivered to everyone who
   reads the conversation, like the message events: a private channel's to its members only.
+- `{"type": "MessagesDeleted", "workspace_id": "…", "conversation_id": "…", "conversation_type":
+  "Channel", "message_ids": ["…"], "thread_ids": ["…"]}`: `deleteMemberMessages` deleted these
+  messages of one channel; `thread_ids` are the distinct threads of the deleted replies. Same
+  visibility as `MessageDeleted`. A client marks the messages deleted and refreshes the counts of
+  the threads named.
 
 Join requests:
 

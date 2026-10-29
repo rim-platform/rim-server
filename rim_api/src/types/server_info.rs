@@ -19,6 +19,7 @@ pub const CAPABILITIES: &[&str] = &[
     "workspace_leave",
     "workspace_rename",
     "message_flag",
+    "delete_member_messages",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.
@@ -177,7 +178,10 @@ impl ServerInfo {
 
     /// API additions this server has that an older server lacks, by name: `message_edited_at`
     /// (`Message.editedAt`), `workspace_leave` (`leaveWorkspace`), `workspace_rename`
-    /// (`renameWorkspace`). A client ignores names it does not know.
+    /// (`renameWorkspace`), `message_flag` (`Message.flagged`, `MessageReport.automatic`,
+    /// `clearMessageFlag`), `delete_member_messages` (`memberMessageCounts`,
+    /// `deleteMemberMessages`, the `MessagesDeleted` event). A client ignores names it does not
+    /// know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES
             .iter()

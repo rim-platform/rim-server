@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::MessageId;
+use rim_core::message::repository::{AuthorChannelCounts, MessageTally};
 use rim_core::moderation::model::{
     MemberTimeout, MessageReport, MessageReportId, MessageReportStatus, ServerBan,
 };
@@ -151,4 +152,46 @@ impl From<ReportPageCursor> for MessageReportCursor {
             report_id: c.report_id,
         }
     }
+}
+
+/// How many messages, in how many channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MessageTallyDto {
+    pub messages: u64,
+    pub channels: u64,
+}
+
+impl From<MessageTally> for MessageTallyDto {
+    fn from(t: MessageTally) -> Self {
+        Self {
+            messages: t.messages,
+            channels: t.channels,
+        }
+    }
+}
+
+/// A person's workspace channel messages a delete would reach: in channels the caller reads, and
+/// in private channels the caller is not in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemberMessageCountsDto {
+    pub readable: MessageTallyDto,
+    pub unjoined_private: MessageTallyDto,
+}
+
+impl From<AuthorChannelCounts> for MemberMessageCountsDto {
+    fn from(c: AuthorChannelCounts) -> Self {
+        Self {
+            readable: c.readable.into(),
+            unjoined_private: c.unjoined_private.into(),
+        }
+    }
+}
+
+/// The outcome of one `delete_member_messages` call: messages deleted, channels they were in,
+/// and whether matching messages remain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DeletedMemberMessagesDto {
+    pub deleted: u64,
+    pub channels: u64,
+    pub has_more: bool,
 }

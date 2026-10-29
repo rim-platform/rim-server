@@ -73,6 +73,9 @@ pub(super) async fn execute_builtin_command(
         "admin.unban" => moderation::unban(services, actor, args, context).await,
         "admin.timeout" => moderation::timeout(services, actor, args, context).await,
         "admin.set_role" => moderation::set_role(services, actor, args, context).await,
+        "admin.delete_member_messages" => {
+            moderation::delete_member_messages(services, actor, args, context).await
+        }
         "chat.set_slow_mode" => moderation::set_slow_mode(services, actor, args, context).await,
         "chat.set_channel_posting" => {
             moderation::set_channel_posting(services, actor, args, context).await

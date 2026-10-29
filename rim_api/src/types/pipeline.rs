@@ -6,6 +6,7 @@ use async_graphql::{Enum, InputObject, SimpleObject};
 pub enum PipelineTriggerKindGql {
     NewMessage,
     MessageUpdated,
+    /// A message was deleted one at a time; a bulk delete (`deleteMemberMessages`) fires none.
     MessageDeleted,
     ReactionsUpdated,
     MemberJoined,

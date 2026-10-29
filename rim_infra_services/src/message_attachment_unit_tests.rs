@@ -274,6 +274,9 @@ mod tests {
             async fn latest_change_version(&self, conversation_id: ConversationId) -> RepoResult<i64>;
             async fn last_sent_at_by_author(&self, conversation_id: ConversationId, author: UserId) -> RepoResult<Option<chrono::DateTime<chrono::Utc>>>;
             async fn list_thread_participant_ids(&self, thread_id: rim_core::message_thread::model::MessageThreadId) -> RepoResult<Vec<UserId>>;
+            async fn count_author_channel_messages(&self, scope: rim_core::message::repository::AuthorChannelScope) -> RepoResult<rim_core::message::repository::AuthorChannelCounts>;
+            async fn list_author_channels(&self, scope: rim_core::message::repository::AuthorChannelScope, include_unjoined_private: bool) -> RepoResult<Vec<ConversationId>>;
+            async fn soft_delete_author_channel_messages(&self, conversation_id: ConversationId, author: UserId, since: Option<chrono::DateTime<chrono::Utc>>, limit: u32) -> RepoResult<Vec<rim_core::message::repository::DeletedMessage>>;
         }
     }
 

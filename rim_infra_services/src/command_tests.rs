@@ -3322,12 +3322,13 @@ mod tests {
 
     // ── Moderation and selected-message commands ──
 
-    const ADMIN_TARGET_COMMANDS: [&str; 5] = [
+    const ADMIN_TARGET_COMMANDS: [&str; 6] = [
         "admin.kick",
         "admin.ban",
         "admin.unban",
         "admin.timeout",
         "admin.set_role",
+        "admin.delete_member_messages",
     ];
 
     /// A command service whose moderation mock reports no timeouts and carries the
@@ -3455,12 +3456,18 @@ mod tests {
     #[tokio::test]
     async fn kick_ban_and_set_role_commands_ask_for_confirmation_first() {
         let svc = moderating(|_| {});
-        for command_id in ["admin.kick", "admin.ban", "admin.set_role"] {
+        for command_id in [
+            "admin.kick",
+            "admin.ban",
+            "admin.set_role",
+            "admin.delete_member_messages",
+        ] {
             let result = svc
                 .execute_command(ExecuteCommandCmd {
                     args: Some(serde_json::json!({
                         "user_id": rim_core::user::model::UserId::new().to_string(),
                         "role": "member",
+                        "window": "1h",
                     })),
                     ..palette_cmd(new_actor(), command_id)
                 })
@@ -3745,6 +3752,12 @@ mod tests {
                 workspace.clone(),
                 "arg `minutes` must be an integer from 1 to 43200",
             ),
+            (
+                "admin.delete_member_messages",
+                serde_json::json!({ "user_id": user_id, "window": "fortnight" }),
+                workspace.clone(),
+                "arg `window` must be one of 1h, 24h, 7d, all",
+            ),
         ]);
 
         for (command_id, args, context, expected) in cases {
@@ -3753,6 +3766,96 @@ mod tests {
                 .expect_err(command_id);
             assert_eq!(validation_message(err), expected, "{command_id}");
         }
+    }
+
+    /// The window becomes the lower bound on `sent_at`, `all` none; the private-channel flag
+    /// defaults to false and passes through; the payload echoes the service's counts.
+    #[tokio::test]
+    async fn delete_member_messages_command_turns_the_window_into_since() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let target = rim_core::user::model::UserId::new();
+        let calls: std::sync::Arc<
+            std::sync::Mutex<Vec<rim_services::moderation::command::DeleteMemberMessagesCmd>>,
+        > = std::sync::Arc::default();
+        let recorded = std::sync::Arc::clone(&calls);
+        let svc = moderating(move |moderation| {
+            moderation
+                .expect_delete_member_messages()
+                .returning(move |cmd| {
+                    let has_more = cmd.include_unjoined_private;
+                    recorded.lock().expect("lock").push(cmd);
+                    Box::pin(async move {
+                        Ok(rim_services::moderation::dto::DeletedMemberMessagesDto {
+                            deleted: 3,
+                            channels: 1,
+                            has_more,
+                        })
+                    })
+                });
+        });
+
+        let windows = [
+            ("1h", Some(chrono::Duration::hours(1))),
+            ("24h", Some(chrono::Duration::hours(24))),
+            ("7d", Some(chrono::Duration::days(7))),
+            ("all", None),
+        ];
+        for (window, back) in windows {
+            let before = chrono::Utc::now();
+            let result = run_confirmed(
+                &svc,
+                "admin.delete_member_messages",
+                serde_json::json!({ "user_id": target.to_string(), "window": window }),
+                Some(workspace_context(workspace)),
+            )
+            .await
+            .expect(window);
+            assert_eq!(result.message, "messages deleted", "{window}");
+            assert_eq!(
+                result.payload,
+                Some(serde_json::json!({
+                    "user_id": target.to_string(),
+                    "deleted": 3,
+                    "channels": 1,
+                    "has_more": false,
+                })),
+                "{window}"
+            );
+            let cmd = calls.lock().expect("lock").pop().expect(window);
+            assert_eq!((cmd.server_id, cmd.user_id), (workspace, target));
+            assert!(!cmd.include_unjoined_private, "{window}");
+            match (back, cmd.since) {
+                (None, None) => {}
+                (Some(back), Some(since)) => {
+                    let off = (before - back - since).num_seconds().abs();
+                    assert!(off <= 5, "{window}: {since} is {off}s off");
+                }
+                other => panic!("{window}: {other:?}"),
+            }
+        }
+
+        let result = run_confirmed(
+            &svc,
+            "admin.delete_member_messages",
+            serde_json::json!({
+                "user_id": target.to_string(),
+                "window": "all",
+                "include_unjoined_private": true,
+            }),
+            Some(workspace_context(workspace)),
+        )
+        .await
+        .expect("with private channels");
+        assert_eq!(result.message, "messages deleted; more remain");
+        assert_eq!(result.payload.expect("payload")["has_more"], true);
+        assert!(
+            calls
+                .lock()
+                .expect("lock")
+                .pop()
+                .expect("call")
+                .include_unjoined_private
+        );
     }
 
     /// A refusal from the moderation service reaches the caller as the same error.
@@ -3774,11 +3877,15 @@ mod tests {
             moderation
                 .expect_set_member_role()
                 .returning(|_| Box::pin(async { Err(ServiceError::PermissionDenied) }));
+            moderation
+                .expect_delete_member_messages()
+                .returning(|_| Box::pin(async { Err(ServiceError::PermissionDenied) }));
         });
         let args = serde_json::json!({
             "user_id": rim_core::user::model::UserId::new().to_string(),
             "minutes": 10,
             "role": "member",
+            "window": "1h",
         });
 
         for command_id in ADMIN_TARGET_COMMANDS {
@@ -4113,6 +4220,7 @@ mod tests {
         ];
         let moderator_level = [
             "admin.ban",
+            "admin.delete_member_messages",
             "admin.kick",
             "admin.set_role",
             "admin.timeout",
@@ -4357,6 +4465,7 @@ mod tests {
                 moderation.expect_unban().never();
                 moderation.expect_timeout().never();
                 moderation.expect_set_member_role().never();
+                moderation.expect_delete_member_messages().never();
                 moderation.expect_set_slow_mode().never();
                 moderation.expect_set_channel_posting().never();
             });

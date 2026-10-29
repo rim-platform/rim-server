@@ -223,6 +223,32 @@ query Reports($serverId: ID!) {
 }
 "#;
 
+const MEMBER_MESSAGE_COUNTS: &str = r#"
+query Counts($serverId: ID!, $userId: ID!, $since: DateTime) {
+  counts: memberMessageCounts(serverId: $serverId, userId: $userId, since: $since) {
+    readable { messages channels }
+    unjoinedPrivate { messages channels }
+  }
+}
+"#;
+
+const DELETE_MEMBER_MESSAGES: &str = r#"
+mutation DeleteTheirs($serverId: ID!, $userId: ID!, $since: DateTime,
+                      $includeUnjoinedPrivate: Boolean!) {
+  deleted: deleteMemberMessages(serverId: $serverId, userId: $userId, since: $since,
+                                includeUnjoinedPrivate: $includeUnjoinedPrivate) {
+    deleted channels hasMore
+  }
+}
+"#;
+
+const MESSAGES_WITH_DELETED: &str = r#"
+query Messages($serverId: ID!, $conversationId: ID!) {
+  page: messages(serverId: $serverId, conversationId: $conversationId, dir: AFTER, limit: 50,
+                 includeDeleted: true) { items { id text isDeleted } }
+}
+"#;
+
 const EXECUTE: &str = r#"
 mutation Exec($serverId: ID!, $args: JSON!, $commandId: String! = "chat.post_message") {
   executeCommand(input: {
@@ -259,6 +285,8 @@ struct Fixture {
     carol: Caller,
     gina: Caller,
     channel_id: String,
+    /// Every event the services emitted.
+    events: std::sync::Arc<support::RecordingBroadcaster>,
 }
 
 /// alice (Owner), mona (Moderator), bob and carol (Member), gina (Guest) and a public channel
@@ -281,7 +309,7 @@ async fn setup() -> Fixture {
     ctx.add_member(&server, &gina_user, ServerMemberRole::Guest)
         .await;
 
-    let schema = ctx.build_schema(RegistrationMode::InviteOnly).await;
+    let (schema, _provider, events) = ctx.build_recording(RegistrationMode::InviteOnly);
     let alice = ctx.caller(&alice_user).await;
     let server_id = server.id.to_string();
     let channel_id = create_channel(&schema, &alice, &server_id, "general", false).await;
@@ -296,6 +324,7 @@ async fn setup() -> Fixture {
         server_id,
         channel_id,
         schema,
+        events,
         ctx,
     }
 }
@@ -1480,6 +1509,9 @@ async fn sdl_exposes_the_role_enum_and_moderation_surface() {
         "reportMessage(",
         "resolveReport(",
         "clearMessageFlag(",
+        "deleteMemberMessages(",
+        "memberMessageCounts(",
+        "hasMore: Boolean!",
         "automatic: Boolean!",
         "flagged: Boolean!",
         "serverBans(",
@@ -1487,6 +1519,282 @@ async fn sdl_exposes_the_role_enum_and_moderation_surface() {
     ] {
         assert!(sdl.contains(needle), "SDL is missing `{needle}`");
     }
+}
+
+// ── Deleting a person's messages ─────────────────────────────────────────────────────────────
+
+impl Fixture {
+    /// The `MessagesDeleted` events so far, as `(conversation, message ids, thread ids,
+    /// private)`.
+    fn bulk_deletes(&self) -> Vec<(String, Vec<String>, Vec<String>, bool)> {
+        self.events
+            .events()
+            .into_iter()
+            .filter_map(|e| match e {
+                rim_services::events::WorkspaceEvent::MessagesDeleted {
+                    conversation_id,
+                    message_ids,
+                    thread_ids,
+                    is_private,
+                    ..
+                } => Some((
+                    conversation_id.to_string(),
+                    message_ids.iter().map(ToString::to_string).collect(),
+                    thread_ids.iter().map(ToString::to_string).collect(),
+                    is_private,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `who`'s view of a conversation's timeline, deleted messages included, as
+    /// `(id, text, isDeleted)`.
+    async fn timeline(&self, who: &Caller, conversation_id: &str) -> Vec<(String, Value, bool)> {
+        let data = exec_ok(
+            &self.schema,
+            who.request(
+                MESSAGES_WITH_DELETED,
+                json!({ "serverId": self.server_id, "conversationId": conversation_id }),
+            ),
+        )
+        .await;
+        data["page"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|m| {
+                (
+                    m["id"].as_str().expect("id").to_string(),
+                    m["text"].clone(),
+                    m["isDeleted"].as_bool().expect("isDeleted"),
+                )
+            })
+            .collect()
+    }
+
+    async fn counts(&self, who: &Caller, user: &Caller, since: Option<String>) -> Value {
+        exec_ok(
+            &self.schema,
+            who.request(
+                MEMBER_MESSAGE_COUNTS,
+                merged(self.member_vars(user), json!({ "since": since })),
+            ),
+        )
+        .await["counts"]
+            .clone()
+    }
+
+    async fn delete_theirs(
+        &self,
+        who: &Caller,
+        user: &Caller,
+        since: Option<String>,
+        include_unjoined_private: bool,
+    ) -> Value {
+        exec_ok(
+            &self.schema,
+            who.request(
+                DELETE_MEMBER_MESSAGES,
+                merged(
+                    self.member_vars(user),
+                    json!({ "since": since, "includeUnjoinedPrivate": include_unjoined_private }),
+                ),
+            ),
+        )
+        .await["deleted"]
+            .clone()
+    }
+}
+
+/// A moderator counts bob's channel messages, split into what they read and a private channel
+/// they are not in, deletes the readable ones, thread reply included, and then the private one
+/// when asked: one `MessagesDeleted` per channel and one audit row per call, without text.
+#[tokio::test]
+async fn a_moderator_counts_and_deletes_a_members_channel_messages() {
+    let f = setup().await;
+    let first = f.send(&f.bob, &f.channel_id, "bob-one").await;
+    let second = f.send(&f.bob, &f.channel_id, "bob-two").await;
+    let reply = exec_ok(
+        &f.schema,
+        f.bob.request(
+            &REPLY.replace("{ id }", "{ id threadId }"),
+            json!({ "input": {
+                "serverId": f.server_id, "conversationId": f.channel_id,
+                "rootMessageId": first, "text": "bob-reply",
+            } }),
+        ),
+    )
+    .await;
+    let reply_id = reply["msg"]["id"].as_str().expect("reply id").to_string();
+    let thread_id = reply["msg"]["threadId"]
+        .as_str()
+        .expect("thread id")
+        .to_string();
+    f.send(&f.carol, &f.channel_id, "carol stays").await;
+
+    let staff = create_channel(&f.schema, &f.alice, &f.server_id, "staff", true).await;
+    exec_ok(
+        &f.schema,
+        f.alice.request(
+            ADD_MEMBERS,
+            json!({ "serverId": f.server_id, "conversationId": staff,
+                    "userIds": [f.bob.user_id.to_string()] }),
+        ),
+    )
+    .await;
+    let private_message = f.send(&f.bob, &staff, "bob-private").await;
+
+    let counts = f.counts(&f.mona, &f.bob, None).await;
+    assert_eq!(
+        counts,
+        json!({ "readable": { "messages": 3, "channels": 1 },
+                "unjoinedPrivate": { "messages": 1, "channels": 1 } })
+    );
+
+    let deleted = f.delete_theirs(&f.mona, &f.bob, None, false).await;
+    assert_eq!(
+        deleted,
+        json!({ "deleted": 3, "channels": 1, "hasMore": false })
+    );
+    let timeline = f.timeline(&f.mona, &f.channel_id).await;
+    for id in [&first, &second] {
+        let (_, text, is_deleted) = timeline
+            .iter()
+            .find(|(m, _, _)| m == id)
+            .expect("bob's message is listed");
+        assert!(*is_deleted, "{id}");
+        assert!(text.is_null(), "{id}: {text}");
+    }
+    assert!(
+        timeline
+            .iter()
+            .any(|(_, text, deleted)| text == &json!("carol stays") && !deleted)
+    );
+
+    let events = f.bulk_deletes();
+    assert_eq!(events.len(), 1);
+    let (conversation, ids, threads, private) = &events[0];
+    assert_eq!(conversation, &f.channel_id);
+    let ids: BTreeSet<&String> = ids.iter().collect();
+    assert_eq!(ids, BTreeSet::from([&first, &second, &reply_id]));
+    assert_eq!(threads, &[thread_id]);
+    assert!(!private);
+
+    let rows = f.audit_rows("admin.delete_member_messages").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].actor_user_id, uuid::Uuid::from(f.mona.user_id));
+    assert_eq!(rows[0].args_redacted["deleted"], json!(3));
+    assert_eq!(rows[0].args_redacted["channels"], json!(1));
+    assert_eq!(rows[0].args_redacted["was_member"], json!(true));
+    assert!(
+        !rows[0].args_redacted.to_string().contains("bob-"),
+        "no message text in the audit row"
+    );
+
+    let staff_view = f.timeline(&f.alice, &staff).await;
+    assert_eq!(
+        staff_view,
+        [(private_message.clone(), json!("bob-private"), false)]
+    );
+
+    let deleted = f.delete_theirs(&f.mona, &f.bob, None, true).await;
+    assert_eq!(
+        deleted,
+        json!({ "deleted": 1, "channels": 1, "hasMore": false })
+    );
+    let events = f.bulk_deletes();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].0, staff);
+    assert_eq!(events[1].1, [private_message]);
+    assert!(events[1].3, "a private channel's event is marked private");
+    assert_eq!(f.audit_rows("admin.delete_member_messages").await.len(), 2);
+    assert_eq!(
+        f.counts(&f.mona, &f.bob, None).await,
+        json!({ "readable": { "messages": 0, "channels": 0 },
+                "unjoinedPrivate": { "messages": 0, "channels": 0 } })
+    );
+}
+
+/// A DM and a message sent before `since` are left alone.
+#[tokio::test]
+async fn deleting_member_messages_leaves_dms_and_messages_before_since() {
+    use sea_orm::ConnectionTrait;
+    let f = setup().await;
+    let old = f.send(&f.bob, &f.channel_id, "old").await;
+    let recent = f.send(&f.bob, &f.channel_id, "recent").await;
+    f.ctx
+        .conn
+        .execute_unprepared(&format!(
+            "UPDATE message SET sent_at = now() - interval '2 hours' WHERE id = '{old}'"
+        ))
+        .await
+        .expect("back-date");
+    let dm = exec_ok(
+        &f.schema,
+        f.bob.request(
+            CREATE_DM,
+            json!({ "serverId": f.server_id, "memberIds": [f.carol.user_id.to_string()] }),
+        ),
+    )
+    .await;
+    let dm_id = dm["conversation"]["id"]
+        .as_str()
+        .expect("dm id")
+        .to_string();
+    let in_dm = f.send(&f.bob, &dm_id, "private words").await;
+
+    let since = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    assert_eq!(
+        f.counts(&f.mona, &f.bob, Some(since.clone())).await["readable"],
+        json!({ "messages": 1, "channels": 1 })
+    );
+    let deleted = f.delete_theirs(&f.mona, &f.bob, Some(since), true).await;
+    assert_eq!(
+        deleted,
+        json!({ "deleted": 1, "channels": 1, "hasMore": false })
+    );
+
+    let timeline = f.timeline(&f.mona, &f.channel_id).await;
+    let state = |id: &str| {
+        timeline
+            .iter()
+            .find(|(m, _, _)| m == id)
+            .map(|(_, _, deleted)| *deleted)
+    };
+    assert_eq!(state(&recent), Some(true));
+    assert_eq!(state(&old), Some(false), "a message before `since` stays");
+    assert_eq!(
+        f.timeline(&f.carol, &dm_id).await,
+        [(in_dm, json!("private words"), false)],
+        "a DM is never touched"
+    );
+    assert_eq!(
+        f.counts(&f.mona, &f.bob, None).await["readable"],
+        json!({ "messages": 1, "channels": 1 })
+    );
+}
+
+/// A banned person is no member any more, and their messages can still be counted and deleted.
+#[tokio::test]
+async fn a_banned_persons_messages_can_still_be_deleted() {
+    let f = setup().await;
+    f.send(&f.bob, &f.channel_id, "spam one").await;
+    f.send(&f.bob, &f.channel_id, "spam two").await;
+    exec_ok(&f.schema, f.mona.request(BAN, f.member_vars(&f.bob))).await;
+
+    assert_eq!(
+        f.counts(&f.mona, &f.bob, None).await["readable"],
+        json!({ "messages": 2, "channels": 1 })
+    );
+    let deleted = f.delete_theirs(&f.mona, &f.bob, None, false).await;
+    assert_eq!(
+        deleted,
+        json!({ "deleted": 2, "channels": 1, "hasMore": false })
+    );
+    let rows = f.audit_rows("admin.delete_member_messages").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].args_redacted["was_member"], json!(false));
 }
 
 // ── The checklist: who may call each root, and what each refusal answers ─────────────────────
@@ -1539,7 +1847,7 @@ fn in_minutes(minutes: i64) -> String {
 }
 
 /// One call to each root that acts on the member `user` of `server`: kick, ban, time out, clear
-/// the timeout.
+/// the timeout, count and delete their messages.
 fn targeting(server: &str, user: &str) -> Vec<Call> {
     let member = json!({ "serverId": server, "userId": user });
     vec![
@@ -1549,7 +1857,12 @@ fn targeting(server: &str, user: &str) -> Vec<Call> {
             TIMEOUT,
             merged(member.clone(), json!({ "until": in_minutes(10) })),
         ),
-        (CLEAR_TIMEOUT, member),
+        (CLEAR_TIMEOUT, member.clone()),
+        (MEMBER_MESSAGE_COUNTS, member.clone()),
+        (
+            DELETE_MEMBER_MESSAGES,
+            merged(member, json!({ "includeUnjoinedPrivate": false })),
+        ),
     ]
 }
 
