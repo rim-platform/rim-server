@@ -1,5 +1,6 @@
 # =============================================================================
-# rim-imagecheck — scores profile pictures for sexual content, gore and violence
+# rim-imagecheck — scores profile pictures for sexual content, gore and violence, and text
+# art for sexual content
 # Multi-stage build: build (download the models, embed the prompts) → runtime
 # =============================================================================
 
@@ -11,8 +12,8 @@ COPY requirements.txt requirements-build.txt ./
 RUN pip install --no-cache-dir --no-deps -r requirements-build.txt
 
 # Both models as ONNX at fixed revisions; each file must match models.sha256.
-# CLIP ViT-B/32: the int8 vision model is what the service runs; the fp32 text model and the
-# tokenizer only embed the prompts below and stay in this stage.
+# CLIP ViT-B/32: the int8 vision model scores profile pictures and the fp32 vision model text art;
+# the fp32 text model and the tokenizer only embed the prompts below and stay in this stage.
 # The nsfw classifier (Falconsai/nsfw_image_detection): its int8 model, its image processor
 # settings and its labels, saved with an nsfw_ prefix.
 ARG CLIP_REPO=Xenova/clip-vit-base-patch32
@@ -26,6 +27,7 @@ RUN set -eu; \
             "https://huggingface.co/$1/resolve/$2/$3" "$4"; \
     }; \
     fetch "$CLIP_REPO" "$CLIP_REVISION" onnx/vision_model_quantized.onnx vision_model_quantized.onnx; \
+    fetch "$CLIP_REPO" "$CLIP_REVISION" onnx/vision_model.onnx vision_model.onnx; \
     fetch "$CLIP_REPO" "$CLIP_REVISION" onnx/text_model.onnx text_model.onnx; \
     fetch "$CLIP_REPO" "$CLIP_REVISION" tokenizer.json tokenizer.json; \
     fetch "$NSFW_REPO" "$NSFW_REVISION" onnx/model_int8.onnx nsfw_model_int8.onnx; \
@@ -33,8 +35,13 @@ RUN set -eu; \
     fetch "$NSFW_REPO" "$NSFW_REVISION" config.json nsfw_config.json; \
     sha256sum -c models.sha256
 
-COPY prompts.py build_prompts.py ./
-RUN python build_prompts.py text_model.onnx tokenizer.json prompts.npz
+# The font text art is drawn in (the runtime stage has no apt).
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY prompts.py text_prompts.py build_prompts.py ./
+RUN python build_prompts.py text_model.onnx tokenizer.json prompts prompts.npz && \
+    python build_prompts.py text_model.onnx tokenizer.json text_prompts text_prompts.npz
 
 # ---------- Stage 2: Runtime ------------------------------------------------
 FROM python:3.12-slim AS runtime
@@ -53,8 +60,10 @@ RUN groupadd --gid 1001 imagecheck && \
 
 WORKDIR /app
 COPY --from=build /build/vision_model_quantized.onnx /build/prompts.npz \
+    /build/vision_model.onnx /build/text_prompts.npz \
     /build/nsfw_model_int8.onnx /build/nsfw_preprocessor_config.json /build/nsfw_config.json ./
-COPY imagecheck.py prompts.py ./
+COPY --from=build /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf ./
+COPY imagecheck.py prompts.py text_prompts.py textart.py ./
 
 USER 1001
 

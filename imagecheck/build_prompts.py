@@ -1,19 +1,19 @@
 """Computes the prompt embeddings the service compares images with, at image build time.
 
-    python build_prompts.py <text_model.onnx> <tokenizer.json> <prompts.npz>
+    python build_prompts.py <text_model.onnx> <tokenizer.json> <module> <out.npz>
 
-Tokenizes every prompt in prompts.py to CLIP's 77 tokens (start and end tokens as tokenizer.json
-adds them, padded with its pad token), runs the fp32 text model, L2-normalizes the embeddings and
-writes them with each row's category and the logit scale.
+<module> is `prompts` (profile pictures) or `text_prompts` (text art). Tokenizes every prompt in
+that module to CLIP's 77 tokens (start and end tokens as tokenizer.json adds them, padded with its
+pad token), runs the fp32 text model, L2-normalizes the embeddings and writes them with each row's
+category and the logit scale.
 """
 
+import importlib
 import sys
 
 import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
-
-import prompts
 
 # CLIP's context length.
 CONTEXT = 77
@@ -29,8 +29,8 @@ def tokenize(tokenizer: Tokenizer, texts: list[str]) -> np.ndarray:
     return np.array([enc.ids for enc in tokenizer.encode_batch(texts)], dtype=np.int64)
 
 
-def main(model_path: str, tokenizer_path: str, out_path: str) -> None:
-    table = prompts.rows()
+def main(model_path: str, tokenizer_path: str, module: str, out_path: str) -> None:
+    table = importlib.import_module(module).rows()
     ids = tokenize(Tokenizer.from_file(tokenizer_path), [prompt for _, prompt in table])
     session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
     (embeds,) = session.run(["text_embeds"], {"input_ids": ids})
@@ -45,6 +45,6 @@ def main(model_path: str, tokenizer_path: str, out_path: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
+    if len(sys.argv) != 5:
         sys.exit(__doc__)
     main(*sys.argv[1:])

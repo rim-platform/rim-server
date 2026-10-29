@@ -11,7 +11,7 @@ import threading
 import unittest
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFont
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -20,8 +20,10 @@ from imagecheck import (
     CLIP_MEAN,
     CLIP_STD,
     ImageRejected,
+    MAX_TEXT_BYTES,
     Model,
     Scorer,
+    TEXT_MODEL,
     VitProcessor,
     clip_input,
     load_image,
@@ -174,6 +176,18 @@ class ScoreTest(unittest.TestCase):
             self.assertLessEqual(sum(scores.values()), 1.0001)
 
 
+class TextScoreTest(unittest.TestCase):
+    def test_the_text_scorer_sums_only_the_sexual_rows(self):
+        scorer = Scorer(
+            np.eye(4, dtype=np.float32),
+            np.array(["sexual", "sexual", "other", "other"]),
+            1.0,
+            ("sexual",),
+        )
+        scores = scorer.score(np.array([1.0, 0, 0, 0]))
+        self.assertEqual(scores, {"sexual": round((math.e + 1) / (math.e + 3), 4)})
+
+
 class NsfwIndexTest(unittest.TestCase):
     def test_finds_the_nsfw_label(self):
         self.assertEqual(nsfw_index({"id2label": {"0": "normal", "1": "nsfw"}}), 1)
@@ -220,6 +234,36 @@ class ModelTest(unittest.TestCase):
             self.model([0.0, 0.0]).check(b"not an image")
 
 
+class TextModelTest(unittest.TestCase):
+    def test_the_higher_of_the_two_polarities_is_reported(self):
+        class Clip:
+            def __init__(self):
+                self.calls = 0
+
+            def run(self, outputs, inputs):
+                self.calls += 1
+                return [np.array([[1.0, 0, 0] if self.calls == 1 else [0, 1.0, 0]])]
+
+        model = Model(
+            None,
+            None,
+            None,
+            None,
+            0,
+            Clip(),
+            Scorer(
+                np.eye(3, dtype=np.float32),
+                np.array(["sexual", "other", "other"]),
+                1.0,
+                ("sexual",),
+            ),
+            ImageFont.load_default(16),
+        )
+        scores = model.check_text("+--+\n|ab|\n+--+")
+        self.assertEqual(scores, {"sexual": round(math.e / (math.e + 2), 4)})
+        self.assertEqual(model.text_clip.calls, 2)
+
+
 class StubModel:
     """Decodes like the real model, then answers fixed scores."""
 
@@ -230,6 +274,10 @@ class StubModel:
         load_image(png_bytes)
         self.calls += 1
         return {"sexual": 0.01, "gore": 0.02, "violence": 0.03}
+
+    def check_text(self, text):
+        self.texts = getattr(self, "texts", []) + [text]
+        return {"sexual": 0.42}
 
 
 class HttpTest(unittest.TestCase):
@@ -256,6 +304,61 @@ class HttpTest(unittest.TestCase):
 
     def check(self, body, content_type="image/png"):
         return self.request("POST", "/v1/check", body, {"Content-Type": content_type})
+
+    def check_text(self, body, content_type="text/plain"):
+        return self.request("POST", "/v1/check-text", body, {"Content-Type": content_type})
+
+    def test_check_text_answers_scores_and_model(self):
+        self.server.model = StubModel()
+        for content_type in ("text/plain", "text/plain; charset=utf-8"):
+            status, content_type_out, body = self.check_text("⣿⠁ hi".encode(), content_type)
+            self.assertEqual(status, 200, content_type)
+            self.assertEqual(content_type_out, "application/json")
+            self.assertEqual(json.loads(body), {"scores": {"sexual": 0.42}, "model": TEXT_MODEL})
+        self.assertEqual(self.server.model.texts, ["⣿⠁ hi"] * 2)
+
+    def test_check_text_other_type_is_415(self):
+        self.server.model = StubModel()
+        for content_type in ("application/json", "image/png", ""):
+            status, _, _ = self.check_text(b"hello", content_type)
+            self.assertEqual(status, 415, content_type)
+
+    def test_check_text_without_length_is_411(self):
+        self.server.model = StubModel()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            sock.sendall(
+                b"POST /v1/check-text HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\n\r\n"
+            )
+            answer = sock.recv(4096)
+        self.assertTrue(answer.startswith(b"HTTP/1.1 411 "), answer)
+
+    def test_check_text_over_the_limit_is_413_before_the_body_is_read(self):
+        self.server.model = StubModel()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            sock.sendall(
+                b"POST /v1/check-text HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\n"
+                b"Content-Length: 65537\r\n\r\n"
+            )
+            answer = sock.recv(4096)
+        self.assertTrue(answer.startswith(b"HTTP/1.1 413 "), answer)
+        self.assertFalse(hasattr(self.server.model, "texts"))
+
+    def test_check_text_exactly_at_the_limit_is_accepted(self):
+        self.server.model = StubModel()
+        status, _, _ = self.check_text(b"a" * MAX_TEXT_BYTES)
+        self.assertEqual(status, 200)
+
+    def test_check_text_must_be_utf8_and_not_blank(self):
+        self.server.model = StubModel()
+        for body in (b"\xff\xfe\xfa", b"", b" \n\t  "):
+            status, _, answer = self.check_text(body)
+            self.assertEqual(status, 400, body)
+            self.assertIn("error", json.loads(answer))
+        self.assertFalse(hasattr(self.server.model, "texts"))
+
+    def test_check_text_while_loading_is_503(self):
+        status, _, _ = self.check_text(b"hello")
+        self.assertEqual(status, 503)
 
     def test_healthz_before_and_after_the_model_loads(self):
         status, _, body = self.request("GET", "/healthz")
