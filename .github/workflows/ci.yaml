@@ -198,7 +198,7 @@ jobs:
         # below 0.5 in every category.
         run: |
           docker run -d --name imagecheck --read-only --tmpfs /tmp --cap-drop ALL \
-            --security-opt no-new-privileges:true --memory 1g -p 127.0.0.1:8090:8090 \
+            --security-opt no-new-privileges:true --memory 1536m -p 127.0.0.1:8090:8090 \
             rim-imagecheck:ci
           for _ in $(seq 60); do
             curl -fsS http://127.0.0.1:8090/healthz && break
@@ -219,6 +219,28 @@ jobs:
           print(answer)
           assert set(answer["scores"]) == {"sexual", "gore", "violence"}, answer
           assert all(score < 0.5 for score in answer["scores"].values()), answer
+          EOF
+      - name: Smoke test of text art
+        # A harmless ASCII table must score below 0.5.
+        run: |
+          python - <<'EOF'
+          import json, urllib.request
+          rows = [("name", "role"), ("alice", "admin"), ("bob", "member"), ("carol", "guest")]
+          border = "+-------+--------+"
+          lines = [border]
+          for name, role in rows:
+              lines += [f"| {name:<5} | {role:<6} |", border]
+          lines.append("total: 4 rows")
+          assert len(lines) == 10, lines
+          request = urllib.request.Request(
+              "http://127.0.0.1:8090/v1/check-text",
+              data="\n".join(lines).encode(),
+              headers={"Content-Type": "text/plain; charset=utf-8"},
+          )
+          answer = json.load(urllib.request.urlopen(request, timeout=30))
+          print(answer)
+          assert answer["model"] == "clip-vit-b32-fp32@d15189d+textart-v1", answer
+          assert answer["scores"]["sexual"] < 0.5, answer
           EOF
       - name: Container logs
         if: always()

@@ -21,6 +21,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- The imagecheck service scores text art (`POST /v1/check-text`): it draws a message's text as a
+  picture and scores it for sexual content. rim-server does not call it yet.
+
 ## [0.0.6] - 2026-10-28
 
 ### Fixed

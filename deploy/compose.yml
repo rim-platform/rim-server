@@ -214,7 +214,8 @@ services:
     restart: unless-stopped
     logging: *logging
 
-  # Scores profile pictures for sexual content, gore and violence (imagecheck/README.md). On the
+  # Scores profile pictures for sexual content, gore and violence, and text art for sexual
+  # content (imagecheck/README.md). On the
   # internal network only: it reaches nothing and only rim reaches it. rim does not wait for
   # it; while it is down, picture uploads fail and everything else works.
   imagecheck:
@@ -224,8 +225,8 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     networks: [internal]
-    # About 320 MB resident; two inference threads.
-    mem_limit: 1g
+    # About 850 MiB resident with all models loaded; two inference threads.
+    mem_limit: 1536m
     cpus: 2
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz', timeout=4)"]

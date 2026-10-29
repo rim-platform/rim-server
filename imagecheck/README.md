@@ -1,7 +1,7 @@
 # rim-imagecheck
 
 A small HTTP service that scores a profile picture for sexual content, gore and violence before
-rim-server stores it. It runs next to rim-server as the `imagecheck` service of
+rim-server stores it, and text art for sexual content. It runs next to rim-server as the `imagecheck` service of
 `deploy/compose.yml`, on the internal network only, and is published with every release as
 `ghcr.io/rim-platform/rim-imagecheck`.
 
@@ -22,6 +22,8 @@ Two models run on every picture, both as int8 ONNX with ONNX Runtime on the CPU:
   logos, textures, pages of text…) give ordinary pictures somewhere to go. CLIP's sexual prompts
   stay in the softmax without being reported: they take the probability of nude pictures that
   would otherwise go to gore or violence.
+
+Text art is scored by CLIP alone, see [Text art](#text-art).
 
 Nothing leaves the container: the model files are part of the image, and ONNX Runtime's usage
 telemetry is switched off.
@@ -47,12 +49,59 @@ revisions. Other answers carry `{"error": "…"}`:
 | 503 | the models are still loading |
 | 404 | any other path or method |
 
+`POST /v1/check-text` with `Content-Type: text/plain` (parameters such as `; charset=utf-8` are
+allowed) and a message's text, UTF-8, of at most 64 KiB (65,536 bytes):
+
+```json
+{"scores": {"sexual": 0.0326}, "model": "clip-vit-b32-fp32@d15189d+textart-v1"}
+```
+
+The score is between 0 and 1, rounded to four places. Errors carry `{"error": "…"}`:
+
+| Status | When |
+|---|---|
+| 400 | the body is not UTF-8, or is empty or only whitespace |
+| 411 | no `Content-Length` |
+| 413 | `Content-Length` over 65,536 bytes (refused before the body is read) |
+| 415 | a `Content-Type` other than `text/plain` |
+| 503 | the models are still loading |
+| 404 | any other path or method |
+
 `GET /healthz` answers `200 ok` once the models are loaded and `503` before; the image's
-`HEALTHCHECK` probes it. Each check logs one line with its three scores and its duration; image
-data is never logged.
+`HEALTHCHECK` probes it. Each check logs one line with its scores and its duration (a text check also the
+number of characters); image data and text are never logged.
 
 Settings: `PORT` (default 8090) and `MODEL_DIR` (default the script's directory, `/app` in the
 image).
+
+## Text art
+
+rim-server sends `/v1/check-text` only messages that look like text art (braille, block or
+box-drawing pictures, ASCII art), and decides from the score it gets back. The text is drawn as
+a picture the way a client shows it: a text of which more than half of the non-whitespace
+characters are braille is decoded dot for dot (every character a 2×4 cell, raised dots black on
+white) and blurred; any other text is set in DejaVu Sans Mono and blurred more. The result is
+scaled to fit 256×256, centred on a white square, and scored in both polarities, the picture and
+its inversion; the higher score counts. At most 200 lines of 400 characters are drawn.
+
+CLIP ViT-B/32 compares the picture with the prompts in [`text_prompts.py`](text_prompts.py),
+written for drawings, line art, dotted and edge renderings and text art; a softmax over all
+prompts gives the score, the sum over the `sexual` ones. The text path runs CLIP's **fp32**
+vision model, not the int8 one the profile picture check uses: on the same pixels the int8
+model's embedding is only about 0.92 cosine-similar to the fp32 one, and a known sexual sample
+dropped from 0.83 to 0.57.
+
+Calibration, measured with the prompts above on 152 harmless samples and a few sexual ones (the
+sexual samples were braille art):
+
+| Samples | sexual score |
+|---|---|
+| 152 harmless: braille art in three styles from photos, portraits, drawings (anime too) and icons; banners, tables, code, logs, emoticons | median 0.04, highest 0.37 |
+| a bikini photo as braille art (borderline) | 0.57 |
+| The Creation of Adam as braille art | at most 0.16 |
+| two sexual braille samples | 0.83 and 0.77 |
+
+The sexual side rests on very few samples, so the threshold should be reviewed as reports come in.
 
 ## Scores and actions
 
@@ -119,15 +168,17 @@ text keep them away from CLIP's other categories.
 
 ## Resources
 
-On an 8-CPU host, with the limits `deploy/compose.yml` sets (1 GB, 2 CPUs):
+On a 2-CPU host, with the limits `deploy/compose.yml` sets (1536 MiB, 2 CPUs):
 
-- image: 459 MB (Python 3.12 slim, ONNX Runtime, NumPy, Pillow, the 89 MB CLIP vision model
-  and the 87 MB classifier);
-- memory: about 315 MiB resident after 20 checks, 340 MiB after a burst of 8 at a time;
-- latency: about 105 ms per check one at a time, including HTTP (the classifier about 70 ms,
-  CLIP about 39 ms); checks run one at a time on 2 threads, about 9 a second when requests
-  queue, and the first few after a start take up to twice as long;
-- start: both models load in under a second.
+- image: 811 MB (Python 3.12 slim, ONNX Runtime, NumPy, Pillow, the 89 MB int8 and 352 MB fp32
+  CLIP vision models, the 87 MB classifier and the font);
+- memory: about 825 MiB resident with all models loaded, after a few checks of each kind, and
+  about 845 MiB after a burst of 8 text checks at a time (the limit was 1 GB before the fp32
+  model and is 1536 MiB now);
+- latency: about 105 ms per profile picture check and about 100 to 115 ms per text check (the
+  service's own log line, a 2.1 to 2.7 thousand character text), one at a time; checks run one
+  at a time on 2 threads;
+- start: all models load in under a second.
 
 ## Licences
 
@@ -142,6 +193,10 @@ On an 8-CPU host, with the limits `deploy/compose.yml` sets (1 GB, 2 CPUs):
   task-specific testing; the calibration above is the start of that testing for this prompt set,
   and operators should extend it on their own traffic before relying on the block threshold.
 
+- **The font**: text art is drawn in DejaVu Sans Mono from Debian's `fonts-dejavu-core`. The
+  DejaVu fonts are derived from Bitstream Vera and are free to use, copy and embed under the
+  Bitstream Vera and DejaVu licence (permissive, no copyleft).
+
 The service's own code is under the repository's Apache-2.0 licence.
 
 ## Building and testing
@@ -150,13 +205,14 @@ The service's own code is under the repository's Apache-2.0 licence.
 docker build -t rim-imagecheck:local imagecheck
 docker run --rm --read-only --tmpfs /tmp -p 8090:8090 rim-imagecheck:local
 curl -s --data-binary @picture.png -H 'Content-Type: image/png' http://localhost:8090/v1/check
+curl -s --data-binary @art.txt -H 'Content-Type: text/plain' http://localhost:8090/v1/check-text
 
 pip install --no-deps -r imagecheck/requirements.txt
 python -m unittest discover -s imagecheck/tests
 ```
 
-The build downloads six model files, checks them against [`models.sha256`](models.sha256) and
-runs [`build_prompts.py`](build_prompts.py). From CLIP: the int8 vision model, plus the fp32 text
+The build downloads seven model files, checks them against [`models.sha256`](models.sha256) and
+runs [`build_prompts.py`](build_prompts.py). From CLIP: the int8 and fp32 vision models, plus the fp32 text
 model and the tokenizer, which only embed the prompts at build time. From the classifier: the
 int8 model, its `preprocessor_config.json` and its `config.json` (for the label order), saved
 with an `nsfw_` prefix. The tests need no model.

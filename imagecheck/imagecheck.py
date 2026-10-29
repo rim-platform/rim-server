@@ -1,6 +1,6 @@
 """Scores profile pictures for sexual content, gore and violence.
 
-Two models run on every picture: a ViT image classifier trained to tell nsfw from normal
+Text art is scored too, see /v1/check-text below. Two models run on every picture: a ViT image classifier trained to tell nsfw from normal
 pictures (Falconsai/nsfw_image_detection) gives the sexual score, and CLIP ViT-B/32 compared with
 the prompts in prompts.py gives gore and violence.
 
@@ -9,6 +9,10 @@ An HTTP service on PORT (default 8090):
     POST /v1/check   body: a PNG of at most 1 MiB and 1024x1024 pixels, Content-Type image/png
                      200 {"scores": {"sexual": s, "gore": g, "violence": v}, "model": MODEL}
                      400 unreadable image, 411 no Content-Length, 413 too large,
+                     415 another type, 503 models not loaded yet
+    POST /v1/check-text  body: UTF-8 text of at most 64 KiB, Content-Type text/plain
+                     200 {"scores": {"sexual": s}, "model": TEXT_MODEL}
+                     400 not UTF-8 or blank, 411 no Content-Length, 413 too large,
                      415 another type, 503 models not loaded yet
     GET  /healthz    200 "ok" once the models are loaded, 503 before
 
@@ -27,12 +31,24 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFont, ImageOps
 
+import textart
 from prompts import SCORED
+from text_prompts import SCORED as TEXT_SCORED
 
 # The models and revisions every answer carries.
 MODEL = "clip-vit-b32-q8@d15189d+falconsai-nsfw-q8@1ceb3c7"
+# The model every text answer carries.
+TEXT_MODEL = "clip-vit-b32-fp32@d15189d+textart-v1"
+# CLIP's fp32 vision model and the prompt embeddings of the text art check, and the font text
+# art is drawn in.
+CLIP_FP32_FILE = "vision_model.onnx"
+TEXT_PROMPTS_FILE = "text_prompts.npz"
+FONT_FILE = "DejaVuSansMono.ttf"
+FONT_SIZE = 16
+# Largest text request body, in bytes.
+MAX_TEXT_BYTES = 65536
 # CLIP's int8 vision model and the prompt embeddings build_prompts.py writes.
 CLIP_FILE = "vision_model_quantized.onnx"
 PROMPTS_FILE = "prompts.npz"
@@ -142,13 +158,20 @@ def softmax(logits: np.ndarray) -> np.ndarray:
 class Scorer:
     """Turns a CLIP image embedding into category scores against the prompt embeddings."""
 
-    def __init__(self, embeds: np.ndarray, labels: np.ndarray, logit_scale: float):
+    def __init__(
+        self,
+        embeds: np.ndarray,
+        labels: np.ndarray,
+        logit_scale: float,
+        scored: tuple[str, ...] = SCORED,
+    ):
+        self.scored = scored
         self.embeds = embeds.astype(np.float32)
         self.labels = np.asarray(labels)
         self.logit_scale = float(logit_scale)
 
     def score(self, image_embed: np.ndarray) -> dict[str, float]:
-        """The score of each category in SCORED for `image_embed`, rounded to 4 places.
+        """The score of each scored category (SCORED unless given) for `image_embed`, rounded to 4 places.
 
         The embedding is L2-normalized, its logits against every prompt are the logit scale times
         the dot products, a softmax runs over all prompts, and a category's score is the sum of
@@ -158,7 +181,8 @@ class Scorer:
         image = image / np.linalg.norm(image)
         probs = softmax(self.logit_scale * (self.embeds @ image))
         return {
-            category: round(float(probs[self.labels == category].sum()), 4) for category in SCORED
+            category: round(float(probs[self.labels == category].sum()), 4)
+            for category in self.scored
         }
 
 
@@ -171,14 +195,27 @@ def nsfw_index(config: dict) -> int:
 
 
 class Model:
-    """Both models; one check runs at a time."""
+    """All models; one check runs at a time."""
 
-    def __init__(self, clip, scorer: Scorer, nsfw, processor: VitProcessor, nsfw_label: int):
+    def __init__(
+        self,
+        clip,
+        scorer: Scorer,
+        nsfw,
+        processor: VitProcessor,
+        nsfw_label: int,
+        text_clip=None,
+        text_scorer: Scorer | None = None,
+        font: ImageFont.FreeTypeFont | None = None,
+    ):
         self.clip = clip
         self.scorer = scorer
         self.nsfw = nsfw
         self.processor = processor
         self.nsfw_label = nsfw_label
+        self.text_clip = text_clip
+        self.text_scorer = text_scorer
+        self.font = font
         self.lock = threading.Lock()
 
     @classmethod
@@ -207,12 +244,19 @@ class Model:
 
         with np.load(os.path.join(model_dir, PROMPTS_FILE), allow_pickle=False) as data:
             scorer = Scorer(data["embeds"], data["labels"], float(data["logit_scale"]))
+        with np.load(os.path.join(model_dir, TEXT_PROMPTS_FILE), allow_pickle=False) as data:
+            text_scorer = Scorer(
+                data["embeds"], data["labels"], float(data["logit_scale"]), TEXT_SCORED
+            )
         return cls(
             session(CLIP_FILE),
             scorer,
             session(NSFW_FILE),
             VitProcessor(config(NSFW_PREPROCESSOR_FILE)),
             nsfw_index(config(NSFW_CONFIG_FILE)),
+            session(CLIP_FP32_FILE),
+            text_scorer,
+            ImageFont.truetype(os.path.join(model_dir, FONT_FILE), FONT_SIZE),
         )
 
     def check(self, png_bytes: bytes) -> dict[str, float]:
@@ -230,9 +274,25 @@ class Model:
         sexual = float(softmax(logits[0])[self.nsfw_label])
         return {"sexual": round(sexual, 4), **self.scorer.score(embeds[0])}
 
+    def check_text(self, text: str) -> dict[str, float]:
+        """The sexual score of `text` drawn as a picture.
+
+        The picture and its inversion go through the fp32 vision model; the score is the higher
+        of the two.
+        """
+        image = textart.picture(text, self.font)
+        scores = []
+        with self.lock:
+            for candidate in (image, ImageOps.invert(image)):
+                (embeds,) = self.text_clip.run(
+                    ["image_embeds"], {"pixel_values": clip_input(candidate)}
+                )
+                scores.append(self.text_scorer.score(embeds[0])["sexual"])
+        return {"sexual": round(max(scores), 4)}
+
 
 class Handler(BaseHTTPRequestHandler):
-    """Answers /v1/check and /healthz with the models on `self.server.model`, None while loading."""
+    """Answers /v1/check, /v1/check-text and /healthz with `self.server.model`, None while loading."""
 
     server_version = "imagecheck"
     sys_version = ""
@@ -248,17 +308,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_text(200, "ok")
 
     def do_POST(self):
-        if self.path != "/v1/check":
+        if self.path not in ("/v1/check", "/v1/check-text"):
             return self.send_json(404, {"error": "not found"})
+        text = self.path == "/v1/check-text"
+        limit = MAX_TEXT_BYTES if text else MAX_BYTES
+        wanted = "text/plain" if text else "image/png"
         length = self.headers.get("Content-Length")
         if length is None or not length.isdigit():
             return self.send_json(411, {"error": "a Content-Length is required"})
-        if int(length) > MAX_BYTES:
-            return self.send_json(413, {"error": f"the body is larger than {MAX_BYTES} bytes"})
+        if int(length) > limit:
+            return self.send_json(413, {"error": f"the body is larger than {limit} bytes"})
         media_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if media_type != "image/png":
-            return self.send_json(415, {"error": "the body must be image/png"})
+        if media_type != wanted:
+            return self.send_json(415, {"error": f"the body must be {wanted}"})
         body = self.rfile.read(int(length))
+        if text:
+            return self.check_text(body)
         model = self.server.model
         if model is None:
             return self.send_json(503, {"error": "the models are still loading"})
@@ -275,6 +340,23 @@ class Handler(BaseHTTPRequestHandler):
             millis,
         )
         self.send_json(200, {"scores": scores, "model": MODEL})
+
+    def check_text(self, body: bytes):
+        """Answers /v1/check-text for the UTF-8 text in `body`."""
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return self.send_json(400, {"error": "the body is not UTF-8 text"})
+        if not text.strip():
+            return self.send_json(400, {"error": "the text is empty"})
+        model = self.server.model
+        if model is None:
+            return self.send_json(503, {"error": "the models are still loading"})
+        started = time.monotonic()
+        scores = model.check_text(text)
+        millis = (time.monotonic() - started) * 1000
+        log.info("check-text sexual=%.4f chars=%d %.0f ms", scores["sexual"], len(text), millis)
+        self.send_json(200, {"scores": scores, "model": TEXT_MODEL})
 
     def do_PUT(self):
         self.send_json(404, {"error": "not found"})
