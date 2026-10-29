@@ -24,7 +24,17 @@ tag `v<version>`, the version every crate in the workspace carries.
 ### Added
 
 - The imagecheck service scores text art (`POST /v1/check-text`): it draws a message's text as a
-  picture and scores it for sexual content. rim-server does not call it yet.
+  picture and scores it for sexual content.
+- Messages that look like text art (braille, block or ASCII drawings) are scored by the
+  imagecheck service after they are sent; a sexual one is flagged, covered for readers, and
+  reported to the workspace's moderators and the operators. Owners and Moderators clear a flag
+  with `clearMessageFlag`. `RIM_TEXT_ART_CHECK_FLAG` sets the threshold (0.60);
+  `text_art_check` in `RIM_FEATURES_DISABLED` turns it off.
+
+### Changed
+
+- **Upgrade:** `MessageReport.reporterUserId` is null for a report the automatic check filed;
+  clients read `MessageReport.automatic`.
 
 ## [0.0.6] - 2026-10-28
 

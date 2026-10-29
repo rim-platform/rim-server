@@ -564,6 +564,7 @@ mod tests {
             is_deleted: deleted,
             has_attachments: false,
             encryption: None,
+            flagged_at: None,
         }
     }
 

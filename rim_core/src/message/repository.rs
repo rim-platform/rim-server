@@ -129,6 +129,15 @@ pub trait MessageRepository: Send + Sync {
 
     async fn soft_delete_message(&self, message_id: MessageId) -> RepoResult<()>;
 
+    /// Flag the message at `flagged_at`, or clear its flag with `None`. A deleted message is
+    /// left as it is, and flagging an already flagged message keeps the first time. Returns
+    /// whether the message's flag changed.
+    async fn set_flagged_at(
+        &self,
+        message_id: MessageId,
+        flagged_at: Option<DateTime<Utc>>,
+    ) -> RepoResult<bool>;
+
     /// Messages of a conversation (timeline and threads, deleted included) whose `version` is
     /// greater than `after_version`, ordered by `version` ascending. Returns up to `limit + 1`
     /// rows so the caller can tell whether more remain; it does not truncate.

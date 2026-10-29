@@ -126,7 +126,8 @@ pub struct MessageReport {
     pub server_id: async_graphql::ID,
     pub conversation_id: async_graphql::ID,
     pub message_id: async_graphql::ID,
-    pub reporter_user_id: async_graphql::ID,
+    /// The member who filed the report; null for a report the automatic text art check filed.
+    pub reporter_user_id: Option<async_graphql::ID>,
     pub reason: String,
     pub status: MessageReportStatus,
     pub resolved_by: Option<async_graphql::ID>,
@@ -151,6 +152,8 @@ pub struct MessageReport {
     /// When the verified content is deleted: 90 days after the report was resolved or
     /// dismissed; null while it is open.
     pub franked_content_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether the automatic text art check filed the report rather than a member.
+    pub automatic: bool,
 }
 
 impl From<rim_services::moderation::dto::MessageReportDto> for MessageReport {
@@ -160,7 +163,10 @@ impl From<rim_services::moderation::dto::MessageReportDto> for MessageReport {
             server_id: async_graphql::ID(value.server_id.to_string()),
             conversation_id: async_graphql::ID(value.conversation_id.to_string()),
             message_id: async_graphql::ID(value.message_id.to_string()),
-            reporter_user_id: async_graphql::ID(value.reporter_user_id.to_string()),
+            reporter_user_id: value
+                .reporter_user_id
+                .map(|id| async_graphql::ID(id.to_string())),
+            automatic: value.reporter_user_id.is_none(),
             reason: value.reason,
             status: value.status.into(),
             resolved_by: value

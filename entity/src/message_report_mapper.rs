@@ -8,7 +8,7 @@ impl From<message_report::Model> for MessageReport {
             server_id: m.server_id.into(),
             conversation_id: m.conversation_id.into(),
             message_id: m.message_id.into(),
-            reporter_user_id: m.reporter_user_id.into(),
+            reporter_user_id: m.reporter_user_id.map(Into::into),
             reason: m.reason,
             status: m.status.into(),
             resolved_by: m.resolved_by.map(Into::into),

@@ -39,6 +39,9 @@ pub struct MessageDto {
 
     /// The MLS envelope of an encrypted message; `None` for plaintext.
     pub encryption: Option<MessageEncryptionDto>,
+
+    /// When the automatic text art check flagged the message; `None` while it is not flagged.
+    pub flagged_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// An encrypted message's envelope as members see it.

@@ -461,3 +461,47 @@ async fn before_pagination_returns_rows_adjacent_to_cursor() {
         ids(&[4, 3])
     );
 }
+
+#[tokio::test]
+async fn set_flagged_at_flags_keeps_the_first_time_clears_and_skips_deleted_messages() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Channel)
+        .await;
+    let user = ctx.create_user("flag-user-1").await;
+    let message = ctx.create_message(conv.id, user.id, "⣿⣿⣿").await;
+    let first = chrono::DateTime::from_timestamp(1_800_000_000, 0).expect("time");
+    let later = chrono::DateTime::from_timestamp(1_800_000_600, 0).expect("time");
+    assert_eq!(message.flagged_at, None);
+
+    assert!(repo.set_flagged_at(message.id, Some(first)).await.unwrap());
+    let stored = repo.get_by_id(message.id).await.unwrap().unwrap();
+    assert_eq!(stored.flagged_at, Some(first));
+
+    assert!(
+        !repo.set_flagged_at(message.id, Some(later)).await.unwrap(),
+        "a flagged message keeps its first flag"
+    );
+    let stored = repo.get_by_id(message.id).await.unwrap().unwrap();
+    assert_eq!(stored.flagged_at, Some(first));
+
+    assert!(repo.set_flagged_at(message.id, None).await.unwrap());
+    assert!(!repo.set_flagged_at(message.id, None).await.unwrap());
+    let stored = repo.get_by_id(message.id).await.unwrap().unwrap();
+    assert_eq!(stored.flagged_at, None);
+
+    let deleted = ctx.create_message(conv.id, user.id, "gone").await;
+    repo.soft_delete_message(deleted.id).await.unwrap();
+    assert!(!repo.set_flagged_at(deleted.id, Some(first)).await.unwrap());
+    let stored = repo.get_by_id(deleted.id).await.unwrap().unwrap();
+    assert_eq!(stored.flagged_at, None);
+
+    assert!(
+        !repo
+            .set_flagged_at(MessageId::new(), Some(first))
+            .await
+            .unwrap()
+    );
+}

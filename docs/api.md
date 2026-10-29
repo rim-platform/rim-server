@@ -801,6 +801,22 @@ public HTTPS targets are accepted, with at most ten safe redirects and a 120-sec
 Twenty attempts per account per hour are allowed, with four concurrent downloads per server.
 Failures use the normal feature/auth/rate responses; invalid pins or bundles return 422.
 
+### Flagged messages
+
+`Message.flagged: Boolean!` is true while the automatic text art check holds a flag on the
+message (`docs/messaging.md`, "Flagged messages"); false for a deleted message. A client covers
+a flagged message until its reader chooses to show it, and keeps its cache current with
+`MessageFlagChanged {workspace_id, conversation_id, message_id, flagged}` on
+`workspaceEvents`.
+
+`clearMessageFlag(serverId: ID!, conversationId: ID!, messageId: ID!): Boolean!` clears the
+flag for the workspace's Owner or a Moderator and answers `true`, also for a message that is
+not flagged. Anyone else gets `FORBIDDEN`; a conversation outside the workspace or a message
+outside the conversation is `NOT_FOUND`.
+
+`MessageReport.reporterUserId` is null for a report the check filed, and
+`MessageReport.automatic: Boolean!` tells such a report from a member's.
+
 ### Rejoining the default workspace and removal notices
 
 `joinDefaultWorkspace: ID!` requires a signed-in local account and returns the current default

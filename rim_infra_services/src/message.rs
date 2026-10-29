@@ -605,6 +605,7 @@ impl DefaultMessageService {
             sent_at: message.sent_at,
             edited_at: message.edited_at,
             encryption,
+            flagged_at: message.flagged_at,
         })
     }
 
@@ -674,6 +675,7 @@ impl DefaultMessageService {
             sent_at: message.sent_at,
             edited_at: message.edited_at,
             encryption,
+            flagged_at: message.flagged_at,
         }
     }
 

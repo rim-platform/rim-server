@@ -65,7 +65,8 @@ pub struct MessageReportDto {
     pub server_id: ServerId,
     pub conversation_id: ConversationId,
     pub message_id: MessageId,
-    pub reporter_user_id: UserId,
+    /// The member who filed the report; `None` for the automatic text art check.
+    pub reporter_user_id: Option<UserId>,
     pub reason: String,
     pub status: MessageReportStatus,
     pub resolved_by: Option<UserId>,

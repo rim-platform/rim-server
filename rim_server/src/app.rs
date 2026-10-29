@@ -484,6 +484,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         .link_preview_concurrency()
         .map_err(std::io::Error::other)?;
     let avatar_checker = avatar_checker(config).map_err(std::io::Error::other)?;
+    let text_art_check = config.text_art_check().map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
@@ -552,6 +553,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     }
     let observers_for_presence = Arc::new(observers.clone());
     let observers_for_schema = Arc::new(observers.clone());
+    let observers_for_text_art = Arc::new(observers.clone());
 
     let (storage_backend, storage_service) = build_storage(config, &repos)?;
 
@@ -724,6 +726,39 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                 }
             }
         });
+    }
+
+    // Background task: the text art check, which scores the readable workspace messages that
+    // look like text art after they are stored.
+    match text_art_check {
+        Some(settings) => {
+            let scorer = rim_infra_services::text_art_check::TextArtChecker::new(&settings.url)
+                .map_err(io_error("text art check"))?;
+            tracing::info!(
+                flag = settings.flag,
+                "text art check on, flag threshold {}",
+                settings.flag
+            );
+            let check = rim_infra_services::text_art_moderation::TextArtModeration::new(
+                rim_infra_services::text_art_moderation::TextArtModerationParts {
+                    scorer: Arc::new(scorer),
+                    flag_threshold: settings.flag,
+                    direct_space_id: Some(s2s.direct_space_id),
+                    feature_gate: Arc::clone(&feature_gate),
+                    message_repo: Arc::clone(&repos.message_repo),
+                    moderation_repo: Arc::clone(&repos.moderation_repo),
+                    relay_abuse: service_provider.relay_abuse_service(),
+                    user_repo: Arc::clone(&repos.user_repo),
+                    observers: observers_for_text_art,
+                },
+            );
+            spawn_text_art_check(
+                Arc::new(check),
+                broadcaster.subscribe(),
+                shutdown_tx.subscribe(),
+            );
+        }
+        None => tracing::info!("RIM_AVATAR_CHECK_URL is unset: the text art check is off"),
     }
 
     // Background tasks: notification digest and retention, assuming a single
@@ -1142,6 +1177,37 @@ fn avatar_checker(
         settings.report,
     )
     .map(|checker| Some(Arc::new(checker)))
+}
+
+/// Run `check` on every new or edited message of `events`, each in its own task, until
+/// `shutdown` changes or the channel closes. The check bounds how many score at once.
+fn spawn_text_art_check(
+    check: Arc<rim_infra_services::text_art_moderation::TextArtModeration>,
+    mut events: tokio::sync::broadcast::Receiver<rim_services::events::WorkspaceEvent>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    use rim_services::events::WorkspaceEvent;
+    use tokio::sync::broadcast::error::RecvError;
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = events.recv() => match result {
+                    Ok(event @ (WorkspaceEvent::NewMessage { .. }
+                    | WorkspaceEvent::MessageUpdated { .. })) => {
+                        let check = Arc::clone(&check);
+                        tokio::spawn(async move { check.handle(&event).await });
+                    }
+                    Ok(_) => {}
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "text art check lagged, some messages were not checked");
+                    }
+                    Err(RecvError::Closed) => break,
+                },
+                _ = shutdown.changed() => break,
+            }
+        }
+    });
 }
 
 /// The stored files: `RIM_STORAGE_LOCAL_PATH`, else `files` under the data directory, created

@@ -559,7 +559,7 @@ mod tests {
                         server_id: cmd.server_id,
                         conversation_id: cmd.conversation_id,
                         message_id: cmd.message_id,
-                        reporter_user_id: cmd.actor.user_id,
+                        reporter_user_id: Some(cmd.actor.user_id),
                         reason: cmd.reason,
                         status: MessageReportStatus::Open,
                         resolved_by: None,

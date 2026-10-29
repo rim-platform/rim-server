@@ -276,6 +276,7 @@ async fn execute_command_post_message_round_trips_through_executor() {
                     sent_at: chrono::Utc::now(),
                     edited_at: None,
                     encryption: None,
+                    flagged_at: None,
                 })
             })
         });

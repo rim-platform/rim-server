@@ -470,6 +470,37 @@ conversation (a moderator outside a private channel gets `NOT_FOUND`, like any r
 moderator delete writes an `admin.delete_message` audit row with the message id and author (no
 text). `MessageDeleted` is unchanged.
 
+### Flagged messages
+
+The server checks the messages it can read for sexual text art (drawings made of braille,
+block, box-drawing or ASCII characters), and flags those that score high.
+
+- **What is checked.** A message of a workspace whose text the server stores: never an encrypted
+  message (the server cannot read it), never a message of the direct space (DMs and groups), and
+  only text that looks like text art. Text looks like text art when it has at least 6 non-blank
+  lines and at least 120 non-whitespace characters, and fewer than half of those characters are
+  letters or digits. Code, logs and prose are mostly letters and are not checked.
+- **When.** After the message is stored, whatever stored it: `sendMessage`, a command, a
+  forward, or a request forwarded from another server. Sending never waits for the check. An
+  edit is checked again.
+- **How.** The text is sent to the image check service the operator runs next to the server
+  (`docs/self-hosting.md`, "Content check"), which scores how sexual it looks from 0 to 1. At or
+  above `RIM_TEXT_ART_CHECK_FLAG` (0.60) the message is flagged.
+- **What a flag does.** `Message.flagged` is true; clients cover the message until the reader
+  chooses to show it. `MessageFlagChanged` reaches the conversation's readers. The workspace's
+  Owner and Moderators get an automatic report (see "Reports"), and the instance operators an
+  abuse report (`docs/operations/relay-public.md`). Nothing is refused or deleted. A message
+  that was flagged once keeps its first flag time until the flag is cleared.
+- **Clearing.** `clearMessageFlag(serverId, conversationId, messageId)`: Owner/Moderator
+  (`FORBIDDEN` otherwise; `NOT_FOUND` for a conversation outside the workspace or a message
+  outside the conversation). It answers `true`, and clearing a message that is not flagged
+  succeeds too. An edit that is no longer text art, or scores below the threshold, clears the
+  flag as well. Clearing leaves the reports as they are.
+- **Fail open.** When the service is unavailable, slow or busy, the message stays unflagged and
+  the server logs a warning; it is not checked again until it is edited. `text_art_check` in
+  `RIM_FEATURES_DISABLED`, or no image check service, turns the check off.
+- A deleted message reads as not flagged.
+
 ### Reports
 
 - `reportMessage(serverId, conversationId, messageId, reason)`: any member who can read the
@@ -484,6 +515,10 @@ text). `MessageDeleted` is unchanged.
   reporter's reason are shown.
 - `resolveReport(serverId, reportId, outcome: RESOLVED | DISMISSED)`: Owner/Moderator; a report
   that is no longer open is `CONFLICT`.
+- The automatic text art check (see "Flagged messages") files a report when it flags a message:
+  at most one per message, beside any member's reports, with a null `reporterUserId`,
+  `automatic: true` and the reason `automatic text art check: sexual 0.80` (the score, two
+  decimals). Moderators list and resolve it like any other.
 - The direct space has no Owner or Moderator: everyone there is a guest. Its reports (of DMs and
   groups) go to the instance operators instead (`docs/api.md`, "Instance moderation"):
   `messageReports`, `messageReport` and `resolveReport` with the direct space's id
@@ -504,7 +539,8 @@ Every moderation action writes one `command_audit_log` row (initiator `moderatio
 shared helper, whether it came from GraphQL or a command: `admin.set_member_role`, `admin.kick`,
 `admin.ban`, `admin.unban`, `admin.timeout`, `admin.clear_timeout`, `chat.set_slow_mode`,
 `chat.set_channel_posting`, `chat.report_message`, `admin.resolve_report`,
-`admin.delete_message`. Arguments hold ids and
+`admin.delete_message`, `admin.clear_message_flag` (only when a flag was cleared). Arguments
+hold ids and
 flags only, never reasons or message text. An action run as a command also gets the generic
 command-execution row. Refused actions are not audited by the helper.
 
@@ -517,6 +553,10 @@ joiner's row, with the role and the accepted request's id). Never the token.
 
 A member's own workspace actions write rows with initiator `workspace`: `workspace.leave` (with
 the role they left) and `workspace.rename` (the Owner's; no name text).
+
+The automatic text art check writes `target: "audit"` log lines, not rows: `message.flagged`
+(message, conversation, workspace, author and score) and `message.flag_cleared` with
+`by = "check"` when an edit clears a flag.
 
 ### Realtime events
 
@@ -533,6 +573,10 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   own role changes to or from `guest` gets the matching visibility from the next event on.
 - `{"type": "WorkspaceUpdated", "workspace_id": "…", "name": "…"}`: the workspace was renamed.
   Delivered to every member, guests included.
+- `{"type": "MessageFlagChanged", "workspace_id": "…", "conversation_id": "…", "message_id":
+  "…", "flagged": true}`: the automatic text art check flagged a message (`true`), or an
+  Owner, a Moderator or a later check cleared its flag (`false`). Delivered to everyone who
+  reads the conversation, like the message events: a private channel's to its members only.
 
 Join requests:
 

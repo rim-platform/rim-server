@@ -200,6 +200,10 @@ USER rim
 #   RIM_AVATAR_CHECK_REPORT — highest score at or above which a picture is stored and reported
 #                           to the operators, in (0, 1] and at most the block one
 #                           (default: 0.60); a bad value stops the server at boot
+#   RIM_TEXT_ART_CHECK_FLAG — sexual score at or above which a workspace message that looks
+#                           like text art is flagged and reported, scored by the service at
+#                           RIM_AVATAR_CHECK_URL, in (0, 1] (default: 0.60); a bad value
+#                           stops the server at boot
 #
 # Probes, unauthenticated, on RIM_SERVER_PORT:
 #   GET /healthz          — 200 {"status":"ok","version":…} while the process runs

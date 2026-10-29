@@ -271,6 +271,22 @@ pub enum WorkspaceEvent {
         #[serde(skip_serializing)]
         member_user_ids: Vec<UserId>,
     },
+    /// The automatic text art check flagged a message, or an Owner, a Moderator or a later
+    /// check cleared its flag. On the wire:
+    /// `{"type":"MessageFlagChanged","workspace_id","conversation_id","message_id","flagged"}`;
+    /// see [`Self::ConversationUpdated`] for the server-side-only visibility fields.
+    MessageFlagChanged {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        flagged: bool,
+        #[serde(skip_serializing)]
+        conversation_type: String,
+        #[serde(skip_serializing, default)]
+        is_private: bool,
+        #[serde(skip_serializing)]
+        member_user_ids: Vec<UserId>,
+    },
     /// A workspace state key was written. The value is not carried: a client that shows it
     /// reads it again.
     WorkspaceStateChanged {
@@ -502,6 +518,7 @@ impl WorkspaceEvent {
             | Self::PresenceChanged { workspace_id, .. }
             | Self::UserMentioned { workspace_id, .. }
             | Self::LinkPreviewReady { workspace_id, .. }
+            | Self::MessageFlagChanged { workspace_id, .. }
             | Self::WorkspaceStateChanged { workspace_id, .. }
             | Self::WorkspaceStateDeleted { workspace_id, .. }
             | Self::PipelineFired { workspace_id, .. }
@@ -575,6 +592,9 @@ impl WorkspaceEvent {
             } => Some(mentioned_user_ids),
             Self::LinkPreviewReady {
                 member_user_ids, ..
+            }
+            | Self::MessageFlagChanged {
+                member_user_ids, ..
             } => Some(member_user_ids),
             // WorkspaceState events: server-scope visible to all, user-scope only to owning user.
             Self::WorkspaceStateChanged { scope, user_id, .. }
@@ -643,6 +663,9 @@ impl WorkspaceEvent {
                 conversation_type, ..
             }
             | Self::LinkPreviewReady {
+                conversation_type, ..
+            }
+            | Self::MessageFlagChanged {
                 conversation_type, ..
             } => Some(conversation_type),
             _ => None,

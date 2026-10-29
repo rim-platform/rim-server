@@ -67,6 +67,7 @@ mod tests {
             is_deleted: false,
             sent_at: chrono::Utc::now(),
             edited_at: None,
+            flagged_at: None,
         }
     }
 
@@ -128,6 +129,7 @@ mod tests {
                         is_deleted: false,
                         sent_at: chrono::Utc::now(),
                         edited_at: None,
+                        flagged_at: None,
                     })
                 })
             });
@@ -567,6 +569,7 @@ mod tests {
             is_deleted: false,
             sent_at: chrono::Utc::now(),
             edited_at: None,
+            flagged_at: None,
         };
         let msg_for_repo = msg.clone();
         message_repo
@@ -1065,6 +1068,7 @@ mod tests {
                     is_deleted: false,
                     sent_at: chrono::Utc::now(),
                     edited_at: None,
+                    flagged_at: None,
                 })
             })
         });

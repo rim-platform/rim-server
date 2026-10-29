@@ -2,8 +2,9 @@ use async_graphql::*;
 use chrono::{DateTime, Utc};
 use rim_services::Actor;
 use rim_services::moderation::command::{
-    BanMemberCmd, ClearTimeoutCmd, KickMemberCmd, ReportMessageCmd, ResolveReportCmd,
-    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    BanMemberCmd, ClearMessageFlagCmd, ClearTimeoutCmd, KickMemberCmd, ReportMessageCmd,
+    ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd,
+    UnbanMemberCmd,
 };
 use rim_services::moderation::service::ModerationService;
 
@@ -256,5 +257,28 @@ impl ModerationMutations {
             .await
             .map_err(map_service_error)?;
         Ok(report.into())
+    }
+
+    /// Clear the automatic text art check's flag on a message (Owner/Moderator); true when the
+    /// message is not flagged afterwards, whether or not it was. Audited
+    /// (`admin.clear_message_flag`) when a flag was cleared.
+    async fn clear_message_flag(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        message_id: ID,
+    ) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        moderation(ctx)?
+            .clear_message_flag(ClearMessageFlagCmd {
+                actor: Actor::new(actor),
+                server_id: parse_uuid_id(&server_id)?,
+                conversation_id: parse_uuid_id(&conversation_id)?,
+                message_id: parse_uuid_id(&message_id)?,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(true)
     }
 }

@@ -24,11 +24,14 @@ pub enum ServerFeature {
     Avatars,
     /// Server-side fetching of hash-pinned web plugin bundles.
     PluginLinkFetch,
+    /// The automatic text art check: readable workspace messages that look like text art are
+    /// scored by the image check service and flagged when the score is high.
+    TextArtCheck,
 }
 
 impl ServerFeature {
     /// Every known feature, in display order.
-    pub const ALL: [ServerFeature; 8] = [
+    pub const ALL: [ServerFeature; 9] = [
         ServerFeature::Attachments,
         ServerFeature::LinkPreviews,
         ServerFeature::Email,
@@ -37,6 +40,7 @@ impl ServerFeature {
         ServerFeature::AiCommands,
         ServerFeature::Avatars,
         ServerFeature::PluginLinkFetch,
+        ServerFeature::TextArtCheck,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -49,6 +53,7 @@ impl ServerFeature {
             ServerFeature::AiCommands => "ai_commands",
             ServerFeature::Avatars => "avatars",
             ServerFeature::PluginLinkFetch => "plugin_link_fetch",
+            ServerFeature::TextArtCheck => "text_art_check",
         }
     }
 

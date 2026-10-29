@@ -54,6 +54,9 @@ notice.
   not marked as encrypted is stored readable, like a channel.
 - Messages in workspace channels are not end-to-end encrypted. The server stores them and can
   read them, and so can the people who run it.
+- Messages in workspaces that look like text art are scored automatically by a model running
+  on this server, with no third party; a flagged message is covered for readers and reported
+  to the workspace's moderators and the operators. Encrypted conversations are never scored.
 - The IP addresses you connect from appear in the server's logs, which are kept only as long
   as they are needed to keep the service running and to fight abuse.
 

@@ -106,6 +106,12 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             is_private,
             member_user_ids,
             ..
+        }
+        | WorkspaceEvent::MessageFlagChanged {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
         } => conversation_event_visible(
             conversation_type,
             *is_private || is_guest,
@@ -415,6 +421,15 @@ mod tests {
                 workspace_id,
                 conversation_id,
                 message_id: MessageId::new(),
+                conversation_type: t.clone(),
+                is_private,
+                member_user_ids: m.clone(),
+            },
+            WorkspaceEvent::MessageFlagChanged {
+                workspace_id,
+                conversation_id,
+                message_id: MessageId::new(),
+                flagged: true,
                 conversation_type: t,
                 is_private,
                 member_user_ids: m,
@@ -443,7 +458,7 @@ mod tests {
     fn visibility_fixture_covers_every_conversation_scoped_variant() {
         assert_eq!(
             conversation_scoped_events("Channel", false, vec![]).len(),
-            11
+            12
         );
     }
 

@@ -381,6 +381,11 @@ pub struct RIMConfig {
     /// which an uploaded profile picture is stored and reported to the operators. Defaults to
     /// [`DEFAULT_AVATAR_CHECK_REPORT`]. Controlled by `RIM_AVATAR_CHECK_REPORT`.
     pub avatar_check_report: Option<f64>,
+    /// The sexual score, in (0, 1], at or above which a workspace message that looks like text
+    /// art is flagged and reported, scored by the service at `RIM_AVATAR_CHECK_URL`. Defaults to
+    /// [`DEFAULT_TEXT_ART_CHECK_FLAG`]. Controlled by `RIM_TEXT_ART_CHECK_FLAG`; see
+    /// [`RIMConfig::text_art_check`].
+    pub text_art_check_flag: Option<f64>,
     /// Days between an account's deletion request and its purge, 0 to 30; default 14.
     /// Controlled by `RIM_ACCOUNT_DELETION_GRACE_DAYS`.
     pub account_deletion_grace_days: Option<u32>,
@@ -523,6 +528,7 @@ impl fmt::Debug for RIMConfig {
             .field("avatar_check_url", &self.avatar_check_url)
             .field("avatar_check_block", &self.avatar_check_block)
             .field("avatar_check_report", &self.avatar_check_report)
+            .field("text_art_check_flag", &self.text_art_check_flag)
             .finish()
     }
 }
@@ -619,6 +625,7 @@ impl Default for RIMConfig {
             avatar_check_url: None,
             avatar_check_block: None,
             avatar_check_report: None,
+            text_art_check_flag: None,
             account_deletion_grace_days: None,
             reserved_names: None,
         }
@@ -1179,7 +1186,7 @@ impl RIMConfig {
     }
 
     /// The features the rest of the configuration cannot support, each with the reason: email
-    /// without SMTP.
+    /// without SMTP, the text art check without the image check service.
     pub fn features_unavailable(
         &self,
     ) -> Vec<(rim_core::server_feature::model::ServerFeature, String)> {
@@ -1188,6 +1195,12 @@ impl RIMConfig {
             unavailable.push((
                 rim_core::server_feature::model::ServerFeature::Email,
                 "no mail server is set up".to_string(),
+            ));
+        }
+        if non_blank(self.avatar_check_url.as_deref()).is_none() {
+            unavailable.push((
+                rim_core::server_feature::model::ServerFeature::TextArtCheck,
+                "RIM_AVATAR_CHECK_URL is unset".to_string(),
             ));
         }
         unavailable
@@ -1292,6 +1305,25 @@ impl RIMConfig {
                 "RIM_AVATAR_CHECK_URL={url} is not an absolute http or https URL"
             )),
         }
+    }
+
+    /// The text art check: the image check service of [`RIMConfig::avatar_check`] with
+    /// `RIM_TEXT_ART_CHECK_FLAG` or its default. `None` when `RIM_AVATAR_CHECK_URL` is unset or
+    /// blank; the threshold is checked either way.
+    ///
+    /// # Errors
+    /// A message naming the variable when the threshold is outside (0, 1], or the message of
+    /// [`RIMConfig::avatar_check`].
+    pub fn text_art_check(&self) -> Result<Option<TextArtCheckSettings>, String> {
+        let flag = match self.text_art_check_flag {
+            None => DEFAULT_TEXT_ART_CHECK_FLAG,
+            Some(v) if v > 0.0 && v <= 1.0 => v,
+            Some(v) => return Err(format!("RIM_TEXT_ART_CHECK_FLAG={v} is outside (0, 1]")),
+        };
+        Ok(self.avatar_check()?.map(|settings| TextArtCheckSettings {
+            url: settings.url,
+            flag,
+        }))
     }
 
     /// `RIM_DEFAULT_WORKSPACE`, trimmed; `None` when unset or blank. Whether the workspace
@@ -1590,6 +1622,19 @@ pub struct AvatarCheckSettings {
     pub block: f64,
     /// A score at or above this, and below `block`, stores the picture and reports it.
     pub report: f64,
+}
+
+/// Default `RIM_TEXT_ART_CHECK_FLAG`.
+pub const DEFAULT_TEXT_ART_CHECK_FLAG: f64 = 0.60;
+
+/// The text art check: the image check service and the threshold its sexual score is held
+/// against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextArtCheckSettings {
+    /// The service's base URL.
+    pub url: String,
+    /// A score at or above this flags the message and reports it.
+    pub flag: f64,
 }
 
 /// Largest `RIM_LIMIT_MESSAGE_BYTES`: the largest message content a client may send.
@@ -2444,7 +2489,7 @@ mod tests {
                 if reason == "no mail server is set up" && !reason.contains("RIM_")
         ));
         for feature in ServerFeature::ALL {
-            if feature != ServerFeature::Email {
+            if feature != ServerFeature::Email && feature != ServerFeature::TextArtCheck {
                 assert_eq!(gate.state(feature), FeatureState::Enabled, "{feature}");
             }
         }
@@ -2452,6 +2497,7 @@ mod tests {
         let smtp = RIMConfig {
             smtp_host: Some("smtp.example.com".to_string()),
             smtp_from: Some("RIM <noreply@example.com>".to_string()),
+            avatar_check_url: Some("http://imagecheck:8090".to_string()),
             ..Default::default()
         };
         assert!(smtp.features_unavailable().is_empty());
@@ -2681,6 +2727,86 @@ mod tests {
             };
             assert!(off.avatar_check().is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn text_art_check_follows_the_image_check_url_and_defaults_its_threshold() {
+        assert_eq!(RIMConfig::default().text_art_check(), Ok(None));
+        let config = RIMConfig {
+            avatar_check_url: Some(" http://imagecheck:8090 ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.text_art_check(),
+            Ok(Some(TextArtCheckSettings {
+                url: "http://imagecheck:8090".to_string(),
+                flag: DEFAULT_TEXT_ART_CHECK_FLAG,
+            }))
+        );
+        assert_eq!(DEFAULT_TEXT_ART_CHECK_FLAG, 0.60);
+    }
+
+    #[test]
+    fn text_art_check_takes_a_threshold_in_0_to_1() {
+        let check = |flag: Option<f64>| {
+            RIMConfig {
+                avatar_check_url: Some("http://imagecheck:8090".to_string()),
+                text_art_check_flag: flag,
+                ..Default::default()
+            }
+            .text_art_check()
+            .map(|set| set.map(|set| set.flag))
+        };
+        assert_eq!(check(Some(1.0)), Ok(Some(1.0)));
+        assert_eq!(check(Some(0.3)), Ok(Some(0.3)));
+        for (flag, name) in [
+            (0.0, "RIM_TEXT_ART_CHECK_FLAG=0 "),
+            (-0.5, "RIM_TEXT_ART_CHECK_FLAG=-0.5"),
+            (1.5, "RIM_TEXT_ART_CHECK_FLAG=1.5"),
+            (f64::NAN, "RIM_TEXT_ART_CHECK_FLAG=NaN"),
+        ] {
+            let err = check(Some(flag)).unwrap_err();
+            assert!(err.starts_with(name), "{err}");
+            // The threshold is checked with the check off too.
+            let off = RIMConfig {
+                text_art_check_flag: Some(flag),
+                ..Default::default()
+            };
+            assert!(off.text_art_check().is_err(), "{name}");
+        }
+        let config = RIMConfig::load_from(env(&[
+            ("DATABASE_URL", "postgres://localhost/rim"),
+            ("RIM_AVATAR_CHECK_URL", "http://imagecheck:8090"),
+            ("RIM_TEXT_ART_CHECK_FLAG", "0.75"),
+        ]))
+        .expect("loads");
+        assert_eq!(
+            config.text_art_check().map(|s| s.map(|s| s.flag)),
+            Ok(Some(0.75))
+        );
+    }
+
+    #[test]
+    fn text_art_check_is_unavailable_without_the_image_check_service() {
+        use rim_core::server_feature::model::{FeatureState, ServerFeature};
+        use rim_services::feature::service::FeatureGate;
+
+        let gate = RIMConfig::default().feature_gate().expect("gate");
+        assert_eq!(
+            gate.state(ServerFeature::TextArtCheck),
+            FeatureState::Unavailable {
+                reason: "RIM_AVATAR_CHECK_URL is unset".to_string()
+            }
+        );
+        let config = RIMConfig {
+            avatar_check_url: Some("http://imagecheck:8090".to_string()),
+            ..Default::default()
+        };
+        let gate = config.feature_gate().expect("gate");
+        assert_eq!(
+            gate.state(ServerFeature::TextArtCheck),
+            FeatureState::Enabled
+        );
     }
 
     #[test]

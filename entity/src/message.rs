@@ -30,6 +30,7 @@ pub struct Model {
     #[sea_orm(column_type = "VarBinary(StringLen::None)", nullable)]
     pub franking_receipt: Option<Vec<u8>>,
     pub franking_key_id: Option<i32>,
+    pub flagged_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

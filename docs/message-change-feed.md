@@ -85,10 +85,11 @@ The result has one entry per requested conversation, in request order.
 
 ## What the feed does not carry
 
-Message creation, text edits, soft delete, `hasAttachments` and attachment lifecycle writes
-(creation, upload completion, finalization, failure and deletion) bump a version. An attachment
-change advances its parent message even when `hasAttachments` stays true; it does not set
-`editedAt`. Reactions, pins, mentions, link previews, a message becoming a thread root
+Message creation, text edits, soft delete, `hasAttachments`, a change of `flagged` (the
+automatic text art check flagging the message, or its flag being cleared) and attachment
+lifecycle writes (creation, upload completion, finalization, failure and deletion) bump a
+version. An attachment change advances its parent message even when `hasAttachments` stays
+true, and a flag change is not an edit either; neither sets `editedAt`. Reactions, pins, mentions, link previews, a message becoming a thread root
 (`rootThreadId`) and its thread's reply count (`threadReplyCount`) do not; those stay on their
 own queries and real-time events.
 
@@ -105,7 +106,8 @@ conversation, so a missed event never leaves the cache behind.
 Migration `m20261008_211159_add_message_change_feed` adds `message.version`,
 `message.edited_at` and a `message_change_seq` table holding one counter per conversation. A
 database trigger runs before every insert into `message`, and before every update that changes
-`text`, `is_deleted` or `has_attachments`. It upserts the conversation's counter row and writes
+`text`, `is_deleted`, `has_attachments`, the ciphertext of an encrypted message or `flagged_at`
+(migration `m20261029_084741_add_message_flag`). It upserts the conversation's counter row and writes
 the new value to `version`; on a text change it also sets `edited_at`. Because this lives in the
 database, every write path (send, reply, forward, edit, delete, attachments, and any added later)
 feeds the change log without service code. Attachment repository writes lock the parent message

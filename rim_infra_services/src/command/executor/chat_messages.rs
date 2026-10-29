@@ -267,6 +267,7 @@ mod tests {
             sent_at: chrono::Utc::now(),
             edited_at: None,
             encryption: None,
+            flagged_at: None,
         }
     }
 

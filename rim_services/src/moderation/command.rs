@@ -157,6 +157,16 @@ impl From<ReportOutcome> for MessageReportStatus {
     }
 }
 
+/// Owner/Moderator; the conversation must be in `server_id` and the message in the
+/// conversation.
+#[derive(Debug, Clone)]
+pub struct ClearMessageFlagCmd {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub message_id: MessageId,
+}
+
 /// Owner/Moderator, or an instance operator for the direct space; the report must belong to
 /// `server_id` and still be open.
 #[derive(Debug, Clone)]
