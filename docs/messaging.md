@@ -477,15 +477,18 @@ block, box-drawing or ASCII characters), and flags those that score high.
 
 - **What is checked.** A message of a workspace whose text the server stores: never an encrypted
   message (the server cannot read it), never a message of the direct space (DMs and groups), and
-  only text that looks like text art. Text looks like text art when it has at least 6 non-blank
-  lines and at least 120 non-whitespace characters, and fewer than half of those characters are
-  letters or digits. Code, logs and prose are mostly letters and are not checked.
+  only text that holds an art block. The art block is the longest run of text art lines in the
+  message (the first when two are equally long). A line is text art when it has at least 8
+  non-whitespace characters and fewer than half of them are letters or digits; blank lines stay
+  inside a run, any other line ends it. A run counts when it has at least 6 non-blank lines and
+  at least 120 non-whitespace characters. Code, logs and prose are mostly letters and are not
+  checked; a picture inside a longer message is found and the words around it are ignored.
 - **When.** After the message is stored, whatever stored it: `sendMessage`, a command, a
   forward, or a request forwarded from another server. Sending never waits for the check. An
   edit is checked again.
-- **How.** The text is sent to the image check service the operator runs next to the server
-  (`docs/self-hosting.md`, "Content check"), which scores how sexual it looks from 0 to 1. At or
-  above `RIM_TEXT_ART_CHECK_FLAG` (0.60) the message is flagged.
+- **How.** Only the art block is sent to the image check service the operator runs next to the
+  server (`docs/self-hosting.md`, "Content check"), which scores how sexual it looks from 0 to
+  1. At or above `RIM_TEXT_ART_CHECK_FLAG` (0.60) the message is flagged.
 - **What a flag does.** `Message.flagged` is true; clients cover the message until the reader
   chooses to show it. `MessageFlagChanged` reaches the conversation's readers. The workspace's
   Owner and Moderators get an automatic report (see "Reports"), and the instance operators an

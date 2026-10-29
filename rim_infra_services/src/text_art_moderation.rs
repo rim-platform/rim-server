@@ -24,7 +24,7 @@ use rim_services::operator::OperatorCaller;
 use rim_services::relay::dto::FileAbuseReport;
 use rim_services::relay::service::RelayAbuseService;
 
-use crate::text_art_check::{TextScorer, looks_like_text_art};
+use crate::text_art_check::{TextScorer, art_block};
 
 /// How many messages are scored at once.
 const CONCURRENCY: usize = 2;
@@ -119,12 +119,12 @@ impl TextArtModeration {
         let Some(text) = subject.message.text.as_deref() else {
             return;
         };
-        if !looks_like_text_art(text) {
+        let Some(block) = art_block(text) else {
             if subject.edited {
                 self.settle(&subject, None).await;
             }
             return;
-        }
+        };
         let message_id = subject.message.id;
         let Ok(Ok(slot)) =
             tokio::time::timeout(SLOT_WAIT, Arc::clone(&self.slots).acquire_owned()).await
@@ -135,7 +135,7 @@ impl TextArtModeration {
             );
             return;
         };
-        let score = self.parts.scorer.score(text).await;
+        let score = self.parts.scorer.score(&block).await;
         drop(slot);
         match score {
             Ok(score) => self.settle(&subject, Some(score)).await,
@@ -326,16 +326,18 @@ mod tests {
         }
     }
 
-    /// A scorer that answers `score` and counts its calls.
+    /// A scorer that answers `score`, counts its calls and records the texts it was given.
     struct FakeScorer {
         score: Result<f64, TextArtCheckError>,
         calls: AtomicUsize,
+        seen: Mutex<Vec<String>>,
     }
 
     #[async_trait]
     impl TextScorer for FakeScorer {
-        async fn score(&self, _text: &str) -> Result<f64, TextArtCheckError> {
+        async fn score(&self, text: &str) -> Result<f64, TextArtCheckError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen.lock().expect("seen").push(text.to_string());
             self.score.clone()
         }
     }
@@ -445,6 +447,7 @@ mod tests {
                 scorer: Arc::new(FakeScorer {
                     score,
                     calls: AtomicUsize::new(0),
+                    seen: Mutex::new(Vec::new()),
                 }),
                 disabled: Vec::new(),
                 message_repo: MockMessageRepository::new(),
@@ -634,6 +637,19 @@ mod tests {
 
         assert_eq!(scorer.calls.load(Ordering::SeqCst), 1);
         assert!(flag_events(&events).is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_the_art_block_is_scored() {
+        let mut fx = Fx::new(Ok(0.59));
+        let data = event_data(&format!("hey here is my new picture:\n{}", art()));
+        fx.storing(Some(stored(&data)));
+        let workspace_id = fx.workspace_id;
+        let (scorer, _, check) = fx.run();
+
+        check.handle(&new_message(workspace_id, data)).await;
+
+        assert_eq!(*scorer.seen.lock().expect("seen"), [art()]);
     }
 
     #[tokio::test]
