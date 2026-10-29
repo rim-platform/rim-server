@@ -1,8 +1,8 @@
 # rim-imagecheck
 
 A small HTTP service that scores a profile picture for sexual content, gore and violence before
-rim-server stores it, and text art for sexual content. It runs next to rim-server as the `imagecheck` service of
-`deploy/compose.yml`, on the internal network only, and is published with every release as
+rim-server stores it, and text art for sexual content. It runs next to rim-server as the
+`imagecheck` service of `deploy/compose.yml`, on the internal network only, and is published with every release as
 `ghcr.io/rim-platform/rim-imagecheck`.
 
 Two models run on every picture, both as int8 ONNX with ONNX Runtime on the CPU:
@@ -68,8 +68,8 @@ The score is between 0 and 1, rounded to four places. Errors carry `{"error": "â
 | 404 | any other path or method |
 
 `GET /healthz` answers `200 ok` once the models are loaded and `503` before; the image's
-`HEALTHCHECK` probes it. Each check logs one line with its scores and its duration (a text check also the
-number of characters); image data and text are never logged.
+`HEALTHCHECK` probes it. Each check logs one line with its scores and its duration (a text check
+also its number of characters); image data and text are never logged.
 
 Settings: `PORT` (default 8090) and `MODEL_DIR` (default the script's directory, `/app` in the
 image).
@@ -168,7 +168,7 @@ text keep them away from CLIP's other categories.
 
 ## Resources
 
-On a 2-CPU host, with the limits `deploy/compose.yml` sets (1536 MiB, 2 CPUs):
+On a 20-CPU host, with the limits `deploy/compose.yml` sets (1536 MiB, 2 CPUs):
 
 - image: 811 MB (Python 3.12 slim, ONNX Runtime, NumPy, Pillow, the 89 MB int8 and 352 MB fp32
   CLIP vision models, the 87 MB classifier and the font);
@@ -212,7 +212,7 @@ python -m unittest discover -s imagecheck/tests
 ```
 
 The build downloads seven model files, checks them against [`models.sha256`](models.sha256) and
-runs [`build_prompts.py`](build_prompts.py). From CLIP: the int8 and fp32 vision models, plus the fp32 text
-model and the tokenizer, which only embed the prompts at build time. From the classifier: the
-int8 model, its `preprocessor_config.json` and its `config.json` (for the label order), saved
+runs [`build_prompts.py`](build_prompts.py) once per prompt set. From CLIP: the int8 and fp32
+vision models, plus the fp32 text model and the tokenizer, which only embed the prompts at build
+time. From the classifier: the int8 model, its `preprocessor_config.json` and its `config.json` (for the label order), saved
 with an `nsfw_` prefix. The tests need no model.

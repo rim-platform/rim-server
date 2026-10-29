@@ -2,9 +2,10 @@
 
     python build_prompts.py <text_model.onnx> <tokenizer.json> <module> <out.npz>
 
-<module> is `prompts` or `text_prompts`. Tokenizes every prompt in that module to CLIP's 77 tokens (start and end tokens as tokenizer.json
-adds them, padded with its pad token), runs the fp32 text model, L2-normalizes the embeddings and
-writes them with each row's category and the logit scale.
+<module> is `prompts` (profile pictures) or `text_prompts` (text art). Tokenizes every prompt in
+that module to CLIP's 77 tokens (start and end tokens as tokenizer.json adds them, padded with its
+pad token), runs the fp32 text model, L2-normalizes the embeddings and writes them with each row's
+category and the logit scale.
 """
 
 import importlib

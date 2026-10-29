@@ -1,8 +1,9 @@
-"""Scores profile pictures for sexual content, gore and violence.
+"""Scores profile pictures for sexual content, gore and violence, and text art for sexual content.
 
-Text art is scored too, see /v1/check-text below. Two models run on every picture: a ViT image classifier trained to tell nsfw from normal
-pictures (Falconsai/nsfw_image_detection) gives the sexual score, and CLIP ViT-B/32 compared with
-the prompts in prompts.py gives gore and violence.
+Two models run on every picture: a ViT image classifier trained to tell nsfw from normal pictures
+(Falconsai/nsfw_image_detection) gives the sexual score, and CLIP ViT-B/32 compared with the
+prompts in prompts.py gives gore and violence. Text art is drawn as a picture (textart.py) and
+scored by CLIP's fp32 vision model against the prompts in text_prompts.py.
 
 An HTTP service on PORT (default 8090):
 
@@ -171,7 +172,7 @@ class Scorer:
         self.logit_scale = float(logit_scale)
 
     def score(self, image_embed: np.ndarray) -> dict[str, float]:
-        """The score of each scored category (SCORED unless given) for `image_embed`, rounded to 4 places.
+        """The score of each scored category for `image_embed`, rounded to 4 places.
 
         The embedding is L2-normalized, its logits against every prompt are the logit scale times
         the dot products, a softmax runs over all prompts, and a category's score is the sum of
@@ -292,7 +293,7 @@ class Model:
 
 
 class Handler(BaseHTTPRequestHandler):
-    """Answers /v1/check, /v1/check-text and /healthz with `self.server.model`, None while loading."""
+    """Answers /v1/check, /v1/check-text and /healthz; `self.server.model` is None while loading."""
 
     server_version = "imagecheck"
     sys_version = ""
