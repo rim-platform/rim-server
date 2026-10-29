@@ -57,6 +57,12 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             member_user_ids,
             ..
         }
+        | WorkspaceEvent::MessagesDeleted {
+            conversation_type,
+            is_private,
+            member_user_ids,
+            ..
+        }
         | WorkspaceEvent::ReactionsUpdated {
             conversation_type,
             is_private,
@@ -357,6 +363,15 @@ mod tests {
                 message_id: MessageId::new(),
                 thread_id: None,
             },
+            WorkspaceEvent::MessagesDeleted {
+                workspace_id,
+                conversation_id,
+                conversation_type: t.clone(),
+                member_user_ids: m.clone(),
+                is_private,
+                message_ids: vec![MessageId::new(), MessageId::new()],
+                thread_ids: vec![MessageThreadId::new()],
+            },
             WorkspaceEvent::ReactionsUpdated {
                 workspace_id,
                 conversation_id,
@@ -458,7 +473,7 @@ mod tests {
     fn visibility_fixture_covers_every_conversation_scoped_variant() {
         assert_eq!(
             conversation_scoped_events("Channel", false, vec![]).len(),
-            12
+            13
         );
     }
 
@@ -548,6 +563,33 @@ mod tests {
             chrono::DateTime::parse_from_rfc3339(wire).unwrap(),
             edited_at
         );
+    }
+
+    /// A bulk delete names the deleted messages and their distinct threads and keeps the
+    /// server-only fields off the wire.
+    #[test]
+    fn messages_deleted_wire_shape() {
+        let deleted = conversation_scoped_events("Channel", true, vec![UserId::new()])
+            .into_iter()
+            .find(|e| matches!(e, WorkspaceEvent::MessagesDeleted { .. }))
+            .expect("MessagesDeleted");
+        let json = serde_json::to_value(&deleted).expect("serialize");
+        let mut keys: Vec<_> = json.as_object().expect("object").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "conversation_id",
+                "conversation_type",
+                "message_ids",
+                "thread_ids",
+                "type",
+                "workspace_id"
+            ]
+        );
+        assert_eq!(json["type"], serde_json::json!("MessagesDeleted"));
+        assert_eq!(json["message_ids"].as_array().map(Vec::len), Some(2));
+        assert_eq!(json["thread_ids"].as_array().map(Vec::len), Some(1));
     }
 
     /// A typing event names the typist by username and display name, `null` when unset, and

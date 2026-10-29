@@ -123,6 +123,7 @@ pub(crate) fn required_role(command_id: &str) -> RequiredRole {
         | "admin.unban"
         | "admin.timeout"
         | "admin.set_role"
+        | "admin.delete_member_messages"
         | "chat.set_slow_mode"
         | "chat.set_channel_posting"
         | "chat.archive_channel"

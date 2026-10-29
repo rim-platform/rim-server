@@ -30,11 +30,19 @@ tag `v<version>`, the version every crate in the workspace carries.
   reported to the workspace's moderators and the operators. Owners and Moderators clear a flag
   with `clearMessageFlag`. `RIM_TEXT_ART_CHECK_FLAG` sets the threshold (0.60);
   `text_art_check` in `RIM_FEATURES_DISABLED` turns it off.
+- Owners and Moderators delete one person's messages in a workspace's channels at once:
+  `memberMessageCounts` counts them (channels the caller reads, and private channels they are
+  not in, as numbers only); `deleteMemberMessages(serverId, userId, since,
+  includeUnjoinedPrivate)` deletes up to 1,000 per call and says whether more remain; the command
+  `admin.delete_member_messages` does the same. Each channel gets one `MessagesDeleted` event;
+  `serverInfo.capabilities` lists `delete_member_messages`.
 
 ### Changed
 
 - **Upgrade:** `MessageReport.reporterUserId` is null for a report the automatic check filed;
   clients read `MessageReport.automatic`.
+- **Upgrade:** a migration adds the index `idx_message_sent_by_sent_at`; on a large `message`
+  table, writes to it wait while the index is built.
 
 ## [0.0.6] - 2026-10-28
 

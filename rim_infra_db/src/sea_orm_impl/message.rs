@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use entity::message;
 use rim_core::message::model::{Message, MessageId, NewMessage};
 use rim_core::message::repository::{
-    ListMessagesParams, MessageChange, MessageCursor, MessageRepository, MessageSearchHit,
-    MessageSearchParams,
+    AuthorChannelCounts, AuthorChannelScope, DeletedMessage, ListMessagesParams, MessageChange,
+    MessageCursor, MessageRepository, MessageSearchHit, MessageSearchParams, MessageTally,
 };
 use rim_core::repository::error::RepoResult;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
@@ -22,6 +22,38 @@ use crate::error::map_db_err;
 
 /// Messages up to this many characters come back whole as their search snippet.
 const WHOLE_HEADLINE_MAX_CHARS: usize = 300;
+
+/// One author's undeleted, unencrypted messages in a workspace's channels that are neither
+/// archived nor encrypted, each with `unjoined` true in a private channel the viewer is not a
+/// (non-pending) member of. Binds `$1` the workspace, `$2` the author, `$3` the inclusive lower
+/// bound on `sent_at` (null for every message) and `$4` the viewer.
+const AUTHOR_CHANNEL_MESSAGES_SQL: &str = r#"
+SELECT m.conversation_id, m.sent_at,
+       (c.is_private AND NOT EXISTS (
+           SELECT 1 FROM conversation_member cm
+           WHERE cm.conversation_id = c.id AND cm.user_id = $4 AND cm.pending_since IS NULL)) AS unjoined
+FROM message m JOIN conversation c ON c.id = m.conversation_id
+WHERE c.server_id = $1 AND c.conversation_type = 'channel'
+  AND c.archived_at IS NULL AND c.encrypted_at IS NULL
+  AND m.sent_by = $2 AND m.is_deleted = false AND m.encrypted = false
+  AND ($3::timestamptz IS NULL OR m.sent_at >= $3)
+"#;
+
+/// The four binds of [`AUTHOR_CHANNEL_MESSAGES_SQL`].
+fn author_scope_values(scope: AuthorChannelScope) -> Vec<Value> {
+    vec![
+        Value::Uuid(Some(Uuid::from(scope.server_id))),
+        Value::Uuid(Some(Uuid::from(scope.author))),
+        Value::ChronoDateTimeUtc(scope.since),
+        Value::Uuid(Some(Uuid::from(scope.viewer))),
+    ]
+}
+
+/// Reads a non-negative SQL count as `u64`.
+fn count_column(row: &sea_orm::QueryResult, column: &str) -> RepoResult<u64> {
+    let n = row.try_get::<i64>("", column).map_err(map_db_err)?;
+    Ok(u64::try_from(n).unwrap_or(0))
+}
 
 pub struct SeaOrmMessageRepository {
     db: DbHandle,
@@ -524,6 +556,118 @@ impl MessageRepository for SeaOrmMessageRepository {
                 row.try_get::<Uuid>("", "user_id")
                     .map(Into::into)
                     .map_err(map_db_err)
+            })
+            .collect()
+    }
+
+    async fn count_author_channel_messages(
+        &self,
+        scope: AuthorChannelScope,
+    ) -> RepoResult<AuthorChannelCounts> {
+        let sql = format!(
+            "WITH scoped AS ({AUTHOR_CHANNEL_MESSAGES_SQL}) \
+             SELECT count(*) FILTER (WHERE NOT unjoined) AS readable_messages, \
+                    count(DISTINCT conversation_id) FILTER (WHERE NOT unjoined) AS readable_channels, \
+                    count(*) FILTER (WHERE unjoined) AS unjoined_messages, \
+                    count(DISTINCT conversation_id) FILTER (WHERE unjoined) AS unjoined_channels \
+             FROM scoped"
+        );
+        let row = self
+            .db
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                sql,
+                author_scope_values(scope),
+            ))
+            .await
+            .map_err(map_db_err)?;
+        let Some(row) = row else {
+            return Ok(AuthorChannelCounts::default());
+        };
+        Ok(AuthorChannelCounts {
+            readable: MessageTally {
+                messages: count_column(&row, "readable_messages")?,
+                channels: count_column(&row, "readable_channels")?,
+            },
+            unjoined_private: MessageTally {
+                messages: count_column(&row, "unjoined_messages")?,
+                channels: count_column(&row, "unjoined_channels")?,
+            },
+        })
+    }
+
+    async fn list_author_channels(
+        &self,
+        scope: AuthorChannelScope,
+        include_unjoined_private: bool,
+    ) -> RepoResult<Vec<rim_core::conversation::model::ConversationId>> {
+        let sql = format!(
+            "WITH scoped AS ({AUTHOR_CHANNEL_MESSAGES_SQL}) \
+             SELECT conversation_id FROM scoped WHERE ($5 OR NOT unjoined) \
+             GROUP BY conversation_id ORDER BY max(sent_at) DESC, conversation_id"
+        );
+        let mut values = author_scope_values(scope);
+        values.push(Value::Bool(Some(include_unjoined_private)));
+        let rows = self
+            .db
+            .query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                sql,
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                row.try_get::<Uuid>("", "conversation_id")
+                    .map(Into::into)
+                    .map_err(map_db_err)
+            })
+            .collect()
+    }
+
+    async fn soft_delete_author_channel_messages(
+        &self,
+        conversation_id: rim_core::conversation::model::ConversationId,
+        author: rim_core::user::model::UserId,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        limit: u32,
+    ) -> RepoResult<Vec<DeletedMessage>> {
+        let rows = self
+            .db
+            .query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"UPDATE message SET is_deleted = true
+                   WHERE id IN (
+                       SELECT id FROM message
+                       WHERE conversation_id = $1 AND sent_by = $2 AND is_deleted = false
+                         AND encrypted = false
+                         AND ($3::timestamptz IS NULL OR sent_at >= $3)
+                       ORDER BY sent_at DESC, id DESC LIMIT $4 FOR UPDATE)
+                     AND is_deleted = false
+                     AND EXISTS (SELECT 1 FROM conversation c
+                                 WHERE c.id = $1 AND c.conversation_type = 'channel'
+                                   AND c.archived_at IS NULL AND c.encrypted_at IS NULL)
+                   RETURNING id, thread_id"#,
+                [
+                    Value::Uuid(Some(Uuid::from(conversation_id))),
+                    Value::Uuid(Some(Uuid::from(author))),
+                    Value::ChronoDateTimeUtc(since),
+                    Value::BigInt(Some(i64::from(limit))),
+                ],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        rows.into_iter()
+            .map(|row| {
+                let id = row.try_get::<Uuid>("", "id").map_err(map_db_err)?;
+                let thread_id = row
+                    .try_get::<Option<Uuid>>("", "thread_id")
+                    .map_err(map_db_err)?;
+                Ok(DeletedMessage {
+                    id: id.into(),
+                    thread_id: thread_id.map(Into::into),
+                })
             })
             .collect()
     }

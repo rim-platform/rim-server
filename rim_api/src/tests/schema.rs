@@ -231,6 +231,7 @@ async fn server_info_lists_its_capabilities() {
         "workspace_leave",
         "workspace_rename",
         "message_flag",
+        "delete_member_messages",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),

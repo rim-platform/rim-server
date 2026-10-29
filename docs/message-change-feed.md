@@ -99,7 +99,10 @@ The WebSocket subscription keeps delivering new, edited and deleted messages as 
 events carry no `version`. A client cache treats an event as a hint: it may show the message
 right away, and it then calls `messageChanges` with the conversation's stored cursor to record
 the change at its version. A client that reconnects after a gap does the same for every cached
-conversation, so a missed event never leaves the cache behind.
+conversation, so a missed event never leaves the cache behind. A bulk delete
+(`deleteMemberMessages`) sends one `MessagesDeleted` per conversation instead of one
+`MessageDeleted` per message, a hint like the others: each deleted message is in the feed at its
+new version.
 
 ## How versions are assigned
 
@@ -118,7 +121,9 @@ The counter row stays locked until the writing transaction commits. A second wri
 conversation waits, then takes the next number; after a rollback the number is reused. So a
 reader cannot see version N+1 while N is still uncommitted, which is what makes "store the last
 cursor" safe. A global sequence would not give this: it hands out numbers at insert time, so a
-later number can commit and become visible first.
+later number can commit and become visible first. A bulk delete changes one conversation per
+statement, each committed on its own, so it holds one counter row at a time and never blocks
+writers in other conversations while it works.
 
 Deleting a conversation while a message is being written into it can deadlock (the delete
 cascades to the counter row while the send holds it and waits on the conversation row);

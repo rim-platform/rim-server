@@ -254,3 +254,59 @@ impl MessageReportPage {
         }
     }
 }
+
+/// A count of a person's messages and of the channels they are in.
+#[derive(SimpleObject, Clone, Copy, Debug)]
+pub struct MessageTally {
+    pub messages: i32,
+    pub channels: i32,
+}
+
+impl From<rim_services::moderation::dto::MessageTallyDto> for MessageTally {
+    fn from(value: rim_services::moderation::dto::MessageTallyDto) -> Self {
+        Self {
+            messages: i32::try_from(value.messages).unwrap_or(i32::MAX),
+            channels: i32::try_from(value.channels).unwrap_or(i32::MAX),
+        }
+    }
+}
+
+/// How many of a person's messages in the workspace's channels `deleteMemberMessages` would
+/// reach with the same `since`.
+#[derive(SimpleObject, Clone, Copy, Debug)]
+pub struct MemberMessageCounts {
+    /// In public channels and the private channels the caller is a member of.
+    pub readable: MessageTally,
+    /// In private channels the caller is not a member of; counts only, never the channels.
+    pub unjoined_private: MessageTally,
+}
+
+impl From<rim_services::moderation::dto::MemberMessageCountsDto> for MemberMessageCounts {
+    fn from(value: rim_services::moderation::dto::MemberMessageCountsDto) -> Self {
+        Self {
+            readable: value.readable.into(),
+            unjoined_private: value.unjoined_private.into(),
+        }
+    }
+}
+
+/// The outcome of one `deleteMemberMessages` call.
+#[derive(SimpleObject, Clone, Copy, Debug)]
+pub struct DeletedMemberMessages {
+    /// Messages deleted by this call.
+    pub deleted: i32,
+    /// Channels those messages were in.
+    pub channels: i32,
+    /// Whether matching messages remain; call again to delete them.
+    pub has_more: bool,
+}
+
+impl From<rim_services::moderation::dto::DeletedMemberMessagesDto> for DeletedMemberMessages {
+    fn from(value: rim_services::moderation::dto::DeletedMemberMessagesDto) -> Self {
+        Self {
+            deleted: i32::try_from(value.deleted).unwrap_or(i32::MAX),
+            channels: i32::try_from(value.channels).unwrap_or(i32::MAX),
+            has_more: value.has_more,
+        }
+    }
+}

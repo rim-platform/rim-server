@@ -54,6 +54,23 @@ pub enum WorkspaceEvent {
         message_id: MessageId,
         thread_id: Option<MessageThreadId>,
     },
+    /// Several messages of one conversation deleted at once by `deleteMemberMessages`. Wire
+    /// shape: `{"type":"MessagesDeleted","workspace_id","conversation_id","conversation_type",
+    /// "message_ids":[…],"thread_ids":[…]}`; `thread_ids` are the distinct threads of the deleted
+    /// replies. Same visibility as `MessageDeleted`.
+    MessagesDeleted {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        conversation_type: String,
+        #[serde(skip_serializing, default)]
+        member_user_ids: Vec<UserId>,
+        /// Server-side only (never serialized): a private channel's events reach its members
+        /// alone, so the subscription filter must not treat it like a public channel.
+        #[serde(skip_serializing, default)]
+        is_private: bool,
+        message_ids: Vec<MessageId>,
+        thread_ids: Vec<MessageThreadId>,
+    },
     ReactionsUpdated {
         workspace_id: ServerId,
         conversation_id: ConversationId,
@@ -498,6 +515,7 @@ impl WorkspaceEvent {
             Self::NewMessage { workspace_id, .. }
             | Self::MessageUpdated { workspace_id, .. }
             | Self::MessageDeleted { workspace_id, .. }
+            | Self::MessagesDeleted { workspace_id, .. }
             | Self::ReactionsUpdated { workspace_id, .. }
             | Self::ConversationCreated { workspace_id, .. }
             | Self::ConversationUpdated { workspace_id, .. }
@@ -542,6 +560,9 @@ impl WorkspaceEvent {
                 member_user_ids, ..
             }
             | Self::MessageDeleted {
+                member_user_ids, ..
+            }
+            | Self::MessagesDeleted {
                 member_user_ids, ..
             }
             | Self::ReactionsUpdated {
@@ -639,6 +660,9 @@ impl WorkspaceEvent {
                 conversation_type, ..
             }
             | Self::MessageDeleted {
+                conversation_type, ..
+            }
+            | Self::MessagesDeleted {
                 conversation_type, ..
             }
             | Self::ReactionsUpdated {

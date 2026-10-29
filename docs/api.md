@@ -746,8 +746,10 @@ each list.
 - **`capabilities`**: the API additions this server has that an older one lacks, by name
   (`message_edited_at`: `Message.editedAt`; `workspace_leave`: `leaveWorkspace`;
   `workspace_rename`: `renameWorkspace`; `message_flag`: `Message.flagged`,
-  `MessageReport.automatic` and `clearMessageFlag`). A client asks for such a field only when its name
-  is listed, so it keeps working against older servers; it ignores names it does not know.
+  `MessageReport.automatic` and `clearMessageFlag`; `delete_member_messages`:
+  `memberMessageCounts`, `deleteMemberMessages` and the `MessagesDeleted` event). A client asks
+  for such a field only when its name is listed, so it keeps working against older servers; it
+  ignores names it does not know.
 
 The discovery document carries the same `features`, and `registrationFull` as
 `registration.full`, for a client that has not connected yet.
@@ -817,6 +819,28 @@ outside the conversation is `NOT_FOUND`.
 
 `MessageReport.reporterUserId` is null for a report the check filed, and
 `MessageReport.automatic: Boolean!` tells such a report from a member's.
+
+### Deleting a person's messages
+
+`memberMessageCounts(serverId: ID!, userId: ID!, since: DateTime): MemberMessageCounts!`
+answers how many of the person's messages in the workspace's channels, sent at or after `since`
+(all of them when null), a delete would reach: `readable { messages channels }` in public
+channels and the private channels the caller is a member of, and `unjoinedPrivate { messages
+channels }` in private channels the caller is not in, as numbers only.
+
+`deleteMemberMessages(serverId: ID!, userId: ID!, since: DateTime, includeUnjoinedPrivate:
+Boolean!): DeletedMemberMessages!` deletes them, the unjoined private channels' only with
+`includeUnjoinedPrivate: true`, at most 1,000 per call, and answers `{ deleted channels hasMore
+}`. A client calls it again while `hasMore` is true. Thread replies are included; DMs, groups,
+the direct space, encrypted messages and conversations, and archived channels never are. Each
+channel gets one `MessagesDeleted {workspace_id, conversation_id, conversation_type,
+message_ids, thread_ids}` on `workspaceEvents`, and the call writes one
+`admin.delete_member_messages` audit row when it deleted anything.
+
+Both are for the workspace's Owner or a Moderator, with the targeting rules of `kickMember`; the
+person need not be a member any more. Anyone else, or a Moderator naming the Owner or another
+Moderator, gets `FORBIDDEN`; naming oneself or the direct space is `VALIDATION`; a user who does
+not exist is `NOT_FOUND`.
 
 ### Rejoining the default workspace and removal notices
 

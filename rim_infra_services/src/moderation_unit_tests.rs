@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
@@ -11,9 +12,13 @@ mod tests {
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message::model::{Message, MessageId};
-    use rim_core::message::repository::MockMessageRepository;
+    use rim_core::message::repository::{
+        AuthorChannelCounts, AuthorChannelScope, DeletedMessage, MessageTally,
+        MockMessageRepository,
+    };
     use rim_core::message_attachment::model::{MessageAttachment, MessageAttachmentId};
     use rim_core::message_attachment::repository::MockMessageAttachmentRepository;
+    use rim_core::message_thread::model::MessageThreadId;
     use rim_core::moderation::model::{
         FrankedReport, MemberTimeout, MessageReport, MessageReportId, MessageReportStatus,
     };
@@ -30,9 +35,10 @@ mod tests {
     use rim_services::audit::service::AuditLogService;
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::moderation::command::{
-        AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, GetReportQuery,
-        KickMemberCmd, LeaveWorkspaceCmd, ReportMessageCmd, ReportOutcome, ResolveReportCmd,
-        SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+        AuthorizeReportAttachmentQuery, BanMemberCmd, ClearTimeoutCmd, DeleteMemberMessagesCmd,
+        GetReportQuery, KickMemberCmd, LeaveWorkspaceCmd, MemberMessageCountsQuery,
+        ReportMessageCmd, ReportOutcome, ResolveReportCmd, SetChannelPostingCmd, SetMemberRoleCmd,
+        SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
     };
     use rim_services::moderation::service::ModerationService;
     use rim_services::{Actor, ServiceError, ServiceResult};
@@ -185,6 +191,21 @@ mod tests {
         operators: Vec<UserId>,
         /// Whether the fixture's workspace is the relay's direct space.
         direct_space: bool,
+        /// Users with no account: `get_by_id` finds nobody.
+        unknown_users: Vec<UserId>,
+        /// What `count_author_channel_messages` answers.
+        author_counts: AuthorChannelCounts,
+        /// The channels holding the target's messages, each with its messages newest first;
+        /// a private one counts as a channel the actor is not in.
+        author_channels: Vec<(Conversation, Vec<DeletedMessage>)>,
+        /// The scopes `count_author_channel_messages` was asked for.
+        count_scopes: Arc<Mutex<Vec<AuthorChannelScope>>>,
+        /// The `include_unjoined_private` flags `list_author_channels` was asked with.
+        include_flags: Arc<Mutex<Vec<bool>>>,
+        /// `(channel, limit)` of every bulk delete statement.
+        bulk_deletes: Arc<Mutex<Vec<(ConversationId, u32)>>>,
+        /// Messages whose unread notifications were deleted.
+        forgotten: Arc<Mutex<Vec<MessageId>>>,
     }
 
     impl Fx {
@@ -203,6 +224,13 @@ mod tests {
                 workspace_attachments: Vec::new(),
                 operators: Vec::new(),
                 direct_space: false,
+                unknown_users: Vec::new(),
+                author_counts: AuthorChannelCounts::default(),
+                author_channels: Vec::new(),
+                count_scopes: Arc::default(),
+                include_flags: Arc::default(),
+                bulk_deletes: Arc::default(),
+                forgotten: Arc::default(),
             }
         }
 
@@ -253,9 +281,10 @@ mod tests {
                 .returning(|_, _, _| Ok(()));
 
             let mut user_repo = MockUserRepository::new();
+            let unknown = self.unknown_users.clone();
             user_repo
                 .expect_get_by_id()
-                .returning(|id| Ok(Some(user(id))));
+                .returning(move |id| Ok((!unknown.contains(&id)).then(|| user(id))));
             user_repo.expect_get_by_ids().returning(|ids| {
                 Ok(ids
                     .iter()
@@ -280,9 +309,23 @@ mod tests {
                 Box::pin(async move { Ok(c) })
             });
             let conversation = self.conversation.clone();
-            conversation_repo.expect_get_by_ids().returning(move |_| {
-                let c = conversation.clone();
-                Box::pin(async move { Ok(c.into_iter().collect()) })
+            let author_conversations: Vec<Conversation> = self
+                .author_channels
+                .iter()
+                .map(|(c, _)| c.clone())
+                .collect();
+            conversation_repo.expect_get_by_ids().returning(move |ids| {
+                let found: Vec<Conversation> = conversation
+                    .clone()
+                    .into_iter()
+                    .chain(
+                        author_conversations
+                            .iter()
+                            .filter(|c| ids.contains(&c.id))
+                            .cloned(),
+                    )
+                    .collect();
+                Box::pin(async move { Ok(found) })
             });
             conversation_repo
                 .expect_set_slow_mode()
@@ -348,6 +391,49 @@ mod tests {
                 let m = message.clone();
                 Box::pin(async move { Ok(m.into_iter().map(|m| (m.id, m)).collect()) })
             });
+            let counts = self.author_counts;
+            let scopes = Arc::clone(&self.count_scopes);
+            message_repo
+                .expect_count_author_channel_messages()
+                .returning(move |scope| {
+                    scopes.lock().expect("lock").push(scope);
+                    Box::pin(async move { Ok(counts) })
+                });
+            let channels: Vec<(ConversationId, bool)> = self
+                .author_channels
+                .iter()
+                .map(|(c, _)| (c.id, c.is_private))
+                .collect();
+            let flags = Arc::clone(&self.include_flags);
+            message_repo
+                .expect_list_author_channels()
+                .returning(move |_, include| {
+                    flags.lock().expect("lock").push(include);
+                    let ids: Vec<ConversationId> = channels
+                        .iter()
+                        .filter(|(_, private)| include || !private)
+                        .map(|(id, _)| *id)
+                        .collect();
+                    Box::pin(async move { Ok(ids) })
+                });
+            let queues: Arc<Mutex<HashMap<ConversationId, Vec<DeletedMessage>>>> =
+                Arc::new(Mutex::new(
+                    self.author_channels
+                        .iter()
+                        .map(|(c, m)| (c.id, m.clone()))
+                        .collect(),
+                ));
+            let bulk_deletes = Arc::clone(&self.bulk_deletes);
+            message_repo
+                .expect_soft_delete_author_channel_messages()
+                .returning(move |id, _, _, limit| {
+                    bulk_deletes.lock().expect("lock").push((id, limit));
+                    let mut queues = queues.lock().expect("lock");
+                    let queue = queues.entry(id).or_default();
+                    let take = queue.len().min(limit as usize);
+                    let deleted: Vec<DeletedMessage> = queue.drain(..take).collect();
+                    Box::pin(async move { Ok(deleted) })
+                });
 
             let roles = self.roles.clone();
             server_member_repo
@@ -359,6 +445,14 @@ mod tests {
                 });
 
             let mut notification_repo = MockNotificationRepository::new();
+            let forgotten = Arc::clone(&self.forgotten);
+            notification_repo
+                .expect_delete_unread_for_messages()
+                .returning(move |ids| {
+                    forgotten.lock().expect("lock").extend_from_slice(ids);
+                    let n = ids.len() as u64;
+                    Box::pin(async move { Ok(n) })
+                });
             let cleared = Arc::clone(&self.cleared_notifications);
             notification_repo
                 .expect_delete_for_user_in_server()
@@ -1831,5 +1925,475 @@ mod tests {
             .await,
             Err(ServiceError::PermissionDenied)
         ));
+    }
+
+    // ── delete member messages ───────────────────────────────────────────
+
+    fn counts_query(fx: &Fx, actor: UserId, target: UserId) -> MemberMessageCountsQuery {
+        MemberMessageCountsQuery {
+            actor: Actor::new(actor),
+            server_id: fx.server_id,
+            user_id: target,
+            since: None,
+        }
+    }
+
+    fn delete_cmd(
+        fx: &Fx,
+        actor: UserId,
+        target: UserId,
+        include: bool,
+    ) -> DeleteMemberMessagesCmd {
+        DeleteMemberMessagesCmd {
+            actor: Actor::new(actor),
+            server_id: fx.server_id,
+            user_id: target,
+            since: None,
+            include_unjoined_private: include,
+        }
+    }
+
+    /// `n` deleted-message records with no thread.
+    fn deleted_messages(n: usize) -> Vec<DeletedMessage> {
+        (0..n)
+            .map(|_| DeletedMessage {
+                id: MessageId::new(),
+                thread_id: None,
+            })
+            .collect()
+    }
+
+    fn private_channel(server_id: ServerId) -> Conversation {
+        Conversation {
+            is_private: true,
+            title: Some("staff".to_string()),
+            ..channel(server_id)
+        }
+    }
+
+    /// The `MessagesDeleted` events the fixture recorded, as `(channel, ids, threads, private)`.
+    type BulkEvent = (ConversationId, Vec<MessageId>, Vec<MessageThreadId>, bool);
+
+    fn bulk_events(fx: &Fx) -> Vec<BulkEvent> {
+        fx.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                WorkspaceEvent::MessagesDeleted {
+                    conversation_id,
+                    message_ids,
+                    thread_ids,
+                    is_private,
+                    conversation_type,
+                    ..
+                } => {
+                    assert_eq!(conversation_type, "Channel");
+                    Some((conversation_id, message_ids, thread_ids, is_private))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_follows_the_kick_target_matrix() {
+        let [owner, mod_a, mod_b, member, guest] = users();
+        let fx = Fx::new(&[
+            (owner, Owner),
+            (mod_a, Moderator),
+            (mod_b, Moderator),
+            (member, Member),
+            (guest, Guest),
+        ]);
+        let svc = fx.service(MockModerationRepository::new());
+
+        let denied = [
+            (mod_a, mod_b),
+            (mod_a, owner),
+            (mod_b, owner),
+            (member, guest),
+            (guest, member),
+        ];
+        for (actor, target) in denied {
+            let err = svc
+                .member_message_counts(counts_query(&fx, actor, target))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+            let err = svc
+                .delete_member_messages(delete_cmd(&fx, actor, target, false))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::PermissionDenied), "{err:?}");
+        }
+        for actor in [owner, mod_a] {
+            assert!(matches!(
+                svc.member_message_counts(counts_query(&fx, actor, actor))
+                    .await,
+                Err(ServiceError::Validation(_))
+            ));
+            assert!(matches!(
+                svc.delete_member_messages(delete_cmd(&fx, actor, actor, false))
+                    .await,
+                Err(ServiceError::Validation(_))
+            ));
+        }
+        assert!(fx.include_flags.lock().expect("lock").is_empty());
+
+        for (actor, target) in [(owner, mod_b), (mod_a, member), (mod_a, guest)] {
+            svc.member_message_counts(counts_query(&fx, actor, target))
+                .await
+                .expect("allowed count");
+            svc.delete_member_messages(delete_cmd(&fx, actor, target, false))
+                .await
+                .expect("allowed delete");
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_reaches_a_former_member_but_not_an_unknown_user() {
+        let [owner, moderator, former, unknown] = users();
+        let mut fx = Fx::new(&[(owner, Owner), (moderator, Moderator)]);
+        fx.unknown_users = vec![unknown];
+        let general = channel(fx.server_id);
+        fx.author_channels = vec![(general, deleted_messages(2))];
+        let svc = fx.service(MockModerationRepository::new());
+
+        assert!(matches!(
+            svc.member_message_counts(counts_query(&fx, moderator, unknown))
+                .await,
+            Err(ServiceError::NotFound)
+        ));
+        assert!(matches!(
+            svc.delete_member_messages(delete_cmd(&fx, moderator, unknown, false))
+                .await,
+            Err(ServiceError::NotFound)
+        ));
+        assert!(fx.bulk_deletes.lock().expect("lock").is_empty());
+
+        svc.member_message_counts(counts_query(&fx, moderator, former))
+            .await
+            .expect("a former member is counted");
+        let outcome = svc
+            .delete_member_messages(delete_cmd(&fx, moderator, former, false))
+            .await
+            .expect("a former member's messages are deleted");
+        assert_eq!(outcome.deleted, 2);
+        let rows = fx.audit.0.lock().expect("lock").clone();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].args_redacted["was_member"], false);
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_refuses_the_direct_space() {
+        let [owner, member] = users();
+        let mut fx = Fx::new(&[(owner, Owner), (member, Member)]);
+        fx.direct_space = true;
+        let svc = fx.service(MockModerationRepository::new());
+
+        assert!(matches!(
+            svc.member_message_counts(counts_query(&fx, owner, member))
+                .await,
+            Err(ServiceError::Validation(_))
+        ));
+        assert!(matches!(
+            svc.delete_member_messages(delete_cmd(&fx, owner, member, true))
+                .await,
+            Err(ServiceError::Validation(_))
+        ));
+        assert!(fx.count_scopes.lock().expect("lock").is_empty());
+        assert!(fx.include_flags.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn member_message_counts_passes_the_caller_as_viewer_and_since() {
+        let [moderator, member] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        fx.author_counts = AuthorChannelCounts {
+            readable: MessageTally {
+                messages: 7,
+                channels: 2,
+            },
+            unjoined_private: MessageTally {
+                messages: 3,
+                channels: 1,
+            },
+        };
+        let svc = fx.service(MockModerationRepository::new());
+        let since = Utc::now() - Duration::hours(1);
+
+        let counts = svc
+            .member_message_counts(MemberMessageCountsQuery {
+                since: Some(since),
+                ..counts_query(&fx, moderator, member)
+            })
+            .await
+            .expect("counts");
+        assert_eq!((counts.readable.messages, counts.readable.channels), (7, 2));
+        assert_eq!(
+            (
+                counts.unjoined_private.messages,
+                counts.unjoined_private.channels
+            ),
+            (3, 1)
+        );
+        assert_eq!(
+            *fx.count_scopes.lock().expect("lock"),
+            [AuthorChannelScope {
+                server_id: fx.server_id,
+                author: member,
+                since: Some(since),
+                viewer: moderator,
+            }]
+        );
+        assert!(fx.audited().is_empty(), "a count is not audited");
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_leaves_unjoined_private_channels_unless_asked() {
+        let [moderator, member] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        let general = channel(fx.server_id);
+        let staff = private_channel(fx.server_id);
+        fx.author_channels = vec![
+            (general.clone(), deleted_messages(2)),
+            (staff.clone(), deleted_messages(1)),
+        ];
+        let svc = fx.service(MockModerationRepository::new());
+
+        let first = svc
+            .delete_member_messages(delete_cmd(&fx, moderator, member, false))
+            .await
+            .expect("delete");
+        assert_eq!(
+            (first.deleted, first.channels, first.has_more),
+            (2, 1, false)
+        );
+        let second = svc
+            .delete_member_messages(delete_cmd(&fx, moderator, member, true))
+            .await
+            .expect("delete with private channels");
+        assert_eq!((second.deleted, second.channels), (1, 1));
+
+        assert_eq!(*fx.include_flags.lock().expect("lock"), [false, true]);
+        let touched: Vec<ConversationId> = fx
+            .bulk_deletes
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(touched, [general.id, general.id, staff.id]);
+        let events = bulk_events(&fx);
+        assert_eq!(events.len(), 2);
+        assert_eq!((events[0].0, events[0].3), (general.id, false));
+        assert_eq!((events[1].0, events[1].3), (staff.id, true));
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_stops_at_the_cap_and_reports_more() {
+        let [moderator, member] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        let a = channel(fx.server_id);
+        let b = channel(fx.server_id);
+        let c = channel(fx.server_id);
+        fx.author_channels = vec![
+            (a.clone(), deleted_messages(600)),
+            (b.clone(), deleted_messages(600)),
+            (c.clone(), deleted_messages(5)),
+        ];
+        fx.author_counts = AuthorChannelCounts {
+            readable: MessageTally {
+                messages: 205,
+                channels: 2,
+            },
+            unjoined_private: MessageTally::default(),
+        };
+        let svc = fx.service(MockModerationRepository::new());
+
+        let outcome = svc
+            .delete_member_messages(delete_cmd(&fx, moderator, member, false))
+            .await
+            .expect("delete");
+        assert_eq!(
+            (outcome.deleted, outcome.channels, outcome.has_more),
+            (1000, 2, true)
+        );
+        assert_eq!(
+            *fx.bulk_deletes.lock().expect("lock"),
+            [(a.id, 1000), (b.id, 400)]
+        );
+        assert_eq!(
+            fx.count_scopes.lock().expect("lock").len(),
+            1,
+            "the cap triggers one recount"
+        );
+        let rows = fx.audit.0.lock().expect("lock").clone();
+        assert_eq!(rows[0].args_redacted["has_more"], true);
+
+        // Below the cap there is no recount and nothing more to report.
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        fx.author_channels = vec![(channel(fx.server_id), deleted_messages(3))];
+        fx.author_counts = AuthorChannelCounts {
+            readable: MessageTally {
+                messages: 9,
+                channels: 1,
+            },
+            unjoined_private: MessageTally::default(),
+        };
+        let svc = fx.service(MockModerationRepository::new());
+        let outcome = svc
+            .delete_member_messages(delete_cmd(&fx, moderator, member, false))
+            .await
+            .expect("delete");
+        assert_eq!((outcome.deleted, outcome.has_more), (3, false));
+        assert!(fx.count_scopes.lock().expect("lock").is_empty());
+
+        // At the cap, private channels the actor is not in count only when asked for.
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        fx.author_channels = vec![(channel(fx.server_id), deleted_messages(1000))];
+        fx.author_counts = AuthorChannelCounts {
+            readable: MessageTally::default(),
+            unjoined_private: MessageTally {
+                messages: 4,
+                channels: 1,
+            },
+        };
+        let svc = fx.service(MockModerationRepository::new());
+        let outcome = svc
+            .delete_member_messages(delete_cmd(&fx, moderator, member, false))
+            .await
+            .expect("delete");
+        assert_eq!((outcome.deleted, outcome.has_more), (1000, false));
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_emits_one_event_per_channel_with_distinct_thread_ids() {
+        let [moderator, member] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        let general = channel(fx.server_id);
+        let random = channel(fx.server_id);
+        let [t1, t2] = [MessageThreadId::new(), MessageThreadId::new()];
+        let in_general = vec![
+            DeletedMessage {
+                id: MessageId::new(),
+                thread_id: Some(t1),
+            },
+            DeletedMessage {
+                id: MessageId::new(),
+                thread_id: None,
+            },
+            DeletedMessage {
+                id: MessageId::new(),
+                thread_id: Some(t1),
+            },
+            DeletedMessage {
+                id: MessageId::new(),
+                thread_id: Some(t2),
+            },
+        ];
+        let in_random = deleted_messages(1);
+        fx.author_channels = vec![
+            (general.clone(), in_general.clone()),
+            (random.clone(), in_random.clone()),
+        ];
+        let svc = fx.service(MockModerationRepository::new());
+
+        svc.delete_member_messages(delete_cmd(&fx, moderator, member, false))
+            .await
+            .expect("delete");
+
+        let events = bulk_events(&fx);
+        assert_eq!(events.len(), 2);
+        let (id, ids, threads, _) = &events[0];
+        assert_eq!(*id, general.id);
+        assert_eq!(*ids, in_general.iter().map(|m| m.id).collect::<Vec<_>>());
+        let mut expected = vec![t1, t2];
+        expected.sort_by_key(|t| uuid::Uuid::from(*t));
+        assert_eq!(*threads, expected);
+        let (id, ids, threads, _) = &events[1];
+        assert_eq!(*id, random.id);
+        assert_eq!(*ids, [in_random[0].id]);
+        assert!(threads.is_empty());
+        assert!(
+            !fx.events()
+                .iter()
+                .any(|e| matches!(e, WorkspaceEvent::MessageDeleted { .. })),
+            "a bulk delete sends no per-message event"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_forgets_unread_notifications() {
+        let [moderator, member] = users();
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        let general = deleted_messages(2);
+        let random = deleted_messages(1);
+        fx.author_channels = vec![
+            (channel(fx.server_id), general.clone()),
+            (channel(fx.server_id), random.clone()),
+        ];
+        let svc = fx.service(MockModerationRepository::new());
+
+        svc.delete_member_messages(delete_cmd(&fx, moderator, member, false))
+            .await
+            .expect("delete");
+
+        let expected: Vec<MessageId> = general.iter().chain(&random).map(|m| m.id).collect();
+        assert_eq!(*fx.forgotten.lock().expect("lock"), expected);
+    }
+
+    #[tokio::test]
+    async fn delete_member_messages_audits_counts_without_text_and_nothing_when_none_deleted() {
+        let [moderator, member] = users();
+        let fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        let svc = fx.service(MockModerationRepository::new());
+        let outcome = svc
+            .delete_member_messages(delete_cmd(&fx, moderator, member, false))
+            .await
+            .expect("nothing to delete");
+        assert_eq!(
+            (outcome.deleted, outcome.channels, outcome.has_more),
+            (0, 0, false)
+        );
+        assert!(fx.audited().is_empty(), "nothing deleted, nothing audited");
+        assert!(bulk_events(&fx).is_empty());
+
+        let mut fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        fx.author_channels = vec![
+            (channel(fx.server_id), deleted_messages(2)),
+            (private_channel(fx.server_id), deleted_messages(3)),
+        ];
+        let svc = fx.service(MockModerationRepository::new());
+        let since = Utc::now() - Duration::days(7);
+        svc.delete_member_messages(DeleteMemberMessagesCmd {
+            since: Some(since),
+            ..delete_cmd(&fx, moderator, member, true)
+        })
+        .await
+        .expect("delete");
+
+        let rows = fx.audit.0.lock().expect("lock").clone();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.command_id, audit_ids::DELETE_MEMBER_MESSAGES);
+        assert_eq!(row.actor_user_id, uuid::Uuid::from(moderator));
+        assert!(row.dangerous);
+        assert_eq!(
+            row.typed_verb,
+            Some(rim_services::command::verb::TypedVerb::Delete)
+        );
+        assert_eq!(
+            row.args_redacted,
+            serde_json::json!({
+                "user_id": member.to_string(),
+                "since": since.to_rfc3339(),
+                "include_unjoined_private": true,
+                "deleted": 5,
+                "channels": 2,
+                "has_more": false,
+                "was_member": true,
+                "complete": true,
+            })
+        );
     }
 }

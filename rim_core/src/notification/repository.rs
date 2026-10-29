@@ -119,6 +119,10 @@ pub trait NotificationRepository: Send + Sync {
     /// Delete the unread notifications of a message (it was deleted); read ones stay.
     async fn delete_unread_for_message(&self, message_id: MessageId) -> RepoResult<u64>;
 
+    /// Delete the unread notifications of `message_ids` (they were deleted); read ones stay.
+    /// Returns rows deleted.
+    async fn delete_unread_for_messages(&self, message_ids: &[MessageId]) -> RepoResult<u64>;
+
     /// Delete every notification of the user in the workspace, read or not (they lost access
     /// to it). Returns rows deleted.
     async fn delete_for_user_in_server(

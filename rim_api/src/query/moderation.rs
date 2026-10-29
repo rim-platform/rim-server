@@ -1,6 +1,9 @@
 use async_graphql::*;
+use chrono::{DateTime, Utc};
 use rim_services::Actor;
-use rim_services::moderation::command::{GetReportQuery, ListBansQuery, ListReportsQuery};
+use rim_services::moderation::command::{
+    GetReportQuery, ListBansQuery, ListReportsQuery, MemberMessageCountsQuery,
+};
 use rim_services::moderation::service::ModerationService;
 
 use crate::auth_context::require_actor;
@@ -8,7 +11,8 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::pagination::PageDir;
 use crate::types::{
-    MessageReport, MessageReportCursorInput, MessageReportPage, MessageReportStatus, ServerBan,
+    MemberMessageCounts, MessageReport, MessageReportCursorInput, MessageReportPage,
+    MessageReportStatus, ServerBan,
 };
 
 #[derive(Default)]
@@ -84,5 +88,31 @@ impl ModerationQueries {
             .await
             .map_err(map_service_error)?;
         Ok(report.into())
+    }
+
+    /// How many of a person's messages in the workspace's channels, sent at or after `since`
+    /// (all of them when null), `deleteMemberMessages` would reach: in channels the caller reads,
+    /// and in private channels the caller is not in (numbers only). Owner/Moderator; the
+    /// targeting rules of `kickMember`, and works for a former member. Listed in
+    /// `serverInfo.capabilities` as `delete_member_messages`.
+    async fn member_message_counts(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        user_id: ID,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<MemberMessageCounts> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ModerationService>>()?;
+        let counts = svc
+            .member_message_counts(MemberMessageCountsQuery {
+                actor: Actor::new(actor),
+                server_id: parse_uuid_id(&server_id)?,
+                user_id: parse_uuid_id(&user_id)?,
+                since,
+            })
+            .await
+            .map_err(map_service_error)?;
+        Ok(counts.into())
     }
 }

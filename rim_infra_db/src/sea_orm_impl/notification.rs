@@ -442,6 +442,22 @@ impl NotificationRepository for SeaOrmNotificationRepository {
         Ok(res.rows_affected)
     }
 
+    async fn delete_unread_for_messages(&self, message_ids: &[MessageId]) -> RepoResult<u64> {
+        if message_ids.is_empty() {
+            return Ok(0);
+        }
+        let res = user_notification::Entity::delete_many()
+            .filter(
+                user_notification::Column::MessageId
+                    .is_in(message_ids.iter().copied().map(Uuid::from)),
+            )
+            .filter(user_notification::Column::ReadAt.is_null())
+            .exec(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(res.rows_affected)
+    }
+
     async fn delete_for_user_in_server(
         &self,
         user_id: UserId,
