@@ -14,7 +14,12 @@ use rim_services::limits::InstanceLimits;
 pub const API_VERSION: i32 = 1;
 
 /// API additions an older server lacks, by name, so a client asks for them only here.
-pub const CAPABILITIES: &[&str] = &["message_edited_at", "workspace_leave", "workspace_rename"];
+pub const CAPABILITIES: &[&str] = &[
+    "message_edited_at",
+    "workspace_leave",
+    "workspace_rename",
+    "message_flag",
+];
 
 /// The running server build, the API version it speaks and the optional features it runs.
 #[derive(SimpleObject, Clone, Debug)]

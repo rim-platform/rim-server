@@ -226,7 +226,12 @@ async fn server_info_lists_its_capabilities() {
     let capabilities = data["serverInfo"]["capabilities"]
         .as_array()
         .expect("capabilities");
-    for capability in ["message_edited_at", "workspace_leave", "workspace_rename"] {
+    for capability in [
+        "message_edited_at",
+        "workspace_leave",
+        "workspace_rename",
+        "message_flag",
+    ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
             "{capability}: {capabilities:?}"

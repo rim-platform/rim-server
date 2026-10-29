@@ -171,7 +171,8 @@ impl Message {
     }
 
     /// Whether the automatic text art check flagged the message and no Owner or Moderator has
-    /// cleared it. False for a deleted message.
+    /// cleared it. False for a deleted message. Listed in `serverInfo.capabilities` as
+    /// `message_flag`.
     async fn flagged(&self) -> bool {
         self.flagged_at.is_some()
     }

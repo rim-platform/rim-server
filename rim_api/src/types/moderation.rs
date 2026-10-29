@@ -152,7 +152,8 @@ pub struct MessageReport {
     /// When the verified content is deleted: 90 days after the report was resolved or
     /// dismissed; null while it is open.
     pub franked_content_expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Whether the automatic text art check filed the report rather than a member.
+    /// Whether the automatic text art check filed the report rather than a member. Listed in
+    /// `serverInfo.capabilities` as `message_flag`.
     pub automatic: bool,
 }
 

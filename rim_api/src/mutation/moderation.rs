@@ -261,7 +261,8 @@ impl ModerationMutations {
 
     /// Clear the automatic text art check's flag on a message (Owner/Moderator); true when the
     /// message is not flagged afterwards, whether or not it was. Audited
-    /// (`admin.clear_message_flag`) when a flag was cleared.
+    /// (`admin.clear_message_flag`) when a flag was cleared. Listed in `serverInfo.capabilities`
+    /// as `message_flag`.
     async fn clear_message_flag(
         &self,
         ctx: &Context<'_>,

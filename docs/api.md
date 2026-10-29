@@ -745,7 +745,8 @@ each list.
   and sends N back as `confirmedMinimumAge`.
 - **`capabilities`**: the API additions this server has that an older one lacks, by name
   (`message_edited_at`: `Message.editedAt`; `workspace_leave`: `leaveWorkspace`;
-  `workspace_rename`: `renameWorkspace`). A client asks for such a field only when its name
+  `workspace_rename`: `renameWorkspace`; `message_flag`: `Message.flagged`,
+  `MessageReport.automatic` and `clearMessageFlag`). A client asks for such a field only when its name
   is listed, so it keeps working against older servers; it ignores names it does not know.
 
 The discovery document carries the same `features`, and `registrationFull` as
