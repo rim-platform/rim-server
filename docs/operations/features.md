@@ -16,6 +16,7 @@ SMTP is not configured, which is how it already behaved.
 | `ai_commands` | `commandDiscover`, `commands(surface: AI)`, `executeCommand` and `executeMacro` with the `AGENT` initiator, and the agent-facing fields of `Command` (`nlDescription` is null, `intentSamples` empty and `aiCallable` false while off) | An instance may not want an AI agent driving its workspaces. |
 | `avatars` | `POST /api/files/avatar`, `GET /api/files/{path}` (the stored avatars; both also when another relay forwards them), `updateMyProfile` with an `avatarUrl`, and `User.avatarUrl` and `ServerMember.avatarUrl` (null while off) | Uploaded profile pictures are content the operator moderates and stores. |
 | `text_art_check` | Scoring the readable workspace messages that look like text art with the image check service, and flagging and reporting those that score high (`docs/messaging.md`, "Flagged messages"); while off no message is scored or flagged, existing flags stay and `clearMessageFlag` still clears them | The text of those messages goes to the image check service, and an instance may not want its messages scored. |
+| `avatar_check` | Scoring uploaded profile pictures with the image check service, refusing those at or above `RIM_AVATAR_CHECK_BLOCK` and reporting those at or above `RIM_AVATAR_CHECK_REPORT` (`docs/self-hosting.md`, "Content check"); while off pictures are stored unchecked | Pictures go to the image check service, and an instance may not want them scored. |
 
 These are platform core and have no switch: end-to-end encrypted conversations, key identity,
 the relay and host roles (`RIM_ROLE`), registration (its own modes: `RIM_OPEN_REGISTRATION`,
@@ -38,6 +39,7 @@ Unavailable today:
 |---|---|---|
 | `email` | `RIM_SMTP_HOST` or `RIM_SMTP_FROM` is not set | Mail is logged (recipient and subject) instead of sent, as before. |
 | `text_art_check` | `RIM_AVATAR_CHECK_URL` is not set | No message is scored or flagged. |
+| `avatar_check` | `RIM_AVATAR_CHECK_URL` is not set | Pictures are stored unchecked. |
 
 A feature both disabled and unavailable is reported as `disabled`. Storage is always the local
 data directory, so `attachments`, `custom_emoji`, `workspace_plugins` and `avatars` are never
@@ -54,7 +56,7 @@ RIM_FEATURES_DISABLED=attachments,custom_emoji
 An unknown name stops the server at boot, naming it, so a typo never leaves a feature on:
 
 ```text
-RIM_FEATURES_DISABLED: unknown feature: atachments (known: attachments, link_previews, email, custom_emoji, workspace_plugins, ai_commands, avatars, plugin_link_fetch, text_art_check)
+RIM_FEATURES_DISABLED: unknown feature: atachments (known: attachments, link_previews, email, custom_emoji, workspace_plugins, ai_commands, avatars, plugin_link_fetch, text_art_check, avatar_check)
 ```
 
 The switches are read at boot; change the variable and restart. At boot the server logs the

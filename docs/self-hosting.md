@@ -421,6 +421,10 @@ Outgoing requests ignore proxy environment variables.
 
 ## Content check
 
+Each check can be switched off on its own with `RIM_FEATURES_DISABLED` (`avatar_check`,
+`text_art_check`), or both by leaving `RIM_AVATAR_CHECK_URL` empty; the `imagecheck` service can
+then be removed from the stack.
+
 ### Profile pictures
 
 `deploy/compose.yml` runs `imagecheck` next to the server: a small service, built from
@@ -428,8 +432,9 @@ Outgoing requests ignore proxy environment variables.
 scores every uploaded profile picture for sexual content, gore and violence, each from 0 to 1.
 It runs two models on the CPU, a trained nsfw classifier and CLIP, and takes about a tenth of a
 second a picture; with the text art model (below) it holds about 825 MiB of memory (its limit is
-1536 MiB and 2 CPUs). It is on the internal network only and reaches nothing; `imagecheck/README.md` describes the models, their
-licences and the scores of ordinary pictures.
+1536 MiB and 2 CPUs). It is on the internal network only and reaches nothing;
+`imagecheck/README.md` describes the models, their licences and the scores of ordinary
+pictures.
 
 The server holds the highest of the three scores against two thresholds:
 

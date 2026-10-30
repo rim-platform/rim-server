@@ -27,11 +27,14 @@ pub enum ServerFeature {
     /// The automatic text art check: readable workspace messages that look like text art are
     /// scored by the image check service and flagged when the score is high.
     TextArtCheck,
+    /// The automatic profile picture check: uploaded profile pictures are scored by the image
+    /// check service and refused or reported when the score is high.
+    AvatarCheck,
 }
 
 impl ServerFeature {
     /// Every known feature, in display order.
-    pub const ALL: [ServerFeature; 9] = [
+    pub const ALL: [ServerFeature; 10] = [
         ServerFeature::Attachments,
         ServerFeature::LinkPreviews,
         ServerFeature::Email,
@@ -41,6 +44,7 @@ impl ServerFeature {
         ServerFeature::Avatars,
         ServerFeature::PluginLinkFetch,
         ServerFeature::TextArtCheck,
+        ServerFeature::AvatarCheck,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -54,6 +58,7 @@ impl ServerFeature {
             ServerFeature::Avatars => "avatars",
             ServerFeature::PluginLinkFetch => "plugin_link_fetch",
             ServerFeature::TextArtCheck => "text_art_check",
+            ServerFeature::AvatarCheck => "avatar_check",
         }
     }
 

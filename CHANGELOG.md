@@ -23,6 +23,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `avatar_check` in `RIM_FEATURES_DISABLED` switches the profile picture check off (pictures
+  are stored unchecked), as `text_art_check` does for the text art check;
+  `serverInfo.features` lists it, `unavailable` without `RIM_AVATAR_CHECK_URL`.
 - The imagecheck service scores text art (`POST /v1/check-text`): it draws a message's text as a
   picture and scores it for sexual content.
 - Messages that look like text art (braille, block or ASCII drawings) are scored by the

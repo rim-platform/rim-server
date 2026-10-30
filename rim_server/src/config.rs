@@ -1186,7 +1186,8 @@ impl RIMConfig {
     }
 
     /// The features the rest of the configuration cannot support, each with the reason: email
-    /// without SMTP, the text art check without the image check service.
+    /// without SMTP, the text art check and the profile picture check without the image check
+    /// service.
     pub fn features_unavailable(
         &self,
     ) -> Vec<(rim_core::server_feature::model::ServerFeature, String)> {
@@ -1200,6 +1201,10 @@ impl RIMConfig {
         if non_blank(self.avatar_check_url.as_deref()).is_none() {
             unavailable.push((
                 rim_core::server_feature::model::ServerFeature::TextArtCheck,
+                "RIM_AVATAR_CHECK_URL is unset".to_string(),
+            ));
+            unavailable.push((
+                rim_core::server_feature::model::ServerFeature::AvatarCheck,
                 "RIM_AVATAR_CHECK_URL is unset".to_string(),
             ));
         }
@@ -2489,7 +2494,10 @@ mod tests {
                 if reason == "no mail server is set up" && !reason.contains("RIM_")
         ));
         for feature in ServerFeature::ALL {
-            if feature != ServerFeature::Email && feature != ServerFeature::TextArtCheck {
+            if !matches!(
+                feature,
+                ServerFeature::Email | ServerFeature::TextArtCheck | ServerFeature::AvatarCheck
+            ) {
                 assert_eq!(gate.state(feature), FeatureState::Enabled, "{feature}");
             }
         }
@@ -2806,6 +2814,57 @@ mod tests {
         assert_eq!(
             gate.state(ServerFeature::TextArtCheck),
             FeatureState::Enabled
+        );
+    }
+
+    #[test]
+    fn avatar_check_feature_parses_is_unavailable_without_the_url_and_disabled_wins() {
+        use rim_core::server_feature::model::{FeatureState, ServerFeature};
+        use rim_services::feature::service::FeatureGate;
+
+        let gate = RIMConfig::default().feature_gate().expect("gate");
+        assert_eq!(
+            gate.state(ServerFeature::AvatarCheck),
+            FeatureState::Unavailable {
+                reason: "RIM_AVATAR_CHECK_URL is unset".to_string()
+            }
+        );
+        let with_url = RIMConfig {
+            avatar_check_url: Some("http://imagecheck:8090".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            with_url
+                .feature_gate()
+                .expect("gate")
+                .state(ServerFeature::AvatarCheck),
+            FeatureState::Enabled
+        );
+        let disabled = RIMConfig {
+            features_disabled: Some("avatar_check".to_string()),
+            ..with_url
+        };
+        assert_eq!(
+            disabled.features_disabled(),
+            Ok(vec![ServerFeature::AvatarCheck])
+        );
+        assert_eq!(
+            disabled
+                .feature_gate()
+                .expect("gate")
+                .state(ServerFeature::AvatarCheck),
+            FeatureState::Disabled
+        );
+        let unset_and_disabled = RIMConfig {
+            features_disabled: Some("avatar_check".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            unset_and_disabled
+                .feature_gate()
+                .expect("gate")
+                .state(ServerFeature::AvatarCheck),
+            FeatureState::Disabled
         );
     }
 
