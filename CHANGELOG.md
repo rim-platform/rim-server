@@ -47,6 +47,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 - **Upgrade:** a migration adds the index `idx_message_sent_by_sent_at`; on a large `message`
   table, writes to it wait while the index is built.
 
+### Fixed
+
+- The roadmap reflects the available early releases and current archive destinations;
+  self-hosting links explicitly name the relay-only setup guide.
+
 ## [0.0.6] - 2026-10-28
 
 ### Fixed
