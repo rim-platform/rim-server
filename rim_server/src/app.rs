@@ -483,11 +483,12 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let link_preview_concurrency = config
         .link_preview_concurrency()
         .map_err(std::io::Error::other)?;
-    let avatar_checker = avatar_checker(config).map_err(std::io::Error::other)?;
     let text_art_check = config.text_art_check().map_err(std::io::Error::other)?;
     let instance_features = config.feature_gate().map_err(std::io::Error::other)?;
     log_features(&instance_features);
     let feature_gate: Arc<dyn FeatureGate> = Arc::new(instance_features);
+    let avatar_checker =
+        avatar_checker(config, feature_gate.as_ref()).map_err(std::io::Error::other)?;
     let email_disabled = feature_gate.state(ServerFeature::Email).is_disabled();
     let registration_mode = config.registration_mode().map_err(std::io::Error::other)?;
     let db = config
@@ -1152,15 +1153,21 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     })
 }
 
-/// The profile picture check `RIM_AVATAR_CHECK_URL` names, with its thresholds; `None`, and a
-/// warning that pictures are stored unchecked, when it is unset.
+/// The profile picture check `RIM_AVATAR_CHECK_URL` names, with its thresholds; `None` when the
+/// `avatar_check` feature is disabled, and `None` with a warning when the URL is unset; either
+/// way pictures are stored unchecked.
 ///
 /// # Errors
 /// The configuration's message for a malformed URL or threshold, or the client's when it
 /// cannot be built.
 fn avatar_checker(
     config: &RIMConfig,
+    gate: &dyn FeatureGate,
 ) -> Result<Option<Arc<rim_infra_services::avatar_check::AvatarChecker>>, String> {
+    if gate.state(ServerFeature::AvatarCheck).is_disabled() {
+        tracing::info!("avatar_check is disabled: profile pictures are stored unchecked");
+        return Ok(None);
+    }
     let Some(settings) = config.avatar_check()? else {
         tracing::warn!("RIM_AVATAR_CHECK_URL is unset: profile pictures are stored unchecked");
         return Ok(None);
@@ -1333,4 +1340,40 @@ async fn seed_builtin_capabilities(
         "seeded builtin capabilities into registry"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_url() -> RIMConfig {
+        RIMConfig {
+            avatar_check_url: Some("http://imagecheck:8090".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn avatar_checker_is_built_from_the_url_when_the_feature_is_on() {
+        let config = with_url();
+        let gate = config.feature_gate().expect("gate");
+        assert!(avatar_checker(&config, &gate).expect("checker").is_some());
+    }
+
+    #[test]
+    fn avatar_checker_is_none_without_the_url() {
+        let config = RIMConfig::default();
+        let gate = config.feature_gate().expect("gate");
+        assert!(avatar_checker(&config, &gate).expect("checker").is_none());
+    }
+
+    #[test]
+    fn avatar_checker_is_none_when_the_feature_is_disabled() {
+        let config = RIMConfig {
+            features_disabled: Some("avatar_check".to_string()),
+            ..with_url()
+        };
+        let gate = config.feature_gate().expect("gate");
+        assert!(avatar_checker(&config, &gate).expect("checker").is_none());
+    }
 }
