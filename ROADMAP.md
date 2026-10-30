@@ -7,9 +7,9 @@ detail lives there once the work starts.
 
 ## Where it stands
 
-RIM is **pre-release**. Everything in "What works today" below runs on both `master` branches,
-and the first `0.0.x` releases of the server and the clients are being prepared together with the
-public relay at `relay.rim-platform.org`.
+RIM is **pre-release**. Early `0.0.x` releases of the server and clients are available, and the
+public relay at `relay.rim-platform.org` is running as a first community test. "What works today"
+below describes the current `master` branches; a release may not include every recent change.
 
 The `0.0.x` releases are **pre-review**: nobody outside the project has checked the cryptography
 of key identity, device linking, recovery and end-to-end encryption yet. `0.1.0`, and any claim
@@ -23,24 +23,24 @@ that RIM is ready for production, waits for that outside review (`docs/security-
 | Moderation | Owner, Moderator, Member and Guest; kick, ban, timeout, slow mode, message reports including franked reports of encrypted messages; an audit log with retention |
 | The programmable layer | A command registry with typed arguments, sensitivity tiers and confirmations; user commands and macros; keybinds with layers and an opt-in Vim profile; pipelines; workspace state; channel lenses |
 | Plugins | Local-process plugins on the desktop and sandboxed web plugins on the desktop and the web; a TypeScript SDK and a frozen protocol; per-workspace registries of publisher-signed plugins; four first-party plugins (Kubernetes pods, GitHub pull requests, polls, releases) |
-| AI agent | Anthropic or OpenAI with your own key; it calls the built-in and plugin commands, and every change it makes waits for a confirmation |
+| AI agent | Anthropic or OpenAI with your own key; built-in changes wait for confirmation; approved non-dangerous plugin commands run without asking each time |
 | Identity | Accounts are key pairs: identity and device keys, an OPAQUE account password, device linking by code, a recovery phrase and an identity-key backup |
 | Encryption | MLS for DMs and private groups with a hybrid X25519 + ML-KEM-768 key agreement; channels stay plaintext |
 | Decentralization | Every server has its own key; relays with a request inbox for strangers; workspace hosts that serve members from other servers through their relay |
-| History on your devices | An encrypted local message cache with local search and offline reading; an encrypted archive in a folder, Google Drive or Dropbox |
+| History on your devices | An encrypted local message cache with local search and offline reading; an encrypted archive in a folder, Google Drive, Dropbox, OneDrive, S3-compatible storage or a separate backup endpoint |
 | Operations | A Docker Compose stack with backup, restore and a restore drill; health probes, Prometheus metrics, instance feature switches, an upgrade guide with rollback |
 
-## Now: the first release
+## Now: early community testing
 
-- The first `0.0.x` release of `rim-server` and `rim-ui` through the release checklist
+- Maintain the early `0.0.x` releases through the release checklist
   (`docs/operations/release-checklist.md`): signed server images and desktop builds for Linux
-  and Windows.
-- The public relay `relay.rim-platform.org` opens as a first test run, hosting the RIM community
+  and Windows, with feedback from people trying them.
+- Run the public relay `relay.rim-platform.org` as a first test run, hosting the RIM community
   workspace every new account joins, with the web client on `chat.rim-platform.org`
   (`docs/operations/relay-public.md`).
-- Signed releases of the four first-party plugins, so "Install from link" works for each.
+- Make the four first-party plugins and their signed release bundles easy to discover and install.
 
-## Next, after the first release
+## Next
 
 In order:
 

@@ -6,8 +6,8 @@ TLS. Caddy sends `/api` (with `/api/ws`), `/.well-known/…` and `/s2s/…` to r
 other path to the web client, so the client and the API share one origin, unless the web client
 gets a domain of its own ("The web client on its own domain"). The health probes stay inside
 the compose network.
-A public relay is the same file with `deploy/compose.relay.yml` on top; `deploy/README.md`
-covers it.
+A public relay is the same file with `deploy/compose.relay.yml` on top;
+[Run your own relay](../deploy/README.md#deploying-a-public-relay) covers it.
 
 Everything marked **FILL** is the operator's choice, recorded here once made.
 
