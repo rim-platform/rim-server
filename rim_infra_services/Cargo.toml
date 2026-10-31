@@ -32,7 +32,7 @@ unicode-security = "0.1.2"
 futures-util = "0.3"
 thiserror = "2.0.17"
 rim_s2s = { path = "../rim_s2s" }
-scraper = "0.22"
+scraper = "0.29"
 regex = "1"
 base64 = "0.22.1"
 sha2 = "0.10.9"
