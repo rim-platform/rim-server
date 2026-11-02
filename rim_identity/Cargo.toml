@@ -15,10 +15,10 @@ aes-gcm = { version = "0.10.3", features = ["zeroize"] }
 base64 = "0.22.1"
 chrono = { version = "0.4.42", features = ["serde"] }
 ed25519-dalek = "3.0"
-hkdf = "0.12.4"
+hkdf = "0.13.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.145"
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 thiserror = "2.0.17"
 uuid = { version = "1.19.0", features = ["serde"] }
 zeroize = "1.8"
