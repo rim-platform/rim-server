@@ -246,6 +246,9 @@ mod tests {
     const BUNDLE: &[u8] =
         br#"{"format":"rim-plugin-bundle","v":1,"files":[{"path":"rim-plugin.json","text":"{}"}]}"#;
 
+    /// The SHA-256 of [`BUNDLE`] as lowercase hex.
+    const BUNDLE_SHA256: &str = "7f4f011131e475356297ae2742ff403286227d9b973b0f77a286797cd3b986fd";
+
     fn sha256_hex(bytes: &[u8]) -> String {
         Sha256::digest(bytes)
             .iter()
@@ -426,7 +429,7 @@ mod tests {
         service
             .expect_upload()
             .withf(move |cmd| {
-                cmd.sha256 == sha256_hex(BUNDLE)
+                cmd.sha256 == BUNDLE_SHA256
                     && cmd.bytes == BUNDLE
                     && cmd.server_id == server_id
                     && cmd.actor.user_id == user_id

@@ -180,6 +180,19 @@ mod tests {
         assert!(verify_csrf_token(&token, ""));
     }
 
+    /// A session, a nonce of 32 bytes of 0x11, and the token signed for them.
+    const KNOWN_SESSION: &str = "rim_sess_known_answer";
+    const KNOWN_SIGNATURE: &str = "deOMMlTxUYSYGlbP-R7PGqSzlR_a3eBsEoqFXxYX6Ek";
+    const KNOWN_TOKEN: &str = "rim_csrf_ERERERERERERERERERERERERERERERERERERERERERE.deOMMlTxUYSYGlbP-R7PGqSzlR_a3eBsEoqFXxYX6Ek";
+
+    #[test]
+    fn a_known_token_has_a_fixed_hmac_sha256_signature_and_verifies() {
+        let signature = compute_hmac(KNOWN_SESSION, &[0x11; 32]);
+        assert_eq!(URL_SAFE_NO_PAD.encode(signature), KNOWN_SIGNATURE);
+        assert!(verify_csrf_token(KNOWN_TOKEN, KNOWN_SESSION));
+        assert!(!verify_csrf_token(KNOWN_TOKEN, "rim_sess_other"));
+    }
+
     #[test]
     fn two_tokens_for_same_session_are_unique() {
         let session = "rim_sess_same_session";

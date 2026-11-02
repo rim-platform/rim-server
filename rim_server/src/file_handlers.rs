@@ -1669,6 +1669,37 @@ mod tests {
         image
     }
 
+    /// An avatar is stored under the first eight bytes of its SHA-256 as hex.
+    #[actix_web::test]
+    async fn an_avatar_is_stored_under_the_known_sha256_prefix_of_its_bytes() {
+        let user_id = UserId::from(uuid::Uuid::from_u128(1));
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_upload_file()
+            .withf(|key, data, _| {
+                key == "avatars/00000000-0000-0000-0000-000000000001/avatar-8f8cbb7dcf46e0bc.png"
+                    && data == b"png"
+            })
+            .times(1)
+            .returning(|key, data, _| {
+                let stored = StoredFile {
+                    key: key.to_string(),
+                    size_bytes: data.len() as u64,
+                };
+                Box::pin(async move { Ok(stored) })
+            });
+        storage
+            .expect_delete_avatar_files()
+            .returning(|_, _| Box::pin(async { Ok(vec![]) }));
+        let stored = store_avatar(user_id, b"png", &storage)
+            .await
+            .expect("stored");
+        assert_eq!(
+            stored.key,
+            "avatars/00000000-0000-0000-0000-000000000001/avatar-8f8cbb7dcf46e0bc.png"
+        );
+    }
+
     /// A JPEG upload is stored re-encoded as a 256×256 PNG under the caller's key, whatever the
     /// client's file name, the caller's other avatar files are deleted, and the answer carries
     /// its path, size and URL.

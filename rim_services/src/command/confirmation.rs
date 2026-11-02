@@ -652,6 +652,37 @@ mod tests {
         assert_eq!(h4, h5);
     }
 
+    #[test]
+    fn args_hash_and_context_fingerprint_are_known_sha256_hex() {
+        assert_eq!(
+            canonical_args_hash(&Some(json!({"b": 2, "a": [1, "x"]}))),
+            "8cbd548a32262b76a6536efe4e7ba86a0e811fcd0475d83a43e10acd0615aa37"
+        );
+        assert_eq!(
+            canonical_args_hash(&None),
+            "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        );
+        assert_eq!(
+            context_fingerprint(&None),
+            "140bedbf9c3f6d56a9846d2ba7088798683f4da0c248231336e6a05679e4fdfe"
+        );
+        let message = |n| rim_core::message::model::MessageId::from(uuid::Uuid::from_u128(n));
+        let ctx = Some(CommandContextDto {
+            workspace_id: Some(ServerId::from(uuid::Uuid::from_u128(1))),
+            conversation_id: Some(ConversationId::from(uuid::Uuid::from_u128(2))),
+            thread_id: None,
+            selected_text: Some("ignored".to_string()),
+            selected_message_id: None,
+            selected_message_ids: vec![message(4), message(3)],
+            focused_surface: None,
+            active_panel: None,
+        });
+        assert_eq!(
+            context_fingerprint(&ctx),
+            "18262671f522d16ee82ee78da6856a5bc8ffc4638d2714353cf25d2f0c4e2e14"
+        );
+    }
+
     /// Cross-command replay.
     /// A token issued for `chat.delete_message` must NOT verify against
     /// `chat.send_message`, even with identical args + context + actor.
