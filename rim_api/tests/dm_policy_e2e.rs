@@ -510,15 +510,37 @@ async fn an_accepted_dm_comes_back_as_a_request_after_the_unblock() {
         !listed(&bob, &direct).await.contains(&conv),
         "the DM Bob had accepted stays out of view until Alice writes again"
     );
+    // The group may come back as a request already, when a late event of it arrives; the DM
+    // has none and waits for Alice's next message.
+    let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
     assert!(
-        request_ids(&bob, "PENDING").await.is_empty(),
-        "the DM and the group wait for their next item"
+        !pending["dmRequests"]
+            .as_array()
+            .expect("requests")
+            .iter()
+            .any(|r| r["conversationId"] == json!(conv)),
+        "the DM waits for its next item: {pending}"
     );
 
     alice
         .ok(SEND, json!({ "s": direct, "c": conv, "t": "back" }))
         .await;
-    let again = holding(&bob, &alice, 2).await;
+    let again = eventually(
+        "the DM filed again holding the invite and its message",
+        || async {
+            let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+            pending["dmRequests"]
+                .as_array()
+                .and_then(|r| {
+                    r.iter().find(|r| {
+                        r["conversationId"] == json!(conv)
+                            && r["heldItems"].as_array().map(Vec::len) == Some(2)
+                    })
+                })
+                .cloned()
+        },
+    )
+    .await;
     assert_eq!(again["id"], dm_request["id"]);
     holds_the_invite_first(&a, &again, &conv);
     assert!(
@@ -545,8 +567,14 @@ async fn an_accepted_dm_comes_back_as_a_request_after_the_unblock() {
     alice
         .ok(SEND, json!({ "s": direct, "c": group, "t": "hello all" }))
         .await;
-    let again = bob.pending_request(&alice).await;
-    assert_eq!(again["conversationId"], json!(group));
+    let again = eventually("the group filed again", || async {
+        let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+        pending["dmRequests"]
+            .as_array()
+            .and_then(|r| r.iter().find(|r| r["conversationId"] == json!(group)))
+            .cloned()
+    })
+    .await;
     assert_eq!(again["id"], group_request["id"]);
 
     a.stop().await;
