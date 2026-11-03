@@ -42,6 +42,7 @@ use rim_services::message::service::MessageService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::CommandRepos;
+use crate::command::dispatch::Dispatch;
 use crate::command::resolver::CommandResolver;
 use crate::command::user_commands::PersistedUserCommandStep;
 
@@ -356,31 +357,21 @@ impl CommandService for DefaultCommandService {
         ));
 
         let mut resolver = CommandResolver::new(self, cmd.actor);
-        let top_level = if cmd.is_pipe {
-            Ok(None)
-        } else {
-            resolver.resolve(&cmd.command_id).await
+        let dispatch = Dispatch::resolve(&cmd, &mut resolver).await;
+        let (sensitivity, dangerous) = dispatch.as_ref().map_or(
+            (CommandSensitivityDto::Safe, false),
+            Dispatch::audit_profile,
+        );
+        let typed_verb = match &dispatch {
+            Ok(Dispatch::Single(Some(resolved))) => Some(resolved.definition.typed_verb),
+            _ => None,
         };
-        let def_snapshot = top_level
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .map(|resolved| resolved.definition.clone());
-        let sensitivity_str = def_snapshot
-            .as_ref()
-            .map_or("safe", |d| match d.sensitivity {
-                CommandSensitivityDto::Safe => "safe",
-                CommandSensitivityDto::Sensitive => "sensitive",
-                CommandSensitivityDto::Mutating => "mutating",
-                CommandSensitivityDto::Restricted => "restricted",
-            });
-        let dangerous = def_snapshot.as_ref().is_some_and(|d| d.dangerous);
         let confirmation_kind = match &cmd.confirmation {
             None => "none",
             Some(ConfirmationProof::InBandToken { .. }) => "in_band_token",
         };
 
-        let result = self.execute_command_inner(cmd, top_level, resolver).await;
+        let result = self.execute_command_inner(cmd, dispatch, resolver).await;
 
         let (outcome, error_kind_str) = match &result {
             Ok(result_dto) => match result_dto.status {
@@ -438,10 +429,10 @@ impl CommandService for DefaultCommandService {
                 command_id: command_id_for_audit,
                 initiator: initiator_for_audit.to_string(),
                 args_redacted: sanitized_args,
-                sensitivity: sensitivity_str.to_string(),
+                sensitivity: sensitivity.as_str().to_string(),
                 dangerous,
                 confirmation_kind: confirmation_kind.to_string(),
-                typed_verb: def_snapshot.as_ref().map(|d| d.typed_verb),
+                typed_verb,
                 outcome,
                 error_kind: error_kind_str,
                 capability_check_outcome: None,
