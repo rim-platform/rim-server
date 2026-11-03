@@ -189,9 +189,12 @@ on; with it off, conversations in the direct space are live at once.
 | `acceptDmRequest` | Held items released; later items flow; the sender becomes a contact |
 | `ignoreDmRequest` | Held items deleted but the invite, which stays with the request; later items dropped; the request expires after 30 days (for a conversation this server hosts, the request is cleared instead, below) |
 | `blockPrincipal` | Pending requests from the principal ignored as above; its invites (`blocked`) and key package claims refused; what they started is hidden and silenced (below) |
-| `unblockPrincipal` | The block lifted; every ignored request from the principal that still keeps its invite, ignored by hand or by the block, is cleared: listed and counted nowhere, until the next item of its conversation files it again as a new pending request holding that item. Nothing dropped while it was ignored comes back. A conversation hosted elsewhere keeps at its host what they wrote meanwhile, which reading it there shows. Unblocking someone not blocked changes nothing. Nothing is cleared while the operator blocks the principal. |
+| `unblockPrincipal` | The block lifted; every ignored request from the principal that still keeps its invite, ignored by hand or by the block, is cleared: listed and counted nowhere, until the next item of its conversation files it again as a new pending request holding that item. Nothing dropped while it was ignored comes back. A conversation hosted elsewhere keeps at its host what they wrote meanwhile, which reading it there shows. Unblocking someone not blocked changes nothing. Nothing is cleared while the operator blocks the principal. A DM or group of this server the person started that the user had accepted is cleared too: it stays out of their view until its next event sends its invite again and files a request holding it, the sender's card taken from that invite. So nothing they wrote while blocked shows before the user decides. A DM the user started, and a conversation hosted on another server, come back as they were. |
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored. Once per user and request: a second report is `CONFLICT` |
 | Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request; for a conversation this server hosts, see below |
+
+Blocking someone also removes them from your contacts; unblocking does not add them back, so
+their new conversations arrive as requests.
 
 **What a blocked person started.** DMs and groups someone the user blocked started are hidden and
 silenced until the unblock, wherever they are hosted. Channels are not.
@@ -204,6 +207,9 @@ posts nothing into it: the posting mutations answer `FORBIDDEN` as for an undeci
 they still post, for its other members. In a DM their posts are refused ("they do not take
 direct messages from you").
 
+A DM with the person is hidden here the same way whoever started it, a DM the user started
+included.
+
 **On another server,** the relay does not know who created a conversation, only who sent the
 user's invite. That is its creator, or for a group the member who added the user later. It drops
 every item of an accepted conversation whose invite came from someone the user blocked, and
@@ -212,7 +218,7 @@ if the blocked person added the user to it, and one the blocked person started i
 if someone else added the user. The conversation's history stays at its host, which keeps
 listing it for the user; the app leaves it out of Direct messages while the person is blocked.
 
-A DM or group someone else started is not affected, wherever it is hosted.
+A group someone else started is not affected, wherever it is hosted.
 
 A request of a conversation this server hosts never lapses into a conversation. Its recipient is
 a member from the start, and only the request keeps the conversation out of their view. When such
@@ -318,9 +324,10 @@ Every minute the server deletes acknowledged and expired items, envelopes no ite
 requests, outbox rows over 7 days (delivered or not) and accepted `seq` values out of the window,
 ends expired delegations and those of revoked devices or departed members, and marks this relay's
 expired subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit
-events (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
-`server` for an operator's), `relay.principal_unblocked` (`scope` `user` with `cleared_requests` for
-a user's unblock, `server` for an operator's, with `cleared_requests` too),
+events (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` with
+`ignored_requests` and `removed_contact` for a user's block, `server` for an operator's),
+`relay.principal_unblocked` (`scope` `user` with `cleared_requests` and `cleared_conversations`
+for a user's unblock, `server` for an operator's, with `cleared_requests` too),
 `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
 `blocked_email_refused` (`action` `signup`), `relay.registration_pow`, `relay.left`,
@@ -445,7 +452,7 @@ space").
 - `myBlockedPrincipals` lists the caller's blocks newest first: `principalId`, `blockedAt`, and
   `userId`, `username` and `displayName` of the account on this server holding the principal
   (null when none does). `unblockPrincipal` takes one off and clears the requests ignored from
-  that person ("The request inbox").
+  that person and the conversations here accepted from them ("The request inbox").
 - `relayStream(after)` on the existing WebSocket yields the session device's items above `after`
   (its cursor when omitted), then live ones, as JSON strings:
   `{"type":"RelayItem","id","hostServerId","workspaceId","envelope":{"payload","signature"}}`, plus
