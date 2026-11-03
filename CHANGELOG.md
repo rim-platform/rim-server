@@ -33,6 +33,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   on another server comes back as it was.
 - Blocking someone also removes them from your contacts.
 
+### Fixed
+
+- A message from someone the user blocks that was still being delivered at the moment of the
+  block no longer stays with their request and shows up in it again after the unblock.
+
 ## [0.0.7] - 2026-10-31
 
 ### Added

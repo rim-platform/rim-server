@@ -515,7 +515,8 @@ impl RelayRepository for SeaOrmRelayRepository {
         self.request(
             &format!(
                 "SELECT {REQUEST_COLUMNS} FROM relay_dm_request \
-                 WHERE user_id = $1 AND host_server_id = $2 AND conversation_id = $3"
+                 WHERE user_id = $1 AND host_server_id = $2 AND conversation_id = $3 \
+                 FOR UPDATE"
             ),
             vec![uuid(user_id), host_server_id.into(), conversation_id.into()],
         )
@@ -728,6 +729,12 @@ impl RelayRepository for SeaOrmRelayRepository {
         principal_id: &str,
         expires_at: DateTime<Utc>,
     ) -> RepoResult<u64> {
+        self.execute(
+            "SELECT id FROM relay_dm_request \
+             WHERE user_id = $1 AND from_principal_id = $2 AND status = 'pending' FOR UPDATE",
+            vec![uuid(user_id), principal_id.into()],
+        )
+        .await?;
         self.execute(
             "DELETE FROM relay_item i WHERE i.request_id IN (SELECT id FROM relay_dm_request \
              WHERE user_id = $1 AND from_principal_id = $2 AND status = 'pending') \
