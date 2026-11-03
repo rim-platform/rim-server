@@ -6,10 +6,24 @@ and contributions are accepted under the same license.
 Everyone taking part follows the code of conduct in `CODE_OF_CONDUCT.md`. A vulnerability is
 not reported as an issue or a pull request: `SECURITY.md` says how to report it privately.
 
+## AI assistants and automated accounts
+
+RIM is written with the help of AI coding agents, and you are welcome to use them too. What every
+pull request needs is a person behind it:
+
+- Say in the pull request which tools helped and how, for example "written with an AI assistant,
+  reviewed and tested by me".
+- You opened it, you understand the change, and you answer the review. You are responsible for it
+  as if you had typed every line.
+- Pull requests from accounts that open them automatically, across many projects, with no person
+  following up, are closed without review.
+- Good first issues are kept for people new to RIM. Say on the issue that you are taking it before
+  you start, so that two people do not do the same work.
+
 ## Pull requests
 
-Use whatever tools you like to write the code, including AI assistants. The pull request has to
-describe what it implements and why, in your words. A diff without that is sent back unread.
+The pull request has to describe what it implements and why, in your words. A diff without that
+is sent back unread.
 
 Every pull request against `master` says:
 
