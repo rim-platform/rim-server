@@ -1344,6 +1344,11 @@ impl RelayService for DefaultRelayService {
                 Utc::now() + IGNORED_REQUEST_TTL,
             )
             .await?;
+        // Someone blocked is no contact: once unblocked, their new conversations are requests.
+        let removed_contact = repos
+            .relay_repo
+            .delete_contact(actor.user_id, &principal_id)
+            .await?;
         Self::commit(scope).await?;
         info!(
             target: "audit",
@@ -1352,6 +1357,7 @@ impl RelayService for DefaultRelayService {
             user_id = %actor.user_id,
             principal_id = %principal_id,
             ignored_requests = ignored,
+            removed_contact,
             "a user blocked a principal"
         );
         Ok(added)

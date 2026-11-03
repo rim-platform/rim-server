@@ -34,7 +34,8 @@ pub trait RelayService: Send + Sync {
 
     async fn remove_contact(&self, actor: Actor, principal_id: String) -> ServiceResult<bool>;
 
-    /// Block a principal: its pending requests are ignored, its invites and claims refused.
+    /// Block a principal: its pending requests are ignored, its invites and claims refused, and
+    /// it leaves the user's contacts.
     async fn block_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool>;
 
     /// Lift a block of a principal, clear the requests the user ignored from them, and clear the

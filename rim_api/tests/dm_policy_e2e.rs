@@ -14,7 +14,8 @@
 //! sender's next message files it again or the recipient posts into it; a workspace DM or group
 //! started by someone the user blocked leaves their list and live events until the unblock, as
 //! does a DM with them whoever started it; a DM or group here they started that the user had
-//! accepted comes back after the unblock as a request, with their next message.
+//! accepted comes back after the unblock as a request, with their next message; a block removes
+//! the person from the user's contacts, and the unblock does not add them back.
 //!
 //! Run with:
 //! ```sh
@@ -603,6 +604,51 @@ async fn a_dm_the_user_started_is_hidden_while_they_block_its_other_member() {
             .iter()
             .any(|r| r["conversationId"] == json!(conv)),
         "a DM Bob started files him no request: {pending}"
+    );
+
+    a.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn blocking_removes_a_contact_so_their_next_group_after_the_unblock_is_a_request() {
+    const CONTACTS: &str = "query { contacts { principalId } }";
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let direct = direct_space(&alice).await;
+
+    alice
+        .ok(
+            "mutation($p: String!, $r: [String!]!) { addContact(principalId: $p, relayUrls: $r) { principalId } }",
+            json!({ "p": bob.principal(), "r": [a.origin] }),
+        )
+        .await;
+    let first = group(&a, &bob, &direct, &[&alice, &carol]).await;
+    eventually("a contact's group delivered", || async {
+        listed(&alice, &direct).await.contains(&first).then_some(())
+    })
+    .await;
+
+    alice.ok(BLOCK, json!({ "p": bob.principal() })).await;
+    assert_eq!(
+        alice.ok(CONTACTS, json!({})).await["contacts"],
+        json!([]),
+        "a block removes the contact"
+    );
+    alice.ok(UNBLOCK, json!({ "p": bob.principal() })).await;
+    assert_eq!(
+        alice.ok(CONTACTS, json!({})).await["contacts"],
+        json!([]),
+        "an unblock does not add it back"
+    );
+
+    let second = group(&a, &bob, &direct, &[&alice, &carol]).await;
+    let request = alice.pending_request(&bob).await;
+    assert_eq!(request["conversationId"], json!(second));
+    assert!(
+        !listed(&alice, &direct).await.contains(&second),
+        "a group from someone no longer a contact is a request"
     );
 
     a.stop().await;

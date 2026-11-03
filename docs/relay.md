@@ -193,6 +193,9 @@ on; with it off, conversations in the direct space are live at once.
 | `reportDmRequest` | Filed in `relay_abuse_report` for the operator and audited as `relay.dm_request_reported`; a pending request is ignored. Once per user and request: a second report is `CONFLICT` |
 | Nothing | Expires after the retention period; from then on accepting, ignoring or reporting it is `NOT_FOUND`, as for an unknown request; for a conversation this server hosts, see below |
 
+Blocking someone also removes them from your contacts; unblocking does not add them back, so
+their new conversations arrive as requests.
+
 **What a blocked person started.** DMs and groups someone the user blocked started are hidden and
 silenced until the unblock, wherever they are hosted. Channels are not.
 
@@ -321,9 +324,10 @@ Every minute the server deletes acknowledged and expired items, envelopes no ite
 requests, outbox rows over 7 days (delivered or not) and accepted `seq` values out of the window,
 ends expired delegations and those of revoked devices or departed members, and marks this relay's
 expired subscriptions lapsed. Every 5 seconds it sends revocations due for another attempt. Audit
-events (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` for a user's block,
-`server` for an operator's), `relay.principal_unblocked` (`scope` `user` with `cleared_requests` and
-`cleared_conversations` for a user's unblock, `server` for an operator's, with `cleared_requests` too),
+events (target `audit`, ids only): `relay.principal_blocked` (`scope` `user` with
+`ignored_requests` and `removed_contact` for a user's block, `server` for an operator's),
+`relay.principal_unblocked` (`scope` `user` with `cleared_requests` and `cleared_conversations`
+for a user's unblock, `server` for an operator's, with `cleared_requests` too),
 `relay.blocked_principal_refused`,
 `relay.dm_request_reported`, `relay.abuse_report_filed`, `relay.abuse_report_resolved`,
 `blocked_email_refused` (`action` `signup`), `relay.registration_pow`, `relay.left`,

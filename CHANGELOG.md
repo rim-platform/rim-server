@@ -31,6 +31,7 @@ tag `v<version>`, the version every crate in the workspace carries.
   again as a request holding the invite and that event, so nothing they wrote while blocked
   shows before the caller decides. Audited with `cleared_conversations`. A conversation hosted
   on another server comes back as it was.
+- Blocking someone also removes them from your contacts.
 
 ## [0.0.7] - 2026-10-31
 
