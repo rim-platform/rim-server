@@ -2031,34 +2031,49 @@ async fn a_group_names_nobody_as_blocked_by_a_dm_partner() {
     );
 }
 
-#[tokio::test]
-async fn a_dm_with_someone_blocked_is_hidden_whoever_started_it() {
-    use rim_core::conversation::model::{ConversationType, NewConversation};
+/// A conversation of `kind` in the direct space that `creator` created, with `members`.
+async fn direct_conversation(
+    ctx: &support::TestCtx,
+    kind: rim_core::conversation::model::ConversationType,
+    creator: UserId,
+    members: &[UserId],
+) -> rim_core::conversation::model::ConversationId {
+    use rim_core::conversation::model::NewConversation;
     use rim_core::conversation::repository::ConversationRepository;
     use rim_core::conversation_member::repository::ConversationMemberRepository;
     use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
     use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
 
-    let ctx = support::TestCtx::new().await;
-    let (alice, bob, dm) = direct_pair(&ctx, ConversationType::Direct).await;
-    let group = SeaOrmConversationRepository::new(ctx.db.clone())
+    let direct = SeaOrmHostRepository::new(ctx.db.clone())
+        .ensure_direct_space("Direct messages")
+        .await
+        .unwrap();
+    let conversation = SeaOrmConversationRepository::new(ctx.db.clone())
         .create_conversation(NewConversation {
-            server_id: SeaOrmHostRepository::new(ctx.db.clone())
-                .ensure_direct_space("Direct messages")
-                .await
-                .unwrap(),
-            conversation_type: ConversationType::Group,
+            server_id: direct,
+            conversation_type: kind,
             title: None,
             is_private: true,
-            created_by: Some(alice.id),
+            created_by: Some(creator),
             encrypted: false,
         })
         .await
-        .unwrap()
-        .id;
-    let members = SeaOrmConversationMemberRepository::new(ctx.db.clone());
-    members.add_member(group, alice.id).await.unwrap();
-    members.add_member(group, bob.id).await.unwrap();
+        .unwrap();
+    let repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+    for member in members {
+        repo.add_member(conversation.id, *member).await.unwrap();
+    }
+    conversation.id
+}
+
+#[tokio::test]
+async fn a_dm_with_someone_blocked_is_hidden_whoever_started_it() {
+    use rim_core::conversation::model::ConversationType;
+
+    let ctx = support::TestCtx::new().await;
+    let (alice, bob, dm) = direct_pair(&ctx, ConversationType::Direct).await;
+    let group =
+        direct_conversation(&ctx, ConversationType::Group, alice.id, &[alice.id, bob.id]).await;
     let repo = SeaOrmRelayRepository::new(ctx.db.clone());
 
     repo.block(alice.id, "rimp1_bob").await.unwrap();
@@ -2080,6 +2095,112 @@ async fn a_dm_with_someone_blocked_is_hidden_whoever_started_it() {
 
     repo.unblock(alice.id, "rimp1_bob").await.unwrap();
     assert!(!repo.conversation_hidden(alice.id, dm.into()).await.unwrap());
+}
+
+#[tokio::test]
+async fn unblocking_clears_what_the_user_accepted_from_its_starter_here_only() {
+    use rim_core::conversation::model::ConversationType;
+    use rim_core::conversation_member::repository::ConversationMemberRepository;
+    use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
+
+    const HERE: &str = "rims1_here";
+    let ctx = support::TestCtx::new().await;
+    let (alice, bob, dm) = direct_pair(&ctx, ConversationType::Direct).await;
+    let carol = ctx.create_key_only_user("carol", "rimp1_carol").await;
+    let both = [alice.id, bob.id];
+    let group = direct_conversation(&ctx, ConversationType::Group, alice.id, &both).await;
+    let carols = direct_conversation(
+        &ctx,
+        ConversationType::Group,
+        carol.id,
+        &[carol.id, alice.id, bob.id],
+    )
+    .await;
+    let left = direct_conversation(&ctx, ConversationType::Group, alice.id, &both).await;
+    SeaOrmConversationMemberRepository::new(ctx.db.clone())
+        .remove_member(left, bob.id)
+        .await
+        .unwrap();
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let accepted = async |host: &str, conversation_id: Uuid| {
+        repo.insert_request(NewDmRequest {
+            status: DmRequestStatus::Accepted,
+            user_id: bob.id,
+            from_principal_id: "rimp1_alice".to_string(),
+            card_payload: String::new(),
+            card_signature: String::new(),
+            host_server_id: host.to_string(),
+            conversation_id,
+            expires_at: Utc::now() + Duration::days(30),
+        })
+        .await
+        .unwrap()
+        .id
+    };
+    let dm_row = accepted(HERE, dm.into()).await;
+    let group_row = accepted(HERE, group.into()).await;
+    let carols_row = accepted(HERE, carols.into()).await;
+    let remote_row = accepted("rims1_elsewhere", Uuid::now_v7()).await;
+    let left_row = accepted(HERE, left.into()).await;
+
+    assert_eq!(
+        repo.clear_accepted_started_by(
+            bob.id,
+            "rimp1_alice",
+            HERE,
+            Utc::now() + Duration::days(30)
+        )
+        .await
+        .unwrap(),
+        2,
+        "alice's DM and group here that bob is still in"
+    );
+    let find = |id| {
+        let repo = &repo;
+        async move { repo.get_request(bob.id, id).await.unwrap().expect("row") }
+    };
+    for cleared in [dm_row, group_row] {
+        let row = find(cleared).await;
+        assert_eq!(row.status, DmRequestStatus::Pending);
+        assert!(row.is_cleared());
+        assert_eq!(repo.count_held(cleared).await.unwrap(), 0);
+    }
+    for kept in [carols_row, remote_row, left_row] {
+        assert_eq!(find(kept).await.status, DmRequestStatus::Accepted);
+    }
+    assert!(repo.conversation_hidden(bob.id, dm.into()).await.unwrap());
+    assert_eq!(
+        repo.uninvited_holders(dm.into())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>(),
+        vec![bob.id],
+        "the DM's next event sends bob its invite again"
+    );
+    let listed: Vec<_> = repo
+        .list_requests(bob.id, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert!(!listed.contains(&dm_row) && !listed.contains(&group_row));
+    assert_eq!(repo.count_pending_requests(bob.id).await.unwrap(), 0);
+
+    repo.take_invite_card(dm_row, "rimp1_alice", "p", "s")
+        .await
+        .unwrap();
+    repo.take_invite_card(dm_row, "rimp1_alice", "q", "t")
+        .await
+        .unwrap();
+    let carded = find(dm_row).await;
+    assert_eq!(
+        (carded.card_payload.as_str(), carded.card_signature.as_str()),
+        ("p", "s"),
+        "a request takes a card once"
+    );
 }
 
 #[tokio::test]

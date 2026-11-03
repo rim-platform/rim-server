@@ -12,7 +12,9 @@
 //! request reads it first and posts nothing into it, nor reacts or types there, until they
 //! accept it; a request of a conversation here that lapses keeps it out of view until the
 //! sender's next message files it again or the recipient posts into it; a workspace DM or group
-//! started by someone the user blocked leaves their list and live events until the unblock.
+//! started by someone the user blocked leaves their list and live events until the unblock, as
+//! does a DM with them whoever started it; a DM or group here they started that the user had
+//! accepted comes back after the unblock as a request, with their next message.
 //!
 //! Run with:
 //! ```sh
@@ -444,7 +446,7 @@ async fn an_unblocked_senders_next_message_is_a_new_request_without_what_the_blo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_accepted_dm_takes_nothing_from_a_blocked_member_and_carries_on_after_the_unblock() {
+async fn an_accepted_dm_comes_back_as_a_request_after_the_unblock() {
     let a = one_server(|_| {}).await;
     let alice = sign_up(&a, "alice", 1).await;
     let bob = sign_up(&a, "bob", 2).await;
@@ -503,16 +505,41 @@ async fn an_accepted_dm_takes_nothing_from_a_blocked_member_and_carries_on_after
     );
 
     bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
-    assert!(listed(&bob, &direct).await.contains(&conv));
-    assert_eq!(texts(&bob, &direct, &conv).await, ["before"]);
+    assert!(
+        !listed(&bob, &direct).await.contains(&conv),
+        "the DM Bob had accepted stays out of view until Alice writes again"
+    );
+    assert!(
+        request_ids(&bob, "PENDING").await.is_empty(),
+        "the DM and the group wait for their next item"
+    );
+
     alice
         .ok(SEND, json!({ "s": direct, "c": conv, "t": "back" }))
         .await;
-    assert_eq!(texts(&bob, &direct, &conv).await, ["before", "back"]);
+    let again = holding(&bob, &alice, 2).await;
+    assert_eq!(again["id"], dm_request["id"]);
+    holds_the_invite_first(&a, &again, &conv);
     assert!(
-        request_ids(&bob, "PENDING").await.is_empty(),
-        "the accepted DM files no request, and the group's waits for its next item"
+        again["card"]["payload"]
+            .as_str()
+            .is_some_and(|p| !p.is_empty()),
+        "the request takes the invite's card: {again}"
     );
+    assert!(!listed(&bob, &direct).await.contains(&conv));
+    assert_eq!(
+        texts(&bob, &direct, &conv).await,
+        ["before", "back"],
+        "Bob may read first, and nothing from the block is there"
+    );
+    bob.ok(
+        "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+        json!({ "id": again["id"] }),
+    )
+    .await;
+    assert!(listed(&bob, &direct).await.contains(&conv));
+    bob.ok(SEND, json!({ "s": direct, "c": conv, "t": "hi back" }))
+        .await;
 
     alice
         .ok(SEND, json!({ "s": direct, "c": group, "t": "hello all" }))
@@ -885,7 +912,22 @@ async fn a_workspace_dm_and_group_a_blocked_person_started_are_hidden_until_the_
 
     bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
     let bobs_list = listed(&bob, &acme).await;
-    assert!(bobs_list.contains(&dm) && bobs_list.contains(&alices));
+    assert!(
+        bobs_list.contains(&alices) && !bobs_list.contains(&dm),
+        "the group, with no request, comes back as it was; the DM Bob had accepted waits for \
+         Alice's next message: {bobs_list:?}"
+    );
+    alice
+        .ok(SEND, json!({ "s": acme, "c": dm, "t": "back again" }))
+        .await;
+    let request = bob.pending_request(&alice).await;
+    assert_eq!(request["conversationId"], json!(dm));
+    assert!(
+        request["card"]["payload"]
+            .as_str()
+            .is_some_and(|p| !p.is_empty()),
+        "a DM accepted as it arrived takes the card of the invite filing it again: {request}"
+    );
     bob.ok(SEND, json!({ "s": acme, "c": alices, "t": "back" }))
         .await;
 

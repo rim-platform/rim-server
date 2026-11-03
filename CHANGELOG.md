@@ -26,6 +26,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A DM with someone the user blocked is hidden from the user whoever started it, as a DM or
   group the blocked person started already was: out of `inboxConversations`, `workspaceEvents`,
   notifications, the digest and unread counts until the unblock.
+- `unblockPrincipal` also clears what the caller had accepted from that person on this server:
+  each DM or group they started stays out of the caller's view until its next event files it
+  again as a request holding the invite and that event, so nothing they wrote while blocked
+  shows before the caller decides. Audited with `cleared_conversations`. A conversation hosted
+  on another server comes back as it was.
 
 ## [0.0.7] - 2026-10-31
 

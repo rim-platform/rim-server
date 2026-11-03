@@ -173,6 +173,28 @@ pub trait RelayRepository: Send + Sync {
         expires_at: DateTime<Utc>,
     ) -> RepoResult<u64>;
 
+    /// Clear each accepted row of `user_id` for a DM or group this server (`own_server_id`)
+    /// hosts, that they are still a member of and whose creator holds `principal_id`: pending
+    /// again, decided as it is filed, holding nothing, expiring at `expires_at`. The conversation
+    /// stays out of their view until its next event sends its invite again and files the request
+    /// anew. Returns how many.
+    async fn clear_accepted_started_by(
+        &self,
+        user_id: UserId,
+        principal_id: &str,
+        own_server_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64>;
+
+    /// Give a request without a card the sender and card of the invite that files it again.
+    async fn take_invite_card(
+        &self,
+        id: DmRequestId,
+        from_principal_id: &str,
+        card_payload: &str,
+        card_signature: &str,
+    ) -> RepoResult<()>;
+
     /// File a cleared request again as a new pending request, expiring at `expires_at`. Returns
     /// `false` when the request is not cleared.
     async fn refile_request(&self, id: DmRequestId, expires_at: DateTime<Utc>) -> RepoResult<bool>;

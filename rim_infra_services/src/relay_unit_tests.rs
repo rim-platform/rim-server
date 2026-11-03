@@ -4710,7 +4710,7 @@ fn unblock_relay(relay: MockRelayRepository) -> DefaultRelayService {
 }
 
 #[tokio::test]
-async fn unblocking_clears_the_ignored_requests_from_that_principal() {
+async fn unblocking_clears_the_ignored_requests_and_accepted_conversations_from_that_principal() {
     let bob = UserId::new();
     let mut relay = MockRelayRepository::new();
     relay
@@ -4724,6 +4724,16 @@ async fn unblocking_clears_the_ignored_requests_from_that_principal() {
         })
         .times(1)
         .returning(|_, _, _| Box::pin(async { Ok(2) }));
+    relay
+        .expect_clear_accepted_started_by()
+        .withf(move |user_id, principal, own, at| {
+            *user_id == bob
+                && principal == "rimp1_alice"
+                && !own.is_empty()
+                && *at > Utc::now() + Duration::days(29)
+        })
+        .times(1)
+        .returning(|_, _, _, _| Box::pin(async { Ok(1) }));
 
     let lifted = unblock_relay(relay)
         .unblock_principal(Actor::new(bob), "rimp1_alice".into())
@@ -4740,6 +4750,7 @@ async fn unblocking_someone_not_blocked_clears_nothing() {
         .expect_unblock()
         .returning(|_, _| Box::pin(async { Ok(false) }));
     relay.expect_clear_ignored_from().never();
+    relay.expect_clear_accepted_started_by().never();
 
     let lifted = unblock_relay(relay)
         .unblock_principal(Actor::new(UserId::new()), "rimp1_alice".into())
@@ -4868,6 +4879,125 @@ async fn an_item_of_an_ordinary_pending_request_is_held_without_filing_it_again(
             .any(|n| matches!(n, RelayNotice::DmRequestReceived { .. })),
         "{notices:?}"
     );
+}
+
+/// The sender and card a request takes from the invite filing it again.
+type TakenCard = (String, String, String);
+
+/// Bob's relay holding one cleared request for `CONVERSATION` whose card is `card_payload`;
+/// `taken` records each card a request takes.
+fn refiling_relay(
+    card_payload: &str,
+    taken: Arc<Mutex<Vec<(rim_core::relay::model::DmRequestId, TakenCard)>>>,
+) -> (DefaultRelayService, rim_core::relay::model::DmRequestId) {
+    use rim_core::relay::model::DmRequestStatus;
+
+    let bob = UserId::new();
+    let mut row = accepted_row(bob, Utc::now() + Duration::days(30), false);
+    let request_id = row.id;
+    row.status = DmRequestStatus::Pending;
+    row.decided_at = Some(row.created_at);
+    row.card_payload = card_payload.to_string();
+    let mut host = MockHostRepository::new();
+    host.expect_find_user()
+        .returning(move |_| Box::pin(async move { Ok(Some((bob, UserKind::Local))) }));
+    let mut subscriptions = MockSubscriptionRepository::new();
+    subscriptions
+        .expect_is_subscribed()
+        .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+    let mut relay = MockRelayRepository::new();
+    relay
+        .expect_received_through()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_advance_received_through()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    relay.expect_find_request().returning(move |_, _, _| {
+        let found = Some(row.clone());
+        Box::pin(async move { Ok(found) })
+    });
+    relay
+        .expect_is_blocked()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    relay
+        .expect_count_held()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_request_held_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_user_held_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    relay
+        .expect_refresh_request()
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+    relay
+        .expect_refile_request()
+        .returning(|_, _| Box::pin(async { Ok(true) }));
+    relay
+        .expect_take_invite_card()
+        .returning(move |id, from, payload, signature| {
+            taken.lock().expect("lock").push((
+                id,
+                (from.to_string(), payload.to_string(), signature.to_string()),
+            ));
+            Box::pin(async { Ok(()) })
+        });
+    relay
+        .expect_insert_envelope()
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_insert_item()
+        .withf(move |item| item.request_id == Some(request_id))
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(1) }));
+    relay
+        .expect_queued_bytes()
+        .returning(|_| Box::pin(async { Ok(0) }));
+    let svc = relay_service(
+        RelayRepos {
+            relay_repo: Arc::new(relay),
+            host_repo: Arc::new(host),
+            subscription_repo: Arc::new(subscriptions),
+            ..empty_repos()
+        },
+        peers_resolving(peer_keys(&host_signer(40), 0), None),
+        MockS2sClient::new(),
+    );
+    (svc, request_id)
+}
+
+/// Delivers Alice's invite to `CONVERSATION`, carrying `card`, to Bob's relay.
+async fn deliver_invite(svc: &DefaultRelayService, card: &SignedJson) {
+    let response = svc
+        .deliver(PEER.to_string(), vec![alice_invite(card)])
+        .await
+        .expect("delivered");
+    assert!(response.refused.is_empty(), "{:?}", response.refused);
+}
+
+#[tokio::test]
+async fn a_cleared_request_without_a_card_takes_the_card_of_the_invite_filing_it_again() {
+    let taken = Arc::default();
+    let (svc, request_id) = refiling_relay("", Arc::clone(&taken));
+    let card = sender_card(1, &[PEER_ORIGIN]);
+
+    deliver_invite(&svc, &card).await;
+
+    assert_eq!(
+        *taken.lock().expect("lock"),
+        vec![(request_id, (sender_id(), card.payload, card.signature))]
+    );
+}
+
+#[tokio::test]
+async fn a_cleared_request_with_a_card_keeps_it_when_filed_again() {
+    let taken = Arc::default();
+    let (svc, _) = refiling_relay("{}", Arc::clone(&taken));
+
+    deliver_invite(&svc, &sender_card(1, &[PEER_ORIGIN])).await;
+
+    assert!(taken.lock().expect("lock").is_empty());
 }
 
 // ── Deciding a request ───────────────────────────────────────────────────────────────────

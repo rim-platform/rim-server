@@ -761,6 +761,55 @@ impl RelayRepository for SeaOrmRelayRepository {
         .await
     }
 
+    async fn clear_accepted_started_by(
+        &self,
+        user_id: UserId,
+        principal_id: &str,
+        own_server_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64> {
+        self.execute(
+            r#"UPDATE relay_dm_request r SET status = 'pending', created_at = now(),
+                   decided_at = now(), expires_at = $4
+               WHERE r.user_id = $1 AND r.status = 'accepted' AND r.host_server_id = $3
+                 AND EXISTS (SELECT 1 FROM conversation c JOIN "user" cu ON cu.id = c.created_by
+                             WHERE c.id = r.conversation_id AND cu.principal_id = $2
+                               AND c.conversation_type IN ('direct', 'group'))
+                 AND EXISTS (SELECT 1 FROM conversation_member m
+                             WHERE m.conversation_id = r.conversation_id
+                               AND m.user_id = r.user_id)"#,
+            vec![
+                uuid(user_id),
+                principal_id.into(),
+                own_server_id.into(),
+                expires_at.into(),
+            ],
+        )
+        .await
+    }
+
+    async fn take_invite_card(
+        &self,
+        id: DmRequestId,
+        from_principal_id: &str,
+        card_payload: &str,
+        card_signature: &str,
+    ) -> RepoResult<()> {
+        self.execute(
+            "UPDATE relay_dm_request \
+             SET from_principal_id = $2, card_payload = $3, card_signature = $4 \
+             WHERE id = $1 AND card_payload = ''",
+            vec![
+                uuid(id),
+                from_principal_id.into(),
+                card_payload.into(),
+                card_signature.into(),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn refile_request(&self, id: DmRequestId, expires_at: DateTime<Utc>) -> RepoResult<bool> {
         Ok(self
             .execute(
