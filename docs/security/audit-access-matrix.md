@@ -143,6 +143,10 @@ CHECK constraint from migration `m20260427_000001_audit_outcome_widen_check`.
 `StepError` and `MacroPartialFailure` appear on the child rows written for macro steps.
 `parent_audit_id` links a child row to the top-level macro row; `None` marks a top-level row.
 
+A pipe (`executeCommand` with `isPipe`) writes one top-level row: its `command_id` is the pipe
+expression, its `sensitivity` the strictest of its stages', `dangerous` true when any stage is
+dangerous, and `typed_verb` null. Its stages write no rows of their own.
+
 ---
 
 ## 6. Closed bypasses (do not reopen)

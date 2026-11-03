@@ -1227,6 +1227,15 @@ mod tests {
         cmd_def: CommandDefinitionDto,
         audit_svc: Option<Arc<dyn rim_services::audit::service::AuditLogService>>,
     ) -> DefaultCommandService {
+        service_with_builtins(vec![cmd_def], audit_svc)
+    }
+
+    /// A command service whose builtins include `defs`, with no capability required
+    /// and `audit_svc` as its audit log.
+    fn service_with_builtins(
+        defs: Vec<CommandDefinitionDto>,
+        audit_svc: Option<Arc<dyn rim_services::audit::service::AuditLogService>>,
+    ) -> DefaultCommandService {
         DefaultCommandService::with_extra_builtins(
             CommandRepos {
                 user_command_repo: Arc::new(MockUserCommandRepository::new()),
@@ -1257,7 +1266,7 @@ mod tests {
                     rim_services::notification::service::MockNotificationService::new(),
                 ),
             },
-            vec![cmd_def],
+            defs,
         )
     }
 
@@ -4679,6 +4688,49 @@ mod tests {
         assert_eq!(kept["truncated"], serde_json::json!(true), "{kept}");
         assert_eq!(kept["bytes"], serde_json::json!(size));
         assert!(kept.to_string().len() <= 4096, "{kept}");
+    }
+
+    #[tokio::test]
+    async fn a_pipe_is_audited_with_its_strictest_stage() {
+        use rim_services::audit::dto::AuditOutcome;
+
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let read = CommandDefinitionDto {
+            rate_limit_per_minute: None,
+            ..rate_limited_cmd_def("test.read", 100)
+        };
+        let kick = CommandDefinitionDto {
+            dangerous: true,
+            sensitivity: CommandSensitivityDto::Mutating,
+            typed_verb: rim_services::command::verb::TypedVerb::Delete,
+            rate_limit_per_minute: None,
+            ..rate_limited_cmd_def("test.kick", 100)
+        };
+        let written: Arc<std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>> =
+            Arc::new(std::sync::Mutex::new(vec![]));
+        let written_clone = written.clone();
+        let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+        audit_svc
+            .expect_write_entry()
+            .times(1)
+            .returning(move |entry| {
+                written_clone.lock().unwrap().push(entry);
+                Box::pin(async { Ok(()) })
+            });
+        let svc = service_with_builtins(vec![read, kick], Some(Arc::new(audit_svc)));
+        let mut pipe = palette_cmd(actor, "test.read | test.kick");
+        pipe.is_pipe = true;
+
+        let result = svc.execute_command(pipe).await.expect("asks to confirm");
+
+        assert_eq!(result.status, CommandResultStatusDto::ConfirmationRequired);
+        let entries = written.lock().unwrap();
+        let row = &entries[0];
+        assert_eq!(row.command_id, "test.read | test.kick");
+        assert_eq!(row.sensitivity, "mutating");
+        assert!(row.dangerous, "a dangerous stage makes the pipe dangerous");
+        assert_eq!(row.typed_verb, None);
+        assert_eq!(row.outcome, AuditOutcome::ConfirmationRequired);
     }
 
     #[tokio::test]
