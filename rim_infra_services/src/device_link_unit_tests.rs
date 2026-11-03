@@ -27,7 +27,7 @@ mod tests {
 
     use crate::device_link::{
         DefaultDeviceLinkService, DeviceLinkRepos, MAX_ANSWER_CIPHERTEXT_LEN,
-        MAX_OFFER_CIPHERTEXT_LEN,
+        MAX_OFFER_CIPHERTEXT_LEN, link_hash,
     };
     use crate::registration_rate_limiter::RegistrationRateLimiter;
 
@@ -513,6 +513,19 @@ mod tests {
         "AAECAwQFBgcICQoLDA0ODx",
         "AAECAwQFBgcICQoLDA0OD+",
     ];
+
+    #[test]
+    fn a_link_id_is_looked_up_by_the_known_sha256_of_its_bytes() {
+        let hash = link_hash("AAECAwQFBgcICQoLDA0ODw").unwrap();
+        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a8991"
+        );
+        for malformed in MALFORMED_LINK_IDS {
+            assert_eq!(link_hash(malformed), None, "{malformed}");
+        }
+    }
 
     // ── startDeviceLink ───────────────────────────────────────────────────────────────────
 

@@ -182,6 +182,13 @@ mod tests {
                 .collect::<String>()
         };
         assert!(check_bytes(bundle, &hash(bundle)).is_ok());
+        assert!(
+            check_bytes(
+                bundle,
+                "7f4f011131e475356297ae2742ff403286227d9b973b0f77a286797cd3b986fd"
+            )
+            .is_ok()
+        );
         assert!(check_bytes(bundle, &"0".repeat(64)).is_err());
         assert!(check_bytes(b"not a bundle", &hash(b"not a bundle")).is_err());
     }

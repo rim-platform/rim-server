@@ -9,6 +9,14 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # rim_auth keeps sha2 0.10 (as `opaque-sha2`) for the OPAQUE key exchange: opaque-ke 4.0
+      # takes a digest 0.10 hash, and 4.1.0-pre.2 still does. Drop once opaque-ke moves to
+      # digest 0.11; patch releases of sha2 0.11 still come through.
+      - dependency-name: sha2
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
   - package-ecosystem: github-actions
     directory: /
     schedule:

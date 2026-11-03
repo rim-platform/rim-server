@@ -85,7 +85,7 @@ pub struct DefaultDeviceLinkService {
 
 /// SHA-256 of the link id's bytes, or `None` when the text is not 16 bytes of strict
 /// unpadded base64url.
-fn link_hash(link_id: &str) -> Option<Vec<u8>> {
+pub(crate) fn link_hash(link_id: &str) -> Option<Vec<u8>> {
     if link_id.len() != LINK_ID_TEXT_LEN {
         return None;
     }

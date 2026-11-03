@@ -16,9 +16,9 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{Context, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use generic_array::{ArrayLength, GenericArray};
 use hkdf::Hkdf;
 use opaque_ke::errors::InternalError;
+use opaque_ke::generic_array::{ArrayLength, GenericArray};
 use opaque_ke::{
     CredentialFinalization, CredentialRequest, RegistrationRequest, RegistrationUpload,
     ServerLogin, ServerLoginParameters, ServerRegistration,
@@ -106,7 +106,7 @@ pub struct RimOpaque;
 
 impl opaque_ke::CipherSuite for RimOpaque {
     type OprfCs = opaque_ke::Ristretto255;
-    type KeyExchange = opaque_ke::TripleDh<opaque_ke::Ristretto255, sha2::Sha512>;
+    type KeyExchange = opaque_ke::TripleDh<opaque_ke::Ristretto255, opaque_sha2::Sha512>;
     type Ksf = RimKsf;
 }
 
