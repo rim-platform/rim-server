@@ -520,6 +520,21 @@ mod tests {
         assert!(a.content_security_policy.contains("frame-ancestors 'none'"));
     }
 
+    #[test]
+    fn the_version_and_the_style_hash_are_known_sha256_values() {
+        let page = TermsPage::from_markdown("# Terms\n", "https://rim.example.org");
+        assert_eq!(
+            page.url(),
+            "https://rim.example.org/api/terms?v=6d01fd4df185b66f"
+        );
+        assert!(
+            page.content_security_policy
+                .contains("style-src 'sha256-CjezMEhddcRSPfTTnaeBjC28jIG9KS+EpVy5ckrKMlU='"),
+            "{}",
+            page.content_security_policy
+        );
+    }
+
     #[actix_web::test]
     async fn the_handler_serves_the_page_with_its_headers() {
         use actix_web::{App, test};

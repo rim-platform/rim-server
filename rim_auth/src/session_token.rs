@@ -185,6 +185,18 @@ mod tests {
     }
 
     #[test]
+    fn hash_token_is_the_known_sha256_hex() {
+        assert_eq!(
+            hash_token("rim_sess_known_answer"),
+            "1612b036400c632ebf149b51490981b0e1d8bc057262d65058b75f7b4894884e"
+        );
+        assert_eq!(
+            hash_token(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
     fn hex_encode_empty() {
         assert_eq!(hex_encode(&[]), "");
     }
