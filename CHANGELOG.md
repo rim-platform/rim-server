@@ -21,6 +21,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Changed
+
+- A DM with someone the user blocked is hidden from the user whoever started it, as a DM or
+  group the blocked person started already was: out of `inboxConversations`, `workspaceEvents`,
+  notifications, the digest and unread counts until the unblock.
+
 ## [0.0.7] - 2026-10-31
 
 ### Added

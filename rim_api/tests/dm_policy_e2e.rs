@@ -524,6 +524,63 @@ async fn an_accepted_dm_takes_nothing_from_a_blocked_member_and_carries_on_after
     a.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dm_the_user_started_is_hidden_while_they_block_its_other_member() {
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let direct = direct_space(&bob).await;
+
+    let conv = created(&dm(&a, &bob, &direct, &alice).await);
+    bob.ok(SEND, json!({ "s": direct, "c": conv, "t": "before" }))
+        .await;
+    let request = alice.pending_request(&bob).await;
+    alice
+        .ok(
+            "mutation($id: ID!) { acceptDmRequest(id: $id) { status } }",
+            json!({ "id": request["id"] }),
+        )
+        .await;
+
+    bob.ok(BLOCK, json!({ "p": alice.principal() })).await;
+    assert!(
+        !listed(&bob, &direct).await.contains(&conv),
+        "Bob started the DM, and blocking Alice still takes it out of his list"
+    );
+    let refused = alice
+        .post(
+            SEND,
+            json!({ "s": direct, "c": conv, "t": "while blocked" }),
+        )
+        .await;
+    assert_eq!(code(&refused), "FORBIDDEN", "{refused}");
+    assert!(
+        refused["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("they do not take direct messages from you")),
+        "{refused}"
+    );
+
+    bob.ok(UNBLOCK, json!({ "p": alice.principal() })).await;
+    assert!(listed(&bob, &direct).await.contains(&conv));
+    assert_eq!(texts(&bob, &direct, &conv).await, ["before"]);
+    alice
+        .ok(SEND, json!({ "s": direct, "c": conv, "t": "back" }))
+        .await;
+    assert_eq!(texts(&bob, &direct, &conv).await, ["before", "back"]);
+    let pending = bob.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+    assert!(
+        !pending["dmRequests"]
+            .as_array()
+            .expect("requests")
+            .iter()
+            .any(|r| r["conversationId"] == json!(conv)),
+        "a DM Bob started files him no request: {pending}"
+    );
+
+    a.stop().await;
+}
+
 /// Expire every request of `conversation` and run the relay's cleanup at once.
 async fn lapse(node: &Node, conversation: &str) {
     node.db

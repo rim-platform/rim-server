@@ -204,6 +204,9 @@ posts nothing into it: the posting mutations answer `FORBIDDEN` as for an undeci
 they still post, for its other members. In a DM their posts are refused ("they do not take
 direct messages from you").
 
+A DM with the person is hidden here the same way whoever started it, a DM the user started
+included.
+
 **On another server,** the relay does not know who created a conversation, only who sent the
 user's invite. That is its creator, or for a group the member who added the user later. It drops
 every item of an accepted conversation whose invite came from someone the user blocked, and
@@ -212,7 +215,7 @@ if the blocked person added the user to it, and one the blocked person started i
 if someone else added the user. The conversation's history stays at its host, which keeps
 listing it for the user; the app leaves it out of Direct messages while the person is blocked.
 
-A DM or group someone else started is not affected, wherever it is hosted.
+A group someone else started is not affected, wherever it is hosted.
 
 A request of a conversation this server hosts never lapses into a conversation. Its recipient is
 a member from the start, and only the request keeps the conversation out of their view. When such

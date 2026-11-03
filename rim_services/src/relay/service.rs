@@ -146,7 +146,8 @@ pub trait RelayService: Send + Sync {
     async fn file_local(&self, envelope: SignedJson, recipients: Vec<String>) -> ServiceResult<()>;
 
     /// Whether a conversation stays out of a local user's list and live events: its request is
-    /// pending or ignored, or the user blocked whoever started the DM or group.
+    /// pending or ignored, or the user blocked whoever started the DM or group, or the DM's other
+    /// member.
     async fn conversation_hidden(
         &self,
         user_id: UserId,

@@ -2032,6 +2032,57 @@ async fn a_group_names_nobody_as_blocked_by_a_dm_partner() {
 }
 
 #[tokio::test]
+async fn a_dm_with_someone_blocked_is_hidden_whoever_started_it() {
+    use rim_core::conversation::model::{ConversationType, NewConversation};
+    use rim_core::conversation::repository::ConversationRepository;
+    use rim_core::conversation_member::repository::ConversationMemberRepository;
+    use rim_infra_db::sea_orm_impl::conversation::SeaOrmConversationRepository;
+    use rim_infra_db::sea_orm_impl::conversation_member::SeaOrmConversationMemberRepository;
+
+    let ctx = support::TestCtx::new().await;
+    let (alice, bob, dm) = direct_pair(&ctx, ConversationType::Direct).await;
+    let group = SeaOrmConversationRepository::new(ctx.db.clone())
+        .create_conversation(NewConversation {
+            server_id: SeaOrmHostRepository::new(ctx.db.clone())
+                .ensure_direct_space("Direct messages")
+                .await
+                .unwrap(),
+            conversation_type: ConversationType::Group,
+            title: None,
+            is_private: true,
+            created_by: Some(alice.id),
+            encrypted: false,
+        })
+        .await
+        .unwrap()
+        .id;
+    let members = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+    members.add_member(group, alice.id).await.unwrap();
+    members.add_member(group, bob.id).await.unwrap();
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+
+    repo.block(alice.id, "rimp1_bob").await.unwrap();
+    assert!(
+        repo.conversation_hidden(alice.id, dm.into()).await.unwrap(),
+        "a DM alice started is hidden from her while she blocks its other member"
+    );
+    assert!(
+        !repo.conversation_hidden(bob.id, dm.into()).await.unwrap(),
+        "the blocked member still sees it"
+    );
+    assert!(
+        !repo
+            .conversation_hidden(alice.id, group.into())
+            .await
+            .unwrap(),
+        "a group she started is not hidden by blocking a member"
+    );
+
+    repo.unblock(alice.id, "rimp1_bob").await.unwrap();
+    assert!(!repo.conversation_hidden(alice.id, dm.into()).await.unwrap());
+}
+
+#[tokio::test]
 async fn a_lapsed_request_of_a_conversation_here_is_cleared_while_its_recipient_is_a_member() {
     use rim_core::conversation::model::{ConversationType, NewConversation};
     use rim_core::conversation::repository::ConversationRepository;
