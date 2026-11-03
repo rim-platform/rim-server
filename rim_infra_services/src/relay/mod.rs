@@ -2165,11 +2165,12 @@ impl RelayService for DefaultRelayService {
         metrics::counter!("rim_relay_removed_items_total", "reason" => "expired")
             .increment(expired_items);
         // Requests of conversations here are cleared before the expired ones are deleted.
-        let rearmed_requests = self
-            .repos
+        let (scope, repos) = self.begin().await?;
+        let rearmed_requests = repos
             .relay_repo
             .rearm_expired_local_requests(&self.own_id(), now, now + self.settings.retention)
             .await?;
+        Self::commit(scope).await?;
         let expired_requests = self.repos.relay_repo.delete_expired_requests(now).await?;
         let orphan_envelopes = self.repos.relay_repo.delete_orphan_envelopes().await?;
         Ok(RelayCleanup {

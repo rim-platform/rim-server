@@ -50,6 +50,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A pipe's row in the command audit log (`listAuditLog`) records the strictest `sensitivity`
   of its stages and is `dangerous` when any stage is, so `chat.mark_as_read | admin.kick` is
   no longer logged as a safe action.
+- A message delivered while the relay cleared a lapsed request of a conversation on this server
+  no longer stays held by that request, unseen and never invited again; it is removed with the
+  rest of what the request held, and a message arriving after the cleanup files the request
+  again.
 
 ## [0.0.7] - 2026-10-31
 

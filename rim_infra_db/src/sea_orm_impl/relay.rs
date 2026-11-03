@@ -24,6 +24,11 @@ struct IdRow {
 }
 
 #[derive(FromQueryResult)]
+struct UuidRow {
+    id: Uuid,
+}
+
+#[derive(FromQueryResult)]
 struct CountRow {
     n: i64,
 }
@@ -843,6 +848,24 @@ impl RelayRepository for SeaOrmRelayRepository {
         now: DateTime<Utc>,
         expires_at: DateTime<Utc>,
     ) -> RepoResult<u64> {
+        // A filing holding a due row is waited for, and the row is changed only if still due.
+        let ids: Vec<Uuid> = self
+            .all::<UuidRow>(
+                "SELECT r.id FROM relay_dm_request r \
+                 WHERE r.host_server_id = $1 AND r.status <> 'accepted' AND r.expires_at < $2 \
+                   AND EXISTS (SELECT 1 FROM conversation_member m \
+                               WHERE m.conversation_id = r.conversation_id \
+                                 AND m.user_id = r.user_id) \
+                 ORDER BY r.id FOR UPDATE OF r",
+                vec![own_server_id.into(), now.into()],
+            )
+            .await?
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        if ids.is_empty() {
+            return Ok(0);
+        }
         self.execute(
             "WITH due AS ( \
                  SELECT r.id, \
@@ -852,7 +875,8 @@ impl RelayRepository for SeaOrmRelayRepository {
                         OR EXISTS (SELECT 1 FROM relay_principal_block pb \
                                 WHERE pb.principal_id = r.from_principal_id) AS blocked \
                  FROM relay_dm_request r \
-                 WHERE r.host_server_id = $1 AND r.status <> 'accepted' AND r.expires_at < $2 \
+                 WHERE r.id = ANY($4) \
+                   AND r.host_server_id = $1 AND r.status <> 'accepted' AND r.expires_at < $2 \
                    AND EXISTS (SELECT 1 FROM conversation_member m \
                                WHERE m.conversation_id = r.conversation_id \
                                  AND m.user_id = r.user_id)), \
@@ -865,7 +889,12 @@ impl RelayRepository for SeaOrmRelayRepository {
                                    ELSE now() END, \
                  expires_at = $3 \
              FROM due WHERE r.id = due.id",
-            vec![own_server_id.into(), now.into(), expires_at.into()],
+            vec![
+                own_server_id.into(),
+                now.into(),
+                expires_at.into(),
+                ids.into(),
+            ],
         )
         .await
     }
