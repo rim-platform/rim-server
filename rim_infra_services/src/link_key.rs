@@ -13,8 +13,8 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
@@ -73,7 +73,7 @@ impl LinkKey {
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
-        XChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(self.0.as_slice()))
+        XChaCha20Poly1305::new((&**self.0).into())
     }
 
     /// `token` sealed for `server_id`: a random nonce and the ciphertext.
@@ -87,7 +87,7 @@ impl LinkKey {
         let ciphertext = self
             .cipher()
             .encrypt(
-                XNonce::from_slice(&nonce),
+                (&nonce).into(),
                 Payload {
                     msg: token.as_bytes(),
                     aad: aad.as_bytes(),
@@ -105,12 +105,12 @@ impl LinkKey {
         if sealed.len() <= NONCE_LEN {
             return None;
         }
-        let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
+        let (nonce, ciphertext) = sealed.split_first_chunk::<NONCE_LEN>()?;
         let aad = uuid::Uuid::from(server_id);
         let plain = Zeroizing::new(
             self.cipher()
                 .decrypt(
-                    XNonce::from_slice(nonce),
+                    nonce.into(),
                     Payload {
                         msg: ciphertext,
                         aad: aad.as_bytes(),

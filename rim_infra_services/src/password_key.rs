@@ -15,8 +15,8 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
@@ -101,7 +101,7 @@ impl PasswordKey {
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
-        XChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(self.share_key.as_slice()))
+        XChaCha20Poly1305::new((&**self.share_key).into())
     }
 
     fn seal(&self, aad: &[u8], value: &[u8]) -> anyhow::Result<Vec<u8>> {
@@ -119,7 +119,7 @@ impl PasswordKey {
     ) -> anyhow::Result<Vec<u8>> {
         let ciphertext = self
             .cipher()
-            .encrypt(XNonce::from_slice(nonce), Payload { msg: value, aad })
+            .encrypt(nonce.into(), Payload { msg: value, aad })
             .map_err(|_| anyhow!("cannot seal under the password key"))?;
         let mut sealed = nonce.to_vec();
         sealed.extend_from_slice(&ciphertext);
@@ -130,10 +130,10 @@ impl PasswordKey {
         if sealed.len() <= NONCE_LEN {
             return None;
         }
-        let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
+        let (nonce, ciphertext) = sealed.split_first_chunk::<NONCE_LEN>()?;
         self.cipher()
             .decrypt(
-                XNonce::from_slice(nonce),
+                nonce.into(),
                 Payload {
                     msg: ciphertext,
                     aad,
