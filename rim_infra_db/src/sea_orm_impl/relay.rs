@@ -173,7 +173,8 @@ struct HolderRow {
 
 /// SQL that is true when the conversation `conversation_id` stays out of the user `user_id`'s
 /// view: their request for it is pending or ignored, or it is a DM or group whose creator they
-/// blocked. Both arguments are SQL expressions (a placeholder or a column).
+/// blocked, or a DM whose other member they blocked. Both arguments are SQL expressions (a
+/// placeholder or a column).
 pub fn hidden(user_id: &str, conversation_id: &str) -> String {
     format!(
         r#"(EXISTS (SELECT 1 FROM relay_dm_request r
@@ -182,7 +183,13 @@ pub fn hidden(user_id: &str, conversation_id: &str) -> String {
     OR EXISTS (SELECT 1 FROM relay_block b
         JOIN "user" cu ON cu.principal_id = b.principal_id
         JOIN conversation hc ON hc.id = {conversation_id} AND hc.created_by = cu.id
-        WHERE b.user_id = {user_id} AND hc.conversation_type IN ('direct', 'group')))"#
+        WHERE b.user_id = {user_id} AND hc.conversation_type IN ('direct', 'group'))
+    OR EXISTS (SELECT 1 FROM relay_block b
+        JOIN "user" pu ON pu.principal_id = b.principal_id AND pu.id <> {user_id}
+        JOIN conversation_member pm
+          ON pm.user_id = pu.id AND pm.conversation_id = {conversation_id}
+        JOIN conversation dc ON dc.id = {conversation_id} AND dc.conversation_type = 'direct'
+        WHERE b.user_id = {user_id}))"#
     )
 }
 
@@ -752,6 +759,55 @@ impl RelayRepository for SeaOrmRelayRepository {
             vec![uuid(user_id), principal_id.into(), expires_at.into()],
         )
         .await
+    }
+
+    async fn clear_accepted_started_by(
+        &self,
+        user_id: UserId,
+        principal_id: &str,
+        own_server_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> RepoResult<u64> {
+        self.execute(
+            r#"UPDATE relay_dm_request r SET status = 'pending', created_at = now(),
+                   decided_at = now(), expires_at = $4
+               WHERE r.user_id = $1 AND r.status = 'accepted' AND r.host_server_id = $3
+                 AND EXISTS (SELECT 1 FROM conversation c JOIN "user" cu ON cu.id = c.created_by
+                             WHERE c.id = r.conversation_id AND cu.principal_id = $2
+                               AND c.conversation_type IN ('direct', 'group'))
+                 AND EXISTS (SELECT 1 FROM conversation_member m
+                             WHERE m.conversation_id = r.conversation_id
+                               AND m.user_id = r.user_id)"#,
+            vec![
+                uuid(user_id),
+                principal_id.into(),
+                own_server_id.into(),
+                expires_at.into(),
+            ],
+        )
+        .await
+    }
+
+    async fn take_invite_card(
+        &self,
+        id: DmRequestId,
+        from_principal_id: &str,
+        card_payload: &str,
+        card_signature: &str,
+    ) -> RepoResult<()> {
+        self.execute(
+            "UPDATE relay_dm_request \
+             SET from_principal_id = $2, card_payload = $3, card_signature = $4 \
+             WHERE id = $1 AND card_payload = ''",
+            vec![
+                uuid(id),
+                from_principal_id.into(),
+                card_payload.into(),
+                card_signature.into(),
+            ],
+        )
+        .await?;
+        Ok(())
     }
 
     async fn refile_request(&self, id: DmRequestId, expires_at: DateTime<Utc>) -> RepoResult<bool> {

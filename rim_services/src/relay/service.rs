@@ -34,11 +34,13 @@ pub trait RelayService: Send + Sync {
 
     async fn remove_contact(&self, actor: Actor, principal_id: String) -> ServiceResult<bool>;
 
-    /// Block a principal: its pending requests are ignored, its invites and claims refused.
+    /// Block a principal: its pending requests are ignored, its invites and claims refused, and
+    /// it leaves the user's contacts.
     async fn block_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool>;
 
-    /// Lift a block of a principal and clear the requests the user ignored from them, so the
-    /// next item of such a conversation files it again. Returns whether a block was lifted.
+    /// Lift a block of a principal, clear the requests the user ignored from them, and clear the
+    /// conversations of this server they started that the user had accepted, so the next item or
+    /// event of each files it again as a request. Returns whether a block was lifted.
     async fn unblock_principal(&self, actor: Actor, principal_id: String) -> ServiceResult<bool>;
 
     /// The principals the caller blocked, newest first.
@@ -146,7 +148,8 @@ pub trait RelayService: Send + Sync {
     async fn file_local(&self, envelope: SignedJson, recipients: Vec<String>) -> ServiceResult<()>;
 
     /// Whether a conversation stays out of a local user's list and live events: its request is
-    /// pending or ignored, or the user blocked whoever started the DM or group.
+    /// pending or ignored, or the user blocked whoever started the DM or group, or the DM's other
+    /// member.
     async fn conversation_hidden(
         &self,
         user_id: UserId,

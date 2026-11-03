@@ -891,12 +891,28 @@ impl DefaultRelayService {
             Filing::Deliver => None,
             Filing::Hold(id) => {
                 // A request an unblock cleared is filed again by the next item of its conversation.
-                if found.as_ref().is_some_and(DmRequest::is_cleared)
+                let refiled = found.as_ref().is_some_and(DmRequest::is_cleared)
                     && repos
                         .relay_repo
                         .refile_request(id, now + self.settings.retention)
-                        .await?
-                {
+                        .await?;
+                if refiled {
+                    // A row accepted as it arrived kept no card; the invite filing it again
+                    // brings one.
+                    if let (Some(invite), Some(request)) = (&read.invite, &found)
+                        && request.card_payload.is_empty()
+                        && let Some(card) = &invite.card
+                    {
+                        repos
+                            .relay_repo
+                            .take_invite_card(
+                                id,
+                                &invite.from_principal_id,
+                                &card.payload,
+                                &card.signature,
+                            )
+                            .await?;
+                    }
                     notices.push(RelayNotice::DmRequestReceived {
                         user_id,
                         request_id: id,
@@ -1328,6 +1344,11 @@ impl RelayService for DefaultRelayService {
                 Utc::now() + IGNORED_REQUEST_TTL,
             )
             .await?;
+        // Someone blocked is no contact: once unblocked, their new conversations are requests.
+        let removed_contact = repos
+            .relay_repo
+            .delete_contact(actor.user_id, &principal_id)
+            .await?;
         Self::commit(scope).await?;
         info!(
             target: "audit",
@@ -1336,6 +1357,7 @@ impl RelayService for DefaultRelayService {
             user_id = %actor.user_id,
             principal_id = %principal_id,
             ignored_requests = ignored,
+            removed_contact,
             "a user blocked a principal"
         );
         Ok(added)
@@ -1362,6 +1384,21 @@ impl RelayService for DefaultRelayService {
         } else {
             0
         };
+        // What they started here that the user had accepted comes back as a request with their next
+        // event, as an ignored request does.
+        let revived = if lifted {
+            repos
+                .relay_repo
+                .clear_accepted_started_by(
+                    actor.user_id,
+                    &principal_id,
+                    &self.own_id(),
+                    Utc::now() + self.settings.retention,
+                )
+                .await?
+        } else {
+            0
+        };
         Self::commit(scope).await?;
         if lifted {
             info!(
@@ -1371,6 +1408,7 @@ impl RelayService for DefaultRelayService {
                 user_id = %actor.user_id,
                 principal_id = %principal_id,
                 cleared_requests = cleared,
+                cleared_conversations = revived,
                 "a user unblocked a principal"
             );
         }

@@ -645,11 +645,12 @@ mod tests {
             .build(DbBackend::Postgres);
         let values = stmt.values.expect("values").0;
         let user = sea_orm::Value::from(Uuid::from(user));
-        assert_eq!(values.len(), 3);
-        assert_eq!(values[1], user);
-        assert_eq!(values[2], user);
+        assert_eq!(values.len(), 5);
+        assert!(values[1..].iter().all(|v| *v == user), "{values:?}");
         assert!(stmt.sql.contains("r.user_id = $2"), "{}", stmt.sql);
         assert!(stmt.sql.contains("b.user_id = $3"), "{}", stmt.sql);
+        assert!(stmt.sql.contains("pu.id <> $4"), "{}", stmt.sql);
+        assert!(stmt.sql.contains("b.user_id = $5"), "{}", stmt.sql);
         assert!(
             stmt.sql
                 .contains(r#"r.conversation_id = "user_notification"."conversation_id""#),
