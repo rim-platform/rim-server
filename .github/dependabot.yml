@@ -17,6 +17,13 @@ updates:
         update-types:
           - version-update:semver-major
           - version-update:semver-minor
+      # rim_auth's OPAQUE vector test drives opaque-ke 4.0 with a seeded ChaCha20Rng, and
+      # opaque-ke takes a rand_core 0.6 generator, which rand_chacha 0.3 is and later releases are
+      # not. Drop once opaque-ke moves to a newer rand_core.
+      - dependency-name: rand_chacha
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
   - package-ecosystem: github-actions
     directory: /
     schedule:
