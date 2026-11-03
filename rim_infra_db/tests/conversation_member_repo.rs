@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use rim_core::conversation::model::{ConversationType, NewConversation};
 use rim_core::conversation::repository::ConversationRepository;
-use rim_core::conversation_member::model::Membership;
+use rim_core::conversation_member::model::{MemberRemoval, MemberRemovalId, Membership};
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::user::model::UserId;
@@ -371,4 +371,62 @@ async fn delete_pending_before_removes_old_invitations_only() {
         repo.membership(conv.id, member).await.unwrap(),
         Some(Membership::Active)
     );
+}
+
+#[tokio::test]
+async fn removals_list_newest_first_up_to_the_limit() {
+    let ctx = support::TestCtx::new().await;
+
+    let conv_repo = SeaOrmConversationRepository::new(ctx.db.clone());
+    let repo = SeaOrmConversationMemberRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let new_group = || NewConversation {
+        server_id: server.id,
+        conversation_type: ConversationType::Group,
+        title: None,
+        is_private: false,
+        created_by: None,
+        encrypted: false,
+    };
+    let conv = conv_repo.create_conversation(new_group()).await.unwrap();
+    let other = conv_repo.create_conversation(new_group()).await.unwrap();
+    let moderator = ctx.create_user("mod").await.id;
+    let removed = ctx.create_user("removed").await.id;
+
+    let t = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let mut ids = Vec::new();
+    for seconds in 0..3 {
+        let removal = MemberRemoval {
+            id: MemberRemovalId::new(),
+            conversation_id: conv.id,
+            user_id: removed,
+            removed_by: moderator,
+            removed_at: t + chrono::Duration::seconds(seconds),
+        };
+        ids.push(removal.id);
+        repo.record_removal(removal).await.unwrap();
+    }
+    repo.record_removal(MemberRemoval {
+        id: MemberRemovalId::new(),
+        conversation_id: other.id,
+        user_id: removed,
+        removed_by: moderator,
+        removed_at: t + chrono::Duration::seconds(10),
+    })
+    .await
+    .unwrap();
+
+    let listed = repo.list_removals(conv.id, 2).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![ids[2], ids[1]]
+    );
+    assert!(
+        listed
+            .iter()
+            .all(|r| r.conversation_id == conv.id && r.user_id == removed)
+    );
+    assert_eq!(listed[0].removed_by, moderator);
+    assert_eq!(repo.list_removals(other.id, 10).await.unwrap().len(), 1);
 }

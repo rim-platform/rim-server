@@ -90,6 +90,14 @@ mutation Remove($serverId: ID!, $conversationId: ID!, $userId: ID!) {
 }
 "#;
 
+const MEMBER_REMOVALS: &str = r#"
+query Removals($serverId: ID!, $conversationId: ID!) {
+  conversationMemberRemovals(serverId: $serverId, conversationId: $conversationId) {
+    userId removedById removedAt user { username } removedBy { username }
+  }
+}
+"#;
+
 const SET_ARCHIVED: &str = r#"
 mutation Archive($serverId: ID!, $conversationId: ID!, $archived: Boolean!) {
   conversation: setConversationArchived(serverId: $serverId, conversationId: $conversationId,
@@ -620,6 +628,68 @@ async fn public_channel_join_and_leave() {
         )
         .await,
         "VALIDATION"
+    );
+}
+
+impl Fixture {
+    async fn remove(&self, who: &Caller, conversation_id: &str, user: &Caller) {
+        exec_ok(
+            &self.schema,
+            who.request(
+                REMOVE_MEMBER,
+                json!({ "serverId": self.server_id, "conversationId": conversation_id,
+                        "userId": user.user_id.to_string() }),
+            ),
+        )
+        .await;
+    }
+
+    async fn removals(&self, who: &Caller, conversation_id: &str) -> Vec<Value> {
+        exec_ok(
+            &self.schema,
+            who.request(MEMBER_REMOVALS, self.ids(conversation_id)),
+        )
+        .await["conversationMemberRemovals"]
+            .as_array()
+            .expect("removals")
+            .clone()
+    }
+}
+
+/// A removal by the Owner is listed to everyone who reads the channel, the removed person
+/// included while the channel stays readable to them; removing oneself is not listed.
+#[tokio::test]
+async fn a_channel_lists_who_an_owner_removed() {
+    let f = setup().await;
+    let lobby = id_of(&f.create_channel(&f.alice, "lobby", false).await);
+    for who in [&f.bob, &f.carol] {
+        exec_ok(&f.schema, who.request(&q(JOIN_CHANNEL), f.ids(&lobby))).await;
+    }
+
+    f.remove(&f.alice, &lobby, &f.bob).await;
+    for who in [&f.carol, &f.bob] {
+        let removals = f.removals(who, &lobby).await;
+        assert_eq!(removals.len(), 1, "{removals:?}");
+        assert_eq!(removals[0]["userId"], json!(f.bob.user_id.to_string()));
+        assert_eq!(
+            removals[0]["removedById"],
+            json!(f.alice.user_id.to_string())
+        );
+        assert!(removals[0]["removedAt"].is_string());
+        assert_eq!(removals[0]["user"]["username"], json!("pc-bob"));
+        assert_eq!(removals[0]["removedBy"]["username"], json!("pc-alice"));
+    }
+
+    f.remove(&f.carol, &lobby, &f.carol).await;
+    assert_eq!(f.removals(&f.alice, &lobby).await.len(), 1);
+
+    let private = id_of(&f.create_channel(&f.alice, "council", true).await);
+    f.add_members(&f.alice, &private, &[&f.bob]).await;
+    f.remove(&f.alice, &private, &f.bob).await;
+    assert_eq!(f.removals(&f.alice, &private).await.len(), 1);
+    assert_eq!(
+        exec_err_code(&f.schema, f.bob.request(MEMBER_REMOVALS, f.ids(&private))).await,
+        "NOT_FOUND"
     );
 }
 

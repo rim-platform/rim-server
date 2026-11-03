@@ -92,6 +92,7 @@ pub(crate) fn route(event: &WorkspaceEvent, event_json: &Value) -> Route {
         | WorkspaceEvent::MemberBanChanged { .. }
         | WorkspaceEvent::MemberJoined { .. }
         | WorkspaceEvent::MemberLeft { .. }
+        | WorkspaceEvent::MemberTimeoutChanged { .. }
         | WorkspaceEvent::MemberRoleChanged { .. } => Route::Directory,
         WorkspaceEvent::TypingStarted { .. } | WorkspaceEvent::PresenceChanged { .. } => {
             Route::Ephemeral
@@ -161,8 +162,15 @@ pub(crate) fn plan(
             })
             .collect(),
         Route::Directory => {
-            let (guests, members): (Vec<_>, Vec<_>) =
-                visible.into_iter().partition(|m| m.role.is_guest() || matches!(event, WorkspaceEvent::MemberLeft { user_id, .. } if *user_id == m.user_id));
+            let (guests, members): (Vec<_>, Vec<_>) = visible.into_iter().partition(|m| {
+                m.role.is_guest()
+                    || matches!(
+                        event,
+                        WorkspaceEvent::MemberLeft { user_id, .. }
+                        | WorkspaceEvent::MemberTimeoutChanged { user_id, .. }
+                            if *user_id == m.user_id
+                    )
+            });
             let mut planned = together("w".to_string(), members);
             planned.extend(guests.into_iter().map(|m| Planned {
                 stream: user_stream(&m),
@@ -1514,6 +1522,27 @@ mod tests {
         };
         let plans = planned(&other, &[guest]);
         assert!(plans.is_empty(), "a guest learns nothing about others");
+    }
+
+    #[test]
+    fn a_timeout_change_reaches_its_subject_on_u_and_members_on_w() {
+        let (subject, regular, guest) = (
+            member(ServerMemberRole::Member),
+            member(ServerMemberRole::Member),
+            member(ServerMemberRole::Guest),
+        );
+        let event = WorkspaceEvent::MemberTimeoutChanged {
+            workspace_id: ServerId::new(),
+            user_id: subject.user_id,
+            until: Some(chrono::Utc::now()),
+            reason: Some("flooding".to_string()),
+        };
+        let plans = planned(&event, &[subject.clone(), regular.clone(), guest]);
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].stream, "w");
+        assert_eq!(plans[0].recipients, vec![regular]);
+        assert_eq!(plans[1].stream, format!("u:{}", subject.principal_id));
+        assert_eq!(plans[1].recipients, vec![subject]);
     }
 
     #[test]

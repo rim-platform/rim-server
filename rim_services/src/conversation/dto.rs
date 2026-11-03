@@ -1,5 +1,6 @@
 use rim_core::conversation::model::ConversationId;
 use rim_core::conversation::repository::{ConversationActivityCursor, ConversationCreatedCursor};
+use rim_core::conversation_member::model::{MemberRemoval, MemberRemovalId};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
@@ -91,6 +92,28 @@ impl From<ChannelPageCursor> for ConversationCreatedCursor {
         Self {
             created_at: value.created_at,
             conversation_id: value.conversation_id,
+        }
+    }
+}
+
+/// A member someone else removed from a channel.
+#[derive(Debug, Clone)]
+pub struct ConversationMemberRemovalDto {
+    pub id: MemberRemovalId,
+    pub conversation_id: ConversationId,
+    pub user_id: UserId,
+    pub removed_by: UserId,
+    pub removed_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<MemberRemoval> for ConversationMemberRemovalDto {
+    fn from(value: MemberRemoval) -> Self {
+        Self {
+            id: value.id,
+            conversation_id: value.conversation_id,
+            user_id: value.user_id,
+            removed_by: value.removed_by,
+            removed_at: value.removed_at,
         }
     }
 }

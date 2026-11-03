@@ -32,9 +32,9 @@ fn user_can_see_event(event: &WorkspaceEvent, user_id: &str) -> bool {
 /// - Private channel, DM and group events are only visible to conversation members.
 /// - Conversation membership events (MemberAddedToConversation,
 ///   MemberRemovedFromConversation) are visible to the conversation's members (plus the removed
-///   user); MemberJoined, MemberLeft, MemberRoleChanged and PresenceChanged to all workspace
-///   members. A guest, who has no full member directory, sees MemberJoined, MemberLeft and
-///   MemberRoleChanged only about themselves.
+///   user); MemberJoined, MemberLeft, MemberTimeoutChanged, MemberRoleChanged and
+///   PresenceChanged to all workspace members. A guest, who has no full member directory, sees
+///   MemberJoined, MemberLeft, MemberTimeoutChanged and MemberRoleChanged only about themselves.
 /// - PipelineFired and PipelineSuspended are visible to the pipeline's creator only.
 pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bool) -> bool {
     match event {
@@ -141,6 +141,10 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             ..
         }
         | WorkspaceEvent::MemberLeft {
+            user_id: event_user_id,
+            ..
+        }
+        | WorkspaceEvent::MemberTimeoutChanged {
             user_id: event_user_id,
             ..
         }
@@ -686,6 +690,12 @@ mod tests {
                 user_id: about,
                 role: "guest".to_string(),
             },
+            WorkspaceEvent::MemberTimeoutChanged {
+                workspace_id,
+                user_id: about,
+                until: None,
+                reason: None,
+            },
         ]
     }
 
@@ -760,6 +770,18 @@ mod tests {
                 vec![
                     "role".to_string(),
                     "type".to_string(),
+                    "user_id".to_string(),
+                    "workspace_id".to_string()
+                ]
+            )
+        );
+        assert_eq!(
+            keys(&events[3]),
+            (
+                serde_json::json!("MemberTimeoutChanged"),
+                vec![
+                    "type".to_string(),
+                    "until".to_string(),
                     "user_id".to_string(),
                     "workspace_id".to_string()
                 ]

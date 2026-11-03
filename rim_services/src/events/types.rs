@@ -153,6 +153,17 @@ pub enum WorkspaceEvent {
         #[serde(default, skip_serializing)]
         reason: Option<String>,
     },
+    /// A member's timeout was set (`until` its end) or cleared early (`until` null). Wire
+    /// shape: `{"type":"MemberTimeoutChanged","workspace_id","user_id","until"}`. Same visibility
+    /// as `MemberLeft`; only the member's own delivery carries the moderator's `reason`.
+    MemberTimeoutChanged {
+        workspace_id: ServerId,
+        user_id: UserId,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        /// Private to the timed-out member's own delivery.
+        #[serde(default, skip_serializing)]
+        reason: Option<String>,
+    },
     /// A member's role changed. `role` is the snake_case role name (`owner`,
     /// `moderator`, `member`, `guest`). Wire shape:
     /// `{"type":"MemberRoleChanged","workspace_id","user_id","role"}`.
@@ -529,6 +540,7 @@ impl WorkspaceEvent {
             | Self::JoinRequestCreated { workspace_id, .. }
             | Self::JoinRequestDecided { workspace_id, .. }
             | Self::MemberLeft { workspace_id, .. }
+            | Self::MemberTimeoutChanged { workspace_id, .. }
             | Self::MemberRoleChanged { workspace_id, .. }
             | Self::MemberAddedToConversation { workspace_id, .. }
             | Self::MemberRemovedFromConversation { workspace_id, .. }
@@ -590,6 +602,7 @@ impl WorkspaceEvent {
             | Self::MemberBanChanged { .. }
             | Self::MemberJoined { .. }
             | Self::MemberLeft { .. }
+            | Self::MemberTimeoutChanged { .. }
             | Self::MemberRoleChanged { .. } => None,
             Self::ConversationUpdated {
                 member_user_ids, ..
@@ -718,18 +731,28 @@ impl WorkspaceEvent {
 }
 
 impl WorkspaceEvent {
-    /// The event's wire form for one subscriber, with removal reasons private to their subject.
+    /// The event's wire form for one subscriber, with removal and timeout reasons private to
+    /// their subject.
     ///
     /// # Errors
     /// When an event cannot be serialized.
     pub fn json_for_user(&self, user_id: &str) -> Result<serde_json::Value, serde_json::Error> {
         let mut value = serde_json::to_value(self)?;
-        if let Self::MemberLeft {
-            user_id: removed,
-            reason: Some(reason),
-            ..
-        } = self
-            && removed.to_string() == user_id
+        let private = match self {
+            Self::MemberLeft {
+                user_id: subject,
+                reason: Some(reason),
+                ..
+            }
+            | Self::MemberTimeoutChanged {
+                user_id: subject,
+                reason: Some(reason),
+                ..
+            } => Some((subject, reason)),
+            _ => None,
+        };
+        if let Some((subject, reason)) = private
+            && subject.to_string() == user_id
         {
             value["reason"] = serde_json::Value::String(reason.clone());
         }
@@ -772,6 +795,48 @@ mod removal_tests {
             received.json_for_user(&removed.to_string()).unwrap()["reason"],
             "private explanation"
         );
+    }
+
+    #[test]
+    fn timeout_reasons_are_serialized_only_for_the_timed_out_member() {
+        let member = UserId::new();
+        let until = chrono::Utc::now();
+        let event = WorkspaceEvent::MemberTimeoutChanged {
+            workspace_id: ServerId::new(),
+            user_id: member,
+            until: Some(until),
+            reason: Some("flooding".to_string()),
+        };
+        let plain = serde_json::to_value(&event).unwrap();
+        assert!(plain.get("reason").is_none());
+        assert_eq!(plain["until"], serde_json::to_value(until).unwrap());
+        let own = event.json_for_user(&member.to_string()).unwrap();
+        assert_eq!(own["reason"], "flooding");
+        assert!(
+            event
+                .json_for_user(&UserId::new().to_string())
+                .unwrap()
+                .get("reason")
+                .is_none()
+        );
+        let received: WorkspaceEvent = serde_json::from_value(own).unwrap();
+        assert_eq!(
+            received.json_for_user(&member.to_string()).unwrap()["reason"],
+            "flooding"
+        );
+    }
+
+    #[test]
+    fn a_cleared_timeout_serializes_a_null_until() {
+        let event = WorkspaceEvent::MemberTimeoutChanged {
+            workspace_id: ServerId::new(),
+            user_id: UserId::new(),
+            until: None,
+            reason: None,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json.as_object().unwrap().contains_key("until"));
+        assert_eq!(json["until"], serde_json::Value::Null);
     }
 
     #[test]

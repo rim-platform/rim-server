@@ -77,7 +77,7 @@ query Messages($serverId: ID!, $conversationId: ID!) {
 
 const SERVER_MEMBERS: &str = r#"
 query Members($serverId: ID!) {
-  serverMembers(serverId: $serverId) { userId memberRole timeoutUntil }
+  serverMembers(serverId: $serverId) { userId memberRole timeoutUntil timeoutReason }
 }
 "#;
 
@@ -124,6 +124,14 @@ query Bans($serverId: ID!) { serverBans(serverId: $serverId) { userId reason } }
 const TIMEOUT: &str = r#"
 mutation Timeout($serverId: ID!, $userId: ID!, $until: DateTime!) {
   timeout: timeoutMember(serverId: $serverId, userId: $userId, until: $until) { userId until }
+}
+"#;
+
+const TIMEOUT_WITH_REASON: &str = r#"
+mutation Timeout($serverId: ID!, $userId: ID!, $until: DateTime!, $reason: String) {
+  timeout: timeoutMember(serverId: $serverId, userId: $userId, until: $until, reason: $reason) {
+    userId until
+  }
 }
 "#;
 
@@ -626,6 +634,96 @@ async fn timed_out_member_cannot_send_or_run_mutating_commands() {
     assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
     assert_eq!(f.audit_rows("admin.timeout").await.len(), 1);
     assert_eq!(f.audit_rows("admin.clear_timeout").await.len(), 1);
+}
+
+impl Fixture {
+    /// `who`'s view of `user`'s `serverMembers` entry.
+    async fn member_entry(&self, who: &Caller, user: &Caller) -> Value {
+        let members = exec_ok(
+            &self.schema,
+            who.request(SERVER_MEMBERS, json!({ "serverId": self.server_id })),
+        )
+        .await;
+        members["serverMembers"]
+            .as_array()
+            .expect("members")
+            .iter()
+            .find(|m| m["userId"] == json!(user.user_id.to_string()))
+            .expect("member entry")
+            .clone()
+    }
+
+    /// The `MemberTimeoutChanged` events about `user` so far.
+    fn timeout_changes(&self, user: &Caller) -> Vec<rim_services::events::WorkspaceEvent> {
+        self.events
+            .events()
+            .into_iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    rim_services::events::WorkspaceEvent::MemberTimeoutChanged { user_id, .. }
+                        if *user_id == user.user_id
+                )
+            })
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn the_timed_out_member_alone_reads_the_reason() {
+    let f = setup().await;
+    let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+    exec_ok(
+        &f.schema,
+        f.mona.request(
+            TIMEOUT_WITH_REASON,
+            json!({
+                "serverId": f.server_id,
+                "userId": f.carol.user_id.to_string(),
+                "until": until.to_rfc3339(),
+                "reason": "flooding",
+            }),
+        ),
+    )
+    .await;
+
+    let own = f.member_entry(&f.carol, &f.carol).await;
+    assert_eq!(own["timeoutReason"], json!("flooding"));
+    assert!(own["timeoutUntil"].is_string());
+    let seen_by_alice = f.member_entry(&f.alice, &f.carol).await;
+    assert!(seen_by_alice["timeoutReason"].is_null());
+    assert!(seen_by_alice["timeoutUntil"].is_string());
+
+    let changes = f.timeout_changes(&f.carol);
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(
+        changes[0]
+            .json_for_user(&f.carol.user_id.to_string())
+            .expect("json")["reason"],
+        json!("flooding")
+    );
+    assert!(
+        changes[0]
+            .json_for_user(&f.alice.user_id.to_string())
+            .expect("json")
+            .get("reason")
+            .is_none()
+    );
+
+    exec_ok(
+        &f.schema,
+        f.mona.request(CLEAR_TIMEOUT, f.member_vars(&f.carol)),
+    )
+    .await;
+    let own = f.member_entry(&f.carol, &f.carol).await;
+    assert!(own["timeoutReason"].is_null());
+    assert!(own["timeoutUntil"].is_null());
+    let changes = f.timeout_changes(&f.carol);
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert!(matches!(
+        changes[1],
+        rim_services::events::WorkspaceEvent::MemberTimeoutChanged { until: None, .. }
+    ));
 }
 
 #[tokio::test]
@@ -1495,6 +1593,8 @@ async fn sdl_exposes_the_role_enum_and_moderation_surface() {
         "MEMBER",
         "memberRole: ServerMemberRoleGql!",
         "timeoutUntil: DateTime",
+        "timeoutReason: String",
+        "conversationMemberRemovals(",
         "slowModeSeconds: Int!",
         "role: ServerMemberRoleGql",
         "enum MessageReportStatus",

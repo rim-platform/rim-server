@@ -11,7 +11,7 @@ mod tests {
     use rim_core::conversation::repository::{
         ConversationActivityCursor, ConversationCreatedCursor,
     };
-    use rim_core::conversation_member::model::ConversationMember;
+    use rim_core::conversation_member::model::{ConversationMember, MemberRemoval};
     use rim_core::custom_emoji::model::{CustomEmoji, CustomEmojiId};
     use rim_core::custom_emoji::repository::MockCustomEmojiRepository;
     use rim_core::message::model::{Message, MessageId, NewMessage};
@@ -215,6 +215,12 @@ mod tests {
                 conversation_id: ConversationId,
                 user_id: UserId,
             ) -> RepoResult<Option<UserId>>;
+            async fn record_removal(&self, removal: MemberRemoval) -> RepoResult<()>;
+            async fn list_removals(
+                &self,
+                conversation_id: ConversationId,
+                limit: u64,
+            ) -> RepoResult<Vec<MemberRemoval>>;
         }
     }
 

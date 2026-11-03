@@ -7,7 +7,7 @@ use tracing::{info, instrument};
 use rim_core::conversation::model::{
     Conversation, ConversationId, ConversationType as CoreConversationType, NewConversation,
 };
-use rim_core::conversation_member::model::Membership;
+use rim_core::conversation_member::model::{MemberRemoval, MemberRemovalId, Membership};
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server_member::model::ServerMemberRole;
@@ -16,10 +16,10 @@ use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::conversation::command::{
     AddConversationMembersCmd, ArchiveConversationCmd, ConversationInviteCmd,
     CreateConversationCmd, GetConversationQuery, JoinChannelCmd, LeaveConversationCmd,
-    ListChannelsQuery, ListInboxConversationsQuery, RemoveConversationMemberCmd,
-    UpdateConversationTopicCmd,
+    ListChannelsQuery, ListInboxConversationsQuery, ListMemberRemovalsQuery,
+    RemoveConversationMemberCmd, UpdateConversationTopicCmd,
 };
-use rim_services::conversation::dto::ConversationDto;
+use rim_services::conversation::dto::{ConversationDto, ConversationMemberRemovalDto};
 use rim_services::conversation::service::ConversationService;
 use rim_services::conversation::types::ConversationParticipants;
 use rim_services::default_workspace::DefaultWorkspaceService;
@@ -595,12 +595,14 @@ impl DefaultConversationService {
 
     /// Removes `user_id`, whose membership was `membership`, from the conversation, deletes
     /// their notifications for it, and tells the remaining members and the removed user (whose
-    /// client must drop the conversation).
+    /// client must drop the conversation). `removed_by` names who removed them when it was
+    /// someone else; a channel records that removal.
     async fn remove_member_and_notify(
         &self,
         conversation: &Conversation,
         user_id: UserId,
         membership: Membership,
+        removed_by: Option<UserId>,
     ) -> ServiceResult<()> {
         self.repos
             .conversation_member_repo
@@ -610,6 +612,20 @@ impl DefaultConversationService {
             .notification_repo
             .delete_for_user_in_conversation(user_id, conversation.id)
             .await?;
+        if let Some(removed_by) = removed_by
+            && conversation.conversation_type == CoreConversationType::Channel
+        {
+            self.repos
+                .conversation_member_repo
+                .record_removal(MemberRemoval {
+                    id: MemberRemovalId::new(),
+                    conversation_id: conversation.id,
+                    user_id,
+                    removed_by,
+                    removed_at: chrono::Utc::now(),
+                })
+                .await?;
+        }
 
         let mut notify_user_ids = self
             .repos
@@ -945,6 +961,30 @@ impl ConversationService for DefaultConversationService {
         self.to_dto(conversation).await
     }
 
+    async fn list_member_removals(
+        &self,
+        query: ListMemberRemovalsQuery,
+    ) -> ServiceResult<Vec<ConversationMemberRemovalDto>> {
+        let conversation = ensure_conversation_member_access(
+            self.access_repos(),
+            query.actor.user_id,
+            query.server_id,
+            query.conversation_id,
+        )
+        .await?;
+        if conversation.conversation_type != CoreConversationType::Channel {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .repos
+            .conversation_member_repo
+            .list_removals(conversation.id, query.limit)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
     async fn get_writable_conversation(
         &self,
         query: GetConversationQuery,
@@ -1232,8 +1272,13 @@ impl ConversationService for DefaultConversationService {
             return Err(ServiceError::NotFound);
         };
 
-        self.remove_member_and_notify(&conversation, cmd.user_id, membership)
-            .await?;
+        self.remove_member_and_notify(
+            &conversation,
+            cmd.user_id,
+            membership,
+            (cmd.user_id != cmd.actor.user_id).then_some(cmd.actor.user_id),
+        )
+        .await?;
         info!("removed conversation member");
         Ok(())
     }
@@ -1309,7 +1354,7 @@ impl ConversationService for DefaultConversationService {
 
         // Leaving a private channel as its last member is allowed; it then stays invisible to
         // everyone, and only an Owner/Moderator can archive it, by id.
-        self.remove_member_and_notify(&conversation, cmd.actor.user_id, membership)
+        self.remove_member_and_notify(&conversation, cmd.actor.user_id, membership, None)
             .await?;
         info!("left conversation");
         Ok(())
@@ -1486,7 +1531,7 @@ impl ConversationService for DefaultConversationService {
         let conversation = self
             .invited_conversation(cmd.server_id, cmd.conversation_id, user_id)
             .await?;
-        self.remove_member_and_notify(&conversation, user_id, Membership::Pending)
+        self.remove_member_and_notify(&conversation, user_id, Membership::Pending, None)
             .await?;
         info!("declined conversation invitation");
         Ok(())
