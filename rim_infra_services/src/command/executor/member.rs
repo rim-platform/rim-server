@@ -126,6 +126,7 @@ mod tests {
             member_role: rim_core::server_member::model::ServerMemberRole::Member,
             joined_at: chrono::Utc::now(),
             timeout_until: None,
+            timeout_reason: None,
             principal_id: None,
         }
     }

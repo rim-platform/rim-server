@@ -6,10 +6,12 @@ use crate::ServiceResult;
 use crate::conversation::command::{
     AddConversationMembersCmd, ArchiveConversationCmd, ConversationInviteCmd,
     CreateConversationCmd, GetConversationQuery, JoinChannelCmd, LeaveConversationCmd,
-    ListChannelsQuery, ListInboxConversationsQuery, RemoveConversationMemberCmd,
-    UpdateConversationTopicCmd,
+    ListChannelsQuery, ListInboxConversationsQuery, ListMemberRemovalsQuery,
+    RemoveConversationMemberCmd, UpdateConversationTopicCmd,
 };
-use crate::conversation::dto::{ChannelPageCursor, ConversationDto, InboxPageCursor};
+use crate::conversation::dto::{
+    ChannelPageCursor, ConversationDto, ConversationMemberRemovalDto, InboxPageCursor,
+};
 use rim_core::conversation::model::ConversationId;
 use rim_core::repository::pagination::Page;
 
@@ -87,4 +89,11 @@ pub trait ConversationService: Send + Sync {
     /// Decline the caller's pending invitation: the membership is deleted like a leave.
     /// `NotFound` when the caller has no pending invitation there.
     async fn decline_conversation_invite(&self, cmd: ConversationInviteCmd) -> ServiceResult<()>;
+
+    /// The latest removals of a channel (someone removed by someone else), newest first, for
+    /// a caller who can read it; empty for a group or DM. Errors as for `get_conversation`.
+    async fn list_member_removals(
+        &self,
+        query: ListMemberRemovalsQuery,
+    ) -> ServiceResult<Vec<ConversationMemberRemovalDto>>;
 }

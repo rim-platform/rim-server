@@ -49,7 +49,17 @@ This document describes the backend contract for conversations, messages, thread
   is a no-op. Leaving a private channel as its last member is allowed; it then stays invisible to
   everyone, and only an Owner/Moderator can archive it, by id (from the audit log).
 - `removeConversationMember`: Owner/Moderator may remove anyone (also from a private channel
-  they are not in); everyone else only themselves.
+  they are not in); everyone else only themselves. When an Owner or Moderator removes someone
+  else from a channel, the removal is recorded with who removed them and when.
+  `conversationMemberRemovals(serverId, conversationId, limit)` lists a channel's latest
+  removals, newest first (`limit` 50 by default, at most 100), to anyone who can read the
+  channel, with the errors of `conversation`; a group or DM answers an empty list. Clients show
+  each as a line in the channel ("Bob was removed by Alice") and read the list again on
+  `MemberRemovedFromConversation`, which reaches the channel's members and the removed person;
+  other readers see a new line the next time they open the channel. Leaving, removing oneself,
+  declining an invitation, a kick or a ban, and removals from groups are not recorded. A removal
+  stays listed after either account is deleted, named as the deleted account. Listed in
+  `serverInfo.capabilities` as `conversation_member_removals`.
 - DMs and groups are unchanged: non-members get `FORBIDDEN`.
 - Mentions (`<@user>`) are stored and notified (`UserMentioned`) only for users who can read the
   conversation: any workspace member but a guest for a public channel, members otherwise. A
@@ -422,7 +432,10 @@ longer a member may be targeted by the Owner or any Moderator (a ban, deleting t
   joining, inviting, creating conversations, and `executeCommand` of
   any `Mutating` (or stricter) command in that workspace. Reads continue, and a timed-out author
   may still delete their own messages over GraphQL. Expired timeouts are ignored;
-  `clearTimeout` ends one early.
+  `clearTimeout` ends one early. Setting a timeout, and clearing one that is in force, emits
+  `MemberTimeoutChanged` (see Realtime events); its end sends nothing, and a client unlocks at
+  `until`. The member reads the reason on their own `ServerMember.timeoutReason`, null on every
+  other entry and for every other viewer.
 
 ### Slow mode
 
@@ -593,6 +606,11 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
 - `{"type": "MemberRoleChanged", "workspace_id": "…", "user_id": "…", "role": "member"}` — `role`
   is `owner`, `moderator`, `member` or `guest`. Same visibility as `MemberLeft`. A subscriber whose
   own role changes to or from `guest` gets the matching visibility from the next event on.
+- `{"type": "MemberTimeoutChanged", "workspace_id": "…", "user_id": "…", "until": "…"}` — a
+  moderator timed the member out until `until`, or cleared the timeout early (`until` null).
+  Same visibility as `MemberLeft`; only the timed-out member's own delivery includes the
+  moderator's `reason`. Listed in `serverInfo.capabilities` as `member_timeout_changed`, with
+  `ServerMember.timeoutReason`.
 - `{"type": "WorkspaceUpdated", "workspace_id": "…", "name": "…"}`: the workspace was renamed.
   Delivered to every member, guests included.
 - `{"type": "MessageFlagChanged", "workspace_id": "…", "conversation_id": "…", "message_id":

@@ -13,6 +13,8 @@ pub mod conversation;
 mod conversation_mapper;
 pub mod conversation_member;
 mod conversation_member_mapper;
+pub mod conversation_member_removal;
+mod conversation_member_removal_mapper;
 pub mod conversation_read_state;
 pub mod custom_emoji;
 mod custom_emoji_mapper;

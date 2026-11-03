@@ -657,6 +657,7 @@ impl DefaultModerationService {
             member_role: member.member_role,
             joined_at: member.joined_at,
             timeout_until,
+            timeout_reason: None,
             principal_id: user.principal_id,
         })
     }
@@ -1130,6 +1131,12 @@ impl ModerationService for DefaultModerationService {
             })
             .await?;
         info!(server_id = %cmd.server_id, user_id = %cmd.user_id, until = %cmd.until, "timed out member");
+        self.observers.emit(WorkspaceEvent::MemberTimeoutChanged {
+            workspace_id: cmd.server_id,
+            user_id: cmd.user_id,
+            until: Some(timeout.until),
+            reason: timeout.reason.clone(),
+        });
 
         self.audit(ModerationAuditEntry {
             actor: cmd.actor.user_id,
@@ -1162,6 +1169,12 @@ impl ModerationService for DefaultModerationService {
             .delete_timeout(cmd.server_id, cmd.user_id)
             .await?;
         if active {
+            self.observers.emit(WorkspaceEvent::MemberTimeoutChanged {
+                workspace_id: cmd.server_id,
+                user_id: cmd.user_id,
+                until: None,
+                reason: None,
+            });
             self.audit(ModerationAuditEntry {
                 actor: cmd.actor.user_id,
                 server_id: cmd.server_id,

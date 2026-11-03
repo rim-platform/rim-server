@@ -158,6 +158,9 @@ pub struct ServerMember {
     pub joined_at: chrono::DateTime<chrono::Utc>,
     /// End of the member's timeout while one is in force, else null.
     pub timeout_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The reason the moderator gave for the timeout, on the viewer's own entry only while it
+    /// is in force; null for every other member and when no reason was given.
+    pub timeout_reason: Option<String>,
     /// The member's key identity (`rimp1_…`), once enrolled; null for a password-only account.
     pub principal_id: Option<String>,
     /// Whether this member is banned in this workspace.
@@ -181,6 +184,7 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
             member_role: value.member_role.into(),
             joined_at: value.joined_at,
             timeout_until: value.timeout_until,
+            timeout_reason: value.timeout_reason,
             principal_id: value.principal_id,
         }
     }

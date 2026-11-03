@@ -52,6 +52,7 @@ impl MockServerMemberService {
                 member_role,
                 joined_at: chrono::Utc::now(),
                 timeout_until: None,
+                timeout_reason: None,
                 principal_id: None,
             });
             Box::pin(async move { member.ok_or(crate::ServiceError::PermissionDenied) })
