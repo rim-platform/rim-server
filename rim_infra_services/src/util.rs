@@ -1205,6 +1205,21 @@ mod tests {
         ) -> RepoResult<Option<UserId>> {
             Ok(None)
         }
+
+        async fn record_removal(
+            &self,
+            _removal: rim_core::conversation_member::model::MemberRemoval,
+        ) -> RepoResult<()> {
+            Ok(())
+        }
+
+        async fn list_removals(
+            &self,
+            _conversation_id: ConversationId,
+            _limit: u64,
+        ) -> RepoResult<Vec<rim_core::conversation_member::model::MemberRemoval>> {
+            Ok(Vec::new())
+        }
     }
 
     /// Non-server-member gets `PermissionDenied` BEFORE the conversation is

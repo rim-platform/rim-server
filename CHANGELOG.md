@@ -21,6 +21,16 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- `MemberTimeoutChanged` workspace event when a member is timed out or their timeout is cleared,
+  so their open clients lock and unlock at once; only the member's own delivery carries the
+  moderator's reason. `ServerMember.timeoutReason` shows the reason on the member's own entry.
+  Listed in `serverInfo.capabilities` as `member_timeout_changed`.
+- Removing someone else from a channel is recorded, and `conversationMemberRemovals` lists a
+  channel's latest removals with who removed whom, so clients can show them in the channel.
+  Listed in `serverInfo.capabilities` as `conversation_member_removals`.
+
 ### Changed
 
 - A DM with someone the user blocked is hidden from the user whoever started it, as a DM or

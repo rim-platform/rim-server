@@ -3695,6 +3695,7 @@ mod tests {
                             member_role: cmd.role,
                             joined_at: chrono::Utc::now(),
                             timeout_until: None,
+                            timeout_reason: None,
                             principal_id: None,
                         })
                     })
@@ -4545,6 +4546,7 @@ mod tests {
                     member_role: role,
                     joined_at: chrono::Utc::now(),
                     timeout_until: None,
+                    timeout_reason: None,
                     principal_id: None,
                 })
             })

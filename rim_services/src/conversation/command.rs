@@ -113,3 +113,13 @@ pub struct ArchiveConversationCmd {
     pub conversation_id: ConversationId,
     pub archived: bool,
 }
+
+/// A channel's latest removals, for someone who can read it.
+#[derive(Debug, Clone)]
+pub struct ListMemberRemovalsQuery {
+    pub actor: Actor,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    /// At most this many, 1 to 100.
+    pub limit: u64,
+}

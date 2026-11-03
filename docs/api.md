@@ -747,7 +747,9 @@ each list.
   (`message_edited_at`: `Message.editedAt`; `workspace_leave`: `leaveWorkspace`;
   `workspace_rename`: `renameWorkspace`; `message_flag`: `Message.flagged`,
   `MessageReport.automatic` and `clearMessageFlag`; `delete_member_messages`:
-  `memberMessageCounts`, `deleteMemberMessages` and the `MessagesDeleted` event). A client asks
+  `memberMessageCounts`, `deleteMemberMessages` and the `MessagesDeleted` event;
+  `member_timeout_changed`: `ServerMember.timeoutReason` and the `MemberTimeoutChanged` event;
+  `conversation_member_removals`: `conversationMemberRemovals`). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 
