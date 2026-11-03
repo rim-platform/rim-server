@@ -73,6 +73,8 @@ pub trait RelayRepository: Send + Sync {
     /// Delete envelopes no item refers to. Returns how many.
     async fn delete_orphan_envelopes(&self) -> RepoResult<u64>;
 
+    /// The user's request for a conversation of a host, its row locked until the surrounding
+    /// transaction ends, so a decision on it waits for the filing that read it.
     async fn find_request(
         &self,
         user_id: UserId,
@@ -154,7 +156,8 @@ pub trait RelayRepository: Send + Sync {
     async fn accepted_at_host(&self, user_id: UserId, host_server_id: &str) -> RepoResult<bool>;
 
     /// Ignore every pending request from a principal, deleting their held items but each
-    /// request's invite. Returns how many requests.
+    /// request's invite. Locks the requests first, so an item a filing in flight adds is
+    /// deleted with the others. Returns how many requests.
     async fn ignore_pending_from(
         &self,
         user_id: UserId,

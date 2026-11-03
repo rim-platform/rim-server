@@ -45,6 +45,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Fixed
 
+- A message from someone the user blocks that was still being delivered at the moment of the
+  block no longer stays with their request and shows up in it again after the unblock.
 - A pipe's row in the command audit log (`listAuditLog`) records the strictest `sensitivity`
   of its stages and is `dangerous` when any stage is, so `chat.mark_as_read | admin.kick` is
   no longer logged as a safe action.

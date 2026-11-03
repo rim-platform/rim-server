@@ -3,7 +3,8 @@
 //! Relay queues, the request inbox, host event streams, the outbox and the device request
 //! window against a real database: per-stream `seq` under concurrency, outbox order, inbound
 //! idempotency, deletion only after every device acked, expired requests left undecided,
-//! cascades, and the migration's refusing `down`.
+//! a block and a filing of the same request taking turns, cascades, and the migration's
+//! refusing `down`.
 
 mod support;
 
@@ -2638,4 +2639,120 @@ async fn a_users_unblock_clears_nothing_while_the_operator_blocks() {
             .unwrap(),
         1
     );
+}
+
+/// Bob's pending request from Alice, holding one item: its invite.
+async fn request_holding_its_invite(
+    repo: &SeaOrmRelayRepository,
+    bob: UserId,
+) -> rim_core::relay::model::DmRequest {
+    let request = repo
+        .insert_request(NewDmRequest {
+            status: DmRequestStatus::Pending,
+            user_id: bob,
+            from_principal_id: "rimp1_alice".to_string(),
+            card_payload: "{}".to_string(),
+            card_signature: "ed25519:c".to_string(),
+            host_server_id: HOST.to_string(),
+            conversation_id: Uuid::now_v7(),
+            expires_at: Utc::now() + Duration::days(30),
+        })
+        .await
+        .unwrap();
+    let env = repo
+        .insert_envelope(envelope(Some(1), Uuid::now_v7()))
+        .await
+        .unwrap();
+    repo.insert_item(NewRelayItem {
+        request_id: Some(request.id),
+        ..item(bob, env)
+    })
+    .await
+    .unwrap();
+    request
+}
+
+#[tokio::test]
+async fn an_item_filed_while_a_block_waits_is_deleted_with_the_others() {
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let request = request_holding_its_invite(&repo, bob.id).await;
+    let conn = support::db_conn().await;
+
+    let filing = begin_transaction(&conn).await.unwrap();
+    let filer = SeaOrmRelayRepository::new(filing.handle());
+    let found = filer
+        .find_request(bob.id, HOST, request.conversation_id)
+        .await
+        .unwrap()
+        .expect("request");
+    assert_eq!(found.status, DmRequestStatus::Pending);
+    let block = tokio::spawn({
+        let conn = conn.clone();
+        async move {
+            let scope = begin_transaction(&conn).await.unwrap();
+            SeaOrmRelayRepository::new(scope.handle())
+                .ignore_pending_from(bob.id, "rimp1_alice", Utc::now() + Duration::days(30))
+                .await
+                .unwrap();
+            scope.commit().await.unwrap();
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let env = filer
+        .insert_envelope(envelope(Some(2), Uuid::now_v7()))
+        .await
+        .unwrap();
+    filer
+        .insert_item(NewRelayItem {
+            request_id: Some(found.id),
+            ..item(bob.id, env)
+        })
+        .await
+        .unwrap();
+    drop(filer);
+    filing.commit().await.unwrap();
+    block.await.unwrap();
+
+    assert_eq!(
+        repo.count_held(request.id).await.unwrap(),
+        1,
+        "the ignored request keeps its invite only"
+    );
+}
+
+#[tokio::test]
+async fn a_filing_during_a_block_reads_the_request_ignored() {
+    let ctx = support::TestCtx::new().await;
+    let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let request = request_holding_its_invite(&repo, bob.id).await;
+    let conn = support::db_conn().await;
+
+    let blocking = begin_transaction(&conn).await.unwrap();
+    let blocker = SeaOrmRelayRepository::new(blocking.handle());
+    blocker
+        .ignore_pending_from(bob.id, "rimp1_alice", Utc::now() + Duration::days(30))
+        .await
+        .unwrap();
+    let filing = tokio::spawn({
+        let conn = conn.clone();
+        let conversation_id = request.conversation_id;
+        async move {
+            let scope = begin_transaction(&conn).await.unwrap();
+            let found = SeaOrmRelayRepository::new(scope.handle())
+                .find_request(bob.id, HOST, conversation_id)
+                .await
+                .unwrap()
+                .expect("request");
+            scope.commit().await.unwrap();
+            found.status
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    drop(blocker);
+    blocking.commit().await.unwrap();
+
+    assert_eq!(filing.await.unwrap(), DmRequestStatus::Ignored);
 }
