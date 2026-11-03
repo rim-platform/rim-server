@@ -15,8 +15,8 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
@@ -101,15 +101,25 @@ impl PasswordKey {
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
-        XChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(self.share_key.as_slice()))
+        XChaCha20Poly1305::new((&**self.share_key).into())
     }
 
     fn seal(&self, aad: &[u8], value: &[u8]) -> anyhow::Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce).map_err(|e| anyhow!("entropy failure: {e}"))?;
+        self.seal_with_nonce(aad, value, &nonce)
+    }
+
+    /// `value` sealed under the share key with the nonce `nonce`: the nonce, then the ciphertext.
+    fn seal_with_nonce(
+        &self,
+        aad: &[u8],
+        value: &[u8],
+        nonce: &[u8; NONCE_LEN],
+    ) -> anyhow::Result<Vec<u8>> {
         let ciphertext = self
             .cipher()
-            .encrypt(XNonce::from_slice(&nonce), Payload { msg: value, aad })
+            .encrypt(nonce.into(), Payload { msg: value, aad })
             .map_err(|_| anyhow!("cannot seal under the password key"))?;
         let mut sealed = nonce.to_vec();
         sealed.extend_from_slice(&ciphertext);
@@ -120,10 +130,10 @@ impl PasswordKey {
         if sealed.len() <= NONCE_LEN {
             return None;
         }
-        let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
+        let (nonce, ciphertext) = sealed.split_first_chunk::<NONCE_LEN>()?;
         self.cipher()
             .decrypt(
-                XNonce::from_slice(nonce),
+                nonce.into(),
                 Payload {
                     msg: ciphertext,
                     aad,
@@ -335,6 +345,50 @@ mod tests {
         assert!(key.open_keep(session, &sealed).is_none());
         let keep = key.seal_keep(session, &[5; 32]).unwrap();
         assert!(key.open_reload(session, &keep).is_none());
+    }
+
+    /// A fixed share key and nonce, so a sealed value's bytes can be compared across releases.
+    fn fixed_key() -> PasswordKey {
+        PasswordKey::new(generate_server_setup(), [0x42; KEY_LEN])
+    }
+
+    const FIXED_NONCE: [u8; NONCE_LEN] = [0x24; NONCE_LEN];
+    const FIXED_SESSION: uuid::Uuid =
+        uuid::Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
+    /// `rim sealed value` sealed as a keep key for `FIXED_SESSION` under `fixed_key` and
+    /// `FIXED_NONCE`, in hex; computed apart from this crate with HChaCha20 and ChaCha20-Poly1305.
+    const FIXED_SEALED: &str = "242424242424242424242424242424242424242424242424d737ba451d412dcac74b1f4c6fe478af661dfd365e119d83d3ba0f2260b319f1";
+
+    #[test]
+    fn a_fixed_key_and_nonce_seal_to_known_bytes() {
+        let aad = PasswordKey::session_aad(KEEP_DOMAIN, SessionId::from(FIXED_SESSION));
+        let sealed = fixed_key()
+            .seal_with_nonce(&aad, b"rim sealed value", &FIXED_NONCE)
+            .unwrap();
+        assert_eq!(hex(&sealed), FIXED_SEALED);
+    }
+
+    #[test]
+    fn a_known_sealed_value_still_opens() {
+        let sealed = unhex(FIXED_SEALED);
+        assert_eq!(
+            fixed_key()
+                .open_keep(SessionId::from(FIXED_SESSION), &sealed)
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(&b"rim sealed value"[..])
+        );
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[tokio::test]
