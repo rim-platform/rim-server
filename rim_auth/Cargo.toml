@@ -32,6 +32,6 @@ version = "0.6.4"
 features = ["getrandom"]
 
 [dev-dependencies]
-rand_chacha = "0.3.1"
+rand_chacha = "0.10.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

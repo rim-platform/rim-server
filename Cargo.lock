@@ -4989,7 +4989,7 @@ dependencies = [
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "opaque-ke",
- "rand_chacha 0.3.1",
+ "rand_chacha 0.10.0",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
