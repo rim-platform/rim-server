@@ -208,7 +208,8 @@ pub trait RelayRepository: Send + Sync {
     /// `own_server_id` hosts that expired before `now` while their user is still a member: pending,
     /// decided as filed, holding nothing, expiring at `expires_at`. One from a principal the user
     /// or the operator blocked stays ignored, keeps what it holds and expires at `expires_at`.
-    /// Returns how many.
+    /// Locks the requests first, in id order, so an item a filing in flight adds is deleted with
+    /// the others. Run in a transaction. Returns how many.
     async fn rearm_expired_local_requests(
         &self,
         own_server_id: &str,

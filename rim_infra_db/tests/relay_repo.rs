@@ -3,8 +3,8 @@
 //! Relay queues, the request inbox, host event streams, the outbox and the device request
 //! window against a real database: per-stream `seq` under concurrency, outbox order, inbound
 //! idempotency, deletion only after every device acked, expired requests left undecided,
-//! a block and a filing of the same request taking turns, cascades, and the migration's
-//! refusing `down`.
+//! a block or a cleanup and a filing of the same request taking turns, cascades, and the
+//! migration's refusing `down`.
 
 mod support;
 
@@ -2641,10 +2641,11 @@ async fn a_users_unblock_clears_nothing_while_the_operator_blocks() {
     );
 }
 
-/// Bob's pending request from Alice, holding one item: its invite.
+/// Bob's pending request from Alice for a conversation, holding one item: its invite.
 async fn request_holding_its_invite(
     repo: &SeaOrmRelayRepository,
     bob: UserId,
+    conversation_id: Uuid,
 ) -> rim_core::relay::model::DmRequest {
     let request = repo
         .insert_request(NewDmRequest {
@@ -2654,7 +2655,7 @@ async fn request_holding_its_invite(
             card_payload: "{}".to_string(),
             card_signature: "ed25519:c".to_string(),
             host_server_id: HOST.to_string(),
-            conversation_id: Uuid::now_v7(),
+            conversation_id,
             expires_at: Utc::now() + Duration::days(30),
         })
         .await
@@ -2677,7 +2678,7 @@ async fn an_item_filed_while_a_block_waits_is_deleted_with_the_others() {
     let ctx = support::TestCtx::new().await;
     let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
     let repo = SeaOrmRelayRepository::new(ctx.db.clone());
-    let request = request_holding_its_invite(&repo, bob.id).await;
+    let request = request_holding_its_invite(&repo, bob.id, Uuid::now_v7()).await;
     let conn = support::db_conn().await;
 
     let filing = begin_transaction(&conn).await.unwrap();
@@ -2727,7 +2728,7 @@ async fn a_filing_during_a_block_reads_the_request_ignored() {
     let ctx = support::TestCtx::new().await;
     let bob = ctx.create_key_only_user("bob", "rimp1_bob").await;
     let repo = SeaOrmRelayRepository::new(ctx.db.clone());
-    let request = request_holding_its_invite(&repo, bob.id).await;
+    let request = request_holding_its_invite(&repo, bob.id, Uuid::now_v7()).await;
     let conn = support::db_conn().await;
 
     let blocking = begin_transaction(&conn).await.unwrap();
@@ -2755,4 +2756,108 @@ async fn a_filing_during_a_block_reads_the_request_ignored() {
     blocking.commit().await.unwrap();
 
     assert_eq!(filing.await.unwrap(), DmRequestStatus::Ignored);
+}
+
+#[tokio::test]
+async fn an_item_filed_while_a_cleanup_waits_is_deleted_with_the_others() {
+    use rim_core::conversation::model::ConversationType;
+
+    let ctx = support::TestCtx::new().await;
+    let (_, bob, conversation_id) = direct_pair(&ctx, ConversationType::Direct).await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let request = request_holding_its_invite(&repo, bob.id, Uuid::from(conversation_id)).await;
+    let lapsed = Utc::now() + Duration::days(31);
+    let conn = support::db_conn().await;
+
+    let filing = begin_transaction(&conn).await.unwrap();
+    let filer = SeaOrmRelayRepository::new(filing.handle());
+    let found = filer
+        .find_request(bob.id, HOST, request.conversation_id)
+        .await
+        .unwrap()
+        .expect("request");
+    assert_eq!(found.status, DmRequestStatus::Pending);
+    let cleanup = tokio::spawn({
+        let conn = conn.clone();
+        async move {
+            let scope = begin_transaction(&conn).await.unwrap();
+            let rearmed = SeaOrmRelayRepository::new(scope.handle())
+                .rearm_expired_local_requests(HOST, lapsed, lapsed + Duration::days(30))
+                .await
+                .unwrap();
+            scope.commit().await.unwrap();
+            rearmed
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let env = filer
+        .insert_envelope(envelope(Some(2), Uuid::now_v7()))
+        .await
+        .unwrap();
+    filer
+        .insert_item(NewRelayItem {
+            request_id: Some(found.id),
+            ..item(bob.id, env)
+        })
+        .await
+        .unwrap();
+    drop(filer);
+    filing.commit().await.unwrap();
+
+    assert_eq!(cleanup.await.unwrap(), 1);
+    let row = repo
+        .get_request(bob.id, request.id)
+        .await
+        .unwrap()
+        .expect("row");
+    assert!(row.is_cleared());
+    assert_eq!(
+        repo.count_held(request.id).await.unwrap(),
+        0,
+        "the cleared request holds nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_filing_during_a_cleanup_reads_the_request_cleared() {
+    use rim_core::conversation::model::ConversationType;
+
+    let ctx = support::TestCtx::new().await;
+    let (_, bob, conversation_id) = direct_pair(&ctx, ConversationType::Direct).await;
+    let repo = SeaOrmRelayRepository::new(ctx.db.clone());
+    let request = request_holding_its_invite(&repo, bob.id, Uuid::from(conversation_id)).await;
+    let lapsed = Utc::now() + Duration::days(31);
+    let conn = support::db_conn().await;
+
+    let cleaning = begin_transaction(&conn).await.unwrap();
+    let cleaner = SeaOrmRelayRepository::new(cleaning.handle());
+    assert_eq!(
+        cleaner
+            .rearm_expired_local_requests(HOST, lapsed, lapsed + Duration::days(30))
+            .await
+            .unwrap(),
+        1
+    );
+    let filing = tokio::spawn({
+        let conn = conn.clone();
+        let conversation_id = request.conversation_id;
+        async move {
+            let scope = begin_transaction(&conn).await.unwrap();
+            let found = SeaOrmRelayRepository::new(scope.handle())
+                .find_request(bob.id, HOST, conversation_id)
+                .await
+                .unwrap()
+                .expect("request");
+            scope.commit().await.unwrap();
+            found.is_cleared()
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    drop(cleaner);
+    cleaning.commit().await.unwrap();
+
+    assert!(
+        filing.await.unwrap(),
+        "the filing files the cleared request again"
+    );
 }
