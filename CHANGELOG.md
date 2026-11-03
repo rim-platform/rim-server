@@ -43,6 +43,12 @@ tag `v<version>`, the version every crate in the workspace carries.
   on another server comes back as it was.
 - Blocking someone also removes them from your contacts.
 
+### Fixed
+
+- A pipe's row in the command audit log (`listAuditLog`) records the strictest `sensitivity`
+  of its stages and is `dangerous` when any stage is, so `chat.mark_as_read | admin.kick` is
+  no longer logged as a safe action.
+
 ## [0.0.7] - 2026-10-31
 
 ### Added

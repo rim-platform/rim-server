@@ -95,6 +95,30 @@ impl Dispatch {
         }
         Ok(())
     }
+
+    /// Resolves what `cmd` dispatches for its actor: each stage of a pipe, or its one command.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` for a pipe expression that does not parse; as
+    /// [`CommandResolver::resolve`].
+    pub(super) async fn resolve(
+        cmd: &ExecuteCommandCmd,
+        resolver: &mut CommandResolver<'_>,
+    ) -> ServiceResult<Self> {
+        if !cmd.is_pipe {
+            return Ok(Self::Single(
+                resolver.resolve(&cmd.command_id).await?.map(Box::new),
+            ));
+        }
+        let segments = pipe_parser::parse_pipe_expression(&cmd.command_id)?;
+        let mut stages = Vec::with_capacity(segments.len());
+        for segment in segments {
+            let resolved = resolver.resolve(&segment.command_id).await?;
+            stages.push((segment, resolved));
+        }
+        Ok(Self::Pipe(stages))
+    }
 }
 
 const RECURSION_DEPTH_EXCEEDED: &str = "user command recursion depth exceeded";
@@ -418,14 +442,14 @@ impl DefaultCommandService {
         self.execute_user_command_recursive(user_command, ctx).await
     }
 
-    /// Inner dispatch body for `execute_command`, given `resolver` and, for a single command,
-    /// its resolution `top_level`. The public trait method wraps this with the audit emit so
-    /// every branch gets exactly one audit line.
+    /// Inner dispatch body for `execute_command`, given what `cmd` dispatches, as
+    /// [`Dispatch::resolve`] resolved it with `resolver`. The public trait method wraps this with
+    /// the audit emit so every branch gets exactly one audit line.
     pub(super) async fn execute_command_inner(
         &self,
         cmd: ExecuteCommandCmd,
-        top_level: ServiceResult<Option<Resolved>>,
-        mut resolver: CommandResolver<'_>,
+        dispatch: ServiceResult<Dispatch>,
+        resolver: CommandResolver<'_>,
     ) -> ServiceResult<CommandResultDto> {
         if !cmd.is_pipe && cmd.command_id.contains('|') {
             return Err(ServiceError::Validation(
@@ -433,17 +457,7 @@ impl DefaultCommandService {
             ));
         }
 
-        let dispatch = if cmd.is_pipe {
-            let segments = pipe_parser::parse_pipe_expression(&cmd.command_id)?;
-            let mut stages = Vec::with_capacity(segments.len());
-            for segment in segments {
-                let resolved = resolver.resolve(&segment.command_id).await?;
-                stages.push((segment, resolved));
-            }
-            Dispatch::Pipe(stages)
-        } else {
-            Dispatch::Single(top_level?.map(Box::new))
-        };
+        let dispatch = dispatch?;
         dispatch.ensure_within_limits()?;
         let run = Arc::new(RunScope::new(resolver.into_user_commands()));
 

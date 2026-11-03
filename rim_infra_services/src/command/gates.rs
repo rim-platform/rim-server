@@ -7,19 +7,41 @@ use super::DefaultCommandService;
 use super::dispatch::Dispatch;
 
 impl Dispatch {
+    /// Every command the dispatch reaches: the single command, or each pipe stage that names
+    /// one.
+    fn definitions(&self) -> Vec<&CommandDefinitionDto> {
+        match self {
+            Self::Single(resolved) => resolved.iter().map(|r| &r.definition).collect(),
+            Self::Pipe(stages) => stages
+                .iter()
+                .filter_map(|(_, r)| r.as_ref().map(|r| &r.definition))
+                .collect(),
+        }
+    }
+
+    /// The strictest sensitivity of the commands the dispatch reaches, and whether any of them
+    /// is dangerous: what its audit row records. `Safe` and `false` when none resolved.
+    pub(super) fn audit_profile(&self) -> (CommandSensitivityDto, bool) {
+        let definitions = self.definitions();
+        (
+            CommandSensitivityDto::effective(
+                CommandSensitivityDto::Safe,
+                &definitions
+                    .iter()
+                    .map(|d| d.sensitivity)
+                    .collect::<Vec<_>>(),
+            ),
+            definitions.iter().any(|d| d.dangerous),
+        )
+    }
+
     /// Returns the de-duplicated union of `required_capabilities` declared
     /// by every command the dispatch reaches (the single command, or every
     /// pipe stage).
     pub(super) fn required_capabilities(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let definitions: Vec<&CommandDefinitionDto> = match self {
-            Self::Single(resolved) => resolved.iter().map(|r| &r.definition).collect(),
-            Self::Pipe(stages) => stages
-                .iter()
-                .filter_map(|(_, r)| r.as_ref().map(|r| &r.definition))
-                .collect(),
-        };
+        let definitions = self.definitions();
         for def in definitions {
             for cap in &def.required_capabilities {
                 if seen.insert(cap) {
