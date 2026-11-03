@@ -644,8 +644,16 @@ async fn blocking_removes_a_contact_so_their_next_group_after_the_unblock_is_a_r
     );
 
     let second = group(&a, &bob, &direct, &[&alice, &carol]).await;
-    let request = alice.pending_request(&bob).await;
-    assert_eq!(request["conversationId"], json!(second));
+    // The first group, cleared by the unblock, may come back as a request of its own when a late
+    // event of it arrives; wait for the second group's.
+    eventually("the second group filed as a request", || async {
+        let pending = alice.ok(REQUESTS, json!({ "status": "PENDING" })).await;
+        pending["dmRequests"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|r| r["conversationId"] == json!(second)))
+            .then_some(())
+    })
+    .await;
     assert!(
         !listed(&alice, &direct).await.contains(&second),
         "a group from someone no longer a contact is a request"
