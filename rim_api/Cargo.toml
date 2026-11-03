@@ -19,7 +19,7 @@ tokio = { version = "1", features = ["sync", "time", "macros"] }
 futures-util = "0.3"
 async-stream = "0.3"
 tracing = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 metrics = "0.24.6"
 async-trait = "0.1.89"
 
