@@ -481,6 +481,24 @@ mod tests {
     }
 
     #[test]
+    fn the_ksf_is_argon2id_with_the_agreed_cost() {
+        // Computed independently with the reference implementation, libargon2's
+        // `argon2id_hash_raw` (t = 3, m = 65536 KiB, p = 4, 16 zero bytes of salt); the
+        // desktop and web clients check the same value.
+        let input: [u8; 64] = std::array::from_fn(|i| i as u8);
+        let out = opaque_ke::ksf::Ksf::hash(
+            &RimKsf::default(),
+            GenericArray::<u8, opaque_ke::generic_array::typenum::U64>::clone_from_slice(&input),
+        )
+        .unwrap();
+        let hex = out.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        assert_eq!(hex, KSF_OUTPUT);
+    }
+
+    const KSF_OUTPUT: &str = "763c05e205e6d06f9d49921578c5fc314590d8016bd8ccc98049f3da265fad5d\
+                              4a27e85aaac6ac1de7cf2aeda7b8c767de0ff4e5db3ff8421d9bb3e8effb279b";
+
+    #[test]
     fn a_registered_password_logs_in_with_the_same_session_key_on_both_sides() {
         let setup = generate_server_setup();
         assert_eq!(server_setup_bytes(&setup).len(), SERVER_SETUP_LEN);
