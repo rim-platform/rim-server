@@ -15,6 +15,7 @@ pub const CONVERSATION_MESSAGE_ROOTS: &[&str] = &[
     "query($s: ID!, $c: ID!) { pinnedMessages(serverId: $s, conversationId: $c) { id } }",
     "mutation($s: ID!, $c: ID!) { sendMessage(input: { serverId: $s, conversationId: $c, \
      text: \"x\" }) { id } }",
+    "query($s: ID!, $c: ID!) { conversationMemberRemovals(serverId: $s, conversationId: $c) { id } }",
 ];
 
 /// Roots that name message `$m` of `$c`, or `$t`, the thread under it.

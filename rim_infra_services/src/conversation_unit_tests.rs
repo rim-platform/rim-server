@@ -11,7 +11,7 @@ mod tests {
         MockConversationRepository,
     };
     use rim_core::conversation_member::model::{
-        ConversationMember, ConversationMemberId, Membership,
+        ConversationMember, ConversationMemberId, MemberRemoval, Membership,
     };
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::e2ee::repository::MockE2eeRepository;
@@ -723,6 +723,8 @@ mod tests {
         gate_calls: Arc<Mutex<Vec<Vec<UserId>>>>,
         /// Users the request gate refuses, as their DM settings would.
         gate_refuses: Vec<UserId>,
+        /// Removals recorded with `record_removal`.
+        removals: Arc<Mutex<Vec<MemberRemoval>>>,
     }
 
     impl Fx {
@@ -749,6 +751,7 @@ mod tests {
                 channels: 0,
                 gate_calls: Arc::default(),
                 gate_refuses: vec![],
+                removals: Arc::default(),
             }
         }
 
@@ -874,6 +877,10 @@ mod tests {
 
         fn cleared_notifications(&self) -> Vec<(UserId, ConversationId)> {
             self.cleared_notifications.lock().expect("lock").clone()
+        }
+
+        fn removals(&self) -> Vec<MemberRemoval> {
+            self.removals.lock().expect("lock").clone()
         }
 
         fn service(&self) -> DefaultConversationService {
@@ -1057,6 +1064,13 @@ mod tests {
                             Err(RepoError::new(RepoErrorKind::NotFound))
                         }
                     })
+                });
+            let removals = Arc::clone(&self.removals);
+            conversation_member_repo
+                .expect_record_removal()
+                .returning(move |removal| {
+                    removals.lock().expect("lock").push(removal);
+                    Box::pin(async { Ok(()) })
                 });
 
             let mut notification_repo = MockNotificationRepository::new();
@@ -1523,6 +1537,39 @@ mod tests {
             fx.remove(moderator, moderator).await,
             Err(ServiceError::NotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn only_a_removal_by_someone_else_from_a_channel_is_recorded() {
+        let [alice, bob, moderator] = users();
+        let fresh = |kind| {
+            Fx::new(kind, false, &[alice, bob])
+                .with_workspace_member(alice, ServerMemberRole::Member)
+                .with_workspace_member(bob, ServerMemberRole::Member)
+                .with_workspace_member(moderator, ServerMemberRole::Moderator)
+        };
+
+        let fx = fresh(ConversationType::Channel);
+        fx.remove(moderator, bob).await.expect("moderator removal");
+        let removals = fx.removals();
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].conversation_id, fx.conversation.id);
+        assert_eq!(
+            (removals[0].user_id, removals[0].removed_by),
+            (bob, moderator)
+        );
+
+        let fx = fresh(ConversationType::Channel);
+        fx.remove(bob, bob).await.expect("self removal");
+        assert!(fx.removals().is_empty());
+
+        let fx = fresh(ConversationType::Group);
+        fx.remove(moderator, bob).await.expect("group removal");
+        assert!(fx.removals().is_empty());
+
+        let fx = fresh(ConversationType::Channel);
+        fx.leave(bob).await.expect("leave");
+        assert!(fx.removals().is_empty());
     }
 
     #[tokio::test]

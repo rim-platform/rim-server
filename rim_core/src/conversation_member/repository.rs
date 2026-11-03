@@ -1,5 +1,5 @@
 use crate::conversation::model::ConversationId;
-use crate::conversation_member::model::{ConversationMember, Membership};
+use crate::conversation_member::model::{ConversationMember, MemberRemoval, Membership};
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 use async_trait::async_trait;
@@ -99,4 +99,14 @@ pub trait ConversationMemberRepository: Send + Sync {
         conversation_id: ConversationId,
         user_id: UserId,
     ) -> RepoResult<Option<UserId>>;
+
+    /// Records that `removal.removed_by` removed `removal.user_id` from the conversation.
+    async fn record_removal(&self, removal: MemberRemoval) -> RepoResult<()>;
+
+    /// The conversation's latest `limit` removals, newest first (`removed_at DESC, id DESC`).
+    async fn list_removals(
+        &self,
+        conversation_id: ConversationId,
+        limit: u64,
+    ) -> RepoResult<Vec<MemberRemoval>>;
 }

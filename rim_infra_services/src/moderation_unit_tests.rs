@@ -962,11 +962,67 @@ mod tests {
             svc.timeout(timeout(Utc::now() + Duration::days(31))).await,
             Err(ServiceError::Validation(_))
         ));
+        assert!(
+            !fx.events()
+                .iter()
+                .any(|e| matches!(e, WorkspaceEvent::MemberTimeoutChanged { .. }))
+        );
         let until = Utc::now() + Duration::days(30) - Duration::minutes(1);
         let set = svc.timeout(timeout(until)).await.expect("timeout");
         assert_eq!(set.until, until);
         assert_eq!(set.set_by, Some(moderator));
         assert_eq!(fx.audited(), [audit_ids::TIMEOUT]);
+    }
+
+    #[tokio::test]
+    async fn timeout_and_clear_tell_the_workspace_and_only_the_member_the_reason() {
+        let [moderator, member] = users();
+        let fx = Fx::new(&[(moderator, Moderator), (member, Member)]);
+        let mut repo = MockModerationRepository::new();
+        repo.expect_upsert_timeout()
+            .times(1)
+            .returning(|t| Box::pin(async move { Ok(t) }));
+        let svc = fx.service(repo);
+        let until = Utc::now() + Duration::hours(1);
+        svc.timeout(TimeoutMemberCmd {
+            actor: Actor::new(moderator),
+            server_id: fx.server_id,
+            user_id: member,
+            until,
+            reason: Some("  flooding  ".to_string()),
+        })
+        .await
+        .expect("timeout");
+
+        let events: Vec<WorkspaceEvent> = fx
+            .events()
+            .into_iter()
+            .filter(|e| matches!(e, WorkspaceEvent::MemberTimeoutChanged { .. }))
+            .collect();
+        assert_eq!(events.len(), 1, "{events:?}");
+        let WorkspaceEvent::MemberTimeoutChanged {
+            workspace_id,
+            user_id,
+            until: event_until,
+            ..
+        } = &events[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(*workspace_id, fx.server_id);
+        assert_eq!(*user_id, member);
+        assert_eq!(*event_until, Some(until));
+        assert_eq!(
+            events[0].json_for_user(&member.to_string()).unwrap()["reason"],
+            "flooding"
+        );
+        assert!(
+            events[0]
+                .json_for_user(&moderator.to_string())
+                .unwrap()
+                .get("reason")
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -1020,6 +1076,37 @@ mod tests {
             .expect("clear")
         );
         assert_eq!(fx.audited(), [audit_ids::CLEAR_TIMEOUT]);
+        let events = fx.events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(matches!(
+            events[0],
+            WorkspaceEvent::MemberTimeoutChanged { user_id, until: None, .. } if user_id == member
+        ));
+    }
+
+    #[tokio::test]
+    async fn clearing_no_timeout_emits_nothing() {
+        let [owner, member] = users();
+        let fx = Fx::new(&[(owner, Owner), (member, Member)]);
+        let server_id = fx.server_id;
+        let mut repo = MockModerationRepository::new();
+        repo.expect_get_active_timeout()
+            .returning(|_, _, _| Box::pin(async { Ok(None) }));
+        repo.expect_delete_timeout()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(false) }));
+        let svc = fx.service(repo);
+        assert!(
+            !svc.clear_timeout(ClearTimeoutCmd {
+                actor: Actor::new(owner),
+                server_id,
+                user_id: member,
+            })
+            .await
+            .expect("clear")
+        );
+        assert!(fx.events().is_empty(), "{:?}", fx.events());
+        assert!(fx.audited().is_empty());
     }
 
     // ── set_member_role ──────────────────────────────────────────────────

@@ -531,7 +531,7 @@ entity of a remote space by (host server id, id).
 |---|---|---|
 | `c:<conversationId>` | Every event with a `conversation_id` (messages, reactions, pins, threads, conversation membership, link previews, `MlsCommitAccepted`, `MlsMembershipChanged`) | 1, 2, … |
 | `u:<principalId>` | Events for one user (`NotificationDue`, `UserMentioned`, `ReadStateUpdated`, `MlsWelcomeAvailable`, `DmInvite`); for a guest, the directory events about them | 1, 2, … |
-| `w` | Other space-wide events (`MemberJoined`, `MemberLeft`, `MemberRoleChanged`, `WorkspacePluginChanged`, `WorkspaceUpdated`, pipeline and workspace-state events), to non-guests | 1, 2, … |
+| `w` | Other space-wide events (`MemberJoined`, `MemberLeft`, `MemberRoleChanged`, `MemberTimeoutChanged`, `WorkspacePluginChanged`, `WorkspaceUpdated`, pipeline and workspace-state events), to non-guests | 1, 2, … |
 | `e` | `TypingStarted`, `PresenceChanged` | `null` |
 
 `seq` is assigned per `(workspace, stream)` in `host_event_stream`, in the transaction that writes
@@ -1650,3 +1650,7 @@ A.1 to A.8 reproduces byte for byte in `rim_s2s`'s tests; A.8's nonce also signs
 `MemberBanChanged {workspace_id, user_id}` is a directory event carrying no ban reason. It
 follows a ban or unban, allowing clients to refresh message-author status without the user
 having to rejoin; its visibility and `w`/`u:` streams match `MemberRoleChanged`.
+
+`MemberTimeoutChanged {workspace_id, user_id, until}` is a directory event: members get it on
+`w` without a reason, guests only about themselves on their `u:` stream, and the timed-out
+member on their own `u:` stream with the moderator's `reason`.

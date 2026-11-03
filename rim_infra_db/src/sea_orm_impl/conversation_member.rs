@@ -1,13 +1,15 @@
 use async_trait::async_trait;
-use entity::conversation_member;
+use entity::{conversation_member, conversation_member_removal};
 use rim_core::conversation::model::ConversationId;
-use rim_core::conversation_member::model::{ConversationMember, ConversationMemberId, Membership};
+use rim_core::conversation_member::model::{
+    ConversationMember, ConversationMemberId, MemberRemoval, Membership,
+};
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::ColumnTrait;
 use sea_orm::prelude::{DateTimeWithTimeZone, Expr, Uuid};
-use sea_orm::{ActiveModelTrait, EntityTrait, QueryFilter, QuerySelect, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set};
 
 use crate::DbHandle;
 use std::collections::HashMap;
@@ -271,5 +273,38 @@ impl ConversationMemberRepository for SeaOrmConversationMemberRepository {
             .await
             .map_err(map_db_err)?;
         Ok(invited_by.flatten().map(Into::into))
+    }
+
+    async fn record_removal(&self, removal: MemberRemoval) -> RepoResult<()> {
+        conversation_member_removal::ActiveModel {
+            id: Set(removal.id.into()),
+            conversation_id: Set(removal.conversation_id.into()),
+            user_id: Set(removal.user_id.into()),
+            removed_by: Set(removal.removed_by.into()),
+            removed_at: Set(removal.removed_at.into()),
+        }
+        .insert(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(())
+    }
+
+    async fn list_removals(
+        &self,
+        conversation_id: ConversationId,
+        limit: u64,
+    ) -> RepoResult<Vec<MemberRemoval>> {
+        let rows = conversation_member_removal::Entity::find()
+            .filter(
+                conversation_member_removal::Column::ConversationId
+                    .eq::<Uuid>(conversation_id.into()),
+            )
+            .order_by_desc(conversation_member_removal::Column::RemovedAt)
+            .order_by_desc(conversation_member_removal::Column::Id)
+            .limit(limit)
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 }

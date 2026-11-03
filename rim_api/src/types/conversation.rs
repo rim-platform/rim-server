@@ -1,5 +1,7 @@
 use async_graphql::{ComplexObject, Enum, InputObject, SimpleObject};
 
+use crate::resolve::ResolveExt;
+
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ConversationTypeEnum {
     Direct,
@@ -266,6 +268,52 @@ impl From<rim_services::conversation::dto::ConversationDto> for Conversation {
                 .collect(),
             posting_policy: value.posting_policy.into(),
             posting_allows_threads: value.posting_allows_threads,
+        }
+    }
+}
+
+/// Someone an Owner or Moderator removed from a channel.
+#[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
+pub struct ConversationMemberRemoval {
+    pub id: async_graphql::ID,
+    pub conversation_id: async_graphql::ID,
+    /// The person removed.
+    pub user_id: async_graphql::ID,
+    /// The Owner or Moderator who removed them.
+    pub removed_by_id: async_graphql::ID,
+    pub removed_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[ComplexObject]
+impl ConversationMemberRemoval {
+    /// The person removed (null if the account no longer exists).
+    async fn user(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<super::User>> {
+        ctx.load_user(&self.user_id).await
+    }
+
+    /// Who removed them (null if the account no longer exists).
+    async fn removed_by(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<super::User>> {
+        ctx.load_user(&self.removed_by_id).await
+    }
+}
+
+impl From<rim_services::conversation::dto::ConversationMemberRemovalDto>
+    for ConversationMemberRemoval
+{
+    fn from(value: rim_services::conversation::dto::ConversationMemberRemovalDto) -> Self {
+        Self {
+            id: async_graphql::ID(value.id.to_string()),
+            conversation_id: async_graphql::ID(value.conversation_id.to_string()),
+            user_id: async_graphql::ID(value.user_id.to_string()),
+            removed_by_id: async_graphql::ID(value.removed_by.to_string()),
+            removed_at: value.removed_at,
         }
     }
 }

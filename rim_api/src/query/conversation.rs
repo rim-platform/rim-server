@@ -1,7 +1,7 @@
 use async_graphql::*;
 use rim_services::Actor;
 use rim_services::conversation::command::{
-    GetConversationQuery, ListChannelsQuery, ListInboxConversationsQuery,
+    GetConversationQuery, ListChannelsQuery, ListInboxConversationsQuery, ListMemberRemovalsQuery,
 };
 use rim_services::conversation::service::ConversationService;
 
@@ -9,8 +9,8 @@ use crate::auth_context::require_actor;
 use crate::ids::parse_uuid_id;
 use crate::pagination::PageDir;
 use crate::types::{
-    ChannelCursorInput, ChannelListFilterInput, ChannelPage, Conversation, ConversationPage,
-    InboxCursorInput, MutedConversation, UnreadCount,
+    ChannelCursorInput, ChannelListFilterInput, ChannelPage, Conversation,
+    ConversationMemberRemoval, ConversationPage, InboxCursorInput, MutedConversation, UnreadCount,
 };
 
 #[derive(Default)]
@@ -95,6 +95,35 @@ impl ConversationQueries {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(ChannelPage::from_channel_page(page))
+    }
+
+    /// A channel's latest removals (someone removed by an Owner or Moderator), newest first:
+    /// at most `limit`, 50 by default and at most 100. Empty for a group or DM. Errors as for
+    /// `conversation`. Listed in `serverInfo.capabilities` as `conversation_member_removals`.
+    async fn conversation_member_removals(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        conversation_id: ID,
+        limit: Option<i32>,
+    ) -> Result<Vec<ConversationMemberRemoval>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn ConversationService>>()?;
+        let server_id = parse_uuid_id::<rim_core::server::model::ServerId>(&server_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&conversation_id)?;
+
+        let removals = svc
+            .list_member_removals(ListMemberRemovalsQuery {
+                actor: Actor::new(actor),
+                server_id,
+                conversation_id,
+                limit: u64::try_from(limit.unwrap_or(50).clamp(1, 100)).unwrap_or(50),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(removals.into_iter().map(Into::into).collect())
     }
 }
 

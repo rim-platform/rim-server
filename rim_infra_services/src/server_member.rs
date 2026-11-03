@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use rim_core::moderation::model::MemberTimeout;
 use rim_services::server_member::command::{
     GetServerMemberQuery, GetServerOwnerQuery, ListServerMembersQuery,
 };
@@ -23,7 +24,8 @@ impl DefaultServerMemberService {
     fn to_dto(
         member: rim_core::server_member::model::ServerMember,
         user: &rim_core::user::model::User,
-        timeout_until: Option<chrono::DateTime<chrono::Utc>>,
+        timeout: Option<&MemberTimeout>,
+        own: bool,
     ) -> ServerMemberDto {
         ServerMemberDto {
             server_id: member.server_id,
@@ -35,7 +37,8 @@ impl DefaultServerMemberService {
             bio: user.bio.clone(),
             member_role: member.member_role,
             joined_at: member.joined_at,
-            timeout_until,
+            timeout_until: timeout.map(|t| t.until),
+            timeout_reason: timeout.filter(|_| own).and_then(|t| t.reason.clone()),
             principal_id: user.principal_id.clone(),
         }
     }
@@ -69,17 +72,16 @@ impl DefaultServerMemberService {
         Ok(Some(visible))
     }
 
-    async fn active_timeout_until(
+    async fn active_timeout(
         &self,
         server_id: rim_core::server::model::ServerId,
         user_id: rim_core::user::model::UserId,
-    ) -> ServiceResult<Option<chrono::DateTime<chrono::Utc>>> {
+    ) -> ServiceResult<Option<MemberTimeout>> {
         Ok(self
             .repos
             .moderation_repo
             .get_active_timeout(server_id, user_id, chrono::Utc::now())
-            .await?
-            .map(|t| t.until))
+            .await?)
     }
 
     async fn resolve_user(
@@ -115,11 +117,14 @@ impl ServerMemberService for DefaultServerMemberService {
             .ok_or(ServiceError::NotFound)?;
 
         let user = self.resolve_user(member.user_id).await?;
-        let timeout_until = self
-            .active_timeout_until(query.server_id, query.user_id)
-            .await?;
+        let timeout = self.active_timeout(query.server_id, query.user_id).await?;
 
-        Ok(Self::to_dto(member, &user, timeout_until))
+        Ok(Self::to_dto(
+            member,
+            &user,
+            timeout.as_ref(),
+            query.user_id == query.actor.user_id,
+        ))
     }
 
     async fn visible_members(
@@ -170,7 +175,7 @@ impl ServerMemberService for DefaultServerMemberService {
             .list_active_timeouts(query.server_id, chrono::Utc::now())
             .await?
             .into_iter()
-            .map(|t| (t.user_id, t.until))
+            .map(|t| (t.user_id, t))
             .collect();
 
         // Batch-fetch all users in a single query to avoid N+1
@@ -186,8 +191,9 @@ impl ServerMemberService for DefaultServerMemberService {
             let user = user_map
                 .get(&member.user_id)
                 .ok_or(ServiceError::NotFound)?;
-            let timeout_until = timeouts.get(&member.user_id).copied();
-            result.push(Self::to_dto(member, user, timeout_until));
+            let own = member.user_id == query.actor.user_id;
+            let timeout = timeouts.get(&member.user_id);
+            result.push(Self::to_dto(member, user, timeout, own));
         }
 
         Ok(result)
