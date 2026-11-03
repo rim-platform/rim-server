@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rim_core::conversation::repository::MockConversationRepository;
 use rim_core::conversation_member::repository::MockConversationMemberRepository;
 use rim_core::dm_policy::model::DmInbound;
@@ -60,10 +60,13 @@ const BOB: &str = "rimp1_bob";
 const ALICE: &str = "rimp1_alice";
 const QUEUE_CAP: i64 = 1 << 20;
 
+/// A host and relay keyed by `seed`. Its inception has a fixed time, so a seed always names the
+/// same server: the server id is a hash of the inception.
 fn identity(seed: u8) -> SharedIdentity {
     let signer = ServerSigner::from_seed([seed; 32]);
     let recovery = ServerSigner::from_seed([seed.wrapping_add(100); 32]);
-    let inception = sign_inception(&signer, &recovery, Utc::now());
+    let incepted_at = DateTime::from_timestamp(1_767_225_600, 0).expect("2026-01-01");
+    let inception = sign_inception(&signer, &recovery, incepted_at);
     let state = ServerKeyState::from_inception(&inception).expect("inception");
     let content = ServerDescriptor::new(
         state.server_id.clone(),
