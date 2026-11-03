@@ -4946,7 +4946,7 @@ dependencies = [
  "async-graphql",
  "async-stream",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek 3.0.0",
  "entity",
@@ -4984,7 +4984,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "getrandom 0.3.4",
  "hkdf 0.13.0",
  "hmac 0.13.0",
@@ -5021,7 +5021,7 @@ version = "0.0.7"
 dependencies = [
  "aes",
  "aes-gcm",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek 3.0.0",
  "hkdf 0.13.0",
@@ -5060,7 +5060,7 @@ dependencies = [
  "anyhow",
  "async-recursion",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "chrono",
  "chrono-tz",
@@ -5121,7 +5121,7 @@ dependencies = [
 name = "rim_s2s"
 version = "0.0.7"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek 3.0.0",
  "getrandom 0.3.4",
@@ -5148,7 +5148,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-actix-web",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "config",
  "dotenvy",
@@ -5187,7 +5187,7 @@ version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "mockall",
  "regex",
