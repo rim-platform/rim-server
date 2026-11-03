@@ -731,7 +731,8 @@ impl RelayRepository for SeaOrmRelayRepository {
     ) -> RepoResult<u64> {
         self.execute(
             "SELECT id FROM relay_dm_request \
-             WHERE user_id = $1 AND from_principal_id = $2 AND status = 'pending' FOR UPDATE",
+             WHERE user_id = $1 AND from_principal_id = $2 AND status = 'pending' \
+             ORDER BY id FOR UPDATE",
             vec![uuid(user_id), principal_id.into()],
         )
         .await?;
