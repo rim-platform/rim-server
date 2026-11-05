@@ -88,10 +88,10 @@ messages"). A connection starts at most 10 subscriptions a second, in bursts of 
 `subscribe` (or `start`) message past that closes it with `1008` ("too many subscriptions
 started"). The socket runs subscriptions only: a query or a mutation sent on it answers one
 error with the code `VALIDATION` and the message "only subscriptions over the WebSocket", runs
-nothing, and completes; send those to `POST /api`. The subscription roots are `workspaceEvents` and
-`relayStream`; the schema describes both. A `TypingStarted` event, sent for direct conversations
-only, names the typing user by `user_id`, `username` and `display_name`, which is `null` when
-they have none.
+nothing, and completes; send those to `POST /api`. The subscription roots are `workspaceEvents`,
+`notificationEvents` and `relayStream`; the schema describes them. A `TypingStarted` event, sent
+for direct conversations only, names the typing user by `user_id`, `username` and `display_name`,
+which is `null` when they have none.
 
 A session signed in without "Keep me signed in" opens its connection with the cookie alone,
 and its first message must be `connection_init` with the session secret as

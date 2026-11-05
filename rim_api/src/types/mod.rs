@@ -108,8 +108,8 @@ pub use moderation::{
 };
 pub use notification::{
     ConversationNotificationLevel, DigestFrequency, DndWindow, DndWindowInput, Notification,
-    NotificationCursorInput, NotificationCursorOutput, NotificationLevel, NotificationPage,
-    NotificationReason, NotificationSettings, UpdateNotificationSettingsInput,
+    NotificationCursorInput, NotificationCursorOutput, NotificationDueEvent, NotificationLevel,
+    NotificationPage, NotificationReason, NotificationSettings, UpdateNotificationSettingsInput,
 };
 pub use pagination::{
     ChannelCursorInput, ChannelCursorOutput, ChannelPage, ConversationPage, InboxCursorInput,

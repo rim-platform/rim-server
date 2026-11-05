@@ -777,6 +777,14 @@ from every other event:
 The event is delivered only to `user_id` (the server-side scope list is `[user_id]`), guests
 included.
 
+`notificationEvents` carries the same notifications as a typed object, with no other event, from
+every workspace on this server at once, so a client can tell its person about workspaces it has
+not opened with one subscription. It takes no workspace and checks no membership: the server
+stores notifications only for members. A conversation in the viewer's request inbox, or one they
+blocked, stays quiet as on `workspaceEvents`. A workspace hosted on another server is not on it:
+those events reach the person through `relayStream`. A server with it lists `notification_events`
+in `serverInfo.capabilities`.
+
 ## Titles
 
 - `Channel` and `Group` conversations may have an optional `title`.

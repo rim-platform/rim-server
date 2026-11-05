@@ -874,6 +874,98 @@ async fn events_until(socket: &mut Socket, marker: &str) -> Vec<String> {
     }
 }
 
+/// The id of the message `person` sends with `text` into `conversation` of `server`.
+async fn send_text(person: &Person, server: &str, conversation: &str, text: &str) -> Value {
+    person
+        .ok(SEND, json!({ "s": server, "c": conversation, "t": text }))
+        .await["sendMessage"]["id"]
+        .clone()
+}
+
+/// `person`'s `notificationEvents` on a socket of its own.
+async fn notifications_of(node: &Node, person: &Person) -> Socket {
+    let mut socket = Socket::connect(&node.origin, &person.session).await;
+    socket
+        .subscribe(
+            "notifications",
+            "subscription { notificationEvents { workspaceId conversationId messageId reason } }",
+            json!({}),
+        )
+        .await;
+    socket
+}
+
+/// The notifications `socket` streams until the one for `message`, which is the last item.
+async fn notifications_until(socket: &mut Socket, message: &str) -> Vec<Value> {
+    let mut seen = Vec::new();
+    loop {
+        let answer = socket.receive().await;
+        let item = answer["payload"]["data"]["notificationEvents"].clone();
+        assert!(item.is_object(), "a notification: {answer}");
+        let done = item["messageId"] == message;
+        seen.push(item);
+        if done {
+            return seen;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn notification_events_cover_every_workspace_and_skip_a_blocked_persons_group() {
+    let a = one_server(|_| {}).await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let bob = sign_up(&a, "bob", 2).await;
+    let carol = sign_up(&a, "carol", 3).await;
+    let acme = workspace(&alice, "Acme", &[&bob, &carol]).await;
+    let beta = workspace(&alice, "Beta", &[&bob]).await;
+    let in_acme = created(&dm(&a, &alice, &acme, &bob).await);
+    let in_beta = created(&dm(&a, &alice, &beta, &bob).await);
+    let carols = group(&a, &carol, &acme, &[&alice, &bob]).await;
+
+    let mut notifications = notifications_of(&a, &bob).await;
+    // The subscription starts listening a moment after it is acknowledged.
+    let mut heard = false;
+    for n in 0..50 {
+        send_text(&alice, &acme, &in_acme, &format!("warm up {n}")).await;
+        if notifications
+            .receive_within(Duration::from_millis(300))
+            .await
+            .is_some()
+        {
+            heard = true;
+            break;
+        }
+    }
+    assert!(heard, "the subscription listens");
+
+    let first = send_text(&alice, &acme, &in_acme, "in Acme").await;
+    let first = first.as_str().expect("id");
+    let seen = notifications_until(&mut notifications, first).await;
+    let item = seen.last().expect("the notification");
+    assert_eq!(item["workspaceId"], acme, "{item}");
+    assert_eq!(item["conversationId"], in_acme, "{item}");
+    assert_eq!(item["reason"], "DIRECT", "{item}");
+    let second = send_text(&alice, &beta, &in_beta, "in Beta").await;
+    let second = second.as_str().expect("id");
+    let seen = notifications_until(&mut notifications, second).await;
+    let item = seen.last().expect("the notification");
+    assert_eq!(item["workspaceId"], beta, "{item}");
+    assert_eq!(item["conversationId"], in_beta, "{item}");
+    assert_eq!(item["reason"], "DIRECT", "{item}");
+
+    bob.ok(BLOCK, json!({ "p": carol.principal() })).await;
+    let hidden = send_text(&carol, &acme, &carols, "from the blocked").await;
+    let hidden = hidden.as_str().expect("id").to_string();
+    let marker = send_text(&alice, &beta, &in_beta, "marker").await;
+    let marker = marker.as_str().expect("id");
+    let seen = notifications_until(&mut notifications, marker).await;
+    assert!(
+        seen.iter()
+            .all(|n| n["messageId"] != hidden.as_str() && n["conversationId"] != carols.as_str()),
+        "nothing of the blocked person's group reaches Bob: {seen:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_workspace_dm_and_group_a_blocked_person_started_are_hidden_until_the_unblock() {
     let a = one_server(|_| {}).await;

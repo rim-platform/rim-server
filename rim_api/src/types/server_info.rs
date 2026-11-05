@@ -22,6 +22,7 @@ pub const CAPABILITIES: &[&str] = &[
     "delete_member_messages",
     "member_timeout_changed",
     "conversation_member_removals",
+    "notification_events",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.
@@ -184,8 +185,8 @@ impl ServerInfo {
     /// `clearMessageFlag`), `delete_member_messages` (`memberMessageCounts`,
     /// `deleteMemberMessages`, the `MessagesDeleted` event), `member_timeout_changed`
     /// (`ServerMember.timeoutReason`, the `MemberTimeoutChanged` event),
-    /// `conversation_member_removals` (`conversationMemberRemovals`). A client ignores names it
-    /// does not know.
+    /// `conversation_member_removals` (`conversationMemberRemovals`), `notification_events`
+    /// (`notificationEvents`). A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES
             .iter()

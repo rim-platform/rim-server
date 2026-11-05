@@ -1,7 +1,7 @@
 //! Notification rules and the notification inbox.
 
 use async_graphql::{
-    ComplexObject, Context, Enum, Error, ErrorExtensions, InputObject, Result, SimpleObject,
+    ComplexObject, Context, Enum, Error, ErrorExtensions, ID, InputObject, Result, SimpleObject,
 };
 
 use super::{Conversation, Message, PageInfo, User};
@@ -53,6 +53,28 @@ pub enum NotificationReason {
     /// Someone reacted to the viewer's message; one entry per message, re-surfaced by each new
     /// reaction.
     Reaction,
+}
+
+/// A notification the server just stored for the viewer, from any workspace on this server.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct NotificationDueEvent {
+    /// The workspace the notification belongs to.
+    pub workspace_id: ID,
+    /// The stored notification, as in the inbox.
+    pub notification_id: ID,
+    /// The conversation of the message.
+    pub conversation_id: ID,
+    /// The message the notification is about.
+    pub message_id: ID,
+    /// Why the viewer was notified.
+    pub reason: NotificationReason,
+    /// True inside the viewer's do-not-disturb window or pause: record it without a toast or a
+    /// sound.
+    pub quiet: bool,
+    /// The emoji of the reaction; null unless `reason` is `REACTION`.
+    pub reaction_emoji: Option<String>,
+    /// Who added the reaction; null unless `reason` is `REACTION`.
+    pub reaction_by: Option<ID>,
 }
 
 impl From<rim_core::notification::model::NotificationReason> for NotificationReason {

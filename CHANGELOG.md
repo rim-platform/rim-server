@@ -21,6 +21,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- A `notificationEvents` subscription: the viewer's notifications from every workspace on this
+  server, on one subscription and with no other events. Listed in `serverInfo.capabilities` as
+  `notification_events`.
+
 ## [0.0.8] - 2026-11-03
 
 ### Added
