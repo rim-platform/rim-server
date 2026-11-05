@@ -380,7 +380,8 @@ async fn an_unblocked_senders_next_message_is_a_new_request_without_what_the_blo
     let hello = alice
         .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
         .await;
-    let request = bob.pending_request(&alice).await;
+    // Everything is held before the block, so "hello" cannot be filed after the unblock.
+    let request = holding(&bob, &alice, 3).await;
 
     let blocked = bob.ok(BLOCK, json!({ "p": alice.principal() })).await;
     assert_eq!(blocked["blockPrincipal"], json!(true));
@@ -416,9 +417,8 @@ async fn an_unblocked_senders_next_message_is_a_new_request_without_what_the_blo
     alice
         .ok(SEND, json!({ "s": direct, "c": conv, "t": "after" }))
         .await;
-    let again = bob.pending_request(&alice).await;
+    let again = holding(&bob, &alice, 2).await;
     assert_eq!(again["id"], request["id"]);
-    assert_eq!(again["heldItems"].as_array().expect("held").len(), 2);
     assert!(
         again["createdAt"].as_str() > request["createdAt"].as_str(),
         "the request is filed anew: {request} then {again}"
@@ -794,7 +794,8 @@ async fn a_lapsed_request_from_someone_blocked_stays_ignored() {
     carol
         .ok(SEND, json!({ "s": direct, "c": conv, "t": "hello" }))
         .await;
-    let request = bob.pending_request(&carol).await;
+    // Everything is held before the block, so "hello" cannot be filed after the unblock.
+    let request = holding(&bob, &carol, 3).await;
     bob.ok(BLOCK, json!({ "p": carol.principal() })).await;
 
     lapse(&a, &conv).await;
