@@ -11,6 +11,7 @@ use rim_services::presence::PresenceService;
 use rim_services::remote_workspace::service::WorkspaceRelayService;
 
 use crate::broadcast::InMemoryBroadcaster;
+use crate::types::NotificationDueEvent;
 
 pub struct Subscription;
 
@@ -68,6 +69,45 @@ impl<S> Drop for RelayStreamPresence<S> {
     fn drop(&mut self) {
         self.workspaces.stream_closed(self.user_id);
     }
+}
+
+/// `event` as the notification `viewer` should receive: `None` for any other event, for another
+/// person's notification, and for a reason this build does not know.
+fn notification_due_for(event: &WorkspaceEvent, viewer: UserId) -> Option<NotificationDueEvent> {
+    let WorkspaceEvent::NotificationDue {
+        workspace_id,
+        notification_id,
+        conversation_id,
+        message_id,
+        reason,
+        quiet,
+        reaction_emoji,
+        reaction_by,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    if !user_can_see_event_as(event, &viewer.to_string(), false) {
+        return None;
+    }
+    let reason = match reason.parse::<rim_core::notification::model::NotificationReason>() {
+        Ok(reason) => reason,
+        Err(e) => {
+            tracing::warn!(error = %e, "notification with an unknown reason skipped");
+            return None;
+        }
+    };
+    Some(NotificationDueEvent {
+        workspace_id: ID::from(workspace_id.to_string()),
+        notification_id: ID::from(notification_id.to_string()),
+        conversation_id: ID::from(conversation_id.to_string()),
+        message_id: ID::from(message_id.to_string()),
+        reason: reason.into(),
+        quiet: *quiet,
+        reaction_emoji: reaction_emoji.clone(),
+        reaction_by: reaction_by.map(|id| ID::from(id.to_string())),
+    })
 }
 
 #[Subscription]
@@ -206,6 +246,48 @@ impl Subscription {
             inner: Box::pin(inner),
             presence: Arc::clone(presence),
             user_id: actor,
+        })
+    }
+
+    /// The viewer's notifications from every workspace on this server, as they are stored: the
+    /// same decisions as the `NotificationDue` event of `workspaceEvents`, with no other event.
+    /// A conversation in the viewer's request inbox, or one they blocked, stays quiet as it does
+    /// there. A notification dropped because the subscriber fell behind is still in the inbox.
+    /// Listed in `serverInfo.capabilities` as `notification_events`.
+    async fn notification_events(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<impl futures_util::Stream<Item = NotificationDueEvent>> {
+        let actor = crate::auth_context::require_actor(ctx)?;
+        let broadcaster = ctx.data::<InMemoryBroadcaster>()?;
+        let mut rx = broadcaster.subscribe();
+        let federation = ctx.data::<crate::federation::FederationContext>().ok();
+        let inbox = federation.map(|f| Arc::clone(&f.relay));
+        Ok(async_stream::stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        let Some(due) = notification_due_for(&event, actor) else {
+                            continue;
+                        };
+                        let hidden = match (&inbox, uuid::Uuid::parse_str(due.conversation_id.as_str())) {
+                            (Some(relay), Ok(conversation_id)) => relay
+                                .conversation_hidden(actor, conversation_id)
+                                .await
+                                .unwrap_or(true),
+                            (Some(_), Err(_)) => true,
+                            (None, _) => false,
+                        };
+                        if !hidden {
+                            yield due;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("notification subscriber lagged, skipped {n} events");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
         })
     }
 
