@@ -35,8 +35,12 @@ the person's session, device keys, account vault, model keys or plugin secrets.
 
 - Everything starts off. A paired agent with no grants can read nothing.
 - A grant names a channel, or "all channels you can see" in one workspace. It is per agent.
-- A grant cannot exceed what the person can read: the server still decides each read. Losing access
-  to a channel ends the agent's access to it.
+- A grant cannot exceed what the person can read. A read comes from the messages stored on this
+  device, which the desktop app keeps as that person, so no server sees or decides it. The app checks
+  that the person can still see the conversation, and a conversation they lost access to is removed
+  from the device.
+- A conversation not stored on this device yet gets a refusal saying to try again shortly, and the
+  app starts storing it.
 - A read within a grant does not prompt. A grant can be revoked at any time, and the revocation
   applies to the next call.
 - "All channels you can see" means what it says: it includes private channels the person is in, and
@@ -75,7 +79,9 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   confirm it. It covers one call with its exact arguments and expires after 60 seconds.
 - An agent never grants itself anything: no tool changes a grant, an approval or a setting that
   limits agents.
-- The server's `ai_commands` switch applies: on a server that has it off, agent calls are refused.
+- The server's `ai_commands` switch applies to changes: on a server that has it off, they are
+  refused. It does not stop a person's own agent reading what is stored on that person's device, as
+  `docs/vision.md` says under "Who it is for first".
 - A refusal says why (`docs/command_model.md`, "Refusals").
 
 ## Encrypted conversations
