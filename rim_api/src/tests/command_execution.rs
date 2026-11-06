@@ -241,3 +241,35 @@ async fn execute_command_rate_limited_error_carries_extension_shape() {
         "retryAfterSeconds must be present and match the service value"
     );
 }
+
+#[tokio::test]
+async fn execute_command_says_what_kind_of_refusal_it_was() {
+    let actor = UserId::new();
+    let mut command = MockCommandService::new();
+    command.expect_execute_command().returning(|_cmd| {
+        Box::pin(async {
+            Err(ServiceError::CapabilityMissing {
+                capability: "delete_member_messages".to_string(),
+            })
+        })
+    });
+
+    let schema = schema_with_command_mock(command);
+    let req = authed_request(
+        r#"mutation { executeCommand(input: { commandId: "chat.post_message" }) { status } }"#,
+        actor,
+    );
+
+    let res = schema.execute(req).await;
+    assert!(!res.errors.is_empty(), "expected a GQL error");
+    let ext = res.errors[0]
+        .extensions
+        .as_ref()
+        .expect("missing extensions");
+    assert_eq!(ext.get("code"), Some(&Value::from("FORBIDDEN")));
+    assert_eq!(ext.get("refusal"), Some(&Value::from("DENIED")));
+    assert_eq!(
+        ext.get("missing"),
+        Some(&Value::from("delete_member_messages"))
+    );
+}

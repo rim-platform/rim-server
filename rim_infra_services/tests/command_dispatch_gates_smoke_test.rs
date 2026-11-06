@@ -235,7 +235,7 @@ async fn dispatch_gates_end_to_end_smoke_test() {
     //
     // (b) **No confirmation token may be issued.** A regression that swaps
     //     the gate ordering (confirmation BEFORE cap) would still surface
-    //     PermissionDenied to the caller — masking the actual security
+    //     CapabilityMissing to the caller — masking the actual security
     //     leak: a token minted for the denied actor now sits in the store,
     //     and a later call could submit it. The `store.is_empty()`
     //     assertion below is the only way to catch this — observable
@@ -246,9 +246,9 @@ async fn dispatch_gates_end_to_end_smoke_test() {
             .execute_command(fx.execute_cmd(None, CommandInitiator::Agent))
             .await;
         match result {
-            Err(ServiceError::PermissionDenied) => {}
+            Err(ServiceError::CapabilityMissing { .. }) => {}
             other => {
-                panic!("S1: expected PermissionDenied from cap gate, got {other:?}")
+                panic!("S1: expected CapabilityMissing from cap gate, got {other:?}")
             }
         }
         assert!(

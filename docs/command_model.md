@@ -379,6 +379,34 @@ steps, pipe stages), before the rate limiter, inside the audit wrapper. Without 
 context it has nothing to check; the services behind the command apply their own write gates
 anyway. Gate order: C1 capability → H1 confirmation → T1 timeout → R1 rate limit.
 
+### Refusals
+
+An error from `executeCommand` or `executeMacro` carries a `refusal` extension next to its `code`,
+which says what the caller can do about it:
+
+| `refusal` | Meaning | Other extensions |
+|---|---|---|
+| `DENIED` | A policy decision: repeating the call does not help. | `missing`, the capability the caller lacks, when the capability gate refused; `until` when timed out; `feature` when the server has the feature off |
+| `FAILED` | A technical problem, not a decision. | `retrySafe`; `retryAfterSeconds` when rate-limited |
+| `EXPIRED` | The confirmation expired or was already used. Nothing ran. | none |
+| `INVALID` | The call itself is wrong: bad arguments, nothing by that name, or a conflict. | none |
+
+A command that needs a confirmation is not refused: it answers status `CONFIRMATION_REQUIRED`.
+
+`retrySafe` is true only when repeating the call cannot change anything twice: every command it
+reaches is `Safe` or `Sensitive` and none is dangerous, or the rate limiter stopped it before it
+started. A `Mutating` command that timed out may have run, so it is false even if nothing changed. A
+macro that fails outside its steps is false as well.
+
+`missing` names a capability, never a workspace, channel or person, so it reveals nothing the caller
+cannot already see: a capability id is public on the command's definition. At the capability gate,
+someone who is not a member gets the same answer as someone whose role is too low, whether or not
+the workspace exists. A client that names the target takes it from what it already shows.
+
+A pipe that fails partway answers status `ERROR` with the failed stage's `message`, with no
+`refusal`. A macro's failed step is reported the same way. A server older than this has no
+`refusal`, so a client falls back on `code`.
+
 ## Arguments
 
 Arguments should be typed from day one.

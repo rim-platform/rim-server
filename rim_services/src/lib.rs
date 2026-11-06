@@ -157,6 +157,21 @@ pub enum ServiceError {
     #[error("forbidden: {0}")]
     Forbidden(String),
 
+    /// A command's capability gate refused: the actor does not hold `capability`, or holds it
+    /// nowhere the call applies. A capability id names no workspace or channel, so the caller may
+    /// see it. Surfaced as `FORBIDDEN` with a `missing` extension.
+    #[error("you do not have the `{capability}` permission")]
+    CapabilityMissing { capability: String },
+
+    /// A command ended on a technical failure. `retry_safe` says whether repeating the call
+    /// cannot change anything twice. Surfaced with the code of `failure` and a `retrySafe`
+    /// extension.
+    #[error("{failure}")]
+    CommandFailed {
+        failure: Box<ServiceError>,
+        retry_safe: bool,
+    },
+
     /// An MLS Commit or message for an epoch or incarnation that is not the conversation's
     /// current one. Carries the current ones, so the client knows what to catch up to.
     #[error("stale MLS epoch; the group is at incarnation {incarnation}, epoch {epoch}")]

@@ -123,7 +123,64 @@ pub fn map_service_error(err: ServiceError) -> Error {
         ServiceError::Internal(_) => Error::new("internal error").extend_with(|_, e| {
             e.set("code", Value::from("INTERNAL"));
         }),
+        ServiceError::CapabilityMissing { capability } => Error::new(format!(
+            "you do not have the `{capability}` permission"
+        ))
+        .extend_with(|_, e| {
+            e.set("code", Value::from("FORBIDDEN"));
+            e.set("missing", Value::from(capability.as_str()));
+        }),
+        // The code of the failure itself, and whether repeating the call is safe.
+        ServiceError::CommandFailed {
+            failure,
+            retry_safe,
+        } => map_service_error(*failure).extend_with(|_, e| {
+            e.set("retrySafe", Value::from(retry_safe));
+        }),
     }
+}
+
+/// [`map_service_error`] for a refused command or macro call, with the `refusal` extension saying
+/// what kind of refusal it is, and `retrySafe` on any `FAILED` one.
+pub fn map_command_error(err: ServiceError) -> Error {
+    let refusal = match &err {
+        ServiceError::PermissionDenied
+        | ServiceError::CapabilityMissing { .. }
+        | ServiceError::Forbidden(_)
+        | ServiceError::TimedOut { .. }
+        | ServiceError::FeatureDisabled(_)
+        | ServiceError::ConversationArchived
+        | ServiceError::ConfirmationFailed(_) => Some("DENIED"),
+        ServiceError::CommandFailed { .. }
+        | ServiceError::RateLimited { .. }
+        | ServiceError::Unavailable
+        | ServiceError::Timeout
+        | ServiceError::Internal(_)
+        | ServiceError::UpstreamUnavailable { .. } => Some("FAILED"),
+        ServiceError::ConfirmationStale => Some("EXPIRED"),
+        ServiceError::Validation(_) | ServiceError::NotFound | ServiceError::Conflict(_) => {
+            Some("INVALID")
+        }
+        _ => None,
+    };
+    // A rate-limited call never started. A failure with no answer of its own, as a macro's can be,
+    // may have changed something.
+    let retry_safe = match &err {
+        ServiceError::RateLimited { .. } => Some(true),
+        ServiceError::Unavailable
+        | ServiceError::Timeout
+        | ServiceError::Internal(_)
+        | ServiceError::UpstreamUnavailable { .. } => Some(false),
+        _ => None,
+    };
+    map_service_error(err).extend_with(|_, e| {
+        if let Some(refusal) = refusal {
+            e.set("refusal", Value::from(refusal));
+        }
+        if let Some(retry_safe) = retry_safe {
+            e.set("retrySafe", Value::from(retry_safe));
+        }
+    })
 }
 
 #[cfg(test)]
@@ -198,5 +255,111 @@ mod tests {
         let err = map_service_error(ServiceError::ConversationArchived);
         let ext = err.extensions.expect("missing extensions");
         assert_eq!(ext.get("code"), Some(&Value::from("CONVERSATION_ARCHIVED")));
+    }
+
+    fn ext(err: Error) -> async_graphql::ErrorExtensionValues {
+        err.extensions.expect("missing extensions")
+    }
+
+    #[test]
+    fn a_missing_capability_is_denied_and_names_the_capability() {
+        let e = ext(map_command_error(ServiceError::CapabilityMissing {
+            capability: "delete_member_messages".to_string(),
+        }));
+        assert_eq!(e.get("code"), Some(&Value::from("FORBIDDEN")));
+        assert_eq!(e.get("refusal"), Some(&Value::from("DENIED")));
+        assert_eq!(
+            e.get("missing"),
+            Some(&Value::from("delete_member_messages"))
+        );
+        assert_eq!(e.get("retrySafe"), None);
+    }
+
+    #[test]
+    fn a_bare_permission_denied_is_denied_and_names_nothing() {
+        let e = ext(map_command_error(ServiceError::PermissionDenied));
+        assert_eq!(e.get("refusal"), Some(&Value::from("DENIED")));
+        assert_eq!(e.get("missing"), None);
+    }
+
+    #[test]
+    fn a_failure_keeps_its_code_and_says_whether_a_retry_is_safe() {
+        let e = ext(map_command_error(ServiceError::CommandFailed {
+            failure: Box::new(ServiceError::Timeout),
+            retry_safe: true,
+        }));
+        assert_eq!(e.get("code"), Some(&Value::from("TIMEOUT")));
+        assert_eq!(e.get("refusal"), Some(&Value::from("FAILED")));
+        assert_eq!(e.get("retrySafe"), Some(&Value::from(true)));
+
+        let e = ext(map_command_error(ServiceError::CommandFailed {
+            failure: Box::new(ServiceError::Unavailable),
+            retry_safe: false,
+        }));
+        assert_eq!(e.get("code"), Some(&Value::from("UNAVAILABLE")));
+        assert_eq!(e.get("retrySafe"), Some(&Value::from(false)));
+    }
+
+    #[test]
+    fn a_rate_limited_call_is_a_failure_that_is_safe_to_retry() {
+        let e = ext(map_command_error(ServiceError::RateLimited {
+            retry_after_seconds: 7,
+        }));
+        assert_eq!(e.get("refusal"), Some(&Value::from("FAILED")));
+        assert_eq!(e.get("retrySafe"), Some(&Value::from(true)));
+        assert_eq!(e.get("retryAfterSeconds"), Some(&Value::from(7)));
+    }
+
+    #[test]
+    fn a_failure_with_no_answer_of_its_own_is_not_safe_to_retry() {
+        for err in [
+            ServiceError::Unavailable,
+            ServiceError::Timeout,
+            ServiceError::Internal(None),
+            ServiceError::upstream("rims1_h"),
+        ] {
+            let e = ext(map_command_error(err));
+            assert_eq!(e.get("refusal"), Some(&Value::from("FAILED")));
+            assert_eq!(e.get("retrySafe"), Some(&Value::from(false)));
+        }
+    }
+
+    #[test]
+    fn a_stale_confirmation_is_expired() {
+        let e = ext(map_command_error(ServiceError::ConfirmationStale));
+        assert_eq!(e.get("code"), Some(&Value::from("CONFIRMATION_STALE")));
+        assert_eq!(e.get("refusal"), Some(&Value::from("EXPIRED")));
+    }
+
+    #[test]
+    fn a_timeout_is_denied_and_keeps_until() {
+        let until = chrono::Utc::now();
+        let e = ext(map_command_error(ServiceError::TimedOut { until }));
+        assert_eq!(e.get("refusal"), Some(&Value::from("DENIED")));
+        assert_eq!(e.get("until"), Some(&Value::from(until.to_rfc3339())));
+    }
+
+    #[test]
+    fn a_wrong_call_is_invalid() {
+        for err in [
+            ServiceError::Validation("bad".to_string()),
+            ServiceError::NotFound,
+            ServiceError::Conflict("clash".to_string()),
+        ] {
+            let e = ext(map_command_error(err));
+            assert_eq!(e.get("refusal"), Some(&Value::from("INVALID")));
+        }
+    }
+
+    #[test]
+    fn other_errors_have_no_refusal() {
+        let e = ext(map_command_error(ServiceError::Unauthenticated));
+        assert_eq!(e.get("refusal"), None);
+    }
+
+    #[test]
+    fn map_service_error_alone_adds_no_refusal() {
+        let e = ext(map_service_error(ServiceError::PermissionDenied));
+        assert_eq!(e.get("refusal"), None);
     }
 }
