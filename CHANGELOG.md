@@ -23,6 +23,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- `serverInfo.capabilities` lists `bot_disclosure` on a server with `User.isBot`, `User.bot`,
+  `ServerMember.isBot` and `ServerMember.bot`, so a client asks for them only there.
 - A `notificationEvents` subscription: the viewer's notifications from every workspace on this
   server, on one subscription and with no other events. Listed in `serverInfo.capabilities` as
   `notification_events`.
