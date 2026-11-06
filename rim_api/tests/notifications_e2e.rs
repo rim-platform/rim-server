@@ -1456,6 +1456,23 @@ impl Fixture {
         row.try_get("", "joined_at").expect("joined_at")
     }
 
+    /// How many read marker rows `who` has for `conversation_id`.
+    async fn stored_markers(&self, who: &Caller, conversation_id: &str) -> i64 {
+        let row = self
+            .ctx
+            .conn
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT count(*) AS n FROM conversation_read_state \
+                 WHERE user_id = $1 AND conversation_id = $2::uuid",
+                [uuid::Uuid::from(who.user_id).into(), conversation_id.into()],
+            ))
+            .await
+            .expect("count")
+            .expect("row");
+        row.try_get("", "n").expect("n")
+    }
+
     /// `(userId, conversationId)` of every `ReadMarkerRewound` emitted so far.
     fn rewinds(&self) -> Vec<(String, String)> {
         self.events
@@ -1520,26 +1537,55 @@ async fn unread_after_says_where_the_unread_messages_begin() {
     );
 }
 
-/// Without a marker yet, the rewind writes one, so the message is the first that counts.
+/// Without a marker, marking a message after the baseline changes nothing: everything since the
+/// join stays unread, and nothing is emitted.
 #[tokio::test]
-async fn a_rewind_without_a_marker_writes_one() {
+async fn a_rewind_without_a_marker_keeps_everything_unread() {
     let f = setup().await;
-    f.send(&f.alice, &f.general, "first").await;
-    let second = f.send(&f.alice, &f.general, "second").await;
-    f.send(&f.alice, &f.general, "third").await;
-    assert_eq!(
-        f.unread_in(&f.carol, &f.general).await.map(|u| u.0),
-        Some(3)
-    );
-
-    f.mark_unread(&f.carol, &f.general, &second).await;
-    let second_at = f.sent_at(&f.carol, &f.general, &second).await;
+    let mut messages = Vec::new();
+    for text in ["one", "two", "three", "four", "five"] {
+        messages.push(f.send(&f.alice, &f.general, text).await);
+    }
+    let joined_at = f.joined_at(&f.carol, &f.general).await;
     assert_eq!(
         f.unread_in(&f.carol, &f.general).await,
-        Some((2, just_before(second_at))),
-        "the second and third count, the first no longer does"
+        Some((5, joined_at))
     );
-    assert_eq!(f.rewinds().len(), 1);
+
+    f.mark_unread(&f.carol, &f.general, &messages[2]).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        Some((5, joined_at)),
+        "all five stay unread"
+    );
+    assert_eq!(f.stored_markers(&f.carol, &f.general).await, 0);
+    assert_eq!(f.rewinds(), Vec::<(String, String)>::new());
+}
+
+/// Without a marker, a message older than the join writes one just before it, so the unread
+/// messages reach back past the join.
+#[tokio::test]
+async fn a_rewind_without_a_marker_to_before_the_join_writes_one() {
+    let f = setup().await;
+    let channel = create_channel(&f.schema, &f.alice, &f.server_id, "history", false).await;
+    let older = f.send(&f.alice, &channel, "before carol joined").await;
+    f.join(&f.carol, &channel).await;
+    f.send(&f.alice, &channel, "after carol joined").await;
+    let joined_at = f.joined_at(&f.carol, &channel).await;
+    assert_eq!(f.unread_in(&f.carol, &channel).await, Some((1, joined_at)));
+
+    f.mark_unread(&f.carol, &channel, &older).await;
+    let older_at = f.sent_at(&f.carol, &channel, &older).await;
+    assert!(older_at < joined_at);
+    assert_eq!(
+        f.unread_in(&f.carol, &channel).await,
+        Some((2, just_before(older_at)))
+    );
+    assert_eq!(f.stored_markers(&f.carol, &channel).await, 1);
+    assert_eq!(
+        f.rewinds(),
+        [(f.carol.user_id.to_string(), channel.clone())]
+    );
 }
 
 /// The count after a rewind holds the message and later ones, and leaves out the person's own

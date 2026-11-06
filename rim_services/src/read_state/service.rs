@@ -13,7 +13,8 @@ pub trait ReadStateService: Send + Sync {
     async fn mark_as_read(&self, cmd: MarkAsReadCmd) -> ServiceResult<()>;
 
     /// Moves the actor's read marker back so that the message and every later one count as
-    /// unread. A marker already before the message stays. Notifications already read stay read.
+    /// unread. Nothing becomes less unread: when they already count, the marker stays.
+    /// Notifications already read stay read.
     ///
     /// # Errors
     /// The errors of a read of the conversation; `NotFound` for a message that does not exist, is

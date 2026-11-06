@@ -39,8 +39,10 @@ pub trait ConversationReadStateRepository: Send + Sync {
         read_at: DateTime<Utc>,
     ) -> RepoResult<()>;
 
-    /// Moves the read marker back to `to`, the only path that moves it backward. A marker
-    /// already at or before `to` stays where it is. Without a marker, `to` becomes the marker.
+    /// Moves the read marker back to `to`, the only path that moves it backward. Nothing becomes
+    /// less unread: a marker already at or before `to` stays where it is, and without a marker one
+    /// is written only when `to` is before the baseline the unread count starts from (when the
+    /// user joined, else when the conversation was created).
     ///
     /// Returns whether the marker was written.
     ///

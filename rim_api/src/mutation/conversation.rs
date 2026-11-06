@@ -302,7 +302,8 @@ impl ReadStateMutations {
     }
 
     /// Moves the viewer's read marker back so that the message and every later one count as
-    /// unread. A marker already before the message stays. Notifications already read stay read.
+    /// unread. Nothing becomes less unread: when they already count, the marker stays.
+    /// Notifications already read stay read.
     async fn mark_as_unread(&self, ctx: &Context<'_>, input: MarkAsUnreadInput) -> Result<bool> {
         let actor = require_actor(ctx)?;
         let svc =

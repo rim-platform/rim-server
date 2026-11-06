@@ -154,12 +154,22 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
         let ts: chrono::DateTime<chrono::FixedOffset> = to.into();
 
         // The only path that moves the marker backward: the guard is the reverse of `upsert`'s.
+        // The SELECT lets an existing marker reach that guard. Without one it yields a row only
+        // for a time before the unread count's baseline, so no unread message stops counting.
         let result = self
             .db
             .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 r#"INSERT INTO conversation_read_state (user_id, conversation_id, last_read_at)
-                   VALUES ($1, $2, $3)
+                   SELECT $1::uuid, c.id, $3::timestamptz
+                   FROM conversation c
+                   LEFT JOIN conversation_member cm
+                       ON cm.user_id = $1::uuid AND cm.conversation_id = c.id
+                   WHERE c.id = $2::uuid
+                     AND ($3::timestamptz < COALESCE(cm.joined_at, c.created_at)
+                          OR EXISTS (SELECT 1 FROM conversation_read_state crs
+                                     WHERE crs.user_id = $1::uuid
+                                       AND crs.conversation_id = $2::uuid))
                    ON CONFLICT (user_id, conversation_id)
                    DO UPDATE SET last_read_at = EXCLUDED.last_read_at
                    WHERE conversation_read_state.last_read_at > EXCLUDED.last_read_at"#,

@@ -85,9 +85,10 @@ This document describes the backend contract for conversations, messages, thread
   one count as unread. The message has to be a root message of the conversation that is not
   deleted and that the caller can read: a thread reply is `VALIDATION`, because replies do not
   count as unread, and a deleted message, a message of another conversation and an unknown id
-  are all `NOT_FOUND`. A marker already before the message stays. Someone with no marker yet gets
-  one there, so older messages stop counting. An encrypted conversation works the same way: the
-  marker and the times are not encrypted.
+  are all `NOT_FOUND`. Marking something unread never makes anything less unread: a marker
+  already before the message stays, and someone with no marker yet stays unread from their join
+  time, unless the message is older than that, which writes a marker just before it. An encrypted
+  conversation works the same way: the marker and the times are not encrypted.
 
 ## Who May Start A DM
 
