@@ -26,6 +26,9 @@ tag `v<version>`, the version every crate in the workspace carries.
 - A `notificationEvents` subscription: the viewer's notifications from every workspace on this
   server, on one subscription and with no other events. Listed in `serverInfo.capabilities` as
   `notification_events`.
+- `executeCommand` and `executeMacro` errors say what kind of refusal they are in a `refusal`
+  extension (`DENIED`, `FAILED`, `EXPIRED`, `INVALID`), with `missing` naming a capability the caller
+  lacks and `retrySafe` saying whether repeating a failed call is safe (`docs/command_model.md`).
 
 ## [0.0.8] - 2026-11-03
 

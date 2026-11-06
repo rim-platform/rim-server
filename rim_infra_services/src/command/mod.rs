@@ -381,7 +381,7 @@ impl CommandService for DefaultCommandService {
                 }
                 CommandResultStatusDto::Error => (AuditOutcome::Error, None),
             },
-            Err(ServiceError::PermissionDenied) => (
+            Err(ServiceError::PermissionDenied | ServiceError::CapabilityMissing { .. }) => (
                 AuditOutcome::PermissionDenied,
                 Some("PermissionDenied".to_string()),
             ),
@@ -449,7 +449,7 @@ impl CommandService for DefaultCommandService {
             }
         }
 
-        result
+        result.map_err(|err| gates::with_retry_safety(err, sensitivity, dangerous))
     }
 
     async fn create_user_command(

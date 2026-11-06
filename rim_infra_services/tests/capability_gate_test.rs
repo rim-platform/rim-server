@@ -82,7 +82,7 @@ fn actor() -> Actor {
 /// The test wires a CapabilityService that explicitly denies `chat.write`
 /// (simulating either: actor not a workspace member, OR the cap not in the
 /// registry). The gate must turn the
-/// denial into `ServiceError::PermissionDenied` AND prevent the message
+/// denial into `ServiceError::CapabilityMissing` AND prevent the message
 /// from being sent.
 #[tokio::test]
 async fn execute_command_denies_when_capability_check_rejects() {
@@ -120,10 +120,10 @@ async fn execute_command_denies_when_capability_check_rejects() {
         .await;
 
     match result {
-        Err(ServiceError::PermissionDenied) => {}
+        Err(ServiceError::CapabilityMissing { capability }) if capability == "chat.write" => {}
         Err(other) => {
             panic!(
-                "capability gate regression: expected PermissionDenied from capability gate, got {other:?}"
+                "capability gate regression: expected CapabilityMissing from capability gate, got {other:?}"
             )
         }
         Ok(_) => panic!(

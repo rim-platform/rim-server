@@ -1106,8 +1106,8 @@ mod tests {
             cap,
         );
 
-        {
-            let _ = svc
+        let refusal = {
+            svc
                     .execute_command(ExecuteCommandCmd {
                         actor,
                         command_id: "chat.post_message".to_string(),
@@ -1121,8 +1121,12 @@ mod tests {
                         is_pipe: false,
                         initiator: rim_services::command::initiator::CommandInitiator::Agent,
                     })
-                    .await;
-        }
+                    .await
+        };
+        assert!(matches!(
+            refusal,
+            Err(ServiceError::CapabilityMissing { ref capability }) if capability == "chat.write"
+        ));
 
         let captured = drain_buf(&buf);
         assert!(

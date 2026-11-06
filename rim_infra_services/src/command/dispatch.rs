@@ -469,7 +469,13 @@ impl DefaultCommandService {
                 self.services
                     .capability_service
                     .check(&cmd.actor, workspace_id, cap)
-                    .await?;
+                    .await
+                    .map_err(|err| match err {
+                        ServiceError::PermissionDenied => ServiceError::CapabilityMissing {
+                            capability: cap.clone(),
+                        },
+                        other => other,
+                    })?;
             }
         }
 

@@ -9,7 +9,7 @@ use rim_services::macro_def::request::{
 use rim_services::macro_def::service::MacroService;
 
 use crate::auth_context::require_actor;
-use crate::errors::map_service_error;
+use crate::errors::{map_command_error, map_service_error};
 use crate::features::require_initiator;
 use crate::ids::parse_uuid_id;
 use crate::types::{
@@ -118,7 +118,7 @@ impl MacroMutations {
                     .unwrap_or_default(),
             })
             .await
-            .map_err(map_service_error)?;
+            .map_err(map_command_error)?;
 
         Ok(result.into())
     }

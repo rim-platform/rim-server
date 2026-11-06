@@ -9,7 +9,7 @@ use rim_services::command::request::{
 use rim_services::command::service::CommandService;
 
 use crate::auth_context::require_actor;
-use crate::errors::map_service_error;
+use crate::errors::{map_command_error, map_service_error};
 use crate::features::require_initiator;
 use crate::types::{Command, CommandContextInput, CommandInitiator, CommandResult};
 
@@ -43,7 +43,7 @@ impl CommandMutations {
                     .unwrap_or_default(),
             })
             .await
-            .map_err(map_service_error)?;
+            .map_err(map_command_error)?;
 
         Ok(result.into())
     }
