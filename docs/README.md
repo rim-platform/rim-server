@@ -40,6 +40,7 @@ Normative, versioned contracts in `specs/`:
 - `specs/plugin-protocol-v1.md`: the plugin process protocol.
 - `specs/web-plugins-v1.md`: sandboxed web plugins.
 - `specs/workspace-plugins-v1.md`: signed manifests and workspace plugin registries.
+- `specs/agent-data-flow-v1.md`: what RIM hands to an agent on your machine, and what it records.
 
 ## Operations
 
