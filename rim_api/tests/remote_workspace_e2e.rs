@@ -964,20 +964,20 @@ async fn a_remote_member_sees_a_bot_of_the_workspace_as_a_bot() {
     let (h, r) = nodes().await;
     let hannah = sign_up(&h, "hannah", 1).await;
     let mut rita = sign_up(&r, "rita", 2).await;
-    let (ws, _general, invite) = workspace(&h, &hannah).await;
+    let (ws, general, invite) = workspace(&h, &hannah).await;
     rita.join(&h, &r, &ws, Some(&invite)).await;
 
-    let bot = hannah
+    let created = hannah
         .ok(
-            r#"mutation($input: CreateBotInput!) { createBot(input: $input) { bot { userId } } }"#,
+            r#"mutation($input: CreateBotInput!) { createBot(input: $input) { token bot { userId } } }"#,
             json!({ "input": {
                 "serverId": ws, "name": "Helper", "runBy": "Hannah", "readsGoTo": "Nowhere",
             }}),
         )
-        .await["createBot"]["bot"]["userId"]
-        .as_str()
-        .expect("id")
-        .to_string();
+        .await["createBot"]
+        .clone();
+    let bot = created["bot"]["userId"].as_str().expect("id").to_string();
+    let token = created["token"].as_str().expect("token");
 
     let joined = rita
         .item_of(&h, "MemberJoined", |i| i.event["user_id"] == json!(bot))
@@ -1025,6 +1025,53 @@ async fn a_remote_member_sees_a_bot_of_the_workspace_as_a_bot() {
         1,
         "a bot has no home relay and no identity to offer another server"
     );
+
+    // What the bot posts on its host reaches the remote member, with its name.
+    hannah
+        .ok(
+            r#"mutation($s: ID!, $c: ID!, $u: [ID!]!) {
+                addConversationMembers(serverId: $s, conversationId: $c, userIds: $u) { memberIds }
+            }"#,
+            json!({ "s": ws, "c": general, "u": [bot] }),
+        )
+        .await;
+    let posted: Value = reqwest::Client::new()
+        .post(format!(
+            "{}/api/bot/v1/channels/{general}/messages",
+            h.origin
+        ))
+        .bearer_auth(token)
+        .json(&json!({ "text": "hello from the bot" }))
+        .send()
+        .await
+        .expect("post")
+        .json()
+        .await
+        .expect("json");
+    let message_id = posted["id"].as_str().expect("a posted message").to_string();
+    let delivered = rita
+        .item_of(&h, "NewMessage", |i| {
+            i.event["message"]["id"] == json!(message_id)
+        })
+        .await;
+    assert_eq!(delivered.event["message"]["text"], "hello from the bot");
+    assert_eq!(delivered.stream, format!("c:{general}"));
+    let shown = rita
+        .remote(
+            &h,
+            r#"query($s: ID!, $c: ID!) {
+                messages(serverId: $s, conversationId: $c, dir: BEFORE, limit: 1, includeDeleted: false) {
+                    items { id author { displayName isBot bot { runBy } } }
+                }
+            }"#,
+            json!({ "s": ws, "c": general }),
+        )
+        .await["messages"]["items"][0]
+        .clone();
+    assert_eq!(shown["id"], json!(message_id));
+    assert_eq!(shown["author"]["displayName"], "Helper");
+    assert_eq!(shown["author"]["isBot"], true);
+    assert_eq!(shown["author"]["bot"]["runBy"], "Hannah");
 
     h.stop().await;
     r.stop().await;

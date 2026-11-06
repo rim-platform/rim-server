@@ -594,6 +594,7 @@ impl AppRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             moderation_repo: Arc::clone(&self.moderation_repo),
+            message_mention_repo: Arc::clone(&self.message_mention_repo),
         }
     }
 

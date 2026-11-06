@@ -9,6 +9,7 @@ pub mod app;
 pub mod audit_cmd;
 pub(crate) mod audit_file;
 mod body;
+mod bot_api;
 pub mod config;
 mod edge;
 mod file_handlers;

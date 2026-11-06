@@ -235,6 +235,7 @@ server as a host running a forwarded request at `/s2s/v1/forward/…`.
 | `direct_revocation` | Device revocations brought directly, per address. |
 | `api_ip` | Requests to `/api` routes per client address (`RIM_RATE_REQUESTS_PER_MIN_PER_IP`). |
 | `api_mutations` | Mutation fields per session, per device for requests forwarded by another server, or per address otherwise (`RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION`). |
+| `bot_api` | Calls to the bot API per bot token, 120 a minute. |
 | `messages` | Messages per user (`RIM_RATE_MESSAGES_PER_MIN_PER_USER`). |
 | `workspace_state_writes` | Workspace state writes per user, 60 a minute in bursts of up to 30. |
 | `ws_connections` | Open WebSocket connections per user (`RIM_RATE_WS_CONNECTIONS_PER_USER`). |

@@ -37,9 +37,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 - **Upgrade:** a migration adds the column `command_audit_log.run_id` and the index
   `idx_command_audit_log_actor_run_id`; on a large `command_audit_log` table, writes to it wait while
   the index is built.
+- **Upgrade:** a migration adds the index `idx_message_mention_user_created`; on a large
+  `message_mention` table, writes to it wait while the index is built.
 - Bot accounts: an Owner or Moderator creates a bot with revocable tokens and a required statement
   of who runs it and where what it reads goes (`Bot`, `BotToken`, `createBot`,
   `docs/specs/bots-v1.md`). Switched off with the `bots` feature.
+- A bot API under `/api/bot/v1` for reading, searching, posting and polling for mentions, in the
+  channels a bot was added to (`docs/specs/bots-v1.md`). `CommandInitiator::Bot` appears in the audit
+  log. Refused calls over a token's limit count as `bot_api` in the rate limit metric.
 
 ### Changed
 
