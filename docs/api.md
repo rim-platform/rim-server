@@ -959,3 +959,31 @@ their own server.
 
 **Tries.** See "Limits". A wrong password is `UNAUTHENTICATED`, a wait `RATE_LIMITED` with
 `retryAfterSeconds`, and a locked password `PASSWORD_LOCKED`.
+
+### Bots
+
+An Owner or Moderator of a workspace manages its bots (`bots.md`; the contract is
+`specs/bots-v1.md`). Every root answers `FEATURE_DISABLED` while the `bots` feature is off.
+
+| Root | Who | Does |
+|---|---|---|
+| `bots(serverId): [Bot!]!` | Any member | The workspace's bots, deactivated ones included. `FORBIDDEN` for anyone else. |
+| `botTokens(botUserId): [BotToken!]!` | Owner, Moderator | The bot's tokens, revoked ones included, never their secret. `FORBIDDEN` for anyone else, `NOT_FOUND` for an unknown bot. |
+| `createBot(input): CreatedBot!` | Owner, Moderator | Creates a bot, a guest of the workspace in no channel, and its first token, labelled `default`. `CreatedBot.token` is shown this once. `VALIDATION` for the direct space, a bad field or a workspace with 25 active bots. |
+| `updateBot(input): Bot!` | Owner, Moderator | Changes the fields given. |
+| `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
+| `createBotToken(botUserId, label): CreatedBotToken!` | Owner, Moderator | A new token, shown this once. `VALIDATION` for a label that is not 1 to 64 characters, a deactivated bot or a bot with 5 active tokens. |
+| `revokeBotToken(tokenId): BotToken!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown token and for a token of a bot in a workspace the caller does not moderate. |
+
+`runBy` and `readsGoTo` are 1 to 200 characters of plain text, trimmed. Text with a control or format
+character is `VALIDATION`.
+
+`User.isBot` and `ServerMember.isBot` mark a bot. `User.bot` and `ServerMember.bot` are a `BotInfo`,
+what the person who added it says about it, and null for anyone else: they answer while the feature
+is off too. `Message.author` is a `User`, so a client draws a bot's messages from it. A bot's
+`handle` and `principalId` are null.
+
+`createConversation` naming a bot and `addConversationMembers` naming a bot for anything but a
+plaintext channel are `VALIDATION` ("A bot can only be in a channel"). `addConversationMembers`
+naming a bot is `FORBIDDEN` for anyone but an Owner or Moderator, and `setMemberRole` on a bot is
+`VALIDATION`.

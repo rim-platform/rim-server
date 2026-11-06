@@ -742,6 +742,7 @@ mod tests {
             deletion_scheduled_for: None,
             profile_locked_until: None,
             handle: rim_core::user::model::UserHandle::Local,
+            is_bot: false,
         }
     }
 
@@ -1342,6 +1343,7 @@ mod tests {
                     deletion_scheduled_for: None,
                     profile_locked_until: locked,
                     handle: None,
+                    is_bot: false,
                 })
             })
         });

@@ -30,6 +30,8 @@ pub struct User {
     pub profile_locked_until: Option<DateTime<Utc>>,
     /// What the account's handle is built from.
     pub handle: UserHandle,
+    /// Whether the account is a workspace's bot.
+    pub is_bot: bool,
 }
 
 /// What an account's handle (`@<username>:<domain>`) is built from.
@@ -40,8 +42,8 @@ pub enum UserHandle {
     /// A person from another server: their username at their home relay and that relay's
     /// handle domain.
     Home { username: String, domain: String },
-    /// No handle: a person from another server whose home handle is not known, or a purged
-    /// account.
+    /// No handle: a person from another server whose home handle is not known, a purged account
+    /// or a bot, which is not offered to other servers.
     Unknown,
 }
 

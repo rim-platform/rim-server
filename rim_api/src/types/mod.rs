@@ -9,6 +9,7 @@ pub(crate) mod account;
 pub(crate) mod account_password;
 pub(crate) mod attachment;
 pub(crate) mod audit;
+pub(crate) mod bot;
 pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod command_result;
@@ -47,6 +48,9 @@ pub use attachment::{Attachment, AttachmentStatusEnum, UploadTicket};
 pub use audit::{
     AuditLogEntry, AuditLogFilterInput, AuditLogPage, AuditLogPageInfo, AuditLogPaginationInput,
     AuditOutcomeGql, TypedVerbGql,
+};
+pub use bot::{
+    Bot, BotInfo, BotToken, CreateBotInput, CreatedBot, CreatedBotToken, UpdateBotInput,
 };
 pub use channel_lens::{
     ChannelLens, FilterConditionGql, FilterConditionInput, FilterField, FilterLogic, FilterOp,

@@ -23,6 +23,7 @@ pub(crate) mod account;
 pub(crate) mod account_password;
 pub(crate) mod attachment;
 pub(crate) mod auth;
+pub(crate) mod bot;
 pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod conversation;
@@ -136,4 +137,4 @@ pub(crate) struct MutationGroup9(
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct MutationGroup10(workspace::WorkspaceMembershipMutations);
+pub(crate) struct MutationGroup10(workspace::WorkspaceMembershipMutations, bot::BotMutations);

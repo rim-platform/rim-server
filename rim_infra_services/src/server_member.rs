@@ -40,6 +40,7 @@ impl DefaultServerMemberService {
             timeout_until: timeout.map(|t| t.until),
             timeout_reason: timeout.filter(|_| own).and_then(|t| t.reason.clone()),
             principal_id: user.principal_id.clone(),
+            is_bot: user.is_bot,
         }
     }
 

@@ -20,6 +20,7 @@ use rim_core::user::model::UserId;
 
 use rim_services::ServiceError;
 use rim_services::auth::service::{MockAuthService, MockRequestAuthenticator};
+use rim_services::bot::service::MockBotService;
 use rim_services::channel_lens::service::MockChannelLensService;
 use rim_services::command::service::MockCommandService;
 use rim_services::conversation::service::MockConversationService;
@@ -128,6 +129,7 @@ fn schema_with_user_mock(user: MockUserService) -> crate::AppSchema {
             request_auth: Arc::new(MockRequestAuthenticator::new()),
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
+            bot: Arc::new(MockBotService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
@@ -181,6 +183,7 @@ fn schema_with_server_mocks_on(
             request_auth: Arc::new(MockRequestAuthenticator::new()),
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
+            bot: Arc::new(MockBotService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
@@ -222,6 +225,7 @@ fn schema_with_keybind_mock(keybind: MockKeybindService) -> crate::AppSchema {
             request_auth: Arc::new(MockRequestAuthenticator::new()),
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
+            bot: Arc::new(MockBotService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
@@ -321,6 +325,7 @@ fn test_user_dto() -> rim_services::user::dto::UserDto {
         deletion_scheduled_for: None,
         profile_locked_until: None,
         handle: None,
+        is_bot: false,
     }
 }
 
@@ -345,6 +350,7 @@ fn test_server_member_dto() -> rim_services::server_member::dto::ServerMemberDto
         timeout_until: None,
         timeout_reason: None,
         principal_id: None,
+        is_bot: false,
     }
 }
 
@@ -386,6 +392,7 @@ struct TestAppServiceProvider {
     request_auth: Arc<dyn rim_services::auth::service::RequestAuthenticator>,
     link_preview: Arc<dyn rim_services::link_preview::LinkPreviewService>,
     custom_emoji: Arc<dyn rim_services::custom_emoji::service::CustomEmojiService>,
+    bot: Arc<dyn rim_services::bot::service::BotService>,
     channel_lens: Arc<dyn rim_services::channel_lens::service::ChannelLensService>,
     workspace_state: Arc<dyn rim_services::workspace_state::service::WorkspaceStateService>,
     moderation: Arc<dyn rim_services::moderation::service::ModerationService>,
@@ -489,6 +496,10 @@ impl AppServiceProvider for TestAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::custom_emoji::service::CustomEmojiService> {
         Arc::clone(&self.custom_emoji)
+    }
+
+    fn bot_service(&self) -> Arc<dyn rim_services::bot::service::BotService> {
+        Arc::clone(&self.bot)
     }
 
     fn channel_lens_service(
@@ -650,6 +661,7 @@ fn schema_with_mocks(
             request_auth: Arc::new(MockRequestAuthenticator::new()),
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
+            bot: Arc::new(MockBotService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
@@ -691,6 +703,7 @@ fn schema_with_command_mock(command: MockCommandService) -> crate::AppSchema {
             request_auth: Arc::new(MockRequestAuthenticator::new()),
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
+            bot: Arc::new(MockBotService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
@@ -736,6 +749,7 @@ fn schema_with_audit_mock(
             request_auth: Arc::new(MockRequestAuthenticator::new()),
             link_preview: Arc::new(MockLinkPreviewService::new()),
             custom_emoji: Arc::new(MockCustomEmojiService::new()),
+            bot: Arc::new(MockBotService::new()),
             channel_lens: Arc::new(MockChannelLensService::new()),
             workspace_state: Arc::new(MockWorkspaceStateService::new()),
             moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),
@@ -792,6 +806,7 @@ fn test_service_provider() -> Arc<dyn AppServiceProvider> {
         request_auth: Arc::new(MockRequestAuthenticator::new()),
         link_preview: Arc::new(MockLinkPreviewService::new()),
         custom_emoji: Arc::new(MockCustomEmojiService::new()),
+        bot: Arc::new(MockBotService::new()),
         channel_lens: Arc::new(MockChannelLensService::new()),
         workspace_state: Arc::new(MockWorkspaceStateService::new()),
         moderation: Arc::new(rim_services::moderation::service::MockModerationService::new()),

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use entity::{server, server_member};
+use rim_core::account_deletion::model::TOMBSTONE_DISPLAY_NAME;
 use rim_core::repository::error::RepoResult;
 use rim_core::server::model::{DeletedWorkspaces, Server, ServerId};
 use rim_core::server::repository::ServerRepository;
@@ -139,14 +140,22 @@ const WORKSPACE_FILES: &[&str] = &[
     "SELECT storage_key AS value FROM plugin_bundle WHERE server_id = ANY($1)",
 ];
 
+/// Make the `user` rows of the bots of the workspaces in `$1` tombstones, named `$2`: a bot belongs
+/// to one workspace, so nothing is left for its account once that goes.
+const TOMBSTONE_WORKSPACE_BOTS: &str = "UPDATE \"user\" SET deleted_at = now(), updated_at = now(), \
+         username = 'deleted-' || right(replace(id::text, '-', ''), 24), display_name = $2 \
+     WHERE kind = 'bot' AND deleted_at IS NULL \
+       AND id IN (SELECT user_id FROM bot WHERE server_id = ANY($1))";
+
 #[derive(FromQueryResult)]
 struct FileRow {
     value: String,
 }
 
 /// Delete the workspaces in `ids` and everything in them; the rows that reference a workspace
-/// go by cascade, its keybinds (which name it without a foreign key) explicitly. The direct
-/// space is left alone. Shared by the workspace deletion and the account purge.
+/// go by cascade, its keybinds (which name it without a foreign key) explicitly, and its bots'
+/// `user` rows are made tombstones. The direct space is left alone. Shared by the workspace
+/// deletion and the account purge.
 pub(crate) async fn delete_workspaces(
     db: &DbHandle,
     ids: &[ServerId],
@@ -183,6 +192,12 @@ pub(crate) async fn delete_workspaces(
     db.execute_raw(statement(
         "DELETE FROM keybind WHERE scope = 'workspace' AND subject_id = ANY($1)",
         vec![ids.clone().into()],
+    ))
+    .await
+    .map_err(map_db_err)?;
+    db.execute_raw(statement(
+        TOMBSTONE_WORKSPACE_BOTS,
+        vec![ids.clone().into(), TOMBSTONE_DISPLAY_NAME.into()],
     ))
     .await
     .map_err(map_db_err)?;

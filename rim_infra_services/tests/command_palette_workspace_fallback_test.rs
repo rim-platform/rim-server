@@ -253,6 +253,7 @@ async fn palette_chat_list_members_uses_context_workspace_id_when_args_omit_serv
                     timeout_until: None,
                     timeout_reason: None,
                     principal_id: None,
+                    is_bot: false,
                 }])
             })
         });

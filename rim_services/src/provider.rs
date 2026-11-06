@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::account_deletion::service::AccountDeletionService;
 use crate::audit::service::AuditLogService;
 use crate::auth::service::{AuthService, RequestAuthenticator};
+use crate::bot::service::BotService;
 use crate::channel_lens::service::ChannelLensService;
 use crate::command::service::CommandService;
 use crate::conversation::service::ConversationService;
@@ -37,6 +38,7 @@ pub trait AppServiceProvider: Send + Sync {
     fn command_service(&self) -> Arc<dyn CommandService>;
     fn conversation_service(&self) -> Arc<dyn ConversationService>;
     fn custom_emoji_service(&self) -> Arc<dyn CustomEmojiService>;
+    fn bot_service(&self) -> Arc<dyn BotService>;
     fn link_preview_service(&self) -> Arc<dyn LinkPreviewService>;
     fn key_auth_service(&self) -> Arc<dyn KeyAuthService>;
     fn keybind_service(&self) -> Arc<dyn KeybindService>;

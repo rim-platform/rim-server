@@ -14,7 +14,7 @@ pub(crate) const DISPLAY_NAME_TOO_LONG: &str = "display_name must be at most 64 
 /// Whether `c` is a control (Cc) or format (Cf) character: one that shows nothing itself but can
 /// hide, join or reorder the text around it, such as a zero-width space, a soft hyphen, a
 /// byte order mark or a bidirectional override.
-fn is_control_or_format(c: char) -> bool {
+pub(crate) fn is_control_or_format(c: char) -> bool {
     matches!(
         c.general_category(),
         GeneralCategory::Control | GeneralCategory::Format

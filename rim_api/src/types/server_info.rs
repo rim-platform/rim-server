@@ -234,7 +234,7 @@ impl ServerInfo {
 pub struct ServerFeatureInfo {
     /// The feature's name, as `RIM_FEATURES_DISABLED` takes it: `attachments`, `link_previews`,
     /// `email`, `custom_emoji`, `workspace_plugins`, `ai_commands`, `avatars`, `plugin_link_fetch`,
-    /// `text_art_check` or `avatar_check`. A client ignores a name it does not know.
+    /// `text_art_check`, `avatar_check` or `bots`. A client ignores a name it does not know.
     pub key: String,
     pub state: ServerFeatureState,
     /// Why an unavailable feature is unavailable; null otherwise.

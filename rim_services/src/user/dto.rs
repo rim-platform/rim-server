@@ -19,4 +19,6 @@ pub struct UserDto {
     pub profile_locked_until: Option<chrono::DateTime<chrono::Utc>>,
     /// `@<username>:<domain>`, or `None` when the account has no known handle.
     pub handle: Option<String>,
+    /// Whether the account is a workspace's bot.
+    pub is_bot: bool,
 }

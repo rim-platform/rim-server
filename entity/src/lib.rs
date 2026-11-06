@@ -5,6 +5,9 @@ pub mod prelude;
 pub mod command_audit_log;
 
 pub mod blocked_email;
+pub mod bot;
+pub mod bot_token;
+mod bot_token_mapper;
 pub mod capability_registry;
 mod capability_registry_mapper;
 pub mod channel_lens;

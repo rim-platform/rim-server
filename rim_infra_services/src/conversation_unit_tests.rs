@@ -3,6 +3,7 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
+    use rim_core::bot::repository::MockBotRepository;
     use rim_core::conversation::model::{
         Conversation, ConversationId, ConversationType, PostingPolicy,
     };
@@ -723,6 +724,8 @@ mod tests {
         gate_calls: Arc<Mutex<Vec<Vec<UserId>>>>,
         /// Users the request gate refuses, as their DM settings would.
         gate_refuses: Vec<UserId>,
+        /// Users whose account is a bot.
+        bots: Vec<UserId>,
         /// Removals recorded with `record_removal`.
         removals: Arc<Mutex<Vec<MemberRemoval>>>,
     }
@@ -751,6 +754,7 @@ mod tests {
                 channels: 0,
                 gate_calls: Arc::default(),
                 gate_refuses: vec![],
+                bots: vec![],
                 removals: Arc::default(),
             }
         }
@@ -818,6 +822,11 @@ mod tests {
         fn channel_cap(mut self, cap: u32, channels: u64) -> Self {
             self.limits.channels_per_workspace = Some(cap);
             self.channels = channels;
+            self
+        }
+
+        fn with_bots(mut self, bots: &[UserId]) -> Self {
+            self.bots = bots.to_vec();
             self
         }
 
@@ -1105,6 +1114,13 @@ mod tests {
                 Box::pin(async move { Ok(found) })
             });
 
+            let bots = self.bots.clone();
+            let mut bots_repo = MockBotRepository::new();
+            bots_repo.expect_bots_among().returning(move |ids| {
+                let found = ids.iter().copied().filter(|id| bots.contains(id)).collect();
+                Box::pin(async move { Ok(found) })
+            });
+
             DefaultConversationService::new(
                 ConversationRepos {
                     conversation_repo: Arc::new(conversation_repo),
@@ -1115,6 +1131,7 @@ mod tests {
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
             .with_e2ee_repo(Arc::new(e2ee_repo))
+            .with_bot_repo(Arc::new(bots_repo))
             .with_direct_space(self.direct_space.then_some(self.server_id))
             .with_limits(self.limits)
             .with_default_workspace(Arc::new(default_workspace_service(
@@ -2555,5 +2572,121 @@ mod tests {
         fx.invite(alice, &[bob])
             .await
             .expect("ready joiners are not invitations");
+    }
+
+    // ── Bots ──
+
+    /// `result` is the refusal of a bot named for anything but a plaintext channel.
+    fn assert_bot_refused<T: std::fmt::Debug>(result: Result<T, ServiceError>) {
+        assert!(
+            matches!(&result, Err(ServiceError::Validation(m)) if m == "A bot can only be in a channel"),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nobody_starts_a_direct_message_or_a_group_with_a_bot() {
+        let (alice, bob, bot) = (UserId::new(), UserId::new(), UserId::new());
+        let fx = Fx::new(ConversationType::Group, false, &[alice])
+            .with_workspace_member(alice, ServerMemberRole::Owner)
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .with_workspace_member(bot, ServerMemberRole::Guest)
+            .with_bots(&[bot]);
+        for participants in [
+            ConversationParticipants::DirectMessage { other_user_id: bot },
+            ConversationParticipants::Group {
+                member_ids: vec![bob, bot],
+            },
+        ] {
+            for encrypted in [false, true] {
+                let created = fx
+                    .service()
+                    .create_conversation(CreateConversationCmd {
+                        actor: Actor::new(alice),
+                        server_id: fx.server_id,
+                        participants: participants.clone(),
+                        title: None,
+                        is_private: false,
+                        encrypted,
+                    })
+                    .await;
+                assert_bot_refused(created);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bot_is_not_added_to_a_group_or_an_encrypted_conversation() {
+        let (alice, bot) = (UserId::new(), UserId::new());
+        let group = Fx::new(ConversationType::Group, false, &[alice])
+            .with_workspace_member(alice, ServerMemberRole::Owner)
+            .with_workspace_member(bot, ServerMemberRole::Guest)
+            .with_bots(&[bot]);
+        assert_bot_refused(group.invite(alice, &[bot]).await);
+
+        let encrypted = Fx::new(ConversationType::Group, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Owner)
+            .with_workspace_member(bot, ServerMemberRole::Guest)
+            .ready(&[alice])
+            .with_bots(&[bot]);
+        assert_bot_refused(encrypted.invite(alice, &[bot]).await);
+
+        // A channel is never encrypted today; one that were keeps the bot out all the same.
+        let channel = Fx::new(ConversationType::Channel, false, &[alice])
+            .encrypted()
+            .with_workspace_member(alice, ServerMemberRole::Owner)
+            .with_workspace_member(bot, ServerMemberRole::Guest)
+            .ready(&[alice])
+            .with_bots(&[bot]);
+        assert_bot_refused(channel.invite(alice, &[bot]).await);
+    }
+
+    #[tokio::test]
+    async fn only_an_owner_or_moderator_adds_a_bot_to_a_channel() {
+        let (bob, bot) = (UserId::new(), UserId::new());
+        for (role, allowed) in [
+            (ServerMemberRole::Member, false),
+            (ServerMemberRole::Moderator, true),
+            (ServerMemberRole::Owner, true),
+        ] {
+            for is_private in [false, true] {
+                let fx = Fx::new(ConversationType::Channel, is_private, &[bob])
+                    .with_workspace_member(bob, role)
+                    .with_workspace_member(bot, ServerMemberRole::Guest)
+                    .with_bots(&[bot]);
+                let result = fx.invite(bob, &[bot]).await;
+                if allowed {
+                    result.expect("added");
+                    assert!(fx.members.lock().expect("lock").contains(&bot));
+                } else {
+                    assert!(matches!(result, Err(ServiceError::PermissionDenied)));
+                    assert!(!fx.members.lock().expect("lock").contains(&bot));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_member_still_adds_people_to_a_channel_when_no_bot_is_named() {
+        let (bob, carol, bot) = (UserId::new(), UserId::new(), UserId::new());
+        let fx = Fx::new(ConversationType::Channel, false, &[bob])
+            .with_workspace_member(bob, ServerMemberRole::Member)
+            .with_workspace_member(carol, ServerMemberRole::Member)
+            .with_bots(&[bot]);
+        fx.invite(bob, &[carol]).await.expect("added");
+    }
+
+    #[tokio::test]
+    async fn a_guest_such_as_a_bot_cannot_join_a_channel_by_itself() {
+        let bot = UserId::new();
+        let fx = Fx::new(ConversationType::Channel, false, &[])
+            .with_workspace_member(bot, ServerMemberRole::Guest)
+            .with_bots(&[bot]);
+        assert!(matches!(
+            fx.join(bot).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        assert!(fx.members.lock().expect("lock").is_empty());
     }
 }

@@ -227,7 +227,9 @@ Recommended trust groups:
 - `plugin`
 - `integration`
 
-Later, bot/app/webhook principals should also become explicit trust-bearing identities.
+A bot is an account of a workspace with tokens of its own (`bots.md`); what it can reach follows
+from its `GUEST` role. Later, app and webhook principals should also become explicit trust-bearing
+identities.
 
 Trust boundaries should be visible in:
 

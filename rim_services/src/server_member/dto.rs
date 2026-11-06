@@ -20,4 +20,6 @@ pub struct ServerMemberDto {
     pub timeout_reason: Option<String>,
     /// The member's key identity, once enrolled; `None` for a password-only account.
     pub principal_id: Option<String>,
+    /// Whether the member is a bot of the workspace.
+    pub is_bot: bool,
 }

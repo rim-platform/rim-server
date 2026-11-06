@@ -1,6 +1,7 @@
 pub mod account_deletion;
 pub mod account_password;
 pub mod audit;
+pub mod bot;
 pub mod capability_registry;
 pub mod channel_lens;
 pub mod conversation;

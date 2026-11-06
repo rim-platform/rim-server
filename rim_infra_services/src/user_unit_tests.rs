@@ -30,6 +30,7 @@ mod tests {
             deletion_scheduled_for: None,
             profile_locked_until: None,
             handle: rim_core::user::model::UserHandle::Local,
+            is_bot: false,
         }
     }
 
@@ -164,10 +165,12 @@ mod tests {
                         username: "kuba".to_string(),
                         domain: "rim-platform.org".to_string(),
                     },
+                    is_bot: false,
                     ..user(remote)
                 },
                 User {
                     handle: UserHandle::Unknown,
+                    is_bot: false,
                     ..user(unknown)
                 },
             ])
