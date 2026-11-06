@@ -161,6 +161,10 @@ mutating-call cap. Palette and keybind still run them in one step.
 | `chat.mark_as_read` | `server_id`, `conversation_id` | `Mutating` | yes | `conversation_id` falls back to the focused conversation |
 | `chat.create_group` | `server_id`, `member_ids`, `title?` | `Mutating` | yes | `member_ids` is a JSON array or one comma-separated string |
 
+`workspace.open_agents` ("Open agents") and `workspace.open_bots` ("Open bots") are `DesktopLocal`, `Safe`
+and offered on the palette and for keybinds, but are not AI-callable: no agent gets a tool that
+opens the screen where its limits are set.
+
 The `state.*` commands and the GraphQL roots `workspaceState`, `workspaceStateList`,
 `setWorkspaceState` and `deleteWorkspaceState` follow the same rules. Every member reads the
 workspace scope (`scope: server`) and reads and writes their own user scope. Writing the

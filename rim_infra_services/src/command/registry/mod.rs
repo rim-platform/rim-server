@@ -178,6 +178,22 @@ mod tests {
         }
     }
 
+    /// The screens that hold an agent's or a bot's limits open from the palette and keybinds
+    /// only; the AI surface never gets a tool for them.
+    #[test]
+    fn open_agents_and_open_bots_are_not_ai_callable() {
+        let commands = builtin_commands();
+        for id in ["workspace.open_agents", "workspace.open_bots"] {
+            let command = commands
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("{id} is not registered"));
+            assert!(!command.ai_callable, "{id}");
+            assert!(command.visible_in_palette, "{id}");
+            assert!(command.keybind_capable, "{id}");
+        }
+    }
+
     #[test]
     fn builtin_commands_ids_are_unique() {
         let commands = builtin_commands();

@@ -4,7 +4,7 @@ use rim_services::command::dto::CommandResultDto;
 
 /// All command IDs that are registered as `DesktopLocal` execution targets.
 /// These must never be dispatched on the server — the client runtime owns them.
-/// Mirrors the full set from `registry/workspace.rs` (all 19 workspace.* IDs)
+/// Mirrors the full set from `registry/workspace.rs` (all 21 workspace.* IDs)
 /// plus the 4 desktop-local chat.* IDs from `registry/chat_messages.rs`.
 pub(super) fn is_desktop_local(command_id: &str) -> bool {
     matches!(
@@ -14,7 +14,7 @@ pub(super) fn is_desktop_local(command_id: &str) -> bool {
             | "chat.open_thread"
             | "chat.scroll_to_bottom"
             | "chat.scroll_to_top"
-            // workspace.* (registry/workspace.rs — all 19)
+            // workspace.* (registry/workspace.rs — all 21)
             | "workspace.open_command_palette"
             | "workspace.cycle_recent_activity"
             | "workspace.open_settings"
@@ -22,6 +22,8 @@ pub(super) fn is_desktop_local(command_id: &str) -> bool {
             | "workspace.search_in_channel"
             | "workspace.open_marketplace"
             | "workspace.open_agent"
+            | "workspace.open_agents"
+            | "workspace.open_bots"
             | "workspace.toggle_sidebar"
             | "workspace.focus_composer"
             | "workspace.focus_message_list"
