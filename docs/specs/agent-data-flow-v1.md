@@ -90,6 +90,43 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   `docs/vision.md` says under "Who it is for first".
 - A refusal says why (`docs/command_model.md`, "Refusals").
 
+## Sending
+
+- An agent can send to a channel only if a read grant of its own covers it, and asking about any other
+  conversation gets the same refusal as a read. Nothing is sent to an encrypted conversation, a direct
+  message or a group in this version.
+- The ids are explicit in each call. A change never takes its target from what the person has open.
+- The dialog MUST show the agent's name, the workspace, the channel as RIM knows them and the whole text,
+  with invisible and direction-changing characters made visible, since that text is what the person
+  confirms. It says the agent may have read text meant to steer it.
+- An agent's dialog never replaces one that is open. A second request while one is open is refused and
+  can be retried. A person's own confirmation replaces an agent's, which ends as discarded.
+- Confirm stays disabled for one second after the dialog opens, so a click or keystroke meant for
+  something else cannot answer it.
+- Discarded, expired and refused are different answers, and none of them is a failure of the agent. After
+  a discard or an expiry, that agent's next request within 10 seconds is refused. That is so a stuck
+  agent cannot keep a dialog in front of the person.
+- When the account locks or the agents switch goes off, a dialog that is open ends as discarded.
+- The record gets an entry when the agent asks and another with the outcome, with the message id if one
+  was sent and never the text.
+- The message is the person's: it carries their name, and the others in the channel are not told an agent
+  wrote it. The audit log records the `AGENT` initiator, which an Owner or Moderator can read.
+
+## Runs
+
+- A run is what one agent did in one stretch: its calls with no more than 15 minutes between them. RIM
+  does not see where an agent's task starts or ends, so a run is a grouping by time and the app MUST NOT
+  describe it as one task.
+- The desktop app gives each run a random identifier and sends it with the changes of that run as
+  `executeCommand`'s `runId`. The server keeps it on the audit entry when the initiator is `AGENT`, and
+  `listAuditLog` can filter by it. The server does not check it, as it takes the client's word for the
+  initiator.
+- The run view is on the person's device and only they see it. It joins the record with their own audit
+  entries. The audit entries, with the identifier, are also readable by those who can read that
+  workspace's log (`docs/security/audit-access-matrix.md`), and the view MUST say so.
+- A run view shows what RIM handed over and what the server recorded. What the agent did in between is
+  outside RIM, and the view MUST say so.
+
 ## Encrypted conversations
 
 - They are closed by default, and "all channels you can see" never includes one.
@@ -118,6 +155,12 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   MUST show it as the plugin's claim.
 - What a plugin command returns is treated as untrusted and recorded like any other read. It is the
   plugin's output, which may include what the plugin fetched from elsewhere.
+- A command never takes its context from what the person has open. The agent gives the ids. A command
+  that needs a workspace or a conversation runs only when a read grant of that agent covers it.
+- The approval is tied to the manifest it was given for, and the plugin host checks that when the command
+  runs. It cannot be used by a plugin that changed since.
+- A command's title and description were written by the plugin's author. An agent receives them marked as
+  untrusted, and the dialog marks them as the plugin's words.
 
 ## Across servers
 
@@ -134,6 +177,6 @@ the person's session, device keys, account vault, model keys or plugin secrets.
 ## What this does not cover
 
 - Bots and agents that run next to a server. They reach RIM with their own identity and grants,
-  under their own contract.
+  under their own contract, `docs/specs/bots-v1.md`.
 - Agents acting for another person, and approvals by another person.
 - A shared view of agent work. The record stays private to the person.
