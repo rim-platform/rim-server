@@ -80,8 +80,9 @@ impl From<CommandSensitivity> for rim_services::command::sensitivity::CommandSen
 /// Where a command execution came from. The server uses it for the audit log and the
 /// confirmation policy: `AGENT` and `PLUGIN` executions of mutating commands need a
 /// confirmation proof.
-// Mirrors `rim_services::command::initiator::CommandInitiator`; the exhaustive `From` impls
-// below fail to compile when a variant is added on one side only.
+// The initiators a client may claim: `rim_services::command::initiator::CommandInitiator` but for
+// `Bot`, which only the bot API sets. The audit log's `initiator` is a string, so this enum is
+// input only.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum CommandInitiator {
     /// User typed/clicked in the command palette.
@@ -98,21 +99,6 @@ pub enum CommandInitiator {
     Plugin,
     /// Out-of-process CLI client (rim-cli).
     Cli,
-}
-
-impl From<rim_services::command::initiator::CommandInitiator> for CommandInitiator {
-    fn from(value: rim_services::command::initiator::CommandInitiator) -> Self {
-        use rim_services::command::initiator::CommandInitiator as D;
-        match value {
-            D::Palette => Self::Palette,
-            D::Agent => Self::Agent,
-            D::Macro => Self::Macro,
-            D::Keybind => Self::Keybind,
-            D::ContextMenu => Self::ContextMenu,
-            D::Plugin => Self::Plugin,
-            D::Cli => Self::Cli,
-        }
-    }
 }
 
 impl From<CommandInitiator> for rim_services::command::initiator::CommandInitiator {

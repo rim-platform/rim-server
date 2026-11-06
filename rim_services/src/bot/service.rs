@@ -3,11 +3,13 @@ use async_trait::async_trait;
 use mockall::automock;
 
 use rim_core::bot::model::BotTokenId;
+use rim_core::conversation::model::ConversationId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 use crate::bot::dto::{
-    BotActorDto, BotDto, BotInfoDto, BotTokenDto, CreatedBotDto, CreatedBotTokenDto,
+    BotActorDto, BotDto, BotInfoDto, BotMentionCursor, BotMentionsPage, BotTokenDto, CreatedBotDto,
+    CreatedBotTokenDto,
 };
 use crate::{Actor, ServiceResult};
 
@@ -83,4 +85,44 @@ pub trait BotService: Send + Sync {
     /// # Errors
     /// Propagates storage errors.
     async fn authenticate_token(&self, raw: &str) -> ServiceResult<Option<BotActorDto>>;
+
+    /// The bot a working token acts as.
+    ///
+    /// # Errors
+    /// `NotFound` when it is gone; propagates storage errors.
+    async fn bot_of(&self, bot: BotActorDto) -> ServiceResult<BotDto>;
+
+    /// Whether `conversation_id` is a plaintext channel of the bot's workspace with the bot a
+    /// member of it. Every other case answers `false`, an unknown id among them.
+    ///
+    /// # Errors
+    /// Propagates storage errors.
+    async fn is_in_channel(
+        &self,
+        bot: BotActorDto,
+        conversation_id: ConversationId,
+    ) -> ServiceResult<bool>;
+
+    /// The bot's mentions after `after`, or from the last 24 hours without it, at most `limit`.
+    /// A deleted message and a channel the bot has left are left out. Recorded in the audit log,
+    /// but for a poll that succeeded with nothing to hand over.
+    ///
+    /// # Errors
+    /// Propagates storage errors.
+    async fn list_mentions(
+        &self,
+        bot: BotActorDto,
+        after: Option<BotMentionCursor>,
+        limit: u32,
+    ) -> ServiceResult<BotMentionsPage>;
+
+    /// Record in the audit log a read of the bot that ran without the command dispatcher, with the
+    /// initiator `bot`. `error` is what it failed with. A failed write is logged, never returned.
+    async fn record_read(
+        &self,
+        bot: BotActorDto,
+        command_id: &'static str,
+        args: serde_json::Value,
+        error: Option<String>,
+    );
 }

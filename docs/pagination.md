@@ -73,3 +73,10 @@ If `items` is empty, both cursors are `None`.
   - `ORDER BY created_at ASC, id ASC` (oldest first), forward only: `after` is exclusive
   - cursor: `(created_at, welcome_id)`, the `createdAt` and `id` of the previous page's last Welcome
   - the answer is a plain list; a page shorter than `limit` is the last
+- A channel's messages on the bot API (`GET /api/bot/v1/channels/{id}/messages`):
+  - as messages in a thread above, with `before` taking the opaque `cursor` of the previous answer,
+    null when there is nothing older
+- A bot's mentions (`GET /api/bot/v1/mentions`):
+  - `ORDER BY created_at ASC, message_id ASC` (oldest first), forward only: `after` is exclusive
+  - cursor: `(created_at, message_id)` of the page's last mention, opaque to the bot; the given one
+    when the page is empty

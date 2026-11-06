@@ -58,10 +58,13 @@ MUST say so where it shows it.
 - A bot's grants are the channels it was added to, and in them only: read messages, search, post a
   message and see its mentions. Every other command is out of its reach, because the API offers
   nothing else.
-- A bot's actions need no confirmation. It runs each one through `executeCommand` with the initiator
-  `BOT`, under the same capability, role, timeout, rate limit and audit gates as anyone else. A
-  moderation timeout, slow mode, a ban or an archived channel applies to it as to a person.
+- A bot's actions need no confirmation. A post and a search run as commands with the initiator
+  `BOT`, under the same capability, role, timeout, rate limit and audit gates as anyone else. A read
+  a command can't answer runs on the service behind it, keeps the token and channel checks, and
+  writes its own audit entry. The dispatcher gates apply to commands. A moderation timeout, slow
+  mode, a ban or an archived channel applies to it as to a person.
 - A `<@id>` mention reaches a bot when it is in that channel, and not otherwise.
+- A bot gets no notifications, digests or pushes. It reads its mentions from `/mentions`.
 
 ## Encrypted conversations
 
@@ -96,6 +99,7 @@ Under `/api/bot/v1`, authorized with `Authorization: Bearer rimbot_...`. JSON bo
   budget of the author also apply.
 
 Reads are recorded in the audit log with the initiator `BOT`, as the gates above record any command.
+A poll for mentions that returned nothing isn't recorded, since nothing was handed over.
 
 ## Incoming webhooks
 

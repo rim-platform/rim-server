@@ -89,6 +89,8 @@ pub struct AppRuntime {
     pub session_revocations: Arc<dyn SessionRevocations>,
     /// The terms page `RIM_TERMS_FILE` names; `None` when the server serves no terms.
     pub(crate) terms_page: Option<Arc<crate::terms::TermsPage>>,
+    /// What the routes of the bot API use, with each token's call limit.
+    pub(crate) bot_api: Arc<crate::bot_api::BotApi>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -1125,6 +1127,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let auth_service = service_provider.auth_service();
     let user_service = service_provider.user_service();
     let relay_abuse_service = service_provider.relay_abuse_service();
+    let bot_api = Arc::new(crate::bot_api::BotApi::new(service_provider.as_ref()));
 
     Ok(AppRuntime {
         schema,
@@ -1150,6 +1153,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         ip_deny_list,
         session_revocations,
         terms_page: terms_page.map(Arc::new),
+        bot_api,
     })
 }
 

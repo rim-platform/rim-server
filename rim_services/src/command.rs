@@ -3,6 +3,7 @@ pub mod confirmation;
 pub mod dto;
 pub mod initiator;
 pub mod rate_limit;
+pub mod refusal;
 pub mod request;
 pub mod sanitize;
 pub mod sensitivity;

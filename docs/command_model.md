@@ -387,6 +387,12 @@ after the challenge was issued. The proof is good once, for the same caller, com
 and context; one that expired or was used answers `CONFIRMATION_STALE`, and one made for
 something else `CONFIRMATION_FAILED`.
 
+A `BOT` call comes from the bot API (`bots.md`), the one initiator the server sets itself: GraphQL has
+no value for it, so a client cannot claim it, and the audit log shows it as `bot`. It is not agentic,
+so a `Mutating` command such as `chat.post_message` needs no proof. Nobody is there to confirm, so a
+command that would answer `CONFIRMATION_REQUIRED` is refused as `DENIED` on that API, and the commands
+it runs need none.
+
 ### Timeout gate (T1)
 
 After the capability and confirmation gates, `execute_command` refuses any command whose `sensitivity` is `Mutating` or

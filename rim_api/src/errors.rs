@@ -2,6 +2,7 @@ use async_graphql::Error;
 use async_graphql::ErrorExtensions;
 use async_graphql::Value;
 use rim_services::ServiceError;
+use rim_services::command::refusal::Refusal;
 
 pub fn map_service_error(err: ServiceError) -> Error {
     match err {
@@ -143,39 +144,11 @@ pub fn map_service_error(err: ServiceError) -> Error {
 /// [`map_service_error`] for a refused command or macro call, with the `refusal` extension saying
 /// what kind of refusal it is, and `retrySafe` on any `FAILED` one.
 pub fn map_command_error(err: ServiceError) -> Error {
-    let refusal = match &err {
-        ServiceError::PermissionDenied
-        | ServiceError::CapabilityMissing { .. }
-        | ServiceError::Forbidden(_)
-        | ServiceError::TimedOut { .. }
-        | ServiceError::FeatureDisabled(_)
-        | ServiceError::ConversationArchived
-        | ServiceError::ConfirmationFailed(_) => Some("DENIED"),
-        ServiceError::CommandFailed { .. }
-        | ServiceError::RateLimited { .. }
-        | ServiceError::Unavailable
-        | ServiceError::Timeout
-        | ServiceError::Internal(_)
-        | ServiceError::UpstreamUnavailable { .. } => Some("FAILED"),
-        ServiceError::ConfirmationStale => Some("EXPIRED"),
-        ServiceError::Validation(_) | ServiceError::NotFound | ServiceError::Conflict(_) => {
-            Some("INVALID")
-        }
-        _ => None,
-    };
-    // A rate-limited call never started. A failure with no answer of its own, as a macro's can be,
-    // may have changed something.
-    let retry_safe = match &err {
-        ServiceError::RateLimited { .. } => Some(true),
-        ServiceError::Unavailable
-        | ServiceError::Timeout
-        | ServiceError::Internal(_)
-        | ServiceError::UpstreamUnavailable { .. } => Some(false),
-        _ => None,
-    };
+    let refusal = Refusal::of(&err);
+    let retry_safe = rim_services::command::refusal::retry_safe(&err);
     map_service_error(err).extend_with(|_, e| {
         if let Some(refusal) = refusal {
-            e.set("refusal", Value::from(refusal));
+            e.set("refusal", Value::from(refusal.as_str()));
         }
         if let Some(retry_safe) = retry_safe {
             e.set("retrySafe", Value::from(retry_safe));

@@ -3,7 +3,8 @@
 //!
 //! Rules, per member except the author:
 //! 1. Only conversation members are candidates (the caller passes the member list; banned,
-//!    removed and non-members are not in it). A timeout does not matter for receiving.
+//!    removed and non-members are not in it, nor are bot accounts). A timeout does not matter
+//!    for receiving.
 //! 2. A timed mute in effect (`muted_until > now`) yields nothing.
 //! 3. Effective level = the conversation override, else the workspace default. `NONE` yields
 //!    nothing, mentions and direct messages included.
@@ -17,6 +18,7 @@
 //! A reaction tells the message's author only ([`decide_reaction`]): never about their own
 //! reaction or a deleted message; the author must still be a member; a timed mute, effective
 //! level `NONE` or the `reactions` setting off yields nothing; do-not-disturb marks it `quiet`.
+//! The caller skips an author who is a bot account.
 
 use std::collections::{HashMap, HashSet};
 

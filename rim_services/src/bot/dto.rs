@@ -2,8 +2,13 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use rim_core::bot::model::{Bot, BotToken, BotTokenId};
+use rim_core::conversation::model::ConversationId;
+use rim_core::message::model::{Message, MessageId};
+use rim_core::message_thread::model::MessageThreadId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
+
+use crate::message::dto::MessageDto;
 
 /// A bot as a workspace's members see it.
 #[derive(Debug, Clone)]
@@ -111,4 +116,59 @@ pub struct BotActorDto {
     pub user_id: UserId,
     pub server_id: ServerId,
     pub token_id: BotTokenId,
+}
+
+/// A message as a bot reads it. `text` is `None` for a deleted message, and so is `edited_at`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotMessageDto {
+    pub id: MessageId,
+    pub conversation_id: ConversationId,
+    pub thread_id: Option<MessageThreadId>,
+    pub author_id: UserId,
+    pub text: Option<String>,
+    pub sent_at: DateTime<Utc>,
+    pub edited_at: Option<DateTime<Utc>>,
+}
+
+impl From<MessageDto> for BotMessageDto {
+    fn from(message: MessageDto) -> Self {
+        Self {
+            id: message.id,
+            conversation_id: message.conversation_id,
+            thread_id: message.thread_id,
+            author_id: message.author_id,
+            text: message.text.filter(|_| !message.is_deleted),
+            sent_at: message.sent_at,
+            edited_at: message.edited_at.filter(|_| !message.is_deleted),
+        }
+    }
+}
+
+impl From<Message> for BotMessageDto {
+    fn from(message: Message) -> Self {
+        Self {
+            id: message.id,
+            conversation_id: message.conversation_id,
+            thread_id: message.thread_id,
+            author_id: message.sent_by,
+            text: message.text.filter(|_| !message.is_deleted),
+            sent_at: message.sent_at,
+            edited_at: message.edited_at.filter(|_| !message.is_deleted),
+        }
+    }
+}
+
+/// Where a bot's reading of its mentions got to: the last mention it was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotMentionCursor {
+    pub created_at: DateTime<Utc>,
+    pub message_id: MessageId,
+}
+
+/// One page of a bot's mentions, oldest first, and the cursor of its last one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotMentionsPage {
+    pub messages: Vec<BotMessageDto>,
+    /// `None` when the page is empty.
+    pub last: Option<BotMentionCursor>,
 }

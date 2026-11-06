@@ -293,7 +293,7 @@ mod tests {
     use super::*;
     use crate::command::initiator::CommandInitiator;
 
-    const ALL_INITIATORS: [CommandInitiator; 7] = [
+    const ALL_INITIATORS: [CommandInitiator; 8] = [
         CommandInitiator::Palette,
         CommandInitiator::Agent,
         CommandInitiator::Macro,
@@ -301,6 +301,7 @@ mod tests {
         CommandInitiator::ContextMenu,
         CommandInitiator::Plugin,
         CommandInitiator::Cli,
+        CommandInitiator::Bot,
     ];
 
     fn definition(dangerous: bool, sensitivity: CommandSensitivityDto) -> CommandDefinitionDto {

@@ -19,6 +19,7 @@ needs the `X-CSRF-Token` header (see "Sessions and CSRF").
 | `GET` | `/api` | Nothing | The GraphiQL explorer, only when `RIM_ENABLE_GRAPHIQL=true`. |
 | `GET` | `/api/ws` | Session | GraphQL subscriptions over a WebSocket. |
 | `GET` | `/api/sdl` | Nothing | The schema in SDL, as `text/plain`. |
+| `GET`, `POST` | `/api/bot/v1/...` | A bot token, never a session | The bot API: the one set of routes a bot token works on (`bots.md`). |
 | `GET` | `/.well-known/rim-server` | Nothing | The signed discovery document. |
 | `GET` | `/healthz` | Nothing | Liveness. |
 | `GET` | `/readyz` | Nothing | Readiness. |
@@ -680,6 +681,11 @@ JSON body naming the refusal:
 | 429 | `{"error":"too_many_connections"}` | A WebSocket upgrade over `RIM_RATE_WS_CONNECTIONS_PER_USER`. |
 | 403 | `{"error":"blocked"}` | The client address is on the operator's IP deny list. |
 
+### Errors from the bot API
+
+Routes under `/api/bot/v1` answer `{"refusal":"...","message":"...","retrySafe":bool}`, with the kinds of
+`command_model.md`, "Refusals" (`bots.md`). The limits above still answer in their own shape first.
+
 ### Errors from the file routes
 
 The file and plugin bundle routes answer `{"error":"<message>"}` with:
@@ -982,6 +988,8 @@ character is `VALIDATION`.
 what the person who added it says about it, and null for anyone else: they answer while the feature
 is off too. `Message.author` is a `User`, so a client draws a bot's messages from it. A bot's
 `handle` and `principalId` are null.
+
+What a bot itself can call is not GraphQL: its token works on `/api/bot/v1` alone (`bots.md`).
 
 `createConversation` naming a bot and `addConversationMembers` naming a bot for anything but a
 plaintext channel are `VALIDATION` ("A bot can only be in a channel"). `addConversationMembers`
