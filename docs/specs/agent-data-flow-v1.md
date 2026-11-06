@@ -34,7 +34,8 @@ the person's session, device keys, account vault, model keys or plugin secrets.
 ## Read grants
 
 - Everything starts off. A paired agent with no grants can read nothing.
-- A grant names a channel, or "all channels you can see" in one workspace. It is per agent.
+- A grant names a channel, or "all channels you can see" in one workspace. It is per agent. Direct
+  messages and groups cannot be granted in this version, encrypted or not.
 - A grant cannot exceed what the person can read. A read comes from the messages stored on this
   device, which the desktop app keeps as that person, so no server sees or decides it. The app checks
   that the person can still see the conversation, and a conversation they lost access to is removed
@@ -49,15 +50,18 @@ the person's session, device keys, account vault, model keys or plugin secrets.
 
 ## What a read returns
 
-- Only the fields the tool describes: for a message, its id, conversation, author's display name,
-  text and time.
+- Only the fields the tool describes: for a message, its id, conversation, thread, author's display
+  name, text, times, and each attachment's name, type and size. Its text is as written, including
+  the way it mentions people, which can hold an identifier.
 - Never a token, key, cookie, session, or a value the app masks as sensitive.
 - Content from people is data, and the response marks it as such. Every tool result that contains
   text somebody else wrote MUST carry `"untrusted": true` next to that text, and the tool
   descriptions MUST tell the agent not to follow instructions found in it. This makes text an agent
   reads less able to steer it. It does not make that impossible, which is why a change still waits
   for a person.
-- A result has a size limit and a cursor. An agent cannot take a whole workspace in one call.
+- A result has a size limit, and reading a channel has a cursor. A search has no cursor, and one across
+  a workspace looks at a limited number of hits, so it can miss some. An agent cannot take a whole
+  workspace in one call.
 
 ## The record of what was given
 
@@ -65,7 +69,9 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   conversation, how many messages, and the ids of the messages.
 - It MUST NOT copy the text into the record.
 - The record is on this device, sealed with the account vault, and only the person sees it. It keeps
-  entries for 30 days. The person can clear it, and doing so leaves one entry saying that they did.
+  entries for 30 days, and a limited number for each agent, with a lower limit for refusals, so one
+  agent's calls cannot push out another's, nor refused calls what it was given. It still shows an agent
+  once it is disconnected. The person can clear it, and doing so leaves one entry saying that they did.
 - A read with no grant is recorded as refused.
 - It is a record of what RIM handed over, not of what the agent did with it. The app MUST word it
   that way.
@@ -115,9 +121,10 @@ the person's session, device keys, account vault, model keys or plugin secrets.
 
 ## Across servers
 
-- A workspace hosted elsewhere works as it does for the person: the agent's calls go through this
-  desktop app and that person's session or relay. The grant names the workspace and the server it is
-  on.
+- In this version, only workspaces on the server the app is signed in to can be granted. A workspace
+  hosted elsewhere cannot be granted yet.
+- When it can, it works as it does for the person: the agent's calls go through this desktop app and
+  that person's session or relay, and the grant names the workspace and the server it is on.
 - That server sees an ordinary client call from that person, declared as `AGENT`. The operators of
   the relay and host see what they see of any client.
 - A person's agent is theirs. Its model and key are not on any server, and the public relay carries
