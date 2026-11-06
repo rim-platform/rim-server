@@ -193,6 +193,7 @@ The normative contracts, for anyone building a client or another server:
 - `docs/specs/plugin-protocol-v1.md`: the client plugin protocol
 - `docs/specs/web-plugins-v1.md`: sandboxed web plugins
 - `docs/specs/workspace-plugins-v1.md`: signed manifests and workspace plugin registries
+- `docs/specs/agent-data-flow-v1.md`: what RIM hands to an agent on your machine, and what it records
 
 `docs/README.md` lists every document in `docs/`.
 
