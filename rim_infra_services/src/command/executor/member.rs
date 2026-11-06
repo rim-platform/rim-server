@@ -128,6 +128,7 @@ mod tests {
             timeout_until: None,
             timeout_reason: None,
             principal_id: None,
+            is_bot: false,
         }
     }
 

@@ -54,6 +54,7 @@ impl MockServerMemberService {
                 timeout_until: None,
                 timeout_reason: None,
                 principal_id: None,
+                is_bot: false,
             });
             Box::pin(async move { member.ok_or(crate::ServiceError::PermissionDenied) })
         });

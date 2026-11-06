@@ -30,11 +30,13 @@ pub enum ServerFeature {
     /// The automatic profile picture check: uploaded profile pictures are scored by the image
     /// check service and refused or reported when the score is high.
     AvatarCheck,
+    /// Bot accounts of a workspace: creating and managing them, and their tokens.
+    Bots,
 }
 
 impl ServerFeature {
     /// Every known feature, in display order.
-    pub const ALL: [ServerFeature; 10] = [
+    pub const ALL: [ServerFeature; 11] = [
         ServerFeature::Attachments,
         ServerFeature::LinkPreviews,
         ServerFeature::Email,
@@ -45,6 +47,7 @@ impl ServerFeature {
         ServerFeature::PluginLinkFetch,
         ServerFeature::TextArtCheck,
         ServerFeature::AvatarCheck,
+        ServerFeature::Bots,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -59,6 +62,7 @@ impl ServerFeature {
             ServerFeature::PluginLinkFetch => "plugin_link_fetch",
             ServerFeature::TextArtCheck => "text_art_check",
             ServerFeature::AvatarCheck => "avatar_check",
+            ServerFeature::Bots => "bots",
         }
     }
 

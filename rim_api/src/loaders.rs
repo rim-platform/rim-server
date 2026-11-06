@@ -8,6 +8,8 @@ use rim_core::message::model::MessageId;
 use rim_core::message_thread::model::MessageThreadId;
 use rim_core::user::model::UserId;
 use rim_services::Actor;
+use rim_services::bot::dto::BotInfoDto;
+use rim_services::bot::service::BotService;
 use rim_services::link_preview::LinkPreviewService;
 use rim_services::mention::service::MentionService;
 use rim_services::message_reaction::command::GetReactionsForMessagesQuery;
@@ -50,6 +52,36 @@ impl Loader<UserId> for UserLoader {
         async move {
             let users = svc.get_users_by_ids(&keys).await.map_err(loader_error)?;
             Ok(users.into_iter().map(|u| (u.id, u)).collect())
+        }
+    }
+}
+
+// ── BotInfoLoader ──────────────────────────────────────────────────────────
+
+/// Batches what is shown about the bots of a member list or a page of messages.
+pub struct BotInfoLoader {
+    bot_service: Arc<dyn BotService>,
+}
+
+impl BotInfoLoader {
+    pub fn new(bot_service: Arc<dyn BotService>) -> Self {
+        Self { bot_service }
+    }
+}
+
+impl Loader<UserId> for BotInfoLoader {
+    type Value = BotInfoDto;
+    type Error = Arc<async_graphql::Error>;
+
+    fn load(
+        &self,
+        keys: &[UserId],
+    ) -> impl Future<Output = Result<HashMap<UserId, Self::Value>, Self::Error>> + Send {
+        let keys = keys.to_vec();
+        let svc = Arc::clone(&self.bot_service);
+        async move {
+            let infos = svc.bot_infos(&keys).await.map_err(loader_error)?;
+            Ok(infos.into_iter().map(|i| (i.user_id, i)).collect())
         }
     }
 }

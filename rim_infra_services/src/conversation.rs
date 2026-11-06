@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{info, instrument};
 
+use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::{
     Conversation, ConversationId, ConversationType as CoreConversationType, NewConversation,
 };
@@ -64,6 +65,9 @@ pub(crate) fn manages_channel(
         || (conversation.is_private && conversation.created_by == Some(user_id))
 }
 
+/// The refusal of a bot named for anything but a plaintext channel.
+const BOT_ONLY_IN_CHANNEL: &str = "A bot can only be in a channel";
+
 /// The refusal of a member who cannot read an encrypted conversation.
 fn not_ready() -> ServiceError {
     ServiceError::Validation(
@@ -79,6 +83,9 @@ pub struct DefaultConversationService {
     /// Readiness of members for encrypted conversations. `None` in unit tests that are not about
     /// them; the composition root wires it.
     e2ee_repo: Option<Arc<dyn E2eeRepository>>,
+    /// Tells bots among the people named, who only join plaintext channels. `None` in unit tests
+    /// that are not about them; the composition root wires it.
+    bot_repo: Option<Arc<dyn BotRepository>>,
     /// The relay's direct space, where everyone is a guest, guests start DMs and groups, and
     /// there are no channels.
     direct_space_id: Option<rim_core::server::model::ServerId>,
@@ -100,6 +107,7 @@ impl DefaultConversationService {
             repos,
             observers,
             e2ee_repo: None,
+            bot_repo: None,
             direct_space_id: None,
             limits: InstanceLimits::default(),
             direct_space_starts: Arc::new(DailyCounter::per_day(
@@ -272,6 +280,12 @@ impl DefaultConversationService {
         Ok(())
     }
 
+    /// The repository that tells bots among the people named.
+    pub fn with_bot_repo(mut self, bot_repo: Arc<dyn BotRepository>) -> Self {
+        self.bot_repo = Some(bot_repo);
+        self
+    }
+
     pub fn with_e2ee_repo(mut self, e2ee_repo: Arc<dyn E2eeRepository>) -> Self {
         self.e2ee_repo = Some(e2ee_repo);
         self
@@ -298,6 +312,22 @@ impl DefaultConversationService {
         }
         self.ensure_invites_below_cap(&pending).await?;
         Ok((active, pending))
+    }
+
+    /// The bots among `user_ids`.
+    async fn bots_among(&self, user_ids: &[UserId]) -> ServiceResult<Vec<UserId>> {
+        match &self.bot_repo {
+            Some(bot_repo) => Ok(bot_repo.bots_among(user_ids).await?),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// `Validation` when one of `user_ids` is a bot.
+    async fn ensure_no_bots(&self, user_ids: &[UserId]) -> ServiceResult<()> {
+        if self.bots_among(user_ids).await?.is_empty() {
+            return Ok(());
+        }
+        Err(ServiceError::Validation(BOT_ONLY_IN_CHANNEL.to_string()))
     }
 
     fn e2ee_repo(&self) -> ServiceResult<&Arc<dyn E2eeRepository>> {
@@ -727,6 +757,16 @@ impl ConversationService for DefaultConversationService {
         if cmd.participants == ConversationParticipants::Channel {
             ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
         }
+        match &cmd.participants {
+            ConversationParticipants::DirectMessage { other_user_id } => {
+                self.ensure_no_bots(std::slice::from_ref(other_user_id))
+                    .await?;
+            }
+            ConversationParticipants::Group { member_ids } => {
+                self.ensure_no_bots(member_ids).await?;
+            }
+            ConversationParticipants::Channel => {}
+        }
         let direct = self.is_direct_space(cmd.server_id);
         if direct {
             let mut joining = vec![cmd.actor.user_id];
@@ -1124,6 +1164,16 @@ impl ConversationService for DefaultConversationService {
             .into_iter()
             .filter(|id| seen.insert(*id))
             .collect();
+        if !self.bots_among(&targets).await?.is_empty() {
+            if conversation.conversation_type != CoreConversationType::Channel
+                || conversation.is_encrypted()
+            {
+                return Err(ServiceError::Validation(BOT_ONLY_IN_CHANNEL.to_string()));
+            }
+            if !role.is_moderator() {
+                return Err(ServiceError::PermissionDenied);
+            }
+        }
         if conversation.conversation_type == CoreConversationType::Group
             && !conversation.is_encrypted()
         {

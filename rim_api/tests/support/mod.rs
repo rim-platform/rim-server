@@ -815,6 +815,9 @@ fn test_provider(
         custom_emoji_repo: Arc::new(
             rim_infra_db::sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(db.clone()),
         ),
+        bot_repo: Arc::new(rim_infra_db::sea_orm_impl::bot::SeaOrmBotRepository::new(
+            db.clone(),
+        )),
         workspace_state_repo: Arc::new(
             rim_infra_db::sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(
                 db.clone(),

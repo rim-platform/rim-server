@@ -145,6 +145,7 @@ impl From<rim_services::server::dto::ServerDto> for Server {
 }
 
 #[derive(SimpleObject, Clone, Debug)]
+#[graphql(complex)]
 pub struct ServerMember {
     pub server_id: async_graphql::ID,
     pub user_id: async_graphql::ID,
@@ -167,6 +168,16 @@ pub struct ServerMember {
     pub banned: bool,
     /// End of the active ban; null for a permanent ban or no ban.
     pub banned_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether this member is a bot, an account nobody signs in to.
+    pub is_bot: bool,
+}
+
+#[async_graphql::ComplexObject]
+impl ServerMember {
+    /// What the person who added this bot says about it; null for anyone but a bot.
+    async fn bot(&self, ctx: &async_graphql::Context<'_>) -> Result<Option<crate::types::BotInfo>> {
+        crate::types::bot::load_bot_info(ctx, self.is_bot, &self.user_id).await
+    }
 }
 
 impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
@@ -186,6 +197,7 @@ impl From<rim_services::server_member::dto::ServerMemberDto> for ServerMember {
             timeout_until: value.timeout_until,
             timeout_reason: value.timeout_reason,
             principal_id: value.principal_id,
+            is_bot: value.is_bot,
         }
     }
 }

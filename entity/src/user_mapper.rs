@@ -3,10 +3,11 @@ use rim_core::user::model::{User, UserHandle};
 
 impl From<user::Model> for User {
     fn from(m: user::Model) -> Self {
+        let is_bot = m.kind == "bot";
         let handle = match (m.kind.as_str(), m.home_username, m.home_handle_domain) {
             _ if m.deleted_at.is_some() => UserHandle::Unknown,
             ("remote", Some(username), Some(domain)) => UserHandle::Home { username, domain },
-            ("remote", _, _) => UserHandle::Unknown,
+            ("remote" | "bot", _, _) => UserHandle::Unknown,
             _ => UserHandle::Local,
         };
         Self {
@@ -25,6 +26,7 @@ impl From<user::Model> for User {
             deletion_scheduled_for: m.deletion_scheduled_for.map(Into::into),
             profile_locked_until: m.profile_locked_until.map(Into::into),
             handle,
+            is_bot,
         }
     }
 }

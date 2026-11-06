@@ -8,11 +8,13 @@ use crate::server::model::ServerId;
 use crate::server_member::model::ServerMemberRole;
 use crate::user::model::UserId;
 
-/// Whether a `user` row is someone whose relay is this server or elsewhere.
+/// What a `user` row is: someone whose relay is this server or elsewhere, or a bot of a workspace
+/// here, which has no relay and cannot sign in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserKind {
     Local,
     Remote,
+    Bot,
 }
 
 impl UserKind {
@@ -20,6 +22,7 @@ impl UserKind {
         match self {
             Self::Local => "local",
             Self::Remote => "remote",
+            Self::Bot => "bot",
         }
     }
 
@@ -27,6 +30,7 @@ impl UserKind {
         match s {
             "local" => Some(Self::Local),
             "remote" => Some(Self::Remote),
+            "bot" => Some(Self::Bot),
             _ => None,
         }
     }

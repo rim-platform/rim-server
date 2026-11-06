@@ -286,8 +286,9 @@ An attachment belongs to a message.
 
 A principal is who acts. Every user with a key identity has a stable principal id (`rimp1_…`)
 that plugins and other servers see instead of a server-local id; a person from another server is
-a `user` row of kind `remote` keyed by that id. `Principal` and `PrincipalKind` in `rim_core` are
-the seam for further kinds such as bots, which do not exist yet.
+a `user` row of kind `remote` keyed by that id. A bot is a `user` row of kind `bot` with no key,
+so it has no principal id and cannot sign in (`bots.md`). `Principal` and `PrincipalKind` in
+`rim_core` are the seam for further kinds.
 
 ### Command
 

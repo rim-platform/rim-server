@@ -660,6 +660,7 @@ impl DefaultModerationService {
             timeout_until,
             timeout_reason: None,
             principal_id: user.principal_id,
+            is_bot: user.is_bot,
         })
     }
 
@@ -814,6 +815,18 @@ impl ModerationService for DefaultModerationService {
 
         if target.member_role == cmd.role {
             return self.member_dto(target).await;
+        }
+        if target.member_role.is_guest()
+            && self
+                .repos
+                .user_repo
+                .get_by_id(target.user_id)
+                .await?
+                .is_some_and(|user| user.is_bot)
+        {
+            return Err(ServiceError::Validation(
+                "a bot stays a guest of its workspace".to_string(),
+            ));
         }
         let previous = target.member_role;
         self.repos

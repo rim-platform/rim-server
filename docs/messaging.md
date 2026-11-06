@@ -204,6 +204,11 @@ decide, and each may only tighten the one above it:
 | `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining) where the channel's posting policy lets them, creates channels and groups, joins public channels, invites people into conversations. In the server's default workspace only the Owner and Moderators create channels (`FORBIDDEN`). |
 | `GUEST` | Restricted. Reads and writes only in conversations they were explicitly added to. |
 
+A bot (`bots.md`) is a `GUEST` whose role cannot change: `setMemberRole` on it is `VALIDATION`. It is
+in the channels an Owner or Moderator added it to, and only those: `addConversationMembers` naming a
+bot is `FORBIDDEN` for anyone else. A direct message, a group or an encrypted conversation with a bot
+is `VALIDATION` ("A bot can only be in a channel").
+
 - **Migration:** before the member role existed every new member was created as `guest`, so "guest" meant an
   ordinary member. The `m20261005_024730_add_member_role` migration adds `member` to the
   `server_member_role` enum and turns **every existing `guest` into `member`**; the column

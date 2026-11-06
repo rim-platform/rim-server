@@ -21,6 +21,7 @@
 use async_graphql::MergedObject;
 
 pub(crate) mod audit;
+pub(crate) mod bot;
 pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod conversation;
@@ -130,4 +131,5 @@ pub(crate) struct QueryGroup9(
     invite::WorkspaceInviteQueries,
     public_join_link::PublicJoinLinkQueries,
     session_key::SessionKeyQueries,
+    bot::BotQueries,
 );

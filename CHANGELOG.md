@@ -37,6 +37,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 - **Upgrade:** a migration adds the column `command_audit_log.run_id` and the index
   `idx_command_audit_log_actor_run_id`; on a large `command_audit_log` table, writes to it wait while
   the index is built.
+- Bot accounts: an Owner or Moderator creates a bot with revocable tokens and a required statement
+  of who runs it and where what it reads goes (`Bot`, `BotToken`, `createBot`,
+  `docs/specs/bots-v1.md`). Switched off with the `bots` feature.
+
+### Changed
+
+- `User.isBot` and `ServerMember.isBot` say whether an account is a bot, and `User.bot` and
+  `ServerMember.bot` what the person who added it says about it. A bot has no `handle`.
 
 ## [0.0.8] - 2026-11-03
 

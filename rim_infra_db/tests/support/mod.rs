@@ -188,6 +188,8 @@ pub async fn reset_db(conn: &DatabaseConnection) {
     let sql = r#"
 TRUNCATE TABLE
   blocked_email,
+  bot,
+  bot_token,
   capability_registry,
   channel_lens,
   command_audit_log,

@@ -16,6 +16,7 @@ pub mod avatar_image;
 // Public: DefaultAuthService is re-exported below for integration tests
 // (signup_txn_regression) that construct the service directly against a live database.
 pub mod auth;
+pub(crate) mod bot;
 pub mod capability;
 pub(crate) mod channel_lens;
 pub(crate) mod clock;

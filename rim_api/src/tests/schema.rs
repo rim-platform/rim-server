@@ -189,9 +189,10 @@ fn user_sdl_ends_with_the_probation_end_the_pending_deletion_the_operator_role_a
         sdl.contains(
             "principalId: String probationEndsAt: DateTime profileLockedUntil: DateTime \
              deletionScheduledFor: DateTime \
-             instanceOperator: Boolean! handle: String banned: Boolean! bannedUntil: DateTime banReason: String }"
+             instanceOperator: Boolean! handle: String isBot: Boolean! banned: Boolean! \
+             bannedUntil: DateTime banReason: String bot: BotInfo }"
         ),
-        "User keeps profile fields followed by workspace ban status"
+        "User keeps profile fields followed by workspace ban status and what a bot discloses"
     );
 }
 
@@ -651,16 +652,39 @@ fn account_password_sdl_matches_the_contract() {
     }
 }
 
+/// The bot roots, appended last, and the types they answer.
+#[test]
+fn bot_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "bots(serverId: ID!): [Bot!]! botTokens(botUserId: ID!): [BotToken!]! }",
+        "createBot(input: CreateBotInput!): CreatedBot! updateBot(input: UpdateBotInput!): Bot! \
+         deactivateBot(botUserId: ID!): Bot! createBotToken(botUserId: ID!, label: String!): \
+         CreatedBotToken! revokeBotToken(tokenId: ID!): BotToken! }",
+        "type BotInfo { runBy: String! readsGoTo: String! addedByName: String }",
+        "type Bot { userId: ID! serverId: ID! name: String! runBy: String! readsGoTo: String! \
+         addedByName: String createdAt: DateTime! deactivatedAt: DateTime }",
+        "type BotToken { id: ID! label: String! createdAt: DateTime! lastUsedAt: DateTime \
+         revokedAt: DateTime }",
+        "type CreatedBot { bot: Bot! token: String! }",
+        "type CreatedBotToken { botToken: BotToken! token: String! }",
+        "bannedUntil: DateTime isBot: Boolean! bot: BotInfo }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
 /// The session key roots, appended after the account password roots and the public join link
-/// queries and followed by the workspace membership roots, and the keep choice of key signup.
+/// queries and followed by the workspace membership and bot roots, and the keep choice of key
+/// signup.
 #[test]
 fn session_key_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
         "passwordResetFinish(resetId: ID!, registrationUpload: String!): Boolean! setReloadKey: \
          String! reloadSession: ReloadSessionPayload! leaveWorkspace(serverId: ID!): Boolean! \
-         renameWorkspace(serverId: ID!, name: String!): Server! }",
-        "myJoinRequests: [JoinRequest!]! sessionKeepKey: String }",
+         renameWorkspace(serverId: ID!, name: String!): Server! createBot(",
+        "myJoinRequests: [JoinRequest!]! sessionKeepKey: String bots(",
         "type ReloadSessionPayload { reloadKey: String! nextReloadKey: String! }",
         "confirmedMinimumAge: Int keepSignedIn: Boolean! keepKeyHeld: Boolean! }",
     ] {

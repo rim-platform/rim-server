@@ -222,6 +222,7 @@ fn user_dto(id: UserId, username: &str) -> UserDto {
         deletion_scheduled_for: None,
         profile_locked_until: None,
         handle: None,
+        is_bot: false,
     }
 }
 
@@ -327,6 +328,7 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
                         timeout_until: None,
                         timeout_reason: None,
                         principal_id: None,
+                        is_bot: false,
                     },
                     ServerMemberDto {
                         server_id: ws,
@@ -341,6 +343,7 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
                         timeout_until: None,
                         timeout_reason: None,
                         principal_id: None,
+                        is_bot: false,
                     },
                 ])
             })

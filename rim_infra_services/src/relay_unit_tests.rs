@@ -4081,6 +4081,7 @@ fn reinvite_writer(
         deletion_scheduled_for: None,
         profile_locked_until: None,
         handle: rim_core::user::model::UserHandle::Local,
+        is_bot: false,
     };
     let mut users = MockUserRepository::new();
     let known = [user(ada, ALICE), user(bob, BOB), user(carol_id(), CAROL)];
@@ -4344,6 +4345,7 @@ fn default_workspace_writer(
         deletion_scheduled_for: None,
         profile_locked_until: None,
         handle: rim_core::user::model::UserHandle::Local,
+        is_bot: false,
     };
     let mut users = MockUserRepository::new();
     let all = vec![user(ada, ALICE), user(bob, BOB), user(carol, "rimp1_carol")];
@@ -4551,6 +4553,7 @@ fn lapsed_writer(
         deletion_scheduled_for: None,
         profile_locked_until: None,
         handle: rim_core::user::model::UserHandle::Local,
+        is_bot: false,
     };
     let mut users = MockUserRepository::new();
     let all = vec![user(ada, ALICE), user(bob, BOB)];
