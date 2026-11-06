@@ -147,6 +147,12 @@ A pipe (`executeCommand` with `isPipe`) writes one top-level row: its `command_i
 expression, its `sensitivity` the strictest of its stages', `dangerous` true when any stage is
 dangerous, and `typed_verb` null. Its stages write no rows of their own.
 
+`run_id` is the identifier a client gave one stretch of an agent's calls, kept only when the
+initiator is `agent` and null on every other row. It is a field of the row like any other: whoever
+may read a row reads its `run_id`, so the Owners and Moderators of a workspace see it on that
+workspace's rows. The `runId` filter of `listAuditLog` only narrows a scope from section 2 and never
+widens one.
+
 ---
 
 ## 6. Closed bypasses (do not reopen)

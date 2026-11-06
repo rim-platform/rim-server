@@ -44,6 +44,7 @@ async fn list_audit_log_query_returns_page() {
                     capability_check_outcome: None,
                     confirmation_outcome: None,
                     parent_audit_id: None,
+                    run_id: None,
                     created_at: chrono::Utc::now(),
                 }],
                 next_cursor: None,

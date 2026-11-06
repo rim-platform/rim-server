@@ -30,6 +30,7 @@ use rim_services::command::dto::{
     CommandContextDto, CommandDefinitionDto, CommandResultDto, CommandResultStatusDto,
     CommandSurfaceDto, UserCommandDto, UserCommandStepDto,
 };
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{
     CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
     GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery, UpdateUserCommandCmd,
@@ -346,6 +347,10 @@ impl CommandService for DefaultCommandService {
         let actor_id = cmd.actor.user_id;
         let command_id_for_audit = cmd.command_id.clone();
         let initiator_for_audit = cmd.initiator;
+        let run_id_for_audit = cmd
+            .run_id
+            .clone()
+            .filter(|_| cmd.initiator == CommandInitiator::Agent);
         let server_id_for_audit: uuid::Uuid = cmd
             .context
             .as_ref()
@@ -438,6 +443,7 @@ impl CommandService for DefaultCommandService {
                 capability_check_outcome: None,
                 confirmation_outcome: None,
                 parent_audit_id: None,
+                run_id: run_id_for_audit,
                 created_at: chrono::Utc::now(),
             };
             if let Err(e) = audit_svc.write_entry(entry).await {

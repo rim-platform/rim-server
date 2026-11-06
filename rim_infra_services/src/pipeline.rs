@@ -927,6 +927,7 @@ impl PipelineService for DefaultPipelineService {
                                 // holds, so a Mutating command needs a
                                 // confirmation proof just as for an agent.
                                 initiator: CommandInitiator::Plugin,
+                                run_id: None,
                             })
                             .await;
 

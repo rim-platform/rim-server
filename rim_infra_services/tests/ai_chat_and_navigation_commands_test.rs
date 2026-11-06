@@ -310,6 +310,7 @@ async fn execute_command_post_message_round_trips_through_executor() {
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.post_message via Agent initiator with proof must succeed");
@@ -432,6 +433,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.create_channel with description must succeed");
@@ -528,6 +530,7 @@ async fn execute_command_create_channel_without_description_skips_update_topic()
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.create_channel without description must succeed");
@@ -600,6 +603,7 @@ async fn execute_command_create_channel_with_empty_description_skips_update_topi
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("empty description must succeed and skip update_topic");

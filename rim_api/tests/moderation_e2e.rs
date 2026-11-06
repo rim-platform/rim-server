@@ -267,13 +267,25 @@ mutation Exec($serverId: ID!, $args: JSON!, $commandId: String! = "chat.post_mes
 }
 "#;
 
+const EXECUTE_IN_RUN: &str = r#"
+mutation Exec($serverId: ID!, $initiator: CommandInitiator, $runId: String) {
+  executeCommand(input: {
+    commandId: "chat.list_channels"
+    args: { server_id: $serverId }
+    commandContext: { workspaceId: $serverId }
+    initiator: $initiator
+    runId: $runId
+  }) { status message }
+}
+"#;
+
 const AUDIT_LOG: &str = r#"
 query Audit($filter: AuditLogFilterInput, $pagination: AuditLogPaginationInput) {
   listAuditLog(filter: $filter, pagination: $pagination) {
     items {
       id actorUserId serverId commandId initiator argsRedacted sensitivity dangerous
       confirmationKind typedVerb outcome errorKind capabilityCheckOutcome confirmationOutcome
-      createdAt
+      runId createdAt
     }
     nextCursor
     pageInfo { hasNextPage hasPrevPage }
@@ -1501,6 +1513,7 @@ async fn audit_log_pages_newest_first_and_filters_by_verb_and_command() {
             "errorKind": null,
             "capabilityCheckOutcome": null,
             "confirmationOutcome": null,
+            "runId": null,
         })
     );
     assert_eq!(
@@ -1570,6 +1583,86 @@ async fn audit_log_pages_newest_first_and_filters_by_verb_and_command() {
         let vars = json!({ "filter": filter, "pagination": pagination });
         let code = exec_err_code(&f.schema, f.alice.request(AUDIT_LOG, vars)).await;
         assert_eq!(code, "VALIDATION", "{filter} {pagination}");
+    }
+}
+
+/// `executeCommand` keeps `runId` on the audit entry of an `AGENT` call and `listAuditLog` filters
+/// by it, within what the caller may read: a member their own rows, the owner the workspace's. A
+/// call with another initiator keeps no id, and a malformed id is `VALIDATION`.
+#[tokio::test]
+async fn audit_log_keeps_and_filters_an_agent_run_id() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let call = |initiator: &str, run_id: &str| json!({ "serverId": f.server_id, "initiator": initiator, "runId": run_id });
+    for (who, vars) in [
+        (&f.bob, call("AGENT", "r_1")),
+        (&f.alice, call("AGENT", "r_1")),
+        (&f.bob, call("AGENT", "r_2")),
+        (&f.bob, call("PALETTE", "r_palette")),
+    ] {
+        let ok = exec_ok(&f.schema, who.request(EXECUTE_IN_RUN, vars)).await;
+        assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
+    }
+
+    let bob_id = f.bob.user_id.to_string();
+    let alice_id = f.alice.user_id.to_string();
+    let rows = |data: &Value| -> Vec<(String, String, String)> {
+        data["listAuditLog"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|row| {
+                (
+                    row["actorUserId"].as_str().expect("actor").to_string(),
+                    row["initiator"].as_str().expect("initiator").to_string(),
+                    row["runId"].as_str().expect("run id").to_string(),
+                )
+            })
+            .collect()
+    };
+    let read = |filter: Value| json!({ "filter": filter });
+    let own_run = read(json!({ "serverId": f.server_id, "actorUserId": bob_id, "runId": "r_1" }));
+
+    let bobs = exec_ok(&f.schema, f.bob.request(AUDIT_LOG, own_run)).await;
+    assert_eq!(
+        rows(&bobs),
+        [(bob_id.clone(), "agent".to_string(), "r_1".to_string())]
+    );
+
+    let workspace_run = read(json!({ "serverId": f.server_id, "runId": "r_1" }));
+    assert_eq!(
+        exec_err_code(&f.schema, f.bob.request(AUDIT_LOG, workspace_run.clone())).await,
+        "FORBIDDEN",
+        "a member reads no one else's rows of a run"
+    );
+    let owners = exec_ok(&f.schema, f.alice.request(AUDIT_LOG, workspace_run)).await;
+    assert_eq!(
+        rows(&owners),
+        [
+            (alice_id, "agent".to_string(), "r_1".to_string()),
+            (bob_id.clone(), "agent".to_string(), "r_1".to_string()),
+        ]
+    );
+
+    let palette = read(json!({ "serverId": f.server_id, "runId": "r_palette" }));
+    let none = exec_ok(&f.schema, f.alice.request(AUDIT_LOG, palette)).await;
+    assert!(rows(&none).is_empty(), "only an agent's call keeps the id");
+    let palette_rows = read(json!({ "serverId": f.server_id, "actorUserId": bob_id }));
+    let bob_all = exec_ok(&f.schema, f.bob.request(AUDIT_LOG, palette_rows)).await;
+    let palette_row = bob_all["listAuditLog"]["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|row| row["initiator"] == json!("palette"))
+        .expect("the palette call");
+    assert_eq!(palette_row["runId"], Value::Null);
+
+    for bad in ["", "has space", &"x".repeat(65)] {
+        assert_eq!(
+            exec_err_code(&f.schema, f.bob.request(EXECUTE_IN_RUN, call("AGENT", bad))).await,
+            "VALIDATION",
+            "{bad:?}"
+        );
     }
 }
 

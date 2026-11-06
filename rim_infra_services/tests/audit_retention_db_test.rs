@@ -36,6 +36,7 @@ fn entry(server_id: Uuid, command_id: &str, created_at: DateTime<Utc>) -> AuditL
         capability_check_outcome: None,
         confirmation_outcome: None,
         parent_audit_id: None,
+        run_id: None,
         created_at,
     }
 }
@@ -110,6 +111,7 @@ async fn one_purge_exports_the_old_rows_and_keeps_the_recent_ones() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: None,

@@ -165,6 +165,7 @@ pub(crate) async fn record_audit_action(
         capability_check_outcome: None,
         confirmation_outcome: None,
         parent_audit_id: None,
+        run_id: None,
         created_at: Utc::now(),
     };
     if let Err(e) = audit_svc.write_entry(row).await {

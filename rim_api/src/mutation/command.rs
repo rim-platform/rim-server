@@ -1,5 +1,4 @@
 use async_graphql::*;
-use rim_services::Actor;
 use rim_services::command::dto::{UserCommandDto, UserCommandStepDto};
 use rim_services::command::initiator::CommandInitiator as CommandInitiatorDto;
 use rim_services::command::request::{
@@ -7,6 +6,7 @@ use rim_services::command::request::{
     UpdateUserCommandCmd,
 };
 use rim_services::command::service::CommandService;
+use rim_services::{Actor, ServiceError};
 
 use crate::auth_context::require_actor;
 use crate::errors::{map_command_error, map_service_error};
@@ -25,6 +25,9 @@ impl CommandMutations {
     ) -> Result<CommandResult> {
         require_initiator(ctx, input.initiator)?;
         let actor = require_actor(ctx)?;
+        if let Some(run_id) = &input.run_id {
+            validate_run_id(run_id).map_err(map_service_error)?;
+        }
 
         let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
 
@@ -41,6 +44,7 @@ impl CommandMutations {
                     .initiator
                     .map(CommandInitiatorDto::from)
                     .unwrap_or_default(),
+                run_id: input.run_id,
             })
             .await
             .map_err(map_command_error)?;
@@ -141,6 +145,27 @@ pub struct ExecuteCommandInput {
     /// human action, never as an agent action. `AGENT` fails with `FEATURE_DISABLED` while the
     /// instance has the AI command surface off.
     pub initiator: Option<CommandInitiator>,
+    /// An identifier the desktop app gives one stretch of an agent's calls. Kept on the audit
+    /// entry when the initiator is `AGENT`, and ignored otherwise.
+    pub run_id: Option<String>,
+}
+
+/// Longest `runId` `executeCommand` accepts.
+const MAX_RUN_ID_LEN: usize = 64;
+
+/// Checks that a `runId` is 1 to 64 ASCII letters, digits, `_` or `-`.
+///
+/// # Errors
+///
+/// [`ServiceError::Validation`] when it is not.
+fn validate_run_id(run_id: &str) -> Result<(), ServiceError> {
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    if run_id.is_empty() || run_id.len() > MAX_RUN_ID_LEN || !run_id.bytes().all(allowed) {
+        return Err(ServiceError::Validation(format!(
+            "runId must be 1 to {MAX_RUN_ID_LEN} letters, digits, underscores or hyphens"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(InputObject)]
@@ -188,4 +213,24 @@ async fn resolved_definition(
     Ok(resolved
         .unwrap_or_else(|| command.as_command_definition())
         .into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_ids_are_short_and_plain() {
+        let longest = "x".repeat(MAX_RUN_ID_LEN);
+        for good in ["r_1", "A-b_9", longest.as_str()] {
+            assert!(validate_run_id(good).is_ok(), "{good}");
+        }
+        let too_long = "x".repeat(MAX_RUN_ID_LEN + 1);
+        for bad in ["", "has space", "r/1", "r\n", "\u{e9}", too_long.as_str()] {
+            assert!(
+                matches!(validate_run_id(bad), Err(ServiceError::Validation(_))),
+                "{bad:?}"
+            );
+        }
+    }
 }

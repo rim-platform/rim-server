@@ -119,8 +119,8 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   describe it as one task.
 - The desktop app gives each run a random identifier and sends it with the changes of that run as
   `executeCommand`'s `runId`. The server keeps it on the audit entry when the initiator is `AGENT`, and
-  `listAuditLog` can filter by it. The server does not check it, as it takes the client's word for the
-  initiator.
+  `listAuditLog` can filter by it. The server checks only its form, and takes the client's word for
+  what it means, as it does for the initiator.
 - The run view is on the person's device and only they see it. It joins the record with their own audit
   entries. The audit entries, with the identifier, are also readable by those who can read that
   workspace's log (`docs/security/audit-access-matrix.md`), and the view MUST say so.

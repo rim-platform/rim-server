@@ -48,6 +48,7 @@ impl AuditLogService for DefaultAuditLogService {
             capability_check_outcome: entry.capability_check_outcome,
             confirmation_outcome: entry.confirmation_outcome,
             parent_audit_id: entry.parent_audit_id,
+            run_id: entry.run_id,
             created_at: entry.created_at,
         };
         self.repo.insert(record).await.map_err(ServiceError::from)
@@ -157,6 +158,7 @@ impl AuditLogService for DefaultAuditLogService {
             server_id: query.server_id,
             command_id: query.command_id,
             typed_verb: query.typed_verb,
+            run_id: query.run_id,
             since: query.since,
             until: query.until,
             cursor: query.cursor,
@@ -186,6 +188,7 @@ impl AuditLogService for DefaultAuditLogService {
                     capability_check_outcome: r.capability_check_outcome,
                     confirmation_outcome: r.confirmation_outcome,
                     parent_audit_id: r.parent_audit_id,
+                    run_id: r.run_id,
                     created_at: r.created_at,
                 })
                 .collect(),
@@ -250,6 +253,7 @@ mod tests {
             capability_check_outcome: None,
             confirmation_outcome: None,
             parent_audit_id: None,
+            run_id: None,
             created_at: chrono::Utc::now(),
         }
     }

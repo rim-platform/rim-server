@@ -180,6 +180,7 @@ async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_ser
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         })
         .await
         .expect("palette chat.list_channels must succeed when context carries workspace_id");
@@ -268,6 +269,7 @@ async fn palette_chat_list_members_uses_context_workspace_id_when_args_omit_serv
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         })
         .await
         .expect("palette chat.list_members must succeed when context carries workspace_id");

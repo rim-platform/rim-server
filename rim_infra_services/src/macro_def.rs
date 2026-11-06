@@ -663,6 +663,7 @@ impl MacroService for DefaultMacroService {
                     // Propagate outer initiator — Agent-triggered macros keep Agent
                     // on every nested call.
                     initiator: cmd.initiator,
+                    run_id: None,
                 })
                 .await;
 
@@ -709,6 +710,7 @@ impl MacroService for DefaultMacroService {
                     capability_check_outcome: None,
                     confirmation_outcome: None,
                     parent_audit_id: Some(parent_audit_id),
+                    run_id: None,
                     created_at: chrono::Utc::now(),
                 };
                 if let Err(e) = audit_svc.write_entry(child_entry).await {
@@ -768,6 +770,7 @@ impl MacroService for DefaultMacroService {
                 capability_check_outcome: None,
                 confirmation_outcome: None,
                 parent_audit_id: None,
+                run_id: None,
                 created_at: chrono::Utc::now(),
             };
             if let Err(e) = audit_svc.write_entry(parent_entry).await {

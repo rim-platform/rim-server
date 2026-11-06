@@ -321,6 +321,12 @@ call's redacted arguments when they serialize to 4,096 bytes or less; larger arg
 as `{"truncated": true, "bytes": <size>, "prefix": <the first 1,024 bytes of the redacted
 JSON>}`.
 
+An `AGENT` call may carry a `runId`, an identifier the desktop app gives one stretch of an
+agent's calls. The audit entry keeps it, so `listAuditLog` can list that stretch; on a call with
+any other initiator it is ignored. It is the client's word, like the initiator. It must be 1 to
+64 ASCII letters, digits, `_` or `-`, or the call is refused with `VALIDATION` whatever the
+initiator. A macro's steps do not carry it.
+
 A pipeline action may not name a user command or a macro: each action runs as its own command
 call with its own budget of 100 builtin steps, and a pipeline fires on events other people cause.
 `createPipeline` and `updatePipeline` refuse such an action with "pipeline actions must not

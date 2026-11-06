@@ -97,6 +97,9 @@ pub struct AuditLogEntry {
     pub error_kind: Option<String>,
     pub capability_check_outcome: Option<String>,
     pub confirmation_outcome: Option<String>,
+    /// The identifier the desktop app gave the stretch of an agent's calls this entry belongs to.
+    /// Null unless the initiator was `AGENT`.
+    pub run_id: Option<String>,
     pub created_at: String,
 }
 
@@ -117,6 +120,7 @@ impl From<rim_services::audit::dto::AuditLogEntryDto> for AuditLogEntry {
             error_kind: dto.error_kind,
             capability_check_outcome: dto.capability_check_outcome,
             confirmation_outcome: dto.confirmation_outcome,
+            run_id: dto.run_id,
             created_at: dto.created_at.to_rfc3339(),
         }
     }
@@ -142,6 +146,7 @@ pub struct AuditLogFilterInput {
     pub server_id: Option<async_graphql::ID>,
     pub command_id: Option<String>,
     pub typed_verb: Option<TypedVerbGql>,
+    pub run_id: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
 }

@@ -253,6 +253,7 @@ impl DefaultWorkspaceHost {
             capability_check_outcome: None,
             confirmation_outcome: None,
             parent_audit_id: None,
+            run_id: None,
             created_at: Utc::now(),
         };
         if let Err(e) = audit.write_entry(row).await {

@@ -27,6 +27,7 @@ fn make_entry(
         capability_check_outcome: None,
         confirmation_outcome: None,
         parent_audit_id: None,
+        run_id: None,
         created_at: chrono::Utc::now(),
     }
 }
@@ -50,6 +51,7 @@ async fn insert_and_list_roundtrip() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: None,
@@ -88,6 +90,7 @@ async fn pagination_cursor_advances_pages() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: None,
@@ -107,6 +110,7 @@ async fn pagination_cursor_advances_pages() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: page1.next_cursor,
@@ -125,6 +129,7 @@ async fn pagination_cursor_advances_pages() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: page2.next_cursor,
@@ -165,6 +170,7 @@ async fn typed_verb_filter_returns_matching_rows_only() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: Some("write".to_string()),
+            run_id: None,
             since: None,
             until: None,
             cursor: None,
@@ -182,6 +188,7 @@ async fn typed_verb_filter_returns_matching_rows_only() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: None,
@@ -221,6 +228,7 @@ async fn all_audit_outcome_variants_accepted_by_db_constraint() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: None,
@@ -263,6 +271,7 @@ async fn audit_insert_roundtrips_parent_audit_id() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: None,
@@ -321,6 +330,7 @@ async fn audit_parent_child_linkage() {
             server_id: Some(server_id),
             command_id: None,
             typed_verb: None,
+            run_id: None,
             since: None,
             until: None,
             cursor: None,
@@ -428,4 +438,51 @@ async fn retention_reads_counts_and_deletes_old_rows_in_batches() {
         2,
         "the old row past the bound and the recent row"
     );
+}
+
+#[tokio::test]
+async fn run_id_round_trips_and_filters() {
+    let ctx = support::TestCtx::new().await;
+
+    let repo = SeaOrmAuditLogRepository::new(ctx.db.clone());
+    let server_id = uuid::Uuid::now_v7();
+    let actor_id = uuid::Uuid::now_v7();
+
+    repo.insert(make_entry(server_id, actor_id, "/no-run"))
+        .await
+        .expect("insert a row with no run");
+    for (command_id, run_id) in [("/first", "r_1"), ("/second", "r_1"), ("/other", "r_2")] {
+        let mut entry = make_entry(server_id, actor_id, command_id);
+        entry.run_id = Some(run_id.to_string());
+        repo.insert(entry).await.expect("insert a row of a run");
+    }
+
+    let query = |run_id: Option<&str>| AuditLogListQuery {
+        actor_user_id: Some(actor_id),
+        server_id: Some(server_id),
+        command_id: None,
+        typed_verb: None,
+        run_id: run_id.map(str::to_string),
+        since: None,
+        until: None,
+        cursor: None,
+        limit: 10,
+    };
+
+    let run = repo.list(query(Some("r_1"))).await.expect("list the run");
+    let commands: Vec<&str> = run.items.iter().map(|r| r.command_id.as_str()).collect();
+    assert_eq!(commands, ["/second", "/first"]);
+    assert!(run.items.iter().all(|r| r.run_id.as_deref() == Some("r_1")));
+
+    let missing = repo.list(query(Some("r_3"))).await.expect("list no run");
+    assert!(missing.items.is_empty());
+
+    let all = repo.list(query(None)).await.expect("list everything");
+    assert_eq!(all.items.len(), 4);
+    let no_run = all
+        .items
+        .iter()
+        .find(|r| r.command_id == "/no-run")
+        .expect("the row with no run");
+    assert_eq!(no_run.run_id, None);
 }

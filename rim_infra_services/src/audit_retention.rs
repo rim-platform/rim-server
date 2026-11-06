@@ -92,6 +92,7 @@ struct ExportLine<'a> {
     capability_check_outcome: Option<&'a str>,
     confirmation_outcome: Option<&'a str>,
     parent_audit_id: Option<String>,
+    run_id: Option<&'a str>,
     created_at: String,
 }
 
@@ -113,6 +114,7 @@ impl<'a> From<&'a AuditLogEntryRecord> for ExportLine<'a> {
             capability_check_outcome: r.capability_check_outcome.as_deref(),
             confirmation_outcome: r.confirmation_outcome.as_deref(),
             parent_audit_id: r.parent_audit_id.map(|id| id.to_string()),
+            run_id: r.run_id.as_deref(),
             created_at: r.created_at.to_rfc3339(),
         }
     }
@@ -532,6 +534,7 @@ mod tests {
             capability_check_outcome: Some("allowed".to_string()),
             confirmation_outcome: None,
             parent_audit_id: None,
+            run_id: None,
             created_at: now - chrono::Duration::minutes(minutes_ago),
         }
     }
@@ -601,6 +604,7 @@ mod tests {
         let mut parent = row(10, now);
         let mut child = row(9, now);
         child.parent_audit_id = Some(parent.id);
+        child.run_id = Some("r_1".to_string());
         parent.typed_verb = None;
 
         let mut writer = ExportWriter::create(dir.path()).expect("create");
@@ -626,6 +630,8 @@ mod tests {
         assert_eq!(lines[0]["id"], parent.id.to_string());
         assert_eq!(lines[0]["typedVerb"], serde_json::Value::Null);
         assert_eq!(lines[0]["argsRedacted"]["text"], "[redacted]");
+        assert_eq!(lines[0]["runId"], serde_json::Value::Null);
+        assert_eq!(lines[1]["runId"], "r_1");
         assert_eq!(lines[1]["parentAuditId"], parent.id.to_string());
         assert_eq!(lines[1]["capabilityCheckOutcome"], "allowed");
         assert_eq!(lines[1]["createdAt"], child.created_at.to_rfc3339());
