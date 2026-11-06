@@ -24,6 +24,7 @@ pub const CAPABILITIES: &[&str] = &[
     "conversation_member_removals",
     "notification_events",
     "bot_disclosure",
+    "command_run_id",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.
@@ -188,7 +189,8 @@ impl ServerInfo {
     /// (`ServerMember.timeoutReason`, the `MemberTimeoutChanged` event),
     /// `conversation_member_removals` (`conversationMemberRemovals`), `notification_events`
     /// (`notificationEvents`), `bot_disclosure` (`User.isBot`, `User.bot`, `ServerMember.isBot`,
-    /// `ServerMember.bot`). A client ignores names it does not know.
+    /// `ServerMember.bot`), `command_run_id` (`ExecuteCommandInput.runId`, `AuditLogEntry.runId`).
+    /// A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES
             .iter()

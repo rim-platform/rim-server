@@ -237,6 +237,7 @@ async fn server_info_lists_its_capabilities() {
         "conversation_member_removals",
         "notification_events",
         "bot_disclosure",
+        "command_run_id",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
