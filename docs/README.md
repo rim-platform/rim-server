@@ -41,6 +41,7 @@ Normative, versioned contracts in `specs/`:
 - `specs/web-plugins-v1.md`: sandboxed web plugins.
 - `specs/workspace-plugins-v1.md`: signed manifests and workspace plugin registries.
 - `specs/agent-data-flow-v1.md`: what RIM hands to an agent on your machine, and what it records.
+- `specs/bots-v1.md`: bot accounts, their API and incoming webhooks.
 
 ## Operations
 
