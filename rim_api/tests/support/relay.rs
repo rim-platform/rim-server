@@ -71,6 +71,8 @@ pub const EDIT_ENCRYPTED: &str = r#"
 mutation Edit($input: EditEncryptedMessageInput!) { editEncryptedMessage(input: $input) { id } }"#;
 pub const MARK_READ: &str = r#"
 mutation Read($input: MarkAsReadInput!) { markAsRead(input: $input) }"#;
+pub const MARK_UNREAD: &str = r#"
+mutation Unread($input: MarkAsUnreadInput!) { markAsUnread(input: $input) }"#;
 pub const HEADS: &str = r#"
 query Heads($serverId: ID!, $streams: [String!]!) { streamHeads(serverId: $serverId, streams: $streams) { stream seq } }"#;
 

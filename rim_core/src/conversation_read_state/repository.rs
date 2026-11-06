@@ -7,6 +7,15 @@ use crate::conversation::model::ConversationId;
 use crate::repository::error::RepoResult;
 use crate::user::model::UserId;
 
+/// One conversation's unread messages for a user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationUnread {
+    pub conversation_id: ConversationId,
+    pub count: i64,
+    /// Messages sent after this time count as unread.
+    pub unread_after: DateTime<Utc>,
+}
+
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait ConversationReadStateRepository: Send + Sync {
@@ -21,7 +30,7 @@ pub trait ConversationReadStateRepository: Send + Sync {
         &self,
         user_id: UserId,
         conversation_ids: &[ConversationId],
-    ) -> RepoResult<Vec<(ConversationId, i64)>>;
+    ) -> RepoResult<Vec<ConversationUnread>>;
 
     async fn mark_all_read(
         &self,
@@ -29,4 +38,18 @@ pub trait ConversationReadStateRepository: Send + Sync {
         conversation_ids: &[ConversationId],
         read_at: DateTime<Utc>,
     ) -> RepoResult<()>;
+
+    /// Moves the read marker back to `to`, the only path that moves it backward. A marker
+    /// already at or before `to` stays where it is. Without a marker, `to` becomes the marker.
+    ///
+    /// Returns whether the marker was written.
+    ///
+    /// # Errors
+    /// Storage errors.
+    async fn rewind(
+        &self,
+        user_id: UserId,
+        conversation_id: ConversationId,
+        to: DateTime<Utc>,
+    ) -> RepoResult<bool>;
 }

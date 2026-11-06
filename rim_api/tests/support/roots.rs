@@ -42,6 +42,8 @@ pub const MESSAGE_ROOTS: &[&str] = &[
      conversationId: $c, messageId: $m }) }",
     "mutation($s: ID!, $c: ID!, $m: ID!) { unpinMessage(input: { serverId: $s, \
      conversationId: $c, messageId: $m }) }",
+    "mutation($s: ID!, $c: ID!, $m: ID!) { markAsUnread(input: { workspaceId: $s, \
+     conversationId: $c, messageId: $m }) }",
 ];
 
 /// Roots that attach a file to message `$m` or change its attachment `$a`.

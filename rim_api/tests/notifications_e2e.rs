@@ -17,6 +17,7 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::{DateTime, TimeDelta, Utc};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 
@@ -105,6 +106,22 @@ mutation MarkAllRead($workspaceId: ID!) { markAllAsRead(input: { workspaceId: $w
 
 const UNREAD_COUNTS: &str = r#"
 query Unread($workspaceId: ID!) { unreadCounts(workspaceId: $workspaceId) { conversationId count } }
+"#;
+
+const UNREAD_AFTER: &str = r#"
+query Unread($workspaceId: ID!) {
+  unreadCounts(workspaceId: $workspaceId) { conversationId count unreadAfter }
+}
+"#;
+
+const MARK_AS_UNREAD: &str = r#"
+mutation MarkUnread($input: MarkAsUnreadInput!) { markAsUnread(input: $input) }
+"#;
+
+const SENT_AT: &str = r#"
+query Sent($serverId: ID!, $conversationId: ID!, $messageId: ID!) {
+  message(serverId: $serverId, conversationId: $conversationId, messageId: $messageId) { sentAt }
+}
 "#;
 
 const MUTE: &str = r#"
@@ -1371,4 +1388,332 @@ async fn palette_conversation_commands_act_on_the_focused_conversation() {
         .execute(&f.carol, "chat.mark_as_read", json!({}), Some(&f.general))
         .await;
     assert_eq!(result["status"], "SUCCESS", "{result}");
+}
+
+impl Fixture {
+    /// `who`'s `(count, unreadAfter)` for `conversation_id`; `None` when nothing there is unread.
+    async fn unread_in(&self, who: &Caller, conversation_id: &str) -> Option<(i64, DateTime<Utc>)> {
+        let vars = json!({ "workspaceId": self.server_id });
+        let data = exec_ok(&self.schema, who.request(UNREAD_AFTER, vars)).await;
+        data["unreadCounts"]
+            .as_array()
+            .expect("counts")
+            .iter()
+            .find(|c| c["conversationId"] == conversation_id)
+            .map(|c| {
+                let count = c["count"].as_i64().expect("count");
+                (count, timestamp(&c["unreadAfter"]))
+            })
+    }
+
+    fn unread_input(&self, conversation_id: &str, message_id: &str) -> Value {
+        json!({ "input": {
+            "workspaceId": self.server_id, "conversationId": conversation_id,
+            "messageId": message_id,
+        } })
+    }
+
+    async fn mark_unread(&self, who: &Caller, conversation_id: &str, message_id: &str) {
+        let vars = self.unread_input(conversation_id, message_id);
+        let data = exec_ok(&self.schema, who.request(MARK_AS_UNREAD, vars)).await;
+        assert_eq!(data["markAsUnread"], true);
+    }
+
+    async fn read_up_to(&self, who: &Caller, conversation_id: &str, read_at: DateTime<Utc>) {
+        let vars = json!({ "input": {
+            "workspaceId": self.server_id, "conversationId": conversation_id,
+            "readAt": read_at.to_rfc3339(),
+        } });
+        exec_ok(&self.schema, who.request(MARK_AS_READ, vars)).await;
+    }
+
+    async fn sent_at(
+        &self,
+        who: &Caller,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> DateTime<Utc> {
+        let vars = json!({
+            "serverId": self.server_id, "conversationId": conversation_id, "messageId": message_id,
+        });
+        let data = exec_ok(&self.schema, who.request(SENT_AT, vars)).await;
+        timestamp(&data["message"]["sentAt"])
+    }
+
+    async fn joined_at(&self, who: &Caller, conversation_id: &str) -> DateTime<Utc> {
+        let row = self
+            .ctx
+            .conn
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT joined_at FROM conversation_member \
+                 WHERE user_id = $1 AND conversation_id = $2::uuid",
+                [uuid::Uuid::from(who.user_id).into(), conversation_id.into()],
+            ))
+            .await
+            .expect("joined_at")
+            .expect("row");
+        row.try_get("", "joined_at").expect("joined_at")
+    }
+
+    /// `(userId, conversationId)` of every `ReadMarkerRewound` emitted so far.
+    fn rewinds(&self) -> Vec<(String, String)> {
+        self.events
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                WorkspaceEvent::ReadMarkerRewound {
+                    user_id,
+                    conversation_id,
+                    ..
+                } => Some((user_id.to_string(), conversation_id.to_string())),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+fn timestamp(value: &Value) -> DateTime<Utc> {
+    value
+        .as_str()
+        .expect("timestamp")
+        .parse()
+        .expect("RFC 3339 timestamp")
+}
+
+/// Just before `sent_at`, where a marker makes that message the first unread one.
+fn just_before(sent_at: DateTime<Utc>) -> DateTime<Utc> {
+    sent_at - TimeDelta::microseconds(1)
+}
+
+/// `unreadAfter` follows the marker: the join time before any read, the read time after one, and
+/// just before the message after a rewind.
+#[tokio::test]
+async fn unread_after_says_where_the_unread_messages_begin() {
+    let f = setup().await;
+    let first = f.send(&f.alice, &f.general, "first").await;
+    let second = f.send(&f.alice, &f.general, "second").await;
+    let first_at = f.sent_at(&f.carol, &f.general, &first).await;
+
+    let joined_at = f.joined_at(&f.carol, &f.general).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        Some((2, joined_at)),
+        "never read: from the join"
+    );
+
+    f.read_up_to(&f.carol, &f.general, first_at).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        Some((1, first_at)),
+        "read: from the read"
+    );
+
+    let second_at = f.sent_at(&f.carol, &f.general, &second).await;
+    f.read_up_to(&f.carol, &f.general, second_at).await;
+    assert_eq!(f.unread_in(&f.carol, &f.general).await, None);
+    f.mark_unread(&f.carol, &f.general, &first).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        Some((2, just_before(first_at))),
+        "rewound: from just before the message"
+    );
+}
+
+/// Without a marker yet, the rewind writes one, so the message is the first that counts.
+#[tokio::test]
+async fn a_rewind_without_a_marker_writes_one() {
+    let f = setup().await;
+    f.send(&f.alice, &f.general, "first").await;
+    let second = f.send(&f.alice, &f.general, "second").await;
+    f.send(&f.alice, &f.general, "third").await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await.map(|u| u.0),
+        Some(3)
+    );
+
+    f.mark_unread(&f.carol, &f.general, &second).await;
+    let second_at = f.sent_at(&f.carol, &f.general, &second).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        Some((2, just_before(second_at))),
+        "the second and third count, the first no longer does"
+    );
+    assert_eq!(f.rewinds().len(), 1);
+}
+
+/// The count after a rewind holds the message and later ones, and leaves out the person's own
+/// messages, thread replies and deleted messages. Notifications stay as they were.
+#[tokio::test]
+async fn a_rewind_counts_from_the_message_and_leaves_notifications_alone() {
+    let f = setup().await;
+    f.send(&f.alice, &f.general, "before").await;
+    let from = f.send(&f.alice, &f.general, &mention(&f.carol)).await;
+    f.send(&f.carol, &f.general, "carol's own").await;
+    let reply = json!({ "input": {
+        "serverId": f.server_id, "conversationId": f.general,
+        "rootMessageId": from, "text": "a reply",
+    } });
+    exec_ok(&f.schema, f.alice.request(REPLY, reply)).await;
+    let deleted = f.send(&f.alice, &f.general, "gone").await;
+    let delete = json!({ "input": {
+        "serverId": f.server_id, "conversationId": f.general, "messageId": deleted,
+    } });
+    exec_ok(&f.schema, f.alice.request(DELETE_MESSAGE, delete)).await;
+    f.send(&f.alice, &f.general, "later").await;
+
+    // Reading everything also reads the mention's notification.
+    f.read_up_to(&f.carol, &f.general, Utc::now()).await;
+    assert_eq!(f.unread_in(&f.carol, &f.general).await, None);
+    assert_eq!(f.unread_count(&f.carol).await, 0);
+
+    f.mark_unread(&f.carol, &f.general, &from).await;
+    let from_at = f.sent_at(&f.carol, &f.general, &from).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        Some((2, just_before(from_at))),
+        "the message and the later one"
+    );
+    assert_eq!(
+        f.unread_count(&f.carol).await,
+        0,
+        "the read notification stays read"
+    );
+    assert_eq!(f.unread_in(&f.bob, &f.general).await.map(|u| u.0), Some(4));
+}
+
+/// `markAsRead` moves a rewound marker forward again, and an older time still never moves it back.
+#[tokio::test]
+async fn only_a_rewind_moves_the_marker_back() {
+    let f = setup().await;
+    let first = f.send(&f.alice, &f.general, "first").await;
+    let second = f.send(&f.alice, &f.general, "second").await;
+    let first_at = f.sent_at(&f.carol, &f.general, &first).await;
+    let second_at = f.sent_at(&f.carol, &f.general, &second).await;
+    f.read_up_to(&f.carol, &f.general, second_at).await;
+
+    f.read_up_to(&f.carol, &f.general, first_at).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        None,
+        "an older read time does not move back"
+    );
+
+    f.mark_unread(&f.carol, &f.general, &second).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        Some((1, just_before(second_at)))
+    );
+    f.read_up_to(&f.carol, &f.general, second_at).await;
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await,
+        None,
+        "a later read moves forward again"
+    );
+}
+
+/// A marker already before the message stays, and then nothing is emitted.
+#[tokio::test]
+async fn a_rewind_past_the_marker_changes_nothing_and_stays_quiet() {
+    let f = setup().await;
+    let first = f.send(&f.alice, &f.general, "first").await;
+    let second = f.send(&f.alice, &f.general, "second").await;
+    let first_at = f.sent_at(&f.carol, &f.general, &first).await;
+    f.read_up_to(&f.carol, &f.general, first_at).await;
+
+    f.mark_unread(&f.carol, &f.general, &second).await;
+    assert_eq!(f.unread_in(&f.carol, &f.general).await, Some((1, first_at)));
+    assert_eq!(f.rewinds(), Vec::<(String, String)>::new());
+
+    f.mark_unread(&f.carol, &f.general, &first).await;
+    assert_eq!(
+        f.rewinds(),
+        [(f.carol.user_id.to_string(), f.general.clone())]
+    );
+}
+
+/// The refusals through the whole stack: a thread reply is `VALIDATION`; a message of another
+/// conversation, a deleted one and an unknown id all answer the same `NOT_FOUND`.
+#[tokio::test]
+async fn mark_as_unread_refuses_what_it_cannot_mark() {
+    let f = setup().await;
+    let root = f.send(&f.alice, &f.general, "root").await;
+    let reply = json!({ "input": {
+        "serverId": f.server_id, "conversationId": f.general,
+        "rootMessageId": root, "text": "a reply",
+    } });
+    let reply = exec_ok(&f.schema, f.alice.request(REPLY, reply)).await["msg"]["id"]
+        .as_str()
+        .expect("reply id")
+        .to_string();
+    let refused = |vars: Value| exec_err_code(&f.schema, f.carol.request(MARK_AS_UNREAD, vars));
+    assert_eq!(
+        refused(f.unread_input(&f.general, &reply)).await,
+        "VALIDATION"
+    );
+
+    let dm = f.create_dm(&f.alice, &f.bob).await;
+    let elsewhere = f.send(&f.alice, &dm, "elsewhere").await;
+    assert_eq!(
+        refused(f.unread_input(&f.general, &elsewhere)).await,
+        "NOT_FOUND"
+    );
+    assert_eq!(
+        refused(f.unread_input(&f.general, &unknown_id())).await,
+        "NOT_FOUND"
+    );
+    let gone = f.send(&f.alice, &f.general, "gone").await;
+    let delete = json!({ "input": {
+        "serverId": f.server_id, "conversationId": f.general, "messageId": gone,
+    } });
+    exec_ok(&f.schema, f.alice.request(DELETE_MESSAGE, delete)).await;
+    assert_eq!(
+        refused(f.unread_input(&f.general, &gone)).await,
+        "NOT_FOUND"
+    );
+    assert_eq!(f.rewinds(), Vec::<(String, String)>::new());
+}
+
+/// `chat.mark_as_unread` runs from the selected message, and takes the message as an arg too.
+#[tokio::test]
+async fn the_mark_as_unread_command_rewinds_the_marker() {
+    let f = setup().await;
+    let first = f.send(&f.alice, &f.general, "first").await;
+    let second = f.send(&f.alice, &f.general, "second").await;
+    f.read_up_to(&f.carol, &f.general, Utc::now()).await;
+
+    let selected = exec_ok(
+        &f.schema,
+        f.carol.request(
+            EXECUTE,
+            json!({
+                "commandId": "chat.mark_as_unread",
+                "args": {},
+                "context": {
+                    "workspaceId": f.server_id, "conversationId": f.general,
+                    "selectedMessageId": second,
+                },
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(selected["result"]["status"], "SUCCESS", "{selected}");
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await.map(|u| u.0),
+        Some(1)
+    );
+
+    let result = f
+        .execute(
+            &f.carol,
+            "chat.mark_as_unread",
+            json!({ "message_id": first }),
+            Some(&f.general),
+        )
+        .await;
+    assert_eq!(result["status"], "SUCCESS", "{result}");
+    assert_eq!(
+        f.unread_in(&f.carol, &f.general).await.map(|u| u.0),
+        Some(2)
+    );
 }

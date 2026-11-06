@@ -298,6 +298,26 @@ mod tests {
         assert_eq!(ids, expected);
     }
 
+    /// Marking something unread changes only the caller's state, and is not an agent's to decide.
+    #[test]
+    fn mark_as_unread_is_a_personal_command_off_the_ai_surface() {
+        let cmds = builtin_commands();
+        let command = cmds
+            .iter()
+            .find(|c| c.id == "chat.mark_as_unread")
+            .expect("registered");
+        assert!(!command.ai_callable);
+        assert!(!collect_ai_callable_inventory(&cmds).contains(&"chat.mark_as_unread"));
+        assert!(command.required_capabilities.is_empty());
+        assert!(command.visible_in_palette);
+        assert!(command.visible_in_context_menus);
+        assert!(command.keybind_capable);
+        assert_eq!(
+            command.sensitivity,
+            rim_services::command::sensitivity::CommandSensitivityDto::Mutating
+        );
+    }
+
     #[test]
     fn collect_ai_callable_inventory_preserves_registration_order() {
         let mut a = builtin_commands().into_iter().next().unwrap();

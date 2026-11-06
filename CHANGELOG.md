@@ -23,6 +23,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- A conversation can be marked unread from a message, with `markAsUnread` or
+  `chat.mark_as_unread`, and `unreadCounts` says where its unread messages begin
+  (`UnreadCount.unreadAfter`). The person's other clients learn of it from a `ReadMarkerRewound`
+  event. Listed in `serverInfo.capabilities` as `read_marker`.
 - Incoming webhooks: one URL per channel, bound to a bot, with a GitHub preset for releases, pull
   requests and issues (`IncomingWebhook`, `POST /api/hooks/{token}`, `docs/specs/bots-v1.md`). Listed
   in `serverInfo.capabilities` as `incoming_webhooks`. Requests to them have the `webhook` route class
