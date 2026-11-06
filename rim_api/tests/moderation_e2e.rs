@@ -418,6 +418,28 @@ impl Fixture {
         exec_ok(&self.schema, self.alice.request(AUDIT_LOG, vars)).await["listAuditLog"].clone()
     }
 
+    /// How many audit rows of the fixture's workspace hold `needle` in any column.
+    async fn audit_rows_holding(&self, needle: &str) -> i64 {
+        use sea_orm::ConnectionTrait;
+
+        self.ctx
+            .conn
+            .query_one_raw(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Postgres,
+                "SELECT count(*) AS n FROM command_audit_log AS c \
+                 WHERE c.server_id = $1 AND row_to_json(c)::text LIKE $2",
+                [
+                    uuid::Uuid::from(self.server.id).into(),
+                    format!("%{needle}%").into(),
+                ],
+            ))
+            .await
+            .expect("query")
+            .expect("row")
+            .try_get::<i64>("", "n")
+            .expect("count")
+    }
+
     async fn audit_rows(&self, command_id: &str) -> Vec<entity::command_audit_log::Model> {
         let server_uuid: uuid::Uuid = self.server.id.into();
         entity::command_audit_log::Entity::find()
@@ -1503,7 +1525,9 @@ async fn audit_log_pages_newest_first_and_filters_by_verb_and_command() {
             "commandId": "chat.post_message",
             "initiator": "palette",
             "argsRedacted": {
-                "server_id": f.server_id, "conversation_id": f.channel_id, "text": "second",
+                "server_id": f.server_id,
+                "conversation_id": f.channel_id,
+                "text": { "redacted_content": true, "chars": 6 },
             },
             "sensitivity": "mutating",
             "dangerous": false,
@@ -1664,6 +1688,107 @@ async fn audit_log_keeps_and_filters_an_agent_run_id() {
             "{bad:?}"
         );
     }
+}
+
+/// `chat.post_message` from an agent keeps the text's length in the audit log and none of its
+/// text, on the held call and on the call carrying the proof; the ids stay for moderation.
+#[tokio::test]
+async fn the_audit_log_keeps_only_the_length_of_an_agents_message() {
+    const POST: &str = r#"
+    mutation Post($input: ExecuteCommandInput!) {
+      executeCommand(input: $input) {
+        status confirmationRequired { token argsHash }
+      }
+    }
+    "#;
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let text = "audit-canary žluťoučký kůň";
+    let call = json!({
+        "commandId": "chat.post_message",
+        "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": text },
+        "commandContext": { "workspaceId": f.server_id },
+        "initiator": "AGENT",
+    });
+
+    let held = exec_ok(&f.schema, f.alice.request(POST, json!({ "input": call }))).await;
+    let held = &held["executeCommand"];
+    assert_eq!(held["status"], json!("CONFIRMATION_REQUIRED"));
+    let challenge = &held["confirmationRequired"];
+    let mut proved = call.clone();
+    proved["confirmation"] = json!({ "inBandToken": {
+        "token": challenge["token"], "argsHash": challenge["argsHash"],
+    } });
+    let sent = exec_ok(&f.schema, f.alice.request(POST, json!({ "input": proved }))).await;
+    assert_eq!(sent["executeCommand"]["status"], json!("SUCCESS"));
+
+    let rows = f.audit_rows("chat.post_message").await;
+    assert_eq!(rows.len(), 2, "the held call and the proof");
+    for row in &rows {
+        assert_eq!(row.initiator, "agent");
+        assert_eq!(row.args_redacted["server_id"], json!(f.server_id));
+        assert_eq!(row.args_redacted["conversation_id"], json!(f.channel_id));
+        assert_eq!(
+            row.args_redacted["text"],
+            json!({ "redacted_content": true, "chars": text.chars().count() })
+        );
+    }
+
+    assert_eq!(
+        f.audit_rows_holding("audit-canary").await,
+        0,
+        "no audit row holds the message text"
+    );
+}
+
+/// A pipe's audit row keeps its stages and the length of what a person wrote in the expression, and
+/// one that does not parse keeps a fixed marker and error while its caller still hears why.
+#[tokio::test]
+async fn the_audit_log_keeps_no_text_written_inside_a_pipe_expression() {
+    const PIPE: &str = r#"
+    mutation Pipe($input: ExecuteCommandInput!) {
+      executeCommand(input: $input) { status }
+    }
+    "#;
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let pipe = |expression: &str| {
+        json!({ "input": {
+            "commandId": expression,
+            "isPipe": true,
+            "commandContext": { "workspaceId": f.server_id },
+        } })
+    };
+
+    let ran = exec_ok(
+        &f.schema,
+        f.alice.request(
+            PIPE,
+            pipe("chat.list_channels text=pipe-canary | chat.list_channels"),
+        ),
+    )
+    .await;
+    assert_eq!(ran["executeCommand"]["status"], json!("SUCCESS"));
+    let rows = f
+        .audit_rows("chat.list_channels text=[REDACTED:11] | chat.list_channels")
+        .await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].outcome, "success");
+
+    let refused = f
+        .schema
+        .execute(f.alice.request(
+            PIPE,
+            pipe("chat.list_channels text=pipe-canary stray-canary"),
+        ))
+        .await;
+    assert!(refused.errors[0].message.contains("stray-canary"));
+    let rows = f.audit_rows("unparsed | pipe").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].outcome, "error");
+    assert_eq!(rows[0].error_kind.as_deref(), Some("InvalidPipeExpression"));
+
+    assert_eq!(f.audit_rows_holding("canary").await, 0);
 }
 
 /// `row` without the fields named in `drop`.
