@@ -73,6 +73,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   internal error, because the older binary can't read the new `kind`. Deactivate bots before rolling
   back.
 
+### Security
+
+- `actix-http` 3.20.3 and `actix-web` 4.18.2 fix RUSTSEC-2026-0446 (request smuggling through
+  malformed chunked trailers) and RUSTSEC-2026-0447 and RUSTSEC-2026-0448 (compressed request
+  bodies exhausting memory and CPU). A server stays affected until it runs a release with this
+  line.
+
 ## [0.0.8] - 2026-11-03
 
 ### Added
