@@ -1,13 +1,15 @@
-//! Bot accounts of a workspace and their tokens. A bot is a `user` row of the kind `bot`, so it
-//! is keyed by its [`UserId`].
+//! Bot accounts of a workspace, their tokens and the incoming webhooks bound to them. A bot is a
+//! `user` row of the kind `bot`, so it is keyed by its [`UserId`].
 
 use chrono::{DateTime, Utc};
 
+use crate::conversation::model::ConversationId;
 use crate::model_id;
 use crate::server::model::ServerId;
 use crate::user::model::UserId;
 
 model_id!(BotTokenId);
+model_id!(IncomingWebhookId);
 
 /// A bot as its workspace sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,5 +73,64 @@ pub struct NewBotToken {
 pub struct BotTokenHolder {
     pub token: BotToken,
     pub server_id: ServerId,
+    pub bot_deactivated_at: Option<DateTime<Utc>>,
+}
+
+/// How an incoming webhook's body becomes text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebhookPreset {
+    /// A JSON object with a string `text`.
+    Plain,
+    /// GitHub's events, chosen by the `X-GitHub-Event` header.
+    Github,
+}
+
+impl WebhookPreset {
+    /// The value kept in the `preset` column.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Github => "github",
+        }
+    }
+
+    /// The preset [`Self::as_str`] names, or `None` for anything else.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "plain" => Some(Self::Plain),
+            "github" => Some(Self::Github),
+            _ => None,
+        }
+    }
+}
+
+/// An incoming webhook of a channel, never with its hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingWebhook {
+    pub id: IncomingWebhookId,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub bot_user_id: UserId,
+    pub preset: WebhookPreset,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// A new incoming webhook: the SHA-256 of the token shown once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewIncomingWebhook {
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub bot_user_id: UserId,
+    pub preset: WebhookPreset,
+    pub token_hash: String,
+    pub created_by: UserId,
+}
+
+/// A webhook found by its hash, with its bot's standing as far as the bot tables know it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingWebhookHolder {
+    pub webhook: IncomingWebhook,
     pub bot_deactivated_at: Option<DateTime<Utc>>,
 }

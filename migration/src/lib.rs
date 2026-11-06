@@ -135,6 +135,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261106_064600_add_command_audit_run_id::Migration),
             Box::new(m20261106_070423_create_bot::Migration),
             Box::new(m20261106_092601_add_message_mention_user_time_index::Migration),
+            Box::new(m20261106_121740_create_incoming_webhook::Migration),
         ]
     }
 }
@@ -257,3 +258,4 @@ mod m20261103_153230_add_conversation_member_removal;
 mod m20261106_064600_add_command_audit_run_id;
 mod m20261106_070423_create_bot;
 mod m20261106_092601_add_message_mention_user_time_index;
+mod m20261106_121740_create_incoming_webhook;

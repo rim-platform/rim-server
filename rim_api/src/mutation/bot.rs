@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use async_graphql::*;
-use rim_core::bot::model::BotTokenId;
+use rim_core::bot::model::{BotTokenId, IncomingWebhookId};
+use rim_core::conversation::model::ConversationId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_services::Actor;
@@ -10,7 +11,10 @@ use rim_services::bot::service::BotService;
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
-use crate::types::{Bot, BotToken, CreateBotInput, CreatedBot, CreatedBotToken, UpdateBotInput};
+use crate::types::{
+    Bot, BotToken, CreateBotInput, CreateIncomingWebhookInput, CreatedBot, CreatedBotToken,
+    CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput,
+};
 
 #[derive(Default)]
 pub(crate) struct BotMutations;
@@ -99,5 +103,44 @@ impl BotMutations {
             .await
             .map_err(map_service_error)?;
         Ok(token.into())
+    }
+
+    /// Create a channel's incoming webhook, bound to a bot of its workspace, and add the bot to the
+    /// channel if it is not there. The token is shown this once. Owner or Moderator, and for a
+    /// private channel one who is in it; `FORBIDDEN` for anyone else, `VALIDATION` for anything but
+    /// a plaintext channel that is not archived and for a bot of another workspace or a deactivated
+    /// one, `CONFLICT` when the channel already has a webhook that is not revoked.
+    async fn create_incoming_webhook(
+        &self,
+        ctx: &Context<'_>,
+        input: CreateIncomingWebhookInput,
+    ) -> Result<CreatedIncomingWebhook> {
+        let actor = require_actor(ctx)?;
+        let conversation_id = parse_uuid_id::<ConversationId>(&input.conversation_id)?;
+        let bot_user_id = parse_uuid_id::<UserId>(&input.bot_user_id)?;
+        let created = ctx
+            .data::<Arc<dyn BotService>>()?
+            .create_webhook(
+                Actor::new(actor),
+                conversation_id,
+                bot_user_id,
+                input.preset.into(),
+            )
+            .await
+            .map_err(map_service_error)?;
+        Ok(created.into())
+    }
+
+    /// Revoke a webhook. Revoking it again changes nothing. `NOT_FOUND` for an unknown webhook and
+    /// for one of a workspace the caller does not moderate.
+    async fn revoke_incoming_webhook(&self, ctx: &Context<'_>, id: ID) -> Result<IncomingWebhook> {
+        let actor = require_actor(ctx)?;
+        let id = parse_uuid_id::<IncomingWebhookId>(&id)?;
+        let webhook = ctx
+            .data::<Arc<dyn BotService>>()?
+            .revoke_webhook(Actor::new(actor), id)
+            .await
+            .map_err(map_service_error)?;
+        Ok(webhook.into())
     }
 }

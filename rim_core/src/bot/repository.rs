@@ -3,7 +3,11 @@ use chrono::{DateTime, Utc};
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use crate::bot::model::{Bot, BotPatch, BotToken, BotTokenHolder, BotTokenId, NewBot, NewBotToken};
+use crate::bot::model::{
+    Bot, BotPatch, BotToken, BotTokenHolder, BotTokenId, IncomingWebhook, IncomingWebhookHolder,
+    IncomingWebhookId, NewBot, NewBotToken, NewIncomingWebhook,
+};
+use crate::conversation::model::ConversationId;
 use crate::repository::error::RepoResult;
 use crate::server::model::ServerId;
 use crate::user::model::UserId;
@@ -71,4 +75,38 @@ pub trait BotRepository: Send + Sync {
 
     /// Record that a token was used at `at`.
     async fn touch_token(&self, id: BotTokenId, at: DateTime<Utc>) -> RepoResult<()>;
+
+    /// Insert an incoming webhook.
+    ///
+    /// # Errors
+    /// `Conflict` when its channel already has one that is not revoked.
+    async fn create_webhook(&self, webhook: NewIncomingWebhook) -> RepoResult<IncomingWebhook>;
+
+    async fn find_webhook(&self, id: IncomingWebhookId) -> RepoResult<Option<IncomingWebhook>>;
+
+    /// The webhook of the channel that is not revoked, by the partial unique index.
+    async fn find_active_webhook(
+        &self,
+        conversation_id: ConversationId,
+    ) -> RepoResult<Option<IncomingWebhook>>;
+
+    /// The workspace's webhooks, revoked ones included, newest first.
+    async fn list_webhooks(&self, server_id: ServerId) -> RepoResult<Vec<IncomingWebhook>>;
+
+    /// Stamp a webhook not yet revoked as revoked at `at`. Returns the webhook as it now is, or
+    /// `None` when there is no such webhook.
+    async fn revoke_webhook(
+        &self,
+        id: IncomingWebhookId,
+        at: DateTime<Utc>,
+    ) -> RepoResult<Option<IncomingWebhook>>;
+
+    /// The webhook with the SHA-256 `token_hash` and its bot's standing, by the unique index.
+    async fn find_webhook_holder(
+        &self,
+        token_hash: &str,
+    ) -> RepoResult<Option<IncomingWebhookHolder>>;
+
+    /// Record that a webhook was used at `at`.
+    async fn touch_webhook(&self, id: IncomingWebhookId, at: DateTime<Utc>) -> RepoResult<()>;
 }

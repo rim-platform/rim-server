@@ -66,6 +66,8 @@ pub(crate) fn route_class(path: &str) -> &'static str {
     };
     if under("/api/remote") {
         "remote-forward"
+    } else if under("/api/hooks") {
+        "webhook"
     } else if under("/api/files")
         || under("/api/attachments")
         || under("/api/reports")
@@ -421,6 +423,9 @@ mod tests {
             ("/api/sdl", "api"),
             ("/api/remote/rims1_x/api", "remote-forward"),
             ("/api/remote", "remote-forward"),
+            ("/api/hooks/rimhook_x", "webhook"),
+            ("/api/hooks", "webhook"),
+            ("/api/hooksy", "api"),
             ("/api/files/upload", "files"),
             ("/api/files/a/b.png", "files"),
             ("/api/attachments/1/download", "files"),

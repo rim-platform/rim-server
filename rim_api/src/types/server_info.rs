@@ -23,6 +23,7 @@ pub const CAPABILITIES: &[&str] = &[
     "member_timeout_changed",
     "conversation_member_removals",
     "notification_events",
+    "incoming_webhooks",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.

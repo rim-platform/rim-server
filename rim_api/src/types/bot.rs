@@ -1,5 +1,5 @@
 use async_graphql::dataloader::DataLoader;
-use async_graphql::{Context, ID, InputObject, Result, SimpleObject};
+use async_graphql::{Context, Enum, ID, InputObject, Result, SimpleObject};
 use chrono::{DateTime, Utc};
 use rim_core::user::model::UserId;
 
@@ -153,4 +153,88 @@ pub struct UpdateBotInput {
     pub name: Option<String>,
     pub run_by: Option<String>,
     pub reads_go_to: Option<String>,
+}
+
+/// How an incoming webhook's body becomes text.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WebhookPreset {
+    /// `{"text": "..."}`, at most 4,000 characters.
+    Plain,
+    /// GitHub's published releases, pull requests opened, closed or merged and issues opened or
+    /// closed, by the `X-GitHub-Event` header.
+    Github,
+}
+
+impl From<rim_core::bot::model::WebhookPreset> for WebhookPreset {
+    fn from(value: rim_core::bot::model::WebhookPreset) -> Self {
+        match value {
+            rim_core::bot::model::WebhookPreset::Plain => Self::Plain,
+            rim_core::bot::model::WebhookPreset::Github => Self::Github,
+        }
+    }
+}
+
+impl From<WebhookPreset> for rim_core::bot::model::WebhookPreset {
+    fn from(value: WebhookPreset) -> Self {
+        match value {
+            WebhookPreset::Plain => Self::Plain,
+            WebhookPreset::Github => Self::Github,
+        }
+    }
+}
+
+/// A URL that posts to one channel as one bot, without its token, which is shown once.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct IncomingWebhook {
+    pub id: ID,
+    pub conversation_id: ID,
+    /// The bot it posts as.
+    pub bot_user_id: ID,
+    pub preset: WebhookPreset,
+    pub created_at: DateTime<Utc>,
+    /// When it was last used, to the minute; null when it never was.
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// When it was revoked; null until then.
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl From<rim_services::bot::dto::IncomingWebhookDto> for IncomingWebhook {
+    fn from(value: rim_services::bot::dto::IncomingWebhookDto) -> Self {
+        Self {
+            id: ID(value.id.to_string()),
+            conversation_id: ID(value.conversation_id.to_string()),
+            bot_user_id: ID(value.bot_user_id.to_string()),
+            preset: value.preset.into(),
+            created_at: value.created_at,
+            last_used_at: value.last_used_at,
+            revoked_at: value.revoked_at,
+        }
+    }
+}
+
+/// A new incoming webhook and its token.
+#[derive(SimpleObject, Clone)]
+pub struct CreatedIncomingWebhook {
+    pub webhook: IncomingWebhook,
+    /// `rimhook_…`, shown this once. The URL is `/api/hooks/` and this on the server's address, and
+    /// it is a secret.
+    pub token: String,
+}
+
+impl From<rim_services::bot::dto::CreatedIncomingWebhookDto> for CreatedIncomingWebhook {
+    fn from(value: rim_services::bot::dto::CreatedIncomingWebhookDto) -> Self {
+        Self {
+            webhook: value.webhook.into(),
+            token: value.token,
+        }
+    }
+}
+
+/// Create a channel's incoming webhook.
+#[derive(InputObject)]
+pub struct CreateIncomingWebhookInput {
+    pub conversation_id: ID,
+    /// The bot it posts as, an active bot of the channel's workspace.
+    pub bot_user_id: ID,
+    pub preset: WebhookPreset,
 }

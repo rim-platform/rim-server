@@ -478,6 +478,7 @@ impl DefaultAppServiceProvider {
                 observers.clone(),
                 Arc::clone(&feature_gate),
                 Arc::clone(&moderation_service),
+                Arc::clone(&conversation_service),
             )
             .with_audit_log_service(Arc::clone(&audit_log_service))
             .with_direct_space(federation.direct_space_id)

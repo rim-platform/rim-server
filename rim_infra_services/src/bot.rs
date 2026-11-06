@@ -1,5 +1,5 @@
 //! Bot accounts of a workspace and their tokens: who may manage them, the limits, and whether a
-//! presented token works.
+//! presented token works. The incoming webhooks bound to a bot are in [`webhook`].
 
 use std::sync::Arc;
 
@@ -8,7 +8,9 @@ use chrono::{DateTime, Duration, Utc};
 use tracing::{instrument, warn};
 
 use rim_auth::session_token::{generate_bot_token, hash_token, is_bot_token_shape};
-use rim_core::bot::model::{Bot, BotPatch, BotTokenId, NewBot, NewBotToken};
+use rim_core::bot::model::{
+    Bot, BotPatch, BotTokenId, IncomingWebhookId, NewBot, NewBotToken, WebhookPreset,
+};
 use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::{ConversationId, ConversationType};
 use rim_core::conversation::repository::ConversationRepository;
@@ -25,12 +27,13 @@ use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::AuditLogService;
 use rim_services::bot::dto::{
     BotActorDto, BotDto, BotInfoDto, BotMentionCursor, BotMentionsPage, BotMessageDto, BotTokenDto,
-    CreatedBotDto, CreatedBotTokenDto,
+    CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto, IncomingWebhookDto,
 };
 use rim_services::bot::service::BotService;
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
+use rim_services::conversation::service::ConversationService;
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::feature::service::FeatureGate;
 use rim_services::limits::InstanceLimits;
@@ -45,6 +48,9 @@ use crate::repos::AppRepos;
 use crate::reserved_names::ReservedNames;
 use crate::signup::normalize_username;
 use crate::util::{add_workspace_member, ensure_workspace_features};
+
+mod webhook;
+mod webhook_text;
 
 /// The most bots a workspace holds that are not deactivated.
 const MAX_ACTIVE_BOTS: u64 = 25;
@@ -93,6 +99,8 @@ pub struct DefaultBotService {
     feature_gate: Arc<dyn FeatureGate>,
     /// Takes a deactivated bot out of its workspace, as a kick takes anyone.
     moderation: Arc<dyn ModerationService>,
+    /// Adds a webhook's bot to its channel, under the rules of adding anyone.
+    conversations: Arc<dyn ConversationService>,
     audit_log_service: Option<Arc<dyn AuditLogService>>,
     direct_space_id: Option<ServerId>,
     reserved_names: ReservedNames,
@@ -107,12 +115,14 @@ impl DefaultBotService {
         observers: Observers,
         feature_gate: Arc<dyn FeatureGate>,
         moderation: Arc<dyn ModerationService>,
+        conversations: Arc<dyn ConversationService>,
     ) -> Self {
         Self {
             repos,
             observers,
             feature_gate,
             moderation,
+            conversations,
             audit_log_service: None,
             direct_space_id: None,
             reserved_names: ReservedNames::default(),
@@ -202,6 +212,35 @@ impl DefaultBotService {
             .ok_or(ServiceError::NotFound)?;
         self.ensure_moderator(bot.server_id, actor).await?;
         Ok(bot)
+    }
+
+    /// Whether `conversation_id` is a plaintext channel of `server_id` with the bot `user_id` a
+    /// member of it.
+    async fn bot_is_in_channel(
+        &self,
+        server_id: ServerId,
+        user_id: UserId,
+        conversation_id: ConversationId,
+    ) -> ServiceResult<bool> {
+        let Some(conversation) = self
+            .repos
+            .conversation_repo
+            .get_by_id(conversation_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if conversation.server_id != server_id
+            || conversation.conversation_type != ConversationType::Channel
+            || conversation.is_encrypted()
+        {
+            return Ok(false);
+        }
+        Ok(self
+            .repos
+            .conversation_member_repo
+            .is_member(conversation_id, user_id)
+            .await?)
     }
 
     async fn audit(
@@ -661,25 +700,8 @@ impl BotService for DefaultBotService {
         bot: BotActorDto,
         conversation_id: ConversationId,
     ) -> ServiceResult<bool> {
-        let Some(conversation) = self
-            .repos
-            .conversation_repo
-            .get_by_id(conversation_id)
-            .await?
-        else {
-            return Ok(false);
-        };
-        if conversation.server_id != bot.server_id
-            || conversation.conversation_type != ConversationType::Channel
-            || conversation.is_encrypted()
-        {
-            return Ok(false);
-        }
-        Ok(self
-            .repos
-            .conversation_member_repo
-            .is_member(conversation_id, bot.user_id)
-            .await?)
+        self.bot_is_in_channel(bot.server_id, bot.user_id, conversation_id)
+            .await
     }
 
     async fn list_mentions(
@@ -765,6 +787,46 @@ impl BotService for DefaultBotService {
             warn!(event = "audit_db_write_failed", command_id, error = %e, "audit DB write failed (tracing line already emitted)");
         }
     }
+
+    async fn create_webhook(
+        &self,
+        actor: Actor,
+        conversation_id: ConversationId,
+        bot_user_id: UserId,
+        preset: WebhookPreset,
+    ) -> ServiceResult<CreatedIncomingWebhookDto> {
+        self.create_incoming_webhook(actor, conversation_id, bot_user_id, preset)
+            .await
+    }
+
+    async fn revoke_webhook(
+        &self,
+        actor: Actor,
+        id: IncomingWebhookId,
+    ) -> ServiceResult<IncomingWebhookDto> {
+        self.revoke_incoming_webhook(actor, id).await
+    }
+
+    async fn list_webhooks(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+    ) -> ServiceResult<Vec<IncomingWebhookDto>> {
+        self.list_incoming_webhooks(actor, server_id).await
+    }
+
+    async fn resolve_webhook(&self, raw: &str) -> ServiceResult<Option<IncomingWebhookDto>> {
+        self.resolve_incoming_webhook(raw).await
+    }
+
+    fn webhook_text(
+        &self,
+        preset: WebhookPreset,
+        event: Option<String>,
+        body: Vec<u8>,
+    ) -> ServiceResult<Option<String>> {
+        webhook::text_of(preset, event.as_deref(), &body)
+    }
 }
 
 #[cfg(test)]
@@ -782,6 +844,7 @@ mod tests {
     use rim_core::server_member::model::{ServerMember, ServerMemberId};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_services::audit::dto::{AuditLogEntryDto, AuditLogPage, ListAuditLogQuery};
+    use rim_services::conversation::service::MockConversationService;
     use rim_services::events::Broadcaster;
     use rim_services::moderation::service::MockModerationService;
 
@@ -891,6 +954,7 @@ mod tests {
                 Observers::new(self.events),
                 Arc::new(InstanceFeatureGate::new(&self.disabled, &[])),
                 Arc::new(self.moderation),
+                Arc::new(MockConversationService::new()),
             )
             .with_audit_log_service(self.audit)
             .with_direct_space(self.direct_space)
@@ -1750,6 +1814,7 @@ mod tests {
             Observers::new(fx.events),
             Arc::new(InstanceFeatureGate::new(&[], &[])),
             Arc::new(fx.moderation),
+            Arc::new(MockConversationService::new()),
         )
     }
 
@@ -1819,6 +1884,7 @@ mod tests {
             Observers::new(fx.events),
             Arc::new(InstanceFeatureGate::new(&[], &[])),
             Arc::new(fx.moderation),
+            Arc::new(MockConversationService::new()),
         )
         .with_audit_log_service(fx.audit);
         (svc, audit)

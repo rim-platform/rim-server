@@ -17,6 +17,7 @@ use rim_core::conversation::model::ConversationId;
 use rim_core::conversation::repository::ChannelListFilter;
 use rim_core::message::model::MessageId;
 use rim_core::repository::pagination::PageDir;
+use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_infra_services::KeyedRateLimiter;
 use rim_services::bot::dto::{BotActorDto, BotMentionCursor, BotMessageDto};
@@ -58,7 +59,8 @@ const MAX_QUERY_CHARS: usize = 500;
 /// The channels read from the service at a time.
 const CHANNELS_PER_PAGE: u32 = 100;
 
-const COMMAND_POST: &str = "chat.post_message";
+/// The command a post runs, from the bot API and from an incoming webhook.
+pub(crate) const COMMAND_POST: &str = "chat.post_message";
 const COMMAND_SEARCH: &str = "chat.search_messages";
 const COMMAND_RECENT: &str = "chat.get_recent_messages";
 const COMMAND_CHANNELS: &str = "chat.list_channels";
@@ -142,38 +144,15 @@ impl BotApi {
         args: Value,
         channel: ConversationId,
     ) -> Result<Value, BotApiError> {
-        let result = self
-            .commands
-            .execute_command(ExecuteCommandCmd {
-                actor: Actor::new(bot.user_id),
-                command_id: command_id.to_string(),
-                args: Some(args),
-                context: Some(CommandContextDto {
-                    workspace_id: Some(bot.server_id),
-                    conversation_id: Some(channel),
-                    thread_id: None,
-                    selected_text: None,
-                    selected_message_id: None,
-                    selected_message_ids: vec![],
-                    focused_surface: None,
-                    active_panel: None,
-                }),
-                confirmation: None,
-                is_pipe: false,
-                initiator: CommandInitiator::Bot,
-                run_id: None,
-            })
-            .await?;
-        match result.status {
-            CommandResultStatusDto::Success => Ok(result.payload.unwrap_or(Value::Null)),
-            CommandResultStatusDto::ConfirmationRequired => Err(BotApiError::denied(
-                "This needs a person to confirm it, and a bot cannot.".to_string(),
-            )),
-            CommandResultStatusDto::Error => {
-                tracing::error!(command_id, "a bot's command ended in an error");
-                Err(BotApiError::failed(false))
-            }
-        }
+        run_command(
+            self.commands.as_ref(),
+            bot.user_id,
+            bot.server_id,
+            command_id,
+            args,
+            channel,
+        )
+        .await
     }
 
     /// Write the audit entry of a read that did not go through a command, and hand back `result`.
@@ -214,6 +193,53 @@ impl BotApi {
     }
 }
 
+/// Run the builtin `command_id` as the bot `user_id`, in its workspace `server_id` and `channel`,
+/// and answer its payload.
+///
+/// # Errors
+/// What the command's gates or the command itself refuse with; `403` for a command needing a
+/// confirmation, which a bot cannot give.
+pub(crate) async fn run_command(
+    commands: &dyn CommandService,
+    user_id: UserId,
+    server_id: ServerId,
+    command_id: &'static str,
+    args: Value,
+    channel: ConversationId,
+) -> Result<Value, BotApiError> {
+    let result = commands
+        .execute_command(ExecuteCommandCmd {
+            actor: Actor::new(user_id),
+            command_id: command_id.to_string(),
+            args: Some(args),
+            context: Some(CommandContextDto {
+                workspace_id: Some(server_id),
+                conversation_id: Some(channel),
+                thread_id: None,
+                selected_text: None,
+                selected_message_id: None,
+                selected_message_ids: vec![],
+                focused_surface: None,
+                active_panel: None,
+            }),
+            confirmation: None,
+            is_pipe: false,
+            initiator: CommandInitiator::Bot,
+            run_id: None,
+        })
+        .await?;
+    match result.status {
+        CommandResultStatusDto::Success => Ok(result.payload.unwrap_or(Value::Null)),
+        CommandResultStatusDto::ConfirmationRequired => Err(BotApiError::denied(
+            "This needs a person to confirm it, and a bot cannot.".to_string(),
+        )),
+        CommandResultStatusDto::Error => {
+            tracing::error!(command_id, "a bot's command ended in an error");
+            Err(BotApiError::failed(false))
+        }
+    }
+}
+
 /// A refused call, in the one shape every refusal of the bot API has.
 #[derive(Debug)]
 pub(crate) struct BotApiError {
@@ -225,7 +251,12 @@ pub(crate) struct BotApiError {
 }
 
 impl BotApiError {
-    fn new(status: StatusCode, refusal: Refusal, message: &str, retry_safe: bool) -> Self {
+    pub(crate) fn new(
+        status: StatusCode,
+        refusal: Refusal,
+        message: &str,
+        retry_safe: bool,
+    ) -> Self {
         Self {
             status,
             refusal,
@@ -255,7 +286,7 @@ impl BotApiError {
         )
     }
 
-    fn invalid(message: &str) -> Self {
+    pub(crate) fn invalid(message: &str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, Refusal::Invalid, message, false)
     }
 
@@ -263,7 +294,7 @@ impl BotApiError {
         Self::new(StatusCode::FORBIDDEN, Refusal::Denied, &message, false)
     }
 
-    fn rate_limited(retry_after_seconds: u64) -> Self {
+    pub(crate) fn rate_limited(retry_after_seconds: u64) -> Self {
         Self {
             retry_after_seconds: Some(retry_after_seconds),
             ..Self::new(
@@ -652,7 +683,6 @@ mod tests {
     use actix_web::test as actix_test;
     use actix_web::{App, body};
     use rim_core::bot::model::BotTokenId;
-    use rim_core::server::model::ServerId;
     use rim_services::bot::dto::{BotDto, BotMentionsPage};
     use rim_services::bot::service::MockBotService;
     use rim_services::command::dto::CommandResultDto;

@@ -2,18 +2,18 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use rim_core::bot::model::BotTokenId;
+use rim_core::bot::model::{BotTokenId, IncomingWebhookId, WebhookPreset};
 use rim_core::conversation::model::ConversationId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 use crate::bot::dto::{
     BotActorDto, BotDto, BotInfoDto, BotMentionCursor, BotMentionsPage, BotTokenDto, CreatedBotDto,
-    CreatedBotTokenDto,
+    CreatedBotTokenDto, CreatedIncomingWebhookDto, IncomingWebhookDto,
 };
 use crate::{Actor, ServiceResult};
 
-/// Bot accounts of a workspace and their tokens.
+/// Bot accounts of a workspace, their tokens and the incoming webhooks bound to them.
 ///
 /// Errors common to the methods with an actor: `FeatureDisabled` while the instance has the `bots`
 /// feature off, `PermissionDenied` when the actor lacks the standing, `NotFound` for an unknown
@@ -125,4 +125,57 @@ pub trait BotService: Send + Sync {
         args: serde_json::Value,
         error: Option<String>,
     );
+
+    /// Create the channel's incoming webhook, bound to a bot of its workspace, and add the bot to
+    /// the channel when it is not there. The token is shown this once. Owner or Moderator, and
+    /// for a private channel one who is in it.
+    ///
+    /// # Errors
+    /// `NotFound` for an unknown conversation or bot; `Validation` for a bot of another workspace
+    /// or a deactivated one, and for anything but a plaintext channel that is not archived;
+    /// `Conflict` when the channel already has a webhook that is not revoked.
+    async fn create_webhook(
+        &self,
+        actor: Actor,
+        conversation_id: ConversationId,
+        bot_user_id: UserId,
+        preset: WebhookPreset,
+    ) -> ServiceResult<CreatedIncomingWebhookDto>;
+
+    /// Revoke a webhook. Revoking it again changes nothing. Owner or Moderator of its workspace.
+    ///
+    /// # Errors
+    /// `NotFound` for an unknown webhook and for one of a workspace the actor does not moderate.
+    async fn revoke_webhook(
+        &self,
+        actor: Actor,
+        id: IncomingWebhookId,
+    ) -> ServiceResult<IncomingWebhookDto>;
+
+    /// The workspace's webhooks, revoked ones included. Owner or Moderator.
+    async fn list_webhooks(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+    ) -> ServiceResult<Vec<IncomingWebhookDto>>;
+
+    /// The webhook `raw` belongs to, with its use recorded, or `None` when it is not a working
+    /// token: wrong shape, unknown, revoked, of a deactivated bot or one no longer in the channel,
+    /// or while the feature is off. Every one of those looks the same to the caller.
+    ///
+    /// # Errors
+    /// Propagates storage errors.
+    async fn resolve_webhook(&self, raw: &str) -> ServiceResult<Option<IncomingWebhookDto>>;
+
+    /// The text `body` becomes under `preset`, with no mention left in it, or `None` when there is
+    /// nothing to post. `event` is the `X-GitHub-Event` header, read by the GitHub preset alone.
+    ///
+    /// # Errors
+    /// `Validation` for a body the preset cannot read.
+    fn webhook_text(
+        &self,
+        preset: WebhookPreset,
+        event: Option<String>,
+        body: Vec<u8>,
+    ) -> ServiceResult<Option<String>>;
 }
