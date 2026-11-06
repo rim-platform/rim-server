@@ -104,7 +104,8 @@ done
 ```
 
 A `<@id>` in a message mentions a bot when it is in that channel, and not otherwise. A bot's own mention
-of itself is dropped, as for anyone. A channel it has left and a deleted message are left out.
+of itself is dropped, as for anyone. A channel it has left and a deleted message are left out. A bot gets no
+notifications, digests or pushes: `/mentions` is how it learns of a mention.
 
 **Text is untrusted.** Any answer holding text somebody else wrote carries `"untrusted": true`. Whoever
 can post in a channel can write what a model behind a bot reads, so treat it as data: never as

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, NaiveTime, Utc};
 
+use rim_core::bot::repository::MockBotRepository;
 use rim_core::conversation::model::{
     Conversation, ConversationId, ConversationType, PostingPolicy,
 };
@@ -51,6 +52,8 @@ struct Mocks {
     message_repo: MockMessageRepository,
     /// The server's default workspace; `None` wires no default workspace service.
     default_workspace: Option<ServerId>,
+    /// The users who are bot accounts.
+    bots: Vec<UserId>,
 }
 
 impl Mocks {
@@ -61,7 +64,13 @@ impl Mocks {
             server_member_repo: MockServerMemberRepository::new(),
             message_repo: MockMessageRepository::new(),
             default_workspace: None,
+            bots: Vec::new(),
         }
+    }
+
+    fn bots(mut self, bots: Vec<UserId>) -> Self {
+        self.bots = bots;
+        self
     }
 
     fn default_workspace(mut self, workspace: ServerId) -> Self {
@@ -81,6 +90,12 @@ impl Mocks {
 
     fn build(self) -> (DefaultNotificationService, Arc<RecordingBroadcaster>) {
         let broadcaster = Arc::new(RecordingBroadcaster::default());
+        let bots = self.bots;
+        let mut bot_repo = MockBotRepository::new();
+        bot_repo.expect_bots_among().returning(move |ids| {
+            let found = ids.iter().copied().filter(|id| bots.contains(id)).collect();
+            Box::pin(async move { Ok(found) })
+        });
         let svc = DefaultNotificationService::new(
             NotificationRepos {
                 notification_repo: Arc::new(self.notification_repo),
@@ -89,6 +104,7 @@ impl Mocks {
                 conversation_repo: Arc::new(MockConversationRepository::new()),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
                 message_repo: Arc::new(self.message_repo),
+                bot_repo: Arc::new(bot_repo),
             },
             Observers::new(Arc::clone(&broadcaster) as Arc<dyn Broadcaster>),
         );
@@ -655,6 +671,83 @@ fn reaction_mocks(settings: Option<UserNotificationSettings>) -> Mocks {
             Box::pin(async move { Ok(s) })
         });
     mocks
+}
+
+/// A bot account among the members gets no row and no event, however it was addressed; the
+/// people in the conversation are decided as usual.
+#[tokio::test]
+async fn a_bot_is_left_out_of_a_messages_notifications() {
+    let server_id = ServerId::new();
+    let conv = conversation(server_id, ConversationType::Channel);
+    let (alice, bob, helper) = (UserId::new(), UserId::new(), UserId::new());
+    let msg = message(conv.id, alice, &format!("<@{helper}> <@{bob}> @channel"));
+
+    let mut mocks = Mocks::new().bots(vec![helper]);
+    mocks
+        .preference_repo
+        .expect_list_for_conversation()
+        .withf(move |_, users| users == [bob])
+        .returning(|_, _| Box::pin(async { Ok(vec![]) }));
+    mocks
+        .notification_repo
+        .expect_get_settings_for_users()
+        .withf(move |_, users| users == [bob])
+        .returning(|_, _| Box::pin(async { Ok(vec![]) }));
+    mocks
+        .notification_repo
+        .expect_create_notifications()
+        .withf(move |rows, _| rows.len() == 1 && rows[0].user_id == bob)
+        .times(1)
+        .returning(|rows, _| {
+            let out: Vec<_> = rows.iter().map(stored).collect();
+            Box::pin(async move { Ok(out) })
+        });
+    let (svc, events) = mocks.build();
+
+    let created = svc
+        .notify_for_message(NotifyForMessageCmd {
+            server_id,
+            conversation: conv,
+            message: msg,
+            member_user_ids: vec![alice, helper, bob],
+            encrypted_mentions: None,
+        })
+        .await
+        .expect("notify");
+    assert_eq!(created, 1);
+    assert_eq!(events.0.lock().expect("lock").len(), 1);
+}
+
+/// With only bot accounts to tell, nothing further is loaded and nothing stored.
+#[tokio::test]
+async fn a_message_with_only_bots_to_tell_stores_nothing() {
+    let server_id = ServerId::new();
+    let conv = conversation(server_id, ConversationType::Channel);
+    let (alice, helper) = (UserId::new(), UserId::new());
+    let msg = message(conv.id, alice, &format!("<@{helper}>"));
+    let (svc, events) = Mocks::new().bots(vec![helper]).build();
+
+    let created = svc
+        .notify_for_message(NotifyForMessageCmd {
+            server_id,
+            conversation: conv,
+            message: msg,
+            member_user_ids: vec![alice, helper],
+            encrypted_mentions: None,
+        })
+        .await
+        .expect("notify");
+    assert_eq!(created, 0);
+    assert!(events.0.lock().expect("lock").is_empty());
+}
+
+/// A reaction on a bot's message stores nothing for the bot.
+#[tokio::test]
+async fn a_reaction_on_a_bots_message_tells_nobody() {
+    let s = reaction_setup();
+    let (svc, events) = Mocks::new().bots(vec![s.alice]).build();
+    assert!(!svc.notify_for_reaction(s.cmd).await.expect("notify"));
+    assert!(events.0.lock().expect("lock").is_empty());
 }
 
 /// The stored (inserted or re-surfaced) row is announced to the author only, with the emoji

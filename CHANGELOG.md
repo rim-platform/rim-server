@@ -44,7 +44,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   `docs/specs/bots-v1.md`). Switched off with the `bots` feature.
 - A bot API under `/api/bot/v1` for reading, searching, posting and polling for mentions, in the
   channels a bot was added to (`docs/specs/bots-v1.md`). `CommandInitiator::Bot` appears in the audit
-  log. Refused calls over a token's limit count as `bot_api` in the rate limit metric.
+  log. Refused calls over a token's limit count as `bot_api` in the rate limit metric. A bot gets no
+  notifications, digests or pushes.
 
 ### Changed
 

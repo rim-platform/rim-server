@@ -59,6 +59,7 @@ MUST say so where it shows it.
   `BOT`, under the same capability, role, timeout, rate limit and audit gates as anyone else. A
   moderation timeout, slow mode, a ban or an archived channel applies to it as to a person.
 - A `<@id>` mention reaches a bot when it is in that channel, and not otherwise.
+- A bot gets no notifications, digests or pushes. It reads its mentions from `/mentions`.
 
 ## Encrypted conversations
 

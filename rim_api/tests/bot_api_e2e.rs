@@ -32,6 +32,8 @@ const REMOVE_MEMBER: &str = r#"mutation($s: ID!, $c: ID!, $u: ID!) {
 }"#;
 const SEND: &str = r#"mutation($input: SendMessageInput!) { sendMessage(input: $input) { id } }"#;
 const DELETE: &str = r#"mutation($input: DeleteMessageInput!) { deleteMessage(input: $input) }"#;
+const REACT: &str =
+    r#"mutation($input: ToggleReactionInput!) { toggleReaction(input: $input) { emoji } }"#;
 const MESSAGES: &str = r#"query($s: ID!, $c: ID!) {
   messages(serverId: $s, conversationId: $c, dir: AFTER, limit: 50, includeDeleted: false) {
     items { id text author { id displayName isBot } }
@@ -229,6 +231,22 @@ impl Scene {
             ))
             .await
             .expect("audit")
+            .expect("a row")
+            .try_get::<i64>("", "n")
+            .expect("n")
+    }
+
+    /// How many notification rows `user` has.
+    async fn notification_rows(&self, user: &str) -> i64 {
+        self.ctx
+            .conn
+            .query_one_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT count(*) AS n FROM user_notification WHERE user_id = $1",
+                [user.parse::<uuid::Uuid>().expect("uuid").into()],
+            ))
+            .await
+            .expect("notifications")
             .expect("a row")
             .try_get::<i64>("", "n")
             .expect("n")
@@ -898,6 +916,40 @@ async fn mentions_are_found_once_in_order_and_only_where_the_bot_still_is() {
             format!("{at_bot} first").as_str(),
             format!("{at_bot} third").as_str()
         ]
+    );
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bot_gets_no_notifications_and_still_finds_its_mentions() {
+    let s = scene("quiet", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let at_bot = mention_of(&bot);
+    let ops = s.channel_with("ops", false, &bot).await;
+
+    s.say(&ops, &format!("{at_bot} @channel look")).await;
+    let posted = s.post(&bot.token, &ops, "my own message").await;
+    assert_eq!(posted.status, StatusCode::CREATED);
+    s.gql(
+        &s.roles.bob,
+        REACT,
+        json!({ "input": {
+            "serverId": s.roles.server_id, "conversationId": ops,
+            "messageId": posted.json()["id"], "emoji": "\u{1f44d}",
+        }}),
+    )
+    .await;
+
+    assert_eq!(s.notification_rows(&bot.id).await, 0);
+    assert!(
+        s.notification_rows(&s.roles.alice.user_id.to_string())
+            .await
+            > 0
+    );
+    let mentions = s.get(&bot.token, "/mentions").await.json();
+    assert_eq!(
+        texts(&mentions["mentions"]),
+        [format!("{at_bot} @channel look").as_str()]
     );
     s.stop().await;
 }
