@@ -2541,8 +2541,8 @@ async fn a_dm_or_group_a_blocked_person_started_is_hidden_in_any_space() {
             .await
             .unwrap()
             .into_iter()
-            .filter(|(_, n)| *n > 0)
-            .map(|(id, _)| id)
+            .filter(|unread| unread.count > 0)
+            .map(|unread| unread.conversation_id)
             .collect();
         (hidden, (listed, bell, digest_rows), unread)
     };

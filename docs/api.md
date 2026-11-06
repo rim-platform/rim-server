@@ -758,7 +758,8 @@ each list.
   `conversation_member_removals`: `conversationMemberRemovals`; `bot_disclosure`: `User.isBot`,
   `User.bot`, `ServerMember.isBot` and `ServerMember.bot`; `command_run_id`:
   `ExecuteCommandInput.runId` and `AuditLogEntry.runId`; `incoming_webhooks`: `IncomingWebhook`,
-  `incomingWebhooks`, `createIncomingWebhook` and `revokeIncomingWebhook`). A client asks
+  `incomingWebhooks`, `createIncomingWebhook` and `revokeIncomingWebhook`; `read_marker`:
+  `UnreadCount.unreadAfter`, `markAsUnread` and the `ReadMarkerRewound` event). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 

@@ -126,6 +126,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.set_channel_posting` | `server_id`, `conversation_id`, `policy` (`everyone`/`moderators`), `allows_threads?` (default true) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
+| `chat.mark_as_unread` | `server_id`, `conversation_id`, `message_id` | no | no | `Mutating`, needs no capability: it changes only the caller's own read state. Palette, context menu and keybind. `conversation_id` falls back to the focused conversation and `message_id` to the selected message. The message and later ones count as unread (`docs/messaging.md`) |
 
 Notification builtins (`docs/messaging.md`, Notification Rules). All are
 `Backend`, `Mutating`, palette- and keybind-visible, AI-callable, in category `Notifications`,
@@ -181,8 +182,9 @@ stored values, including the caller's own `scope: user` entries, and nothing red
 in workspace state. Kept off the AI surface on purpose: `chat.edit_message`,
 `chat.delete_message`, `chat.reply_to_selected_message` and `chat.copy_message_text` (they act on
 the user's selected message, which the agent cannot supply), `admin.invite_member` (its result is
-an invite token that would pass through the model provider), and `chat.mark_all_as_read`
-(duplicates `notifications.mark_all_read`).
+an invite token that would pass through the model provider), `chat.mark_all_as_read`
+(duplicates `notifications.mark_all_read`), and `chat.mark_as_unread` (an agent does not decide
+what someone has read).
 
 List arguments such as `user_ids` and `member_ids` accept a JSON array of ids or one
 comma-separated string, because the agent's tool schema types every argument as a scalar.

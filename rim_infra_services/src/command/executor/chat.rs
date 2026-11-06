@@ -13,7 +13,7 @@ use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandRes
 use super::{
     clamp_limit, optional_bool_arg, optional_integer_arg, optional_string_arg, parse_uuid_arg,
     parse_uuid_array_arg, require_string_arg, resolve_author_usernames, resolve_channel_titles,
-    resolve_conversation_id, resolve_workspace_id,
+    resolve_conversation_id, resolve_message_id, resolve_workspace_id,
 };
 
 /// Hard cap on the single-page result for `chat.list_channels`. The AI surface
@@ -184,6 +184,40 @@ pub(super) async fn mark_as_read(
     Ok(CommandResultDto {
         status: CommandResultStatusDto::Success,
         message: "conversation marked as read".to_string(),
+        payload: None,
+        follow_up_commands: vec![],
+        pipeline_stages: None,
+        confirmation_required: None,
+    })
+}
+
+pub(super) async fn mark_as_unread(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let workspace_id = resolve_workspace_id::<rim_core::server::model::ServerId>(
+        &args,
+        context.as_ref(),
+        "server_id",
+    )?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
+    let message_id = resolve_message_id(&args, context.as_ref(), "message_id")?;
+
+    services
+        .read_state_service
+        .mark_as_unread(rim_services::read_state::dto::MarkAsUnreadCmd {
+            actor,
+            workspace_id,
+            conversation_id,
+            message_id,
+        })
+        .await?;
+
+    Ok(CommandResultDto {
+        status: CommandResultStatusDto::Success,
+        message: "conversation marked as unread".to_string(),
         payload: None,
         follow_up_commands: vec![],
         pipeline_stages: None,
@@ -1528,6 +1562,85 @@ mod tests {
         };
         assert!(msg.contains("conversation_id"), "{msg}");
         assert!(msg.contains("context.conversation_id"), "{msg}");
+    }
+
+    /// With no args the workspace, the focused conversation and the selected message are used.
+    #[tokio::test]
+    async fn mark_as_unread_takes_its_targets_from_the_context() {
+        let (ws, conv, msg) = (ServerId::new(), ConversationId::new(), MessageId::new());
+        let mut read_svc = MockReadStateService::new();
+        read_svc
+            .expect_mark_as_unread()
+            .withf(move |cmd| {
+                cmd.workspace_id == ws && cmd.conversation_id == conv && cmd.message_id == msg
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let context = CommandContextDto {
+            conversation_id: Some(conv),
+            selected_message_id: Some(msg),
+            ..ctx_with(ws)
+        };
+        let result = super::mark_as_unread(
+            &make_services_with_read(read_svc),
+            actor(),
+            serde_json::Map::new(),
+            Some(context),
+        )
+        .await
+        .expect("marked unread");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    /// Args win over the context.
+    #[tokio::test]
+    async fn mark_as_unread_args_win_over_the_context() {
+        let (ws, conv, msg) = (ServerId::new(), ConversationId::new(), MessageId::new());
+        let mut read_svc = MockReadStateService::new();
+        read_svc
+            .expect_mark_as_unread()
+            .withf(move |cmd| {
+                cmd.workspace_id == ws && cmd.conversation_id == conv && cmd.message_id == msg
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let context = CommandContextDto {
+            conversation_id: Some(ConversationId::new()),
+            selected_message_id: Some(MessageId::new()),
+            ..ctx_with(ServerId::new())
+        };
+        let mut args = conversation_arg(conv);
+        args.insert("server_id".to_string(), ws.to_string().into());
+        args.insert("message_id".to_string(), msg.to_string().into());
+        super::mark_as_unread(
+            &make_services_with_read(read_svc),
+            actor(),
+            args,
+            Some(context),
+        )
+        .await
+        .expect("marked unread");
+    }
+
+    /// With no message arg and nothing selected there is nothing to mark from.
+    #[tokio::test]
+    async fn mark_as_unread_without_a_message_is_validation() {
+        let context = CommandContextDto {
+            conversation_id: Some(ConversationId::new()),
+            ..ctx_with(ServerId::new())
+        };
+        let err = super::mark_as_unread(
+            &make_services_with_read(MockReadStateService::new()),
+            actor(),
+            serde_json::Map::new(),
+            Some(context),
+        )
+        .await
+        .unwrap_err();
+        let rim_services::ServiceError::Validation(msg) = err else {
+            panic!("expected Validation, got: {err:?}");
+        };
+        assert!(msg.contains("message_id"), "{msg}");
     }
 
     /// Without a `conversation_id` arg the focused conversation is read.

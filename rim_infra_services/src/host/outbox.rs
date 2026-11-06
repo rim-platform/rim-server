@@ -94,9 +94,11 @@ pub(crate) fn route(event: &WorkspaceEvent, event_json: &Value) -> Route {
         | WorkspaceEvent::MemberLeft { .. }
         | WorkspaceEvent::MemberTimeoutChanged { .. }
         | WorkspaceEvent::MemberRoleChanged { .. } => Route::Directory,
-        WorkspaceEvent::TypingStarted { .. } | WorkspaceEvent::PresenceChanged { .. } => {
-            Route::Ephemeral
-        }
+        // A read marker's rewind takes no `seq`: a client that does not know the event refuses it
+        // without applying it, and on a sequenced stream that would stall the events behind it.
+        WorkspaceEvent::TypingStarted { .. }
+        | WorkspaceEvent::PresenceChanged { .. }
+        | WorkspaceEvent::ReadMarkerRewound { .. } => Route::Ephemeral,
         _ => match event_json
             .get("conversation_id")
             .and_then(Value::as_str)
@@ -1567,6 +1569,25 @@ mod tests {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].stream, "w");
         assert_eq!(plans[0].recipients, vec![regular]);
+    }
+
+    /// A rewound read marker goes unsequenced on `e`, to its owner alone: a client that does not
+    /// know the event refuses it, and on `u:` the `seq` it skips would hold the owner's later
+    /// events until the stream is reconciled.
+    #[test]
+    fn a_rewound_read_marker_goes_on_e_to_its_owner_only() {
+        let owner = member(ServerMemberRole::Member);
+        let other = member(ServerMemberRole::Member);
+        let event = WorkspaceEvent::ReadMarkerRewound {
+            workspace_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            user_id: owner.user_id,
+        };
+        let plans = planned(&event, &[other.clone(), owner.clone()]);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].stream, "e");
+        assert_eq!(plans[0].recipients, vec![owner]);
+        assert!(planned(&event, &[other]).is_empty());
     }
 
     #[test]

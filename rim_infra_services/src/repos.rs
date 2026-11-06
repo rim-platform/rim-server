@@ -219,6 +219,8 @@ pub struct ReadStateRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     /// Reading a conversation also marks its notifications read.
     pub notification_repo: Arc<dyn NotificationRepository>,
+    /// The message a conversation is marked unread from.
+    pub message_repo: Arc<dyn MessageRepository>,
 }
 
 #[derive(Clone)]
@@ -531,6 +533,7 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             notification_repo: Arc::clone(&self.notification_repo),
+            message_repo: Arc::clone(&self.message_repo),
         }
     }
 

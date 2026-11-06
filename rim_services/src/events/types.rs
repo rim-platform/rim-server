@@ -274,6 +274,13 @@ pub enum WorkspaceEvent {
         user_id: UserId,
         last_read_at: chrono::DateTime<chrono::Utc>,
     },
+    /// `user_id` moved their read marker of the conversation back: their other clients read
+    /// `unreadCounts` again. Reaches only `user_id`.
+    ReadMarkerRewound {
+        workspace_id: ServerId,
+        conversation_id: ConversationId,
+        user_id: UserId,
+    },
     PresenceChanged {
         workspace_id: ServerId,
         user_id: UserId,
@@ -545,6 +552,7 @@ impl WorkspaceEvent {
             | Self::MemberAddedToConversation { workspace_id, .. }
             | Self::MemberRemovedFromConversation { workspace_id, .. }
             | Self::ReadStateUpdated { workspace_id, .. }
+            | Self::ReadMarkerRewound { workspace_id, .. }
             | Self::PresenceChanged { workspace_id, .. }
             | Self::UserMentioned { workspace_id, .. }
             | Self::LinkPreviewReady { workspace_id, .. }
@@ -616,8 +624,8 @@ impl WorkspaceEvent {
             | Self::MessageUnpinned {
                 member_user_ids, ..
             } => Some(member_user_ids),
-            // ReadStateUpdated is filtered by user_id in the subscription, not by member list.
-            Self::ReadStateUpdated { .. } => None,
+            // Read state events are filtered by user_id in the subscription, not by member list.
+            Self::ReadStateUpdated { .. } | Self::ReadMarkerRewound { .. } => None,
             // PresenceChanged is visible to all workspace members.
             Self::PresenceChanged { .. } => None,
             // UserMentioned is filtered per-user in the subscription.

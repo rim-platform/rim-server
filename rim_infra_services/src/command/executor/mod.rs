@@ -59,6 +59,7 @@ pub(super) async fn execute_builtin_command(
         "chat.list_channels" => chat::list_channels(services, actor, args, context).await,
         "chat.create_channel" => chat::create_channel(services, actor, args, context).await,
         "chat.mark_as_read" => chat::mark_as_read(services, actor, args, context).await,
+        "chat.mark_as_unread" => chat::mark_as_unread(services, actor, args, context).await,
         "chat.mark_all_as_read" => chat::mark_all_as_read(services, actor, args, context).await,
         "chat.search_messages" => chat::search_messages(services, actor, args, context).await,
         "chat.get_recent_messages" => {
