@@ -49,8 +49,20 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- The command audit log no longer keeps message text, search words, moderation reasons, channel
+  descriptions, group titles or stored state values, only their length. This applies to new rows:
+  existing rows age out with the audit retention. `AuditLogEntry.argsRedacted` holds
+  `{"redacted_content": true, "chars": <count>}` in their place, and a pipe's
+  `AuditLogEntry.commandId` holds `text=[REDACTED:<count>]`. A pipe that does not parse is kept as
+  `unparsed | pipe` with the `errorKind` `InvalidPipeExpression` (`docs/command_model.md`).
 - `User.isBot` and `ServerMember.isBot` say whether an account is a bot, and `User.bot` and
   `ServerMember.bot` what the person who added it says about it. A bot has no `handle`.
+- `bots` answers a Guest `FORBIDDEN`, as it does a non-member. An Owner or Moderator adds a bot to a
+  public channel without joining it; a private channel still needs them in it
+  (`addConversationMembers`).
+- **Upgrade:** rolling back the binary after bots exist: calls naming a bot's id fail with an
+  internal error, because the older binary can't read the new `kind`. Deactivate bots before rolling
+  back.
 
 ## [0.0.8] - 2026-11-03
 

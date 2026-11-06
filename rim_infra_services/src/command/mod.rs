@@ -262,6 +262,16 @@ impl DefaultCommandService {
     }
 }
 
+/// What the audit keeps of a call's error: its message, or a fixed kind for a pipe expression that
+/// did not parse, since that message can quote a word of the expression.
+fn audited_error(err: &ServiceError, unparsed_pipe: bool) -> String {
+    if unparsed_pipe && matches!(err, ServiceError::Validation(_)) {
+        pipe_parser::UNPARSED_PIPE_ERROR_KIND.to_string()
+    } else {
+        err.to_string()
+    }
+}
+
 #[async_trait]
 impl CommandService for DefaultCommandService {
     async fn list_commands(
@@ -345,7 +355,13 @@ impl CommandService for DefaultCommandService {
         // Snapshot the audit fields BEFORE moving `cmd` into
         // `execute_command_inner` (which consumes args/context).
         let actor_id = cmd.actor.user_id;
-        let command_id_for_audit = cmd.command_id.clone();
+        let unparsed_pipe =
+            cmd.is_pipe && pipe_parser::parse_pipe_expression(&cmd.command_id).is_err();
+        let command_id_for_audit = if cmd.is_pipe {
+            pipe_parser::audit_expression(&cmd.command_id)
+        } else {
+            cmd.command_id.clone()
+        };
         let initiator_for_audit = cmd.initiator;
         let run_id_for_audit = cmd
             .run_id
@@ -397,7 +413,7 @@ impl CommandService for DefaultCommandService {
             Err(ServiceError::RateLimited { .. }) => {
                 (AuditOutcome::RateLimited, Some("RateLimited".to_string()))
             }
-            Err(err) => (AuditOutcome::Error, Some(format!("{err}"))),
+            Err(err) => (AuditOutcome::Error, Some(audited_error(err, unparsed_pipe))),
         };
 
         match &result {
@@ -421,7 +437,7 @@ impl CommandService for DefaultCommandService {
                     initiator = %initiator_for_audit,
                     args = %sanitized_args,
                     result_status = AuditOutcome::Error.as_str(),
-                    error = %err,
+                    error = %audited_error(err, unparsed_pipe),
                 );
             }
         }

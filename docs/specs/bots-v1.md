@@ -19,10 +19,11 @@ MUST say so where it shows it.
 ## A bot
 
 - A bot belongs to one workspace, on the server that hosts it. An Owner or a Moderator of that
-  workspace creates it and can change, deactivate or remove it. It cannot be created in the direct
+  workspace creates it and can change or deactivate it. Deactivating is final, and its messages stay. It cannot be created in the direct
   space. A workspace holds at most 25 active bots.
 - A bot is a user with the kind `bot`. It has a name, and no email, key, password, device or session,
   so it cannot sign in.
+- A bot that was kicked or banned keeps its row and counts against the limit until it's deactivated.
 - A person cannot start a direct message or a group with a bot.
 - Bots are switched off for a whole instance with the `bots` feature in `RIM_FEATURES_DISABLED`.
   While it is off, nothing can be created, and bot tokens and webhooks are refused.
@@ -52,6 +53,8 @@ MUST say so where it shows it.
   was explicitly added to. That role does not change.
 - Only an Owner or Moderator can add a bot to a channel. A bot never joins by itself, and joining a
   workspace adds it to no channel. Adding a bot to a private channel is how it gets to read it.
+- An Owner or Moderator adds it to a public channel without joining it, and to a private channel only
+  if they are in it, since they can't give it what they can't read.
 - A bot's grants are the channels it was added to, and in them only: read messages, search, post a
   message and see its mentions. Every other command is out of its reach, because the API offers
   nothing else.
