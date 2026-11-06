@@ -153,8 +153,8 @@ webhook and create another; the old URL stops working at once.
 **Creating one.** An Owner or Moderator calls `createIncomingWebhook` with the channel, a bot of the
 workspace and a preset, `PLAIN` or `GITHUB`. A channel has one webhook that is not revoked; a second is
 `CONFLICT`, so revoke the first. Creating it adds the bot to the channel if it was not there, under the
-rule for adding a bot. A private channel takes a Moderator who is in it, even when the bot is there
-already. Only a plaintext channel that is not archived can have one.
+rule for adding a bot. A private channel takes an Owner or Moderator who is in it, even when the bot is
+there already. Only a plaintext channel that is not archived can have one.
 
 The answer holds `token`, `rimhook_` and 43 base64url characters, shown once; only its SHA-256 is
 stored. The URL is `POST /api/hooks/<token>` on the address of your server.
