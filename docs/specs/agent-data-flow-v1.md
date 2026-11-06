@@ -126,6 +126,7 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   workspace's log (`docs/security/audit-access-matrix.md`), and the view MUST say so.
 - A run view shows what RIM handed over and what the server recorded. What the agent did in between is
   outside RIM, and the view MUST say so.
+- A change to what the agent may do starts a new run, so a run keeps the permissions it started with.
 
 ## Encrypted conversations
 

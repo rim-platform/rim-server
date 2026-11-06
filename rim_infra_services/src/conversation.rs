@@ -1148,23 +1148,30 @@ impl ConversationService for DefaultConversationService {
         }
         ensure_not_archived(&conversation)?;
 
-        // Public channels: anyone can read them, but only members invite others (join first).
-        if !self
-            .repos
-            .conversation_member_repo
-            .is_member(conversation.id, cmd.actor.user_id)
-            .await?
-        {
-            return Err(ServiceError::PermissionDenied);
-        }
-
         let mut seen = HashSet::new();
         let targets: Vec<UserId> = cmd
             .user_ids
             .into_iter()
             .filter(|id| seen.insert(*id))
             .collect();
-        if !self.bots_among(&targets).await?.is_empty() {
+        let bots = self.bots_among(&targets).await?;
+
+        // Public channels: anyone can read them, but only members invite others (join first).
+        // A Moderator or Owner adds bots alone to a public channel without joining it.
+        let adds_only_bots = !targets.is_empty() && bots.len() == targets.len();
+        let without_joining =
+            adds_only_bots && role.is_moderator() && conversation.is_public_channel();
+        if !without_joining
+            && !self
+                .repos
+                .conversation_member_repo
+                .is_member(conversation.id, cmd.actor.user_id)
+                .await?
+        {
+            return Err(ServiceError::PermissionDenied);
+        }
+
+        if !bots.is_empty() {
             if conversation.conversation_type != CoreConversationType::Channel
                 || conversation.is_encrypted()
             {

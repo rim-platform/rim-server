@@ -565,12 +565,13 @@ impl BotService for DefaultBotService {
 
     async fn list_bots(&self, actor: Actor, server_id: ServerId) -> ServiceResult<Vec<BotDto>> {
         self.require_feature()?;
-        if !self
+        let member = self
             .repos
             .server_member_repo
-            .is_member(server_id, actor.user_id)
+            .get_member(server_id, actor.user_id)
             .await?
-        {
+            .ok_or(ServiceError::PermissionDenied)?;
+        if member.member_role.is_guest() {
             return Err(ServiceError::PermissionDenied);
         }
         let bots = self.repos.bot_repo.list_by_server(server_id).await?;
@@ -1345,8 +1346,7 @@ mod tests {
         let id = UserId::new();
         let server_id = ServerId::new();
 
-        let mut fx = Fx::new();
-        fx.members.expect_is_member().returning(|_, _| Ok(true));
+        let mut fx = Fx::new().with_role(Some(ServerMemberRole::Member));
         fx.bots
             .expect_list_by_server()
             .returning(move |_| ok(vec![bot_of(server_id, id)]));
@@ -1356,10 +1356,10 @@ mod tests {
             1
         );
 
-        let mut fx = Fx::new();
-        fx.members.expect_is_member().returning(|_, _| Ok(false));
-        let svc = fx.build();
-        assert_denied(svc.list_bots(actor(), server_id).await);
+        for role in [None, Some(ServerMemberRole::Guest)] {
+            let svc = Fx::new().with_role(role).build();
+            assert_denied(svc.list_bots(actor(), server_id).await);
+        }
 
         let mut fx = Fx::new().with_role(Some(ServerMemberRole::Member));
         expect_bot(&mut fx.bots, server_id, id);

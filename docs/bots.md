@@ -20,7 +20,11 @@ own model and key.
   from that host.
 
 A workspace holds at most 25 bots that are not deactivated. It cannot have one in the direct space,
-and each bot counts as a member against `RIM_LIMIT_MEMBERS_PER_WORKSPACE`.
+and each bot counts as a member against `RIM_LIMIT_MEMBERS_PER_WORKSPACE`. A bot that was kicked or
+banned keeps its row and counts against the limit until it's deactivated.
+
+An Owner or Moderator adds a bot to a public channel without joining it, and to a private channel only
+if they are in it, since they can't give it what they can't read.
 
 ## Creating and changing one
 
@@ -28,7 +32,7 @@ An Owner or Moderator calls `createBot` with a name and a disclosure. The name f
 a display name. `updateBot` changes any of these later.
 
 `deactivateBot` is the way to stop a bot. Its tokens stop working and it leaves the workspace and every
-channel. Its messages stay, shown with its name. There is no way back in this version; create a new
+channel. Its messages stay, shown with its name. Deactivating is final, and its messages stay; create a new
 bot instead.
 
 ## Disclosure
