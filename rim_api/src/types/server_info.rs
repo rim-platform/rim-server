@@ -25,6 +25,7 @@ pub const CAPABILITIES: &[&str] = &[
     "notification_events",
     "bot_disclosure",
     "command_run_id",
+    "incoming_webhooks",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.

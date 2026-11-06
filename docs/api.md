@@ -756,7 +756,9 @@ each list.
   `memberMessageCounts`, `deleteMemberMessages` and the `MessagesDeleted` event;
   `member_timeout_changed`: `ServerMember.timeoutReason` and the `MemberTimeoutChanged` event;
   `conversation_member_removals`: `conversationMemberRemovals`; `bot_disclosure`: `User.isBot`,
-  `User.bot`, `ServerMember.isBot` and `ServerMember.bot`; `command_run_id`: `ExecuteCommandInput.runId` and `AuditLogEntry.runId`). A client asks
+  `User.bot`, `ServerMember.isBot` and `ServerMember.bot`; `command_run_id`:
+  `ExecuteCommandInput.runId` and `AuditLogEntry.runId`; `incoming_webhooks`: `IncomingWebhook`,
+  `incomingWebhooks`, `createIncomingWebhook` and `revokeIncomingWebhook`). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 
@@ -978,9 +980,12 @@ An Owner or Moderator of a workspace manages its bots (`bots.md`; the contract i
 | `botTokens(botUserId): [BotToken!]!` | Owner, Moderator | The bot's tokens, revoked ones included, never their secret. `FORBIDDEN` for anyone else, `NOT_FOUND` for an unknown bot. |
 | `createBot(input): CreatedBot!` | Owner, Moderator | Creates a bot, a guest of the workspace in no channel, and its first token, labelled `default`. `CreatedBot.token` is shown this once. `VALIDATION` for the direct space, a bad field or a workspace with 25 active bots. |
 | `updateBot(input): Bot!` | Owner, Moderator | Changes the fields given. |
-| `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
+| `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and webhooks and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
 | `createBotToken(botUserId, label): CreatedBotToken!` | Owner, Moderator | A new token, shown this once. `VALIDATION` for a label that is not 1 to 64 characters, a deactivated bot or a bot with 5 active tokens. |
 | `revokeBotToken(tokenId): BotToken!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown token and for a token of a bot in a workspace the caller does not moderate. |
+| `incomingWebhooks(serverId): [IncomingWebhook!]!` | Owner, Moderator | The workspace's webhooks, revoked ones included, never their token. `FORBIDDEN` for anyone else. |
+| `createIncomingWebhook(input): CreatedIncomingWebhook!` | Owner, Moderator | Creates the channel's webhook, bound to a bot, and adds the bot to the channel if it is not there. `CreatedIncomingWebhook.token` is shown this once. `FORBIDDEN` for anyone else and for a private channel the caller is not in. `VALIDATION` for anything but a plaintext channel that is not archived and for a bot of another workspace or a deactivated one. `CONFLICT` when the channel has a webhook that is not revoked. `NOT_FOUND` for an unknown conversation or bot. |
+| `revokeIncomingWebhook(id): IncomingWebhook!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown webhook and for one of a workspace the caller does not moderate. |
 
 `runBy` and `readsGoTo` are 1 to 200 characters of plain text, trimmed. Text with a control or format
 character is `VALIDATION`.
@@ -990,7 +995,9 @@ what the person who added it says about it, and null for anyone else: they answe
 is off too. `Message.author` is a `User`, so a client draws a bot's messages from it. A bot's
 `handle` and `principalId` are null.
 
-What a bot itself can call is not GraphQL: its token works on `/api/bot/v1` alone (`bots.md`).
+What a bot itself can call is not GraphQL: its token works on `/api/bot/v1` alone (`bots.md`). An
+incoming webhook's token works on `POST /api/hooks/{token}` alone, and a client builds that URL from the
+address it is signed in to (`bots.md`, "Incoming webhooks").
 
 `createConversation` naming a bot and `addConversationMembers` naming a bot for anything but a
 plaintext channel are `VALIDATION` ("A bot can only be in a channel"). `addConversationMembers`

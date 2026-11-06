@@ -6,8 +6,9 @@ use chrono::{Duration, DurationRound, Utc};
 use migration::{Migrator, MigratorTrait};
 use rim_core::account_deletion::model::TOMBSTONE_DISPLAY_NAME;
 use rim_core::account_deletion::repository::AccountDeletionRepository;
-use rim_core::bot::model::{BotPatch, NewBot, NewBotToken};
+use rim_core::bot::model::{BotPatch, NewBot, NewBotToken, NewIncomingWebhook, WebhookPreset};
 use rim_core::bot::repository::BotRepository;
+use rim_core::conversation::model::ConversationId;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server::model::{Server, ServerId};
 use rim_core::server::repository::ServerRepository;
@@ -516,4 +517,190 @@ async fn reverting_the_migration_waits_for_bots_to_go_and_brings_the_constraints
         .create_bot(new_bot(server.id, "bot-again", ada.id))
         .await
         .unwrap();
+}
+
+/// A channel of `server`, written directly.
+async fn channel_of(ctx: &support::TestCtx, server: &Server) -> ConversationId {
+    let id = ConversationId::new();
+    ctx.db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "INSERT INTO conversation (id, conversation_type, server_id) \
+             VALUES ($1, 'channel', $2)",
+            [Uuid::from(id).into(), Uuid::from(server.id).into()],
+        ))
+        .await
+        .unwrap();
+    id
+}
+
+fn new_webhook(
+    server: &Server,
+    channel: ConversationId,
+    bot: UserId,
+    hash: &str,
+    created_by: UserId,
+) -> NewIncomingWebhook {
+    NewIncomingWebhook {
+        server_id: server.id,
+        conversation_id: channel,
+        bot_user_id: bot,
+        preset: WebhookPreset::Github,
+        token_hash: hash.to_string(),
+        created_by,
+    }
+}
+
+#[tokio::test]
+async fn a_channel_has_one_webhook_that_is_not_revoked() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "hook-one").await;
+    let bots = repo(&ctx);
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-hook-one", ada.id))
+        .await
+        .unwrap();
+    let channel = channel_of(&ctx, &server).await;
+
+    let first = bots
+        .create_webhook(new_webhook(&server, channel, bot.user_id, "h1", ada.id))
+        .await
+        .unwrap();
+    assert_eq!(first.preset, WebhookPreset::Github);
+    assert_eq!(first.last_used_at, None);
+    assert_eq!(first.revoked_at, None);
+    assert_eq!(
+        bots.find_active_webhook(channel).await.unwrap().unwrap().id,
+        first.id
+    );
+
+    let refused = bots
+        .create_webhook(new_webhook(&server, channel, bot.user_id, "h2", ada.id))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.kind(), RepoErrorKind::Conflict);
+
+    // A hash is unique across channels too.
+    let other = channel_of(&ctx, &server).await;
+    let refused = bots
+        .create_webhook(new_webhook(&server, other, bot.user_id, "h1", ada.id))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.kind(), RepoErrorKind::Conflict);
+
+    let at = Utc::now().duration_trunc(Duration::seconds(1)).unwrap();
+    let revoked = bots.revoke_webhook(first.id, at).await.unwrap().unwrap();
+    assert_eq!(revoked.revoked_at, Some(at));
+    assert_eq!(bots.find_active_webhook(channel).await.unwrap(), None);
+    let later = at + Duration::hours(1);
+    let again = bots.revoke_webhook(first.id, later).await.unwrap().unwrap();
+    assert_eq!(again.revoked_at, Some(at), "the first revocation stands");
+
+    let second = bots
+        .create_webhook(new_webhook(&server, channel, bot.user_id, "h2", ada.id))
+        .await
+        .unwrap();
+    let listed = bots.list_webhooks(server.id).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|w| w.id).collect::<Vec<_>>(),
+        [second.id, first.id],
+        "newest first, revoked ones included"
+    );
+    assert!(
+        bots.revoke_webhook(rim_core::bot::model::IncomingWebhookId::new(), at)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_webhook_is_found_by_its_hash_with_its_bots_standing() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "hook-find").await;
+    let bots = repo(&ctx);
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-hook-find", ada.id))
+        .await
+        .unwrap();
+    let channel = channel_of(&ctx, &server).await;
+    let webhook = bots
+        .create_webhook(new_webhook(&server, channel, bot.user_id, "find", ada.id))
+        .await
+        .unwrap();
+
+    assert_eq!(bots.find_webhook_holder("nothing").await.unwrap(), None);
+    let holder = bots.find_webhook_holder("find").await.unwrap().unwrap();
+    assert_eq!(holder.webhook.id, webhook.id);
+    assert_eq!(holder.bot_deactivated_at, None);
+
+    let at = Utc::now().duration_trunc(Duration::seconds(1)).unwrap();
+    bots.touch_webhook(webhook.id, at).await.unwrap();
+    bots.set_deactivated(bot.user_id, at).await.unwrap();
+    let holder = bots.find_webhook_holder("find").await.unwrap().unwrap();
+    assert_eq!(holder.webhook.last_used_at, Some(at));
+    assert_eq!(holder.bot_deactivated_at, Some(at));
+}
+
+#[tokio::test]
+async fn revoking_all_of_a_bots_webhooks_leaves_those_of_others_and_earlier_stamps() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "hook-all").await;
+    let bots = repo(&ctx);
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-hook-all", ada.id))
+        .await
+        .unwrap();
+    let other = bots
+        .create_bot(new_bot(server.id, "bot-hook-other", ada.id))
+        .await
+        .unwrap();
+    let webhook_on = async |who: UserId, hash: &str| {
+        let channel = channel_of(&ctx, &server).await;
+        bots.create_webhook(new_webhook(&server, channel, who, hash, ada.id))
+            .await
+            .unwrap()
+    };
+    let first = webhook_on(bot.user_id, "all-1").await;
+    let second = webhook_on(bot.user_id, "all-2").await;
+    let earlier = webhook_on(bot.user_id, "all-3").await;
+    let others = webhook_on(other.user_id, "all-4").await;
+
+    let at = Utc::now().duration_trunc(Duration::seconds(1)).unwrap();
+    let before = at - Duration::hours(1);
+    bots.revoke_webhook(earlier.id, before).await.unwrap();
+
+    assert_eq!(bots.revoke_all_webhooks(bot.user_id, at).await.unwrap(), 2);
+    assert_eq!(bots.revoke_all_webhooks(bot.user_id, at).await.unwrap(), 0);
+    let revoked_at = async |id| bots.find_webhook(id).await.unwrap().unwrap().revoked_at;
+    assert_eq!(revoked_at(first.id).await, Some(at));
+    assert_eq!(revoked_at(second.id).await, Some(at));
+    assert_eq!(revoked_at(earlier.id).await, Some(before));
+    assert_eq!(revoked_at(others.id).await, None);
+}
+
+#[tokio::test]
+async fn a_webhook_goes_with_its_channel() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "hook-gone").await;
+    let bots = repo(&ctx);
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-hook-gone", ada.id))
+        .await
+        .unwrap();
+    let channel = channel_of(&ctx, &server).await;
+    let webhook = bots
+        .create_webhook(new_webhook(&server, channel, bot.user_id, "gone", ada.id))
+        .await
+        .unwrap();
+
+    ctx.db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "DELETE FROM conversation WHERE id = $1",
+            [Uuid::from(channel).into()],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(bots.find_webhook(webhook.id).await.unwrap(), None);
 }

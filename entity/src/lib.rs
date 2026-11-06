@@ -26,6 +26,7 @@ pub mod device_link;
 pub mod device_request_seen;
 pub mod host_delegation;
 pub mod host_event_stream;
+pub mod incoming_webhook;
 pub mod instance_invite;
 mod instance_invite_mapper;
 pub mod invite;

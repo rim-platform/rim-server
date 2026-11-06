@@ -118,6 +118,7 @@ pub async fn serve(
     let feature_gate = runtime.feature_gate;
     let auth_service = runtime.auth_service;
     let bot_api = web::Data::from(runtime.bot_api);
+    let webhook_api = web::Data::from(runtime.webhook_api);
     let readiness = web::Data::new(ReadinessCache::new(Arc::new(SystemProbe {
         db: runtime.db.clone(),
         server_key_file: config.key_files().key_file,
@@ -191,6 +192,7 @@ pub async fn serve(
             )
             .service(web::resource("/api/sdl").route(web::get().to(sdl_handler)))
             .service(crate::bot_api::scope())
+            .service(crate::webhook_api::resource())
             .service(
                 web::resource("/api/remote/{host_server_id}/{tail:.*}")
                     .route(web::get().to(crate::remote_handlers::handle_remote))
@@ -241,6 +243,7 @@ pub async fn serve(
             .app_data(web::Data::new(Arc::clone(&feature_gate)))
             .app_data(web::Data::new(Arc::clone(&auth_service)))
             .app_data(bot_api.clone())
+            .app_data(webhook_api.clone())
             .app_data(web::Data::new(handler_cfg))
             .app_data(edge_limits.clone())
     })

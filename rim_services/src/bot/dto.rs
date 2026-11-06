@@ -1,7 +1,9 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use rim_core::bot::model::{Bot, BotToken, BotTokenId};
+use rim_core::bot::model::{
+    Bot, BotToken, BotTokenId, IncomingWebhook, IncomingWebhookId, WebhookPreset,
+};
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::{Message, MessageId};
 use rim_core::message_thread::model::MessageThreadId;
@@ -171,4 +173,47 @@ pub struct BotMentionsPage {
     pub messages: Vec<BotMessageDto>,
     /// `None` when the page is empty.
     pub last: Option<BotMentionCursor>,
+}
+
+/// An incoming webhook as its workspace's Owner and Moderators see it. Never its hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingWebhookDto {
+    pub id: IncomingWebhookId,
+    pub server_id: ServerId,
+    pub conversation_id: ConversationId,
+    pub bot_user_id: UserId,
+    pub preset: WebhookPreset,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl From<IncomingWebhook> for IncomingWebhookDto {
+    fn from(webhook: IncomingWebhook) -> Self {
+        Self {
+            id: webhook.id,
+            server_id: webhook.server_id,
+            conversation_id: webhook.conversation_id,
+            bot_user_id: webhook.bot_user_id,
+            preset: webhook.preset,
+            created_at: webhook.created_at,
+            last_used_at: webhook.last_used_at,
+            revoked_at: webhook.revoked_at,
+        }
+    }
+}
+
+/// A new incoming webhook and its token, shown this once. `Debug` leaves the token out.
+#[derive(Clone)]
+pub struct CreatedIncomingWebhookDto {
+    pub webhook: IncomingWebhookDto,
+    pub token: String,
+}
+
+impl fmt::Debug for CreatedIncomingWebhookDto {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CreatedIncomingWebhookDto")
+            .field("webhook", &self.webhook)
+            .finish_non_exhaustive()
+    }
 }

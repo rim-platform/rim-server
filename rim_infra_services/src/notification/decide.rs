@@ -37,7 +37,7 @@ use rim_services::notification::command::EncryptedMentions;
 use crate::mention::parse_mention_ids;
 
 /// Tokens that mention everyone in the conversation (whole word, case-insensitive).
-const CHANNEL_MENTION_TOKENS: [&str; 2] = ["@channel", "@here"];
+pub(crate) const CHANNEL_MENTION_TOKENS: [&str; 2] = ["@channel", "@here"];
 
 /// Everything [`decide`] needs, loaded by the caller.
 pub(crate) struct DecisionInput<'a> {

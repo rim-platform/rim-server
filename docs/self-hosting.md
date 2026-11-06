@@ -717,6 +717,14 @@ Caddy is an example. Any TLS proxy works if it:
 - sets `X-Forwarded-For` itself, replacing what the client sent: the server takes the client's
   address from its first entry and never reads `Forwarded`;
 - drops `Forwarded`, as the Caddyfiles do with `header_up -Forwarded`;
+- keeps its access log private, or leaves `/api/hooks/*` out of it (see below);
 - is the only way in.
 
 `deploy/README.md` has an nginx example for the relay's paths.
+
+**Access logs hold webhook URLs.** The token of an incoming webhook is in its URL path
+(`POST /api/hooks/<token>`, `bots.md`), and anyone holding that URL can post to its channel as its bot.
+rim-server writes the token to no log or metric, but a proxy's access log records paths. The
+`deploy/Caddyfile` here turns on no access log. If you add one, or run another proxy that keeps one,
+keep it as private as the database, or leave `/api/hooks/*` out of it. A URL found in a log is revoked
+and replaced.

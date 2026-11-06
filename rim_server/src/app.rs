@@ -91,6 +91,8 @@ pub struct AppRuntime {
     pub(crate) terms_page: Option<Arc<crate::terms::TermsPage>>,
     /// What the routes of the bot API use, with each token's call limit.
     pub(crate) bot_api: Arc<crate::bot_api::BotApi>,
+    /// What the incoming webhook route uses, with each webhook's post limit.
+    pub(crate) webhook_api: Arc<crate::webhook_api::WebhookApi>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -1128,6 +1130,9 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let user_service = service_provider.user_service();
     let relay_abuse_service = service_provider.relay_abuse_service();
     let bot_api = Arc::new(crate::bot_api::BotApi::new(service_provider.as_ref()));
+    let webhook_api = Arc::new(crate::webhook_api::WebhookApi::new(
+        service_provider.as_ref(),
+    ));
 
     Ok(AppRuntime {
         schema,
@@ -1154,6 +1159,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         session_revocations,
         terms_page: terms_page.map(Arc::new),
         bot_api,
+        webhook_api,
     })
 }
 

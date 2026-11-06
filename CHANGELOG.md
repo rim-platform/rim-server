@@ -23,6 +23,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Incoming webhooks: one URL per channel, bound to a bot, with a GitHub preset for releases, pull
+  requests and issues (`IncomingWebhook`, `POST /api/hooks/{token}`, `docs/specs/bots-v1.md`). Listed
+  in `serverInfo.capabilities` as `incoming_webhooks`. Requests to them have the `webhook` route class
+  in the HTTP metrics, and refused calls over a webhook's limit count as `webhook` in the rate limit
+  metric. Switched off with the `bots` feature. A reverse proxy's access log can hold these URLs, so
+  keep it private (`docs/self-hosting.md`).
 - `serverInfo.capabilities` lists `bot_disclosure` on a server with `User.isBot`, `User.bot`,
   `ServerMember.isBot` and `ServerMember.bot`, and `command_run_id` on one with
   `ExecuteCommandInput.runId` and `AuditLogEntry.runId`, so a client asks for them only there.

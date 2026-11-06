@@ -105,17 +105,20 @@ A poll for mentions that returned nothing isn't recorded, since nothing was hand
 
 - An Owner or Moderator creates one for a channel and binds it to a bot of that workspace. A channel
   has at most one active webhook. Creating it adds the bot to the channel if it was not there. It
-  cannot be created for a conversation that is not a channel.
+  cannot be created for a conversation that is not a channel. An Owner or Moderator creates one on a
+  private channel only if they are in it, since they can't post where they can't read.
 - The URL is `POST /api/hooks/{token}`, with the token `rimhook_` followed by 43 base64url
   characters, shown once. Only its SHA-256 is stored. It is revoked by an Owner or Moderator, and it
-  stops working with its bot. The last time it was used is shown.
+  stops working with its bot. Deactivating a bot revokes its webhooks. The last time it was used is
+  shown.
 - Anyone holding the URL can post to that one channel as that bot, within the limit. A proxy's access
   log can hold the URL, so `docs/self-hosting.md` says to keep such logs private. RIM itself MUST NOT
   log the token. A leaked URL is revoked and a new one made.
 - A webhook has its own limit of 30 posts a minute, and a body limit of 1 MiB.
 - A post runs `chat.post_message` as its bot with the initiator `BOT`, so the gates and the audit log
   apply. A moderation action on the bot stops its webhook too.
-- A webhook's text MUST NOT mention anyone: mention tokens in what was received are made plain text.
+- A webhook's text MUST NOT mention anyone: `<@id>`, `@channel` and `@here` in what was received are
+  made plain text.
 - The preset decides how the body becomes text.
   - `plain`: `{"text": "..."}`, at most 4,000 characters.
   - `github`: the `X-GitHub-Event` header decides. A published release, a pull request opened, closed

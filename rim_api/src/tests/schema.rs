@@ -238,6 +238,7 @@ async fn server_info_lists_its_capabilities() {
         "notification_events",
         "bot_disclosure",
         "command_run_id",
+        "incoming_webhooks",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
@@ -659,10 +660,13 @@ fn account_password_sdl_matches_the_contract() {
 fn bot_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
-        "bots(serverId: ID!): [Bot!]! botTokens(botUserId: ID!): [BotToken!]! }",
+        "bots(serverId: ID!): [Bot!]! botTokens(botUserId: ID!): [BotToken!]! \
+         incomingWebhooks(serverId: ID!): [IncomingWebhook!]! }",
         "createBot(input: CreateBotInput!): CreatedBot! updateBot(input: UpdateBotInput!): Bot! \
          deactivateBot(botUserId: ID!): Bot! createBotToken(botUserId: ID!, label: String!): \
-         CreatedBotToken! revokeBotToken(tokenId: ID!): BotToken! }",
+         CreatedBotToken! revokeBotToken(tokenId: ID!): BotToken! createIncomingWebhook(input: \
+         CreateIncomingWebhookInput!): CreatedIncomingWebhook! revokeIncomingWebhook(id: ID!): \
+         IncomingWebhook! }",
         "type BotInfo { runBy: String! readsGoTo: String! addedByName: String }",
         "type Bot { userId: ID! serverId: ID! name: String! runBy: String! readsGoTo: String! \
          addedByName: String createdAt: DateTime! deactivatedAt: DateTime }",
@@ -670,6 +674,12 @@ fn bot_sdl_matches_the_contract() {
          revokedAt: DateTime }",
         "type CreatedBot { bot: Bot! token: String! }",
         "type CreatedBotToken { botToken: BotToken! token: String! }",
+        "enum WebhookPreset { PLAIN GITHUB }",
+        "type IncomingWebhook { id: ID! conversationId: ID! botUserId: ID! preset: WebhookPreset! \
+         createdAt: DateTime! lastUsedAt: DateTime revokedAt: DateTime }",
+        "type CreatedIncomingWebhook { webhook: IncomingWebhook! token: String! }",
+        "input CreateIncomingWebhookInput { conversationId: ID! botUserId: ID! preset: \
+         WebhookPreset! }",
         "bannedUntil: DateTime isBot: Boolean! bot: BotInfo }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");

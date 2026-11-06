@@ -31,8 +31,8 @@ if they are in it, since they can't give it what they can't read.
 An Owner or Moderator calls `createBot` with a name and a disclosure. The name follows the rules of
 a display name. `updateBot` changes any of these later.
 
-`deactivateBot` is the way to stop a bot. Its tokens stop working and it leaves the workspace and every
-channel. Its messages stay, shown with its name. Deactivating is final, and its messages stay; create a new
+`deactivateBot` is the way to stop a bot. Its tokens stop working, its webhooks are revoked and it leaves
+the workspace and every channel. Its messages stay, shown with its name. Deactivating is final, and its messages stay; create a new
 bot instead.
 
 ## Disclosure
@@ -140,11 +140,96 @@ should have it ignore other bots (`authorIsBot`).
 **Across servers.** A bot lives on the server hosting its workspace, and its token works there alone.
 A member from another server gets its messages, with its name, as they get anything from that host.
 
+## Incoming webhooks
+
+An incoming webhook is a URL that posts to one channel as one bot, so a service that can call a URL
+can post without running anything that holds a bot token. The server only receives: it calls nothing
+back, and a webhook reads nothing.
+
+**The URL is a secret.** Anyone holding it can post to that channel as that bot, within the limit, and
+no signature is checked (`specs/bots-v1.md`). Keep it as you keep a password. If it leaks, revoke the
+webhook and create another; the old URL stops working at once. Deactivating a bot revokes its webhooks, so
+their channels can have new ones.
+
+**Creating one.** An Owner or Moderator calls `createIncomingWebhook` with the channel, a bot of the
+workspace and a preset, `PLAIN` or `GITHUB`. A channel has one webhook that is not revoked; a second is
+`CONFLICT`, so revoke the first. Creating it adds the bot to the channel if it was not there, under the
+rule for adding a bot. An Owner or Moderator creates one on a private channel only if they are in it,
+since they can't post where they can't read, even when the bot is there already. Only a plaintext channel
+that is not archived can have one.
+
+The answer holds `token`, `rimhook_` and 43 base64url characters, shown once; only its SHA-256 is
+stored. The URL is `POST /api/hooks/<token>` on the address of your server.
+
+`incomingWebhooks` lists a workspace's webhooks with when each was created, last used and revoked, for
+an Owner or Moderator. The last use is kept to the minute. `revokeIncomingWebhook` ends one. A caller
+who does not moderate its workspace gets `NOT_FOUND`, the same as for an unknown id.
+
+**Plain.** The body is JSON with a string `text`, at most 4,000 characters after trimming. Markdown in
+it stays as you wrote it.
+
+```sh
+curl -H 'Content-Type: application/json' -d '{"text":"The deploy is **done**."}' \
+  "https://rim.example/api/hooks/$RIM_WEBHOOK_TOKEN"
+```
+
+**GitHub.** A webhook with the preset `GITHUB` takes what a repository or organization sends. In the
+repository's **Settings**, **Webhooks**, **Add webhook**:
+
+1. **Payload URL**: the webhook's URL.
+2. **Content type**: `application/json`. The form-encoded default cannot be read.
+3. **Secret**: leave it empty. RIM does not check signatures, because that would take keeping a secret
+   readable on the server.
+4. **Which events**: choose **Let me select individual events** and tick **Releases**, **Pull requests**
+   and **Issues**. Anything else is answered and ignored, so more events do no harm but count against
+   the limit.
+
+GitHub then sends a `ping`, which answers `202` and posts nothing. What posts, one line each, with the
+repository, who did it, the title and the link:
+
+| Event | Action | Line |
+|---|---|---|
+| `release` | `published` | `acme/widgets: ada published release v1.2.0` |
+| `pull_request` | `opened`, `closed` | `acme/widgets: ada opened pull request #7: Fix it`, or `closed`, or `merged` when it was merged |
+| `issues` | `opened`, `closed` | `acme/widgets: ada opened issue #9: It broke`, or `closed` |
+
+Markdown in what GitHub sent is escaped, a line is at most 1,000 characters and a link is kept only when
+it points at `https://github.com/`. Any other event or action, or a handled one missing a field the line
+needs, answers `202` and posts nothing.
+
+**A webhook mentions nobody.** `<@id>`, `@channel` and `@here` in what it receives are made plain text
+under both presets. People whose notification level is `ALL` hear of the post as of any other message.
+
+**Answers.**
+
+| Status | Body | When |
+|---|---|---|
+| `200` | `{"ok":true}` | It was posted. |
+| `202` | `{"ok":true,"ignored":true}` | Nothing to post. |
+| `400` | A refusal, as in "The API" | A body the preset cannot read, or text a command refuses. |
+| `401` | `{"ok":false}` | The URL does not work: unknown, wrong shape or revoked, its bot deactivated, kicked, banned or out of the channel, or the feature off. The same bytes every time. |
+| `403` | A refusal | The bot is timed out, the channel is archived or posting is restricted to moderators. |
+| `413` | A refusal | The body is over 1 MiB. |
+| `429` | A refusal, with `Retry-After` | Over a limit. |
+| `5xx` | A refusal | `"RIM could not do this."` |
+
+**Limits.** Each webhook has 30 calls a minute, ignored ones counted, and one over the limit posts
+nothing. The per-address limit of `/api`, the bot's message budget and slow mode also apply.
+
+**How a post runs.** It runs `chat.post_message` as the bot with the initiator `bot`, so the same gates
+and audit log apply as to a post from the bot API, and moderating the bot stops its webhook. The audit
+entry holds no text. RIM writes the token to no log, audit entry or metric. A reverse proxy's access log
+can hold the URL, so `self-hosting.md` says to keep it private.
+
+**Across servers.** A webhook lives on the server hosting its workspace and posts there as the bot. A
+member from another server gets those messages as they get anything from that host.
+
 ## Audit
 
 Each management call writes an entry to the workspace's audit log: `bot.create`, `bot.update`,
-`bot.deactivate`, `bot.token.create` and `bot.token.revoke`. An entry holds the bot's id and, for a
-token, its id and label. It never holds a token or its hash.
+`bot.deactivate`, `bot.token.create`, `bot.token.revoke`, `bot.webhook.create` and
+`bot.webhook.revoke`. An entry holds the bot's id and, for a token, its id and label, and for a webhook,
+its id and channel. It never holds a token or its hash.
 
 Each call of the bot API writes one too, with the initiator `bot`: `bot.me`, `chat.list_channels`,
 `chat.get_recent_messages`, `chat.search_messages`, `chat.post_message` and `bot.mentions`. A call
@@ -154,5 +239,5 @@ poll for mentions that returned nothing writes none either, since nothing was ha
 ## Switching it off
 
 `RIM_FEATURES_DISABLED=bots` switches bots off for the whole instance (`operations/features.md`).
-Nothing can be created or managed and tokens are refused. Bots that exist stay members, still marked
-as bots with their disclosure.
+Nothing can be created or managed, and tokens and webhooks are refused. Bots that exist stay members,
+still marked as bots with their disclosure.

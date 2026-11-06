@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use entity::bot_token;
+use entity::{bot_token, incoming_webhook};
 use rim_core::bot::model::{
-    Bot, BotPatch, BotToken, BotTokenHolder, BotTokenId, NewBot, NewBotToken,
+    Bot, BotPatch, BotToken, BotTokenHolder, BotTokenId, IncomingWebhook, IncomingWebhookHolder,
+    IncomingWebhookId, NewBot, NewBotToken, NewIncomingWebhook, WebhookPreset,
 };
 use rim_core::bot::repository::BotRepository;
+use rim_core::conversation::model::ConversationId;
 use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
@@ -82,6 +84,26 @@ struct TokenHolderRow {
     revoked_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
     server_id: Uuid,
     bot_deactivated_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+}
+
+/// A webhook row as the domain knows it.
+///
+/// # Errors
+/// `InvalidData` for a preset this build does not know.
+fn webhook_of(model: incoming_webhook::Model) -> RepoResult<IncomingWebhook> {
+    let preset = WebhookPreset::parse(&model.preset).ok_or_else(|| {
+        RepoError::with_message(RepoErrorKind::InvalidData, "unknown webhook preset")
+    })?;
+    Ok(IncomingWebhook {
+        id: model.id.into(),
+        server_id: model.server_id.into(),
+        conversation_id: model.conversation_id.into(),
+        bot_user_id: model.bot_user_id.into(),
+        preset,
+        created_at: model.created_at.into(),
+        last_used_at: model.last_used_at.map(Into::into),
+        revoked_at: model.revoked_at.map(Into::into),
+    })
 }
 
 pub struct SeaOrmBotRepository {
@@ -338,6 +360,105 @@ impl BotRepository for SeaOrmBotRepository {
     async fn touch_token(&self, id: BotTokenId, at: DateTime<Utc>) -> RepoResult<()> {
         self.execute(
             "UPDATE bot_token SET last_used_at = $2 WHERE id = $1",
+            vec![uuid(id), utc(at)],
+        )
+        .await?;
+        Ok(())
+    }
+    async fn create_webhook(&self, webhook: NewIncomingWebhook) -> RepoResult<IncomingWebhook> {
+        let active = incoming_webhook::ActiveModel {
+            id: Set(IncomingWebhookId::new().into()),
+            server_id: Set(webhook.server_id.into()),
+            conversation_id: Set(webhook.conversation_id.into()),
+            bot_user_id: Set(webhook.bot_user_id.into()),
+            preset: Set(webhook.preset.as_str().to_string()),
+            token_hash: Set(webhook.token_hash),
+            created_by: Set(webhook.created_by.into()),
+            ..Default::default()
+        };
+        webhook_of(active.insert(&self.db).await.map_err(map_db_err)?)
+    }
+
+    async fn find_webhook(&self, id: IncomingWebhookId) -> RepoResult<Option<IncomingWebhook>> {
+        incoming_webhook::Entity::find_by_id::<Uuid>(id.into())
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .map(webhook_of)
+            .transpose()
+    }
+
+    async fn find_active_webhook(
+        &self,
+        conversation_id: ConversationId,
+    ) -> RepoResult<Option<IncomingWebhook>> {
+        incoming_webhook::Entity::find()
+            .filter(incoming_webhook::Column::ConversationId.eq::<Uuid>(conversation_id.into()))
+            .filter(incoming_webhook::Column::RevokedAt.is_null())
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .map(webhook_of)
+            .transpose()
+    }
+
+    async fn list_webhooks(&self, server_id: ServerId) -> RepoResult<Vec<IncomingWebhook>> {
+        incoming_webhook::Entity::find()
+            .filter(incoming_webhook::Column::ServerId.eq::<Uuid>(server_id.into()))
+            .order_by_desc(incoming_webhook::Column::CreatedAt)
+            .order_by_desc(incoming_webhook::Column::Id)
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .into_iter()
+            .map(webhook_of)
+            .collect()
+    }
+
+    async fn revoke_webhook(
+        &self,
+        id: IncomingWebhookId,
+        at: DateTime<Utc>,
+    ) -> RepoResult<Option<IncomingWebhook>> {
+        self.execute(
+            "UPDATE incoming_webhook SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL",
+            vec![uuid(id), utc(at)],
+        )
+        .await?;
+        self.find_webhook(id).await
+    }
+
+    async fn revoke_all_webhooks(&self, bot_user_id: UserId, at: DateTime<Utc>) -> RepoResult<u64> {
+        self.execute(
+            "UPDATE incoming_webhook SET revoked_at = $2 \
+             WHERE bot_user_id = $1 AND revoked_at IS NULL",
+            vec![uuid(bot_user_id), utc(at)],
+        )
+        .await
+    }
+
+    async fn find_webhook_holder(
+        &self,
+        token_hash: &str,
+    ) -> RepoResult<Option<IncomingWebhookHolder>> {
+        let found = incoming_webhook::Entity::find()
+            .filter(incoming_webhook::Column::TokenHash.eq(token_hash))
+            .find_also_related(entity::bot::Entity)
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        let Some((model, Some(bot))) = found else {
+            return Ok(None);
+        };
+        Ok(Some(IncomingWebhookHolder {
+            webhook: webhook_of(model)?,
+            bot_deactivated_at: bot.deactivated_at.map(Into::into),
+        }))
+    }
+
+    async fn touch_webhook(&self, id: IncomingWebhookId, at: DateTime<Utc>) -> RepoResult<()> {
+        self.execute(
+            "UPDATE incoming_webhook SET last_used_at = $2 WHERE id = $1",
             vec![uuid(id), utc(at)],
         )
         .await?;
