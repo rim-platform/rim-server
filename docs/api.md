@@ -755,7 +755,8 @@ each list.
   `MessageReport.automatic` and `clearMessageFlag`; `delete_member_messages`:
   `memberMessageCounts`, `deleteMemberMessages` and the `MessagesDeleted` event;
   `member_timeout_changed`: `ServerMember.timeoutReason` and the `MemberTimeoutChanged` event;
-  `conversation_member_removals`: `conversationMemberRemovals`). A client asks
+  `conversation_member_removals`: `conversationMemberRemovals`; `bot_disclosure`: `User.isBot`,
+  `User.bot`, `ServerMember.isBot` and `ServerMember.bot`; `command_run_id`: `ExecuteCommandInput.runId` and `AuditLogEntry.runId`). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 
