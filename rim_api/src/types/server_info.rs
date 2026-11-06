@@ -23,6 +23,8 @@ pub const CAPABILITIES: &[&str] = &[
     "member_timeout_changed",
     "conversation_member_removals",
     "notification_events",
+    "bot_disclosure",
+    "command_run_id",
     "incoming_webhooks",
 ];
 
@@ -187,7 +189,9 @@ impl ServerInfo {
     /// `deleteMemberMessages`, the `MessagesDeleted` event), `member_timeout_changed`
     /// (`ServerMember.timeoutReason`, the `MemberTimeoutChanged` event),
     /// `conversation_member_removals` (`conversationMemberRemovals`), `notification_events`
-    /// (`notificationEvents`). A client ignores names it does not know.
+    /// (`notificationEvents`), `bot_disclosure` (`User.isBot`, `User.bot`, `ServerMember.isBot`,
+    /// `ServerMember.bot`), `command_run_id` (`ExecuteCommandInput.runId`, `AuditLogEntry.runId`).
+    /// A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES
             .iter()
