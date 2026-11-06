@@ -1,8 +1,8 @@
 //! Command argument sensitivity classification and sensitive-data detection.
 //!
 //! This module is the server's **single source of truth** for what counts as "sensitive"
-//! data in command arguments: the audit redaction for the `audit` tracing line and the
-//! database audit log goes through it.
+//! data in command arguments, and for which arguments hold what a person wrote: the audit
+//! redaction for the `audit` tracing line and the database audit log goes through it.
 //!
 //! The client's confirm-modal masking keeps a copy of [`SENSITIVE_ARG_NAME_RE`]; the two must
 //! match, or a value masked in the modal could be logged in plain text.
@@ -24,6 +24,14 @@ pub static SENSITIVE_ARG_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)password|token|secret|key|credential|auth|api_key|bearer|cookie|session")
         .expect("SENSITIVE_ARG_NAME_RE regex is a compile-time constant")
 });
+
+/// Argument names under which a builtin command takes what a person wrote: message text, search
+/// words, moderation reasons, channel descriptions, group titles and stored state values.
+///
+/// Matched whole and case-insensitively. The audit log keeps only the length of a string under
+/// one of these names.
+pub const CONTENT_ARG_NAMES: &[&str] =
+    &["text", "query", "reason", "description", "title", "value"];
 
 /// JWT detection: `header.payload.signature`, each segment base64url.
 ///
@@ -144,6 +152,13 @@ pub fn arg_name_looks_sensitive(arg_name: &str) -> bool {
     SENSITIVE_ARG_NAME_RE.is_match(arg_name)
 }
 
+/// Returns `true` if `arg_name` is one of [`CONTENT_ARG_NAMES`], in any case.
+pub fn arg_name_holds_content(arg_name: &str) -> bool {
+    CONTENT_ARG_NAMES
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(arg_name))
+}
+
 /// Returns `true` if the string value has a secret-like *shape* regardless
 /// of what argument name it was passed under.
 ///
@@ -232,7 +247,8 @@ pub const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 
 /// Recursively walk a JSON args object, replacing any value whose *name*
 /// matches a sensitive key OR whose *value shape* looks secret with
-/// `REDACTED_PLACEHOLDER`.
+/// `REDACTED_PLACEHOLDER`, and any string under one of [`CONTENT_ARG_NAMES`]
+/// with `{"redacted_content": true, "chars": <count>}`.
 ///
 /// Used by the audit log writer to make sure nothing sensitive
 /// lands in durable logs. Safe to call on any JSON shape; arrays and nested
@@ -240,18 +256,25 @@ pub const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 ///
 /// Returns a new `Value`; the input is not mutated.
 pub fn redact_for_audit(args: &serde_json::Value) -> serde_json::Value {
-    redact_walk(args, /*key_context:*/ None, /*forced:*/ false)
+    redact_walk(
+        args, /*key_context:*/ None, /*forced:*/ false, /*content:*/ false,
+    )
 }
 
 /// Audit-side entry point for redacting `ExecuteCommandCmd::args` immediately
 /// before it is emitted on the `target: "audit"` tracing line and written to the database
 /// audit log by `execute_command`.
 ///
-/// Delegates to [`redact_for_audit`] (same key/value regex policy, same propagation rules).
-/// It is the named entry point for the audit-write boundary: route every audit emit through
-/// it rather than copying the redaction policy.
+/// Delegates to [`redact_for_audit`] (same key/value regex policy, same propagation rules, same
+/// handling of what a person wrote). It is the named entry point for the audit-write boundary:
+/// route every audit emit through it rather than copying the redaction policy.
 pub fn sanitize_args_for_audit(args: &serde_json::Value) -> serde_json::Value {
     redact_for_audit(args)
+}
+
+/// The value kept in place of a string a person wrote: its length and nothing of its text.
+fn content_marker(text: &str) -> serde_json::Value {
+    serde_json::json!({ "redacted_content": true, "chars": text.chars().count() })
 }
 
 /// Recursive walker. `key_context` is the key this value was looked up
@@ -266,16 +289,26 @@ pub fn sanitize_args_for_audit(args: &serde_json::Value) -> serde_json::Value {
 /// Scalars (strings, numbers, bools) under a forced path become the
 /// `[REDACTED]` string — shape change is accepted as the cost of not
 /// lying to audit (a number-shaped secret must not survive).
+///
+/// `content` is sticky in the same way, for an ancestor key in [`CONTENT_ARG_NAMES`]: every string
+/// below it becomes a [`content_marker`], while numbers, bools and null keep the rules above. A
+/// sensitive path wins over a content one, so it keeps no length.
 fn redact_walk(
     value: &serde_json::Value,
     key_context: Option<&str>,
     forced: bool,
+    content: bool,
 ) -> serde_json::Value {
     let is_forced = forced || matches!(key_context, Some(k) if arg_name_looks_sensitive(k));
+    let is_content = content || matches!(key_context, Some(k) if arg_name_holds_content(k));
 
     match value {
         serde_json::Value::String(s) => {
-            if is_forced || value_looks_secret(s) {
+            if is_forced {
+                serde_json::Value::String(REDACTED_PLACEHOLDER.to_string())
+            } else if is_content {
+                content_marker(s)
+            } else if value_looks_secret(s) {
                 serde_json::Value::String(REDACTED_PLACEHOLDER.to_string())
             } else {
                 value.clone()
@@ -287,13 +320,13 @@ fn redact_walk(
                 // Array items inherit the parent key's sensitivity via
                 // `is_forced`. Pass `None` as their own key_context (they
                 // have no key) — the forced flag carries the signal.
-                .map(|v| redact_walk(v, None, is_forced))
+                .map(|v| redact_walk(v, None, is_forced, is_content))
                 .collect(),
         ),
         serde_json::Value::Object(map) => {
             let mut out = serde_json::Map::with_capacity(map.len());
             for (k, v) in map {
-                out.insert(k.clone(), redact_walk(v, Some(k), is_forced));
+                out.insert(k.clone(), redact_walk(v, Some(k), is_forced, is_content));
             }
             serde_json::Value::Object(out)
         }
@@ -579,6 +612,79 @@ mod tests {
             "tokens": ["v1", "v2"],
         });
         assert_eq!(sanitize_args_for_audit(&args), redact_for_audit(&args));
+    }
+
+    // --- what a person wrote --- //
+
+    #[test]
+    fn sanitize_keeps_only_the_length_of_each_content_argument() {
+        for name in CONTENT_ARG_NAMES {
+            let args = json!({ "server_id": "s1", *name: "žluťoučký kůň" });
+            let kept = sanitize_args_for_audit(&args);
+            assert_eq!(kept["server_id"], json!("s1"), "{name}");
+            assert_eq!(
+                kept[*name],
+                json!({ "redacted_content": true, "chars": 13 }),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_matches_a_content_name_in_any_case_but_only_whole() {
+        let kept = sanitize_args_for_audit(&json!({ "Text": "hello", "context": "hello" }));
+        assert_eq!(
+            kept["Text"],
+            json!({ "redacted_content": true, "chars": 5 })
+        );
+        assert_eq!(kept["context"], json!("hello"));
+    }
+
+    #[test]
+    fn sanitize_reaches_content_nested_and_in_arrays() {
+        let kept = sanitize_args_for_audit(&json!({
+            "message": { "text": "nested" },
+            "steps": [{ "query": "in array" }],
+            "text": ["one", { "inner": "below" }],
+        }));
+        assert_eq!(
+            kept,
+            json!({
+                "message": { "text": { "redacted_content": true, "chars": 6 } },
+                "steps": [{ "query": { "redacted_content": true, "chars": 8 } }],
+                "text": [
+                    { "redacted_content": true, "chars": 3 },
+                    { "inner": { "redacted_content": true, "chars": 5 } },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn sanitize_leaves_a_non_string_under_a_content_name_to_the_existing_rules() {
+        let args = json!({ "value": 42, "text": null, "query": true });
+        assert_eq!(sanitize_args_for_audit(&args), args);
+        assert_eq!(
+            sanitize_args_for_audit(&json!({ "auth": { "value": 42 } })),
+            json!({ "auth": { "value": REDACTED_PLACEHOLDER } })
+        );
+    }
+
+    #[test]
+    fn sanitize_treats_a_secret_looking_content_value_as_content() {
+        let secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+        let kept = sanitize_args_for_audit(&json!({ "text": secret }));
+        assert_eq!(
+            kept["text"],
+            json!({ "redacted_content": true, "chars": secret.len() })
+        );
+        assert!(!kept.to_string().contains(secret));
+    }
+
+    #[test]
+    fn sanitize_gives_a_sensitive_path_no_length() {
+        let kept = sanitize_args_for_audit(&json!({ "credentials": { "text": "hunter2" } }));
+        assert_eq!(kept["credentials"]["text"], json!(REDACTED_PLACEHOLDER));
     }
 
     // --- CommandSensitivityDto --- //

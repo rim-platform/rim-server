@@ -1,5 +1,13 @@
+use rim_services::command::sensitivity::sanitize_args_for_audit;
 use rim_services::{ServiceError, ServiceResult};
 use serde_json::Value;
+
+/// The command id audited for a pipe expression that does not parse, whose text is kept nowhere.
+pub(super) const UNPARSED_PIPE_AUDIT_ID: &str = "unparsed | pipe";
+
+/// The error audited for a pipe expression that does not parse, in place of a message that can
+/// quote a word of it.
+pub(super) const UNPARSED_PIPE_ERROR_KIND: &str = "InvalidPipeExpression";
 
 // SECURITY: All keys from the previous stage's output pass through to the next
 // stage without filtering. A crafted first stage could inject unexpected keys
@@ -112,9 +120,86 @@ pub(super) fn parse_pipe_expression(expr: &str) -> ServiceResult<Vec<PipeSegment
     Ok(segments)
 }
 
+/// The form of a pipe expression the audit keeps: its stage ids joined by ` | `, each `key=value`
+/// under the audit's redaction rules, with `[REDACTED:<count>]` for what a person wrote and
+/// `[REDACTED]` for a secret. An expression that does not parse becomes
+/// [`UNPARSED_PIPE_AUDIT_ID`].
+pub(super) fn audit_expression(expr: &str) -> String {
+    if parse_pipe_expression(expr).is_err() {
+        return UNPARSED_PIPE_AUDIT_ID.to_string();
+    }
+    expr.split('|')
+        .map(|segment| {
+            segment
+                .split_whitespace()
+                .map(audit_token)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// One whitespace-separated token of a parsed segment as the audit keeps it.
+fn audit_token(token: &str) -> String {
+    let Some((key, value)) = token.split_once('=') else {
+        return token.to_string();
+    };
+    let kept = sanitize_args_for_audit(&serde_json::json!({ key: value }));
+    match &kept[key] {
+        Value::String(kept) => format!("{key}={kept}"),
+        marker => format!("{key}=[REDACTED:{}]", marker["chars"]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audit_expression_masks_content_and_keeps_the_stages() {
+        assert_eq!(
+            audit_expression("chat.post_message  text=žluťoučký limit=5 |  state.list query=a=b"),
+            "chat.post_message text=[REDACTED:9] limit=5 | state.list query=[REDACTED:3]"
+        );
+    }
+
+    #[test]
+    fn audit_expression_masks_a_content_value_in_every_content_name() {
+        for name in rim_services::command::sensitivity::CONTENT_ARG_NAMES {
+            assert_eq!(
+                audit_expression(&format!("a {name}=hello | b")),
+                format!("a {name}=[REDACTED:5] | b")
+            );
+        }
+    }
+
+    #[test]
+    fn audit_expression_redacts_secrets_without_a_length() {
+        assert_eq!(
+            audit_expression("state.get key=k data=sk-proj-abc | b password=hunter2"),
+            "state.get key=[REDACTED] data=[REDACTED] | b password=[REDACTED]"
+        );
+    }
+
+    #[test]
+    fn audit_expression_keeps_a_stage_with_no_arguments_as_it_is() {
+        assert_eq!(audit_expression("a|b"), "a | b");
+        assert_eq!(audit_expression("a"), "a");
+    }
+
+    #[test]
+    fn audit_expression_masks_a_content_pair_written_as_a_stage_id() {
+        assert_eq!(audit_expression("text=hello | b"), "text=[REDACTED:5] | b");
+    }
+
+    #[test]
+    fn audit_expression_keeps_nothing_of_an_expression_that_does_not_parse() {
+        for expr in ["a text=hello stray", "a | ", "| a", "a =hello"] {
+            assert_eq!(audit_expression(expr), UNPARSED_PIPE_AUDIT_ID, "{expr}");
+        }
+        assert!(UNPARSED_PIPE_AUDIT_ID.contains(" | "));
+    }
 
     #[test]
     fn parse_single_command() {

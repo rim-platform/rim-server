@@ -1166,12 +1166,13 @@ mod tests {
         let svc =
             service_with_capability(repo, MockConversationService::new(), message_service, cap);
 
+        let server_id = rim_core::server::model::ServerId::new().to_string();
         {
             svc.execute_command(ExecuteCommandCmd {
                     actor,
                     command_id: "chat.post_message".to_string(),
                     args: Some(serde_json::json!({
-                        "server_id": rim_core::server::model::ServerId::new().to_string(),
+                        "server_id": server_id,
                         "conversation_id": rim_core::conversation::model::ConversationId::new().to_string(),
                         "text": "hello",
                         "password": "hunter2",
@@ -1201,7 +1202,15 @@ mod tests {
             "raw API key value must NOT appear in audit; captured = {captured}",
         );
         assert!(
-            captured.contains("hello"),
+            !captured.contains("hello"),
+            "message text must NOT appear in audit; captured = {captured}",
+        );
+        assert!(
+            captured.contains(r#""chars":5"#),
+            "the length of the text stays; captured = {captured}",
+        );
+        assert!(
+            captured.contains(&server_id),
             "benign args must remain visible; captured = {captured}",
         );
     }
@@ -2876,6 +2885,45 @@ mod tests {
             "pipe stage 2 ('state.incr') failed: version mismatch"
         );
         assert_eq!(result.pipeline_stages.map(|s| s.len()), Some(2));
+    }
+
+    /// The audit line of a pipe keeps the stages and only the length of what a person wrote.
+    #[tokio::test]
+    async fn pipe_audit_line_masks_content_in_the_expression() {
+        let (_guard, buf) = capture_audit_lines();
+        let mut workspace_state = MockWorkspaceStateService::new();
+        expect_one_empty_list(&mut workspace_state);
+        let svc = state_service(repo_with(vec![]), workspace_state);
+
+        svc.execute_command(pipe_cmd(new_actor(), "state.list query=canary"))
+            .await
+            .expect("runs");
+
+        let captured = drain_buf(&buf);
+        assert!(!captured.contains("canary"), "{captured}");
+        assert!(
+            captured.contains("state.list query=[REDACTED:6]"),
+            "{captured}"
+        );
+    }
+
+    /// A pipe that does not parse tells the caller why, and its audit line keeps none of its words.
+    #[tokio::test]
+    async fn pipe_audit_line_keeps_nothing_of_an_expression_that_does_not_parse() {
+        let (_guard, buf) = capture_audit_lines();
+        let svc = state_service(repo_with(vec![]), MockWorkspaceStateService::new());
+
+        let err = svc
+            .execute_command(pipe_cmd(new_actor(), "state.list text=canary stray"))
+            .await
+            .unwrap_err();
+
+        assert!(validation_message(err).contains("stray"));
+        let captured = drain_buf(&buf);
+        assert!(!captured.contains("canary"), "{captured}");
+        assert!(!captured.contains("stray"), "{captured}");
+        assert!(captured.contains("unparsed | pipe"), "{captured}");
+        assert!(captured.contains("InvalidPipeExpression"), "{captured}");
     }
 
     /// A pipe naming an unknown or desktop-local stage is refused before any stage runs.
@@ -4694,7 +4742,7 @@ mod tests {
             rate_limited_cmd_def("test.bounded", 100),
             Some(Arc::new(audit_svc)),
         );
-        let args = serde_json::json!({ "text": "x".repeat(10_000) });
+        let args = serde_json::json!({ "data": "x".repeat(10_000) });
         let size = args.to_string().len();
         let mut cmd = palette_cmd(actor, "test.bounded");
         cmd.args = Some(args);
@@ -4706,6 +4754,36 @@ mod tests {
         assert_eq!(kept["truncated"], serde_json::json!(true), "{kept}");
         assert_eq!(kept["bytes"], serde_json::json!(size));
         assert!(kept.to_string().len() <= 4096, "{kept}");
+    }
+
+    #[tokio::test]
+    async fn execute_command_audits_a_long_text_as_its_length_alone() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let written: Arc<std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>> =
+            Arc::new(std::sync::Mutex::new(vec![]));
+        let written_clone = written.clone();
+        let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+        audit_svc
+            .expect_write_entry()
+            .times(1)
+            .returning(move |entry| {
+                written_clone.lock().unwrap().push(entry);
+                Box::pin(async { Ok(()) })
+            });
+        let svc = service_with_rate_limited_cmd(
+            rate_limited_cmd_def("test.long_text", 100),
+            Some(Arc::new(audit_svc)),
+        );
+        let mut cmd = palette_cmd(actor, "test.long_text");
+        cmd.args = Some(serde_json::json!({ "text": "x".repeat(10_000) }));
+
+        svc.execute_command(cmd).await.expect("runs");
+
+        let entries = written.lock().unwrap();
+        assert_eq!(
+            entries[0].args_redacted,
+            serde_json::json!({ "text": { "redacted_content": true, "chars": 10_000 } })
+        );
     }
 
     /// The `run_id` on the audit entry of a call with `initiator` and `run_id`.

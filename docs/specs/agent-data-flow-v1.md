@@ -99,6 +99,8 @@ the person's session, device keys, account vault, model keys or plugin secrets.
 - The dialog MUST show the agent's name, the workspace, the channel as RIM knows them and the whole text,
   with invisible and direction-changing characters made visible, since that text is what the person
   confirms. It says the agent may have read text meant to steer it.
+- The dialog comes before the text reaches the server, so a discarded or expired request leaves it only
+  on the device. The app asks the server, and answers its challenge, only after the person confirms.
 - An agent's dialog never replaces one that is open. A second request while one is open is refused and
   can be retried. A person's own confirmation replaces an agent's, which ends as discarded.
 - Confirm stays disabled for one second after the dialog opens, so a click or keystroke meant for

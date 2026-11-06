@@ -321,6 +321,18 @@ call's redacted arguments when they serialize to 4,096 bytes or less; larger arg
 as `{"truncated": true, "bytes": <size>, "prefix": <the first 1,024 bytes of the redacted
 JSON>}`.
 
+What a person wrote is left out of the redacted arguments, with only its length kept. A string
+under the name `text`, `query`, `reason`, `description`, `title` or `value`, at any depth and in
+any command, is kept as `{"redacted_content": true, "chars": <count>}`. A plugin command's other
+arguments are not known to the server by name, so they stay as they are, redacted only where their
+name or value looks secret.
+
+The same rules apply to a pipe expression, which the row keeps as its `commandId`: each stage's id
+stays, with its `key=value` pairs masked, so `chat.post_message text=hello` is kept as
+`chat.post_message text=[REDACTED:5]`, and a secret as `key=[REDACTED]`. An expression that does
+not parse is kept as `unparsed | pipe` with the error kind `InvalidPipeExpression`, while the caller
+still gets the message saying what is wrong with it.
+
 An `AGENT` call may carry a `runId`, an identifier the desktop app gives one stretch of an
 agent's calls. The audit entry keeps it, so `listAuditLog` can list that stretch; on a call with
 any other initiator it is ignored. It is the client's word, like the initiator. It must be 1 to
