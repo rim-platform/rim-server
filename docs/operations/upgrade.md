@@ -142,6 +142,9 @@ checkout, `deploy/upgrade.sh <previous version>` does the same after a backup. T
 `dc up -d` stops at the failing `migrate`; use `--no-deps` as above. When you upgrade again there is
 no migration left to run.
 
+**Bots.** After bots exist, calls naming a bot's id fail with an internal error on the older
+binary, because it can't read the new `kind`. Deactivate bots before rolling back.
+
 **Further back.** Restore the backup taken before the upgrade (`docs/self-hosting.md`,
 "Restore"). Everything written since that backup is lost.
 

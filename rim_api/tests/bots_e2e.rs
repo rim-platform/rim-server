@@ -323,6 +323,11 @@ async fn a_bot_joins_as_a_guest_of_no_channel_and_shows_as_a_bot_to_members() {
         0,
         "joining a workspace adds a bot to no channel"
     );
+    assert_eq!(
+        s.err(&r.gina, &bots_query(), json!({ "s": r.server_id }))
+            .await,
+        "FORBIDDEN"
+    );
     let members = s.ok(&r.bob, MEMBERS, json!({ "s": r.server_id })).await;
     let members = members["serverMembers"].as_array().expect("members");
     let shown = members
@@ -454,6 +459,64 @@ async fn only_an_owner_or_moderator_adds_a_bot_to_a_channel_public_or_private() 
         .await,
         "VALIDATION"
     );
+}
+
+#[tokio::test]
+async fn a_moderator_adds_a_bot_to_a_public_channel_without_joining_it() {
+    let s = scene("outside").await;
+    let r = &s.roles;
+    let (bot, _) = s.create_bot(&r.mona, "Helper").await;
+    let public = create_channel(&s.schema, &r.alice, &r.server_id, "public", false).await;
+    let private = create_channel(&s.schema, &r.alice, &r.server_id, "private", true).await;
+    let count = "SELECT count(*) AS n FROM conversation_member WHERE user_id = $1";
+
+    // A Member cannot, and neither can a Moderator outside a private channel.
+    assert_eq!(
+        s.err(
+            &r.bob,
+            ADD_MEMBERS,
+            json!({ "s": r.server_id, "c": public, "u": [bot] }),
+        )
+        .await,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        s.err(
+            &r.mona,
+            ADD_MEMBERS,
+            json!({ "s": r.server_id, "c": private, "u": [bot] }),
+        )
+        .await,
+        "NOT_FOUND"
+    );
+    // A bot with a person is refused as before.
+    assert_eq!(
+        s.err(
+            &r.mona,
+            ADD_MEMBERS,
+            json!({ "s": r.server_id, "c": public, "u": [bot, r.bob.user_id.to_string()] }),
+        )
+        .await,
+        "FORBIDDEN"
+    );
+    assert_eq!(s.scalar(count, &bot).await, 0);
+
+    let added = s
+        .ok(
+            &r.mona,
+            ADD_MEMBERS,
+            json!({ "s": r.server_id, "c": public, "u": [bot] }),
+        )
+        .await;
+    assert!(
+        added["addConversationMembers"]["memberIds"]
+            .as_array()
+            .expect("ids")
+            .contains(&json!(bot))
+    );
+    assert_eq!(s.scalar(count, &bot).await, 1);
+    let mona_id = r.mona.user_id.to_string();
+    assert_eq!(s.scalar(count, &mona_id).await, 0, "mona did not join");
 }
 
 #[tokio::test]
