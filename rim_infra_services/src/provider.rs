@@ -264,6 +264,7 @@ impl DefaultAppServiceProvider {
         )
         .with_e2ee_repo(Arc::clone(&repos.e2ee_repo))
         .with_bot_repo(Arc::clone(&repos.bot_repo))
+        .with_feature_gate(Arc::clone(&feature_gate))
         .with_direct_space(federation.direct_space_id)
         .with_limits(limits)
         .with_default_workspace(Arc::clone(&default_workspace_service));

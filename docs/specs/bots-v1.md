@@ -27,6 +27,7 @@ MUST say so where it shows it.
 - A person cannot start a direct message or a group with a bot.
 - Bots are switched off for a whole instance with the `bots` feature in `RIM_FEATURES_DISABLED`.
   While it is off, nothing can be created, and bot tokens and webhooks are refused.
+  With the feature off, a bot can't be added to a channel, and it can still be removed.
 
 ## Who runs it
 

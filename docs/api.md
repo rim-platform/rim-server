@@ -972,7 +972,8 @@ their own server.
 ### Bots
 
 An Owner or Moderator of a workspace manages its bots (`bots.md`; the contract is
-`specs/bots-v1.md`). Every root answers `FEATURE_DISABLED` while the `bots` feature is off.
+`specs/bots-v1.md`). Every root answers `FEATURE_DISABLED` while the `bots` feature is off, and so
+does `addConversationMembers` naming a bot; `removeConversationMember` still removes one.
 
 | Root | Who | Does |
 |---|---|---|

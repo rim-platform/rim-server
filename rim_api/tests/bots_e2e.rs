@@ -843,6 +843,90 @@ async fn with_the_feature_off_nothing_is_managed_and_existing_bots_stay_marked()
 }
 
 #[tokio::test]
+async fn with_the_feature_off_a_bot_is_not_added_to_a_channel_and_can_still_be_removed() {
+    let s = scene("offadd").await;
+    let r = &s.roles;
+    let (bot, _) = s.create_bot(&r.mona, "Helper").await;
+    let joined = create_channel(&s.schema, &r.mona, &r.server_id, "joined", false).await;
+    let other = create_channel(&s.schema, &r.mona, &r.server_id, "other", false).await;
+    s.ok(
+        &r.mona,
+        ADD_MEMBERS,
+        json!({ "s": r.server_id, "c": joined, "u": [bot] }),
+    )
+    .await;
+    let schema = s.ctx.build_schema_with_disabled(&[ServerFeature::Bots]);
+    let bob = r.bob.user_id.to_string();
+
+    for targets in [json!([bot]), json!([bob, bot])] {
+        assert_eq!(
+            exec_err_code(
+                &schema,
+                r.mona.request(
+                    ADD_MEMBERS,
+                    json!({ "s": r.server_id, "c": other, "u": targets }),
+                ),
+            )
+            .await,
+            "FEATURE_DISABLED",
+            "{targets}"
+        );
+    }
+    let other_id = other.parse::<uuid::Uuid>().expect("uuid");
+    for who in [&bot, &bob] {
+        assert_eq!(
+            s.ctx
+                .conn
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT count(*) AS n FROM conversation_member \
+                     WHERE conversation_id = $1 AND user_id = $2",
+                    [
+                        other_id.into(),
+                        who.parse::<uuid::Uuid>().expect("uuid").into(),
+                    ],
+                ))
+                .await
+                .expect("query")
+                .expect("a row")
+                .try_get::<i64>("", "n")
+                .expect("n"),
+            0,
+            "{who}"
+        );
+    }
+
+    // Adding people does not depend on the feature.
+    exec_ok(
+        &schema,
+        r.mona.request(
+            ADD_MEMBERS,
+            json!({ "s": r.server_id, "c": other, "u": [bob] }),
+        ),
+    )
+    .await;
+
+    exec_ok(
+        &schema,
+        r.mona.request(
+            r#"mutation($s: ID!, $c: ID!, $u: ID!) {
+              removeConversationMember(serverId: $s, conversationId: $c, userId: $u)
+            }"#,
+            json!({ "s": r.server_id, "c": joined, "u": bot }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        s.scalar(
+            "SELECT count(*) AS n FROM conversation_member WHERE user_id = $1",
+            &bot
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
 async fn a_bots_tokens_end_with_its_workspace() {
     let s = scene("delete").await;
     let r = &s.roles;

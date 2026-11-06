@@ -11,6 +11,7 @@ use rim_core::conversation::model::{
 use rim_core::conversation_member::model::{MemberRemoval, MemberRemovalId, Membership};
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::repository::error::RepoErrorKind;
+use rim_core::server_feature::model::ServerFeature;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_services::command::rate_limit::RateLimitDecision;
@@ -24,6 +25,7 @@ use rim_services::conversation::dto::{ConversationDto, ConversationMemberRemoval
 use rim_services::conversation::service::ConversationService;
 use rim_services::conversation::types::ConversationParticipants;
 use rim_services::default_workspace::DefaultWorkspaceService;
+use rim_services::feature::service::FeatureGate;
 use rim_services::host::service::HostService;
 use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::{ServiceError, ServiceResult};
@@ -86,6 +88,9 @@ pub struct DefaultConversationService {
     /// Tells bots among the people named, who only join plaintext channels. `None` in unit tests
     /// that are not about them; the composition root wires it.
     bot_repo: Option<Arc<dyn BotRepository>>,
+    /// Whether a bot can be added to a channel: not while the `bots` feature is off. `None` in
+    /// unit tests that are not about it; the composition root wires it.
+    feature_gate: Option<Arc<dyn FeatureGate>>,
     /// The relay's direct space, where everyone is a guest, guests start DMs and groups, and
     /// there are no channels.
     direct_space_id: Option<rim_core::server::model::ServerId>,
@@ -108,6 +113,7 @@ impl DefaultConversationService {
             observers,
             e2ee_repo: None,
             bot_repo: None,
+            feature_gate: None,
             direct_space_id: None,
             limits: InstanceLimits::default(),
             direct_space_starts: Arc::new(DailyCounter::per_day(
@@ -283,6 +289,12 @@ impl DefaultConversationService {
     /// The repository that tells bots among the people named.
     pub fn with_bot_repo(mut self, bot_repo: Arc<dyn BotRepository>) -> Self {
         self.bot_repo = Some(bot_repo);
+        self
+    }
+
+    /// The instance's feature switches, which decide whether a bot can be added to a channel.
+    pub fn with_feature_gate(mut self, feature_gate: Arc<dyn FeatureGate>) -> Self {
+        self.feature_gate = Some(feature_gate);
         self
     }
 
@@ -1155,6 +1167,11 @@ impl ConversationService for DefaultConversationService {
             .filter(|id| seen.insert(*id))
             .collect();
         let bots = self.bots_among(&targets).await?;
+        if !bots.is_empty()
+            && let Some(gate) = &self.feature_gate
+        {
+            gate.require(ServerFeature::Bots)?;
+        }
 
         // Public channels: anyone can read them, but only members invite others (join first).
         // A Moderator or Owner adds bots alone to a public channel without joining it.
