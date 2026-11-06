@@ -101,6 +101,9 @@ pub trait BotRepository: Send + Sync {
         at: DateTime<Utc>,
     ) -> RepoResult<Option<IncomingWebhook>>;
 
+    /// Stamp every webhook of the bot not yet revoked as revoked at `at`. Returns how many.
+    async fn revoke_all_webhooks(&self, bot_user_id: UserId, at: DateTime<Utc>) -> RepoResult<u64>;
+
     /// The webhook with the SHA-256 `token_hash` and its bot's standing, by the unique index.
     async fn find_webhook_holder(
         &self,

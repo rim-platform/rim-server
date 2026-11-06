@@ -25,6 +25,9 @@ const AUDIT_WEBHOOK_REVOKE: &str = "bot.webhook.revoke";
 /// The refusal of a second webhook on a channel.
 const CHANNEL_HAS_ONE: &str = "This channel already has a webhook. Revoke it first.";
 
+/// The refusal of a webhook for a bot that is deactivated.
+const DEACTIVATED_BOT: &str = "A deactivated bot cannot have a webhook.";
+
 /// The text `body` becomes under `preset`, or `None` when there is nothing to post. The GitHub
 /// preset posts nothing without an event to go by.
 ///
@@ -77,9 +80,7 @@ impl DefaultBotService {
             ));
         }
         if bot.deactivated_at.is_some() {
-            return Err(ServiceError::Validation(
-                "A deactivated bot cannot have a webhook.".to_string(),
-            ));
+            return Err(ServiceError::Validation(DEACTIVATED_BOT.to_string()));
         }
         if conversation.conversation_type != ConversationType::Channel
             || conversation.is_encrypted()
@@ -129,8 +130,19 @@ impl DefaultBotService {
         }
 
         let token = generate_webhook_token();
-        let created = self
-            .repos
+        let (scope, repos) = self.transaction().await?;
+        repos.bot_repo.lock_bot(bot_user_id).await?;
+        // Read under the lock: a deactivation that committed first is seen here, and one that
+        // comes later revokes this row with the bot's others.
+        let current = repos
+            .bot_repo
+            .find_bot(bot_user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if current.deactivated_at.is_some() {
+            return Err(ServiceError::Validation(DEACTIVATED_BOT.to_string()));
+        }
+        let created = repos
             .bot_repo
             .create_webhook(NewIncomingWebhook {
                 server_id,
@@ -146,6 +158,7 @@ impl DefaultBotService {
                 RepoErrorKind::Conflict => ServiceError::Conflict(CHANNEL_HAS_ONE.to_string()),
                 _ => ServiceError::from(e),
             })?;
+        Self::commit(scope).await?;
         self.audit(
             actor.user_id,
             server_id,
@@ -398,6 +411,7 @@ mod tests {
         }
 
         fn with_insert(mut self) -> Self {
+            self.bots.expect_lock_bot().returning(|_| ok(true));
             self.bots.expect_create_webhook().returning(|new| {
                 ok(IncomingWebhook {
                     id: IncomingWebhookId::new(),
@@ -584,6 +598,7 @@ mod tests {
             .with_channel_members(|_| true)
             .with_no_active_webhook();
         let row = a_webhook(&fx);
+        fx.bots.expect_lock_bot().returning(|_| ok(true));
         fx.bots.expect_create_webhook().returning(move |new| {
             *seen.lock().expect("lock") = new.token_hash.clone();
             ok(row.clone())
@@ -668,6 +683,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_deactivation_that_commits_first_is_seen_under_the_lock_and_no_row_is_written() {
+        let fx = Fx::new();
+        let (channel, bot, server_id) = (fx.channel, fx.bot, fx.server_id);
+        let mut fx = fx
+            .with_role(Some(ServerMemberRole::Owner))
+            .with_conversation(|_| {})
+            .with_channel_members(|_| true)
+            .with_no_active_webhook();
+        let mut reads = 0;
+        fx.bots.expect_find_bot().returning(move |_| {
+            reads += 1;
+            ok(Some(Bot {
+                deactivated_at: (reads > 1).then(Utc::now),
+                ..a_bot(server_id, bot)
+            }))
+        });
+        fx.bots.expect_lock_bot().times(1).returning(|_| ok(true));
+        assert_validation(create(&fx.build().0, channel, bot).await);
+    }
+
+    #[tokio::test]
     async fn a_private_channel_takes_a_moderator_who_is_in_it_even_with_the_bot_there() {
         let fx = Fx::new();
         let (channel, bot) = (fx.channel, fx.bot);
@@ -710,6 +746,7 @@ mod tests {
             .with_bot()
             .with_channel_members(|_| true)
             .with_no_active_webhook();
+        fx.bots.expect_lock_bot().returning(|_| ok(true));
         fx.bots
             .expect_create_webhook()
             .returning(|_| Box::pin(async { Err(RepoError::new(RepoErrorKind::Conflict)) }));

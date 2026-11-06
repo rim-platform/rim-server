@@ -643,6 +643,43 @@ async fn a_webhook_is_found_by_its_hash_with_its_bots_standing() {
 }
 
 #[tokio::test]
+async fn revoking_all_of_a_bots_webhooks_leaves_those_of_others_and_earlier_stamps() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "hook-all").await;
+    let bots = repo(&ctx);
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-hook-all", ada.id))
+        .await
+        .unwrap();
+    let other = bots
+        .create_bot(new_bot(server.id, "bot-hook-other", ada.id))
+        .await
+        .unwrap();
+    let webhook_on = async |who: UserId, hash: &str| {
+        let channel = channel_of(&ctx, &server).await;
+        bots.create_webhook(new_webhook(&server, channel, who, hash, ada.id))
+            .await
+            .unwrap()
+    };
+    let first = webhook_on(bot.user_id, "all-1").await;
+    let second = webhook_on(bot.user_id, "all-2").await;
+    let earlier = webhook_on(bot.user_id, "all-3").await;
+    let others = webhook_on(other.user_id, "all-4").await;
+
+    let at = Utc::now().duration_trunc(Duration::seconds(1)).unwrap();
+    let before = at - Duration::hours(1);
+    bots.revoke_webhook(earlier.id, before).await.unwrap();
+
+    assert_eq!(bots.revoke_all_webhooks(bot.user_id, at).await.unwrap(), 2);
+    assert_eq!(bots.revoke_all_webhooks(bot.user_id, at).await.unwrap(), 0);
+    let revoked_at = async |id| bots.find_webhook(id).await.unwrap().unwrap().revoked_at;
+    assert_eq!(revoked_at(first.id).await, Some(at));
+    assert_eq!(revoked_at(second.id).await, Some(at));
+    assert_eq!(revoked_at(earlier.id).await, Some(before));
+    assert_eq!(revoked_at(others.id).await, None);
+}
+
+#[tokio::test]
 async fn a_webhook_goes_with_its_channel() {
     let ctx = support::TestCtx::new().await;
     let (server, ada) = workspace(&ctx, "hook-gone").await;

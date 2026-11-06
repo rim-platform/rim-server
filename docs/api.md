@@ -980,7 +980,7 @@ An Owner or Moderator of a workspace manages its bots (`bots.md`; the contract i
 | `botTokens(botUserId): [BotToken!]!` | Owner, Moderator | The bot's tokens, revoked ones included, never their secret. `FORBIDDEN` for anyone else, `NOT_FOUND` for an unknown bot. |
 | `createBot(input): CreatedBot!` | Owner, Moderator | Creates a bot, a guest of the workspace in no channel, and its first token, labelled `default`. `CreatedBot.token` is shown this once. `VALIDATION` for the direct space, a bad field or a workspace with 25 active bots. |
 | `updateBot(input): Bot!` | Owner, Moderator | Changes the fields given. |
-| `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
+| `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and webhooks and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
 | `createBotToken(botUserId, label): CreatedBotToken!` | Owner, Moderator | A new token, shown this once. `VALIDATION` for a label that is not 1 to 64 characters, a deactivated bot or a bot with 5 active tokens. |
 | `revokeBotToken(tokenId): BotToken!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown token and for a token of a bot in a workspace the caller does not moderate. |
 | `incomingWebhooks(serverId): [IncomingWebhook!]!` | Owner, Moderator | The workspace's webhooks, revoked ones included, never their token. `FORBIDDEN` for anyone else. |

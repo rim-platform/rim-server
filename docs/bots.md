@@ -31,8 +31,8 @@ if they are in it, since they can't give it what they can't read.
 An Owner or Moderator calls `createBot` with a name and a disclosure. The name follows the rules of
 a display name. `updateBot` changes any of these later.
 
-`deactivateBot` is the way to stop a bot. Its tokens stop working and it leaves the workspace and every
-channel. Its messages stay, shown with its name. Deactivating is final, and its messages stay; create a new
+`deactivateBot` is the way to stop a bot. Its tokens stop working, its webhooks are revoked and it leaves
+the workspace and every channel. Its messages stay, shown with its name. Deactivating is final, and its messages stay; create a new
 bot instead.
 
 ## Disclosure
@@ -148,13 +148,15 @@ back, and a webhook reads nothing.
 
 **The URL is a secret.** Anyone holding it can post to that channel as that bot, within the limit, and
 no signature is checked (`specs/bots-v1.md`). Keep it as you keep a password. If it leaks, revoke the
-webhook and create another; the old URL stops working at once.
+webhook and create another; the old URL stops working at once. Deactivating a bot revokes its webhooks, so
+their channels can have new ones.
 
 **Creating one.** An Owner or Moderator calls `createIncomingWebhook` with the channel, a bot of the
 workspace and a preset, `PLAIN` or `GITHUB`. A channel has one webhook that is not revoked; a second is
 `CONFLICT`, so revoke the first. Creating it adds the bot to the channel if it was not there, under the
-rule for adding a bot. A private channel takes an Owner or Moderator who is in it, even when the bot is
-there already. Only a plaintext channel that is not archived can have one.
+rule for adding a bot. An Owner or Moderator creates one on a private channel only if they are in it,
+since they can't post where they can't read, even when the bot is there already. Only a plaintext channel
+that is not archived can have one.
 
 The answer holds `token`, `rimhook_` and 43 base64url characters, shown once; only its SHA-256 is
 stored. The URL is `POST /api/hooks/<token>` on the address of your server.
@@ -195,7 +197,7 @@ Markdown in what GitHub sent is escaped, a line is at most 1,000 characters and 
 it points at `https://github.com/`. Any other event or action, or a handled one missing a field the line
 needs, answers `202` and posts nothing.
 
-**A webhook mentions nobody.** A `<@id>`, `@channel` or `@here` in what it receives is made plain text
+**A webhook mentions nobody.** `<@id>`, `@channel` and `@here` in what it receives are made plain text
 under both presets. People whose notification level is `ALL` hear of the post as of any other message.
 
 **Answers.**

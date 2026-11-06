@@ -801,6 +801,41 @@ async fn every_way_a_url_stops_working_is_the_same_bytes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deactivating_a_bot_revokes_its_webhooks_and_frees_their_channels() {
+    let s = scene("deactivate", |_| {}).await;
+    let r = &s.roles;
+    let bot = s.bot("Leaving").await;
+    let ops = s.channel("ops", false).await;
+    let hook = s.webhook(&ops, &bot, "PLAIN").await;
+    assert_eq!(
+        s.post_text(&hook.token, "before").await.status,
+        StatusCode::OK
+    );
+
+    s.gql(&r.alice, DEACTIVATE, json!({ "id": bot })).await;
+
+    let answer = s.post_text(&hook.token, "after").await;
+    assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(answer.bytes, BAD_TOKEN_BODY);
+    let listed = s.gql(&r.alice, LIST, json!({ "s": r.server_id })).await;
+    assert_eq!(listed["incomingWebhooks"][0]["id"], json!(hook.id));
+    assert!(
+        listed["incomingWebhooks"][0]["revokedAt"].is_string(),
+        "{listed}"
+    );
+
+    // The channel is free for a new webhook, with no revoke first.
+    let next = s.bot("Staying").await;
+    let replaced = s.webhook(&ops, &next, "PLAIN").await;
+    assert_eq!(
+        s.post_text(&replaced.token, "hello").await.status,
+        StatusCode::OK
+    );
+    assert_eq!(s.bot_texts(&ops, &next).await, ["hello"]);
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_command_refuses_a_timed_out_bot_and_an_archived_channel() {
     let s = scene("gates", |_| {}).await;
     let r = &s.roles;

@@ -45,8 +45,9 @@ pub trait BotService: Send + Sync {
         reads_go_to: Option<String>,
     ) -> ServiceResult<BotDto>;
 
-    /// Deactivate a bot: its tokens stop working and it leaves the workspace and its channels. Its
-    /// messages stay. Doing it again changes nothing. Owner or Moderator.
+    /// Deactivate a bot: its tokens stop working, its webhooks are revoked and it leaves the
+    /// workspace and its channels. Its messages stay. Doing it again changes nothing. Owner or
+    /// Moderator.
     async fn deactivate_bot(&self, actor: Actor, user_id: UserId) -> ServiceResult<BotDto>;
 
     /// Create a token for an active bot. Owner or Moderator.

@@ -60,9 +60,9 @@ impl BotMutations {
         Ok(bot.into())
     }
 
-    /// Deactivate a bot: its tokens stop working and it leaves the workspace and its channels. Its
-    /// messages stay. Doing it again changes nothing. There is no way back. Owner or Moderator of
-    /// its workspace.
+    /// Deactivate a bot: its tokens stop working, its webhooks are revoked and it leaves the
+    /// workspace and its channels. Its messages stay. Doing it again changes nothing. There is no
+    /// way back. Owner or Moderator of its workspace.
     async fn deactivate_bot(&self, ctx: &Context<'_>, bot_user_id: ID) -> Result<Bot> {
         let actor = require_actor(ctx)?;
         let user_id = parse_uuid_id::<UserId>(&bot_user_id)?;

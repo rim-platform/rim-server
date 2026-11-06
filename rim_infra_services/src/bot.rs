@@ -466,6 +466,7 @@ impl BotService for DefaultBotService {
         repos.bot_repo.lock_bot(user_id).await?;
         let changed = repos.bot_repo.set_deactivated(user_id, now).await?;
         repos.bot_repo.revoke_all_tokens(user_id, now).await?;
+        repos.bot_repo.revoke_all_webhooks(user_id, now).await?;
         Self::commit(scope).await?;
 
         // After the commit, so its tokens are dead whatever happens here; calling again retries.
@@ -1344,6 +1345,10 @@ mod tests {
             .expect_revoke_all_tokens()
             .times(1)
             .returning(|_, _| ok(2));
+        fx.bots
+            .expect_revoke_all_webhooks()
+            .times(1)
+            .returning(|_, _| ok(1));
         fx.members.expect_is_member().returning(|_, _| Ok(true));
         fx.moderation
             .expect_kick()
@@ -1372,6 +1377,7 @@ mod tests {
         fx.bots.expect_lock_bot().returning(|_| ok(true));
         fx.bots.expect_set_deactivated().returning(|_, _| ok(false));
         fx.bots.expect_revoke_all_tokens().returning(|_, _| ok(0));
+        fx.bots.expect_revoke_all_webhooks().returning(|_, _| ok(0));
         fx.members.expect_is_member().returning(|_, _| Ok(false));
         let audit = fx.audit_handle();
         let svc = fx.build();
@@ -1390,6 +1396,10 @@ mod tests {
         fx.bots.expect_set_deactivated().returning(|_, _| ok(true));
         fx.bots
             .expect_revoke_all_tokens()
+            .times(1)
+            .returning(|_, _| ok(1));
+        fx.bots
+            .expect_revoke_all_webhooks()
             .times(1)
             .returning(|_, _| ok(1));
         fx.members.expect_is_member().returning(|_, _| Ok(true));

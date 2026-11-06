@@ -428,6 +428,15 @@ impl BotRepository for SeaOrmBotRepository {
         self.find_webhook(id).await
     }
 
+    async fn revoke_all_webhooks(&self, bot_user_id: UserId, at: DateTime<Utc>) -> RepoResult<u64> {
+        self.execute(
+            "UPDATE incoming_webhook SET revoked_at = $2 \
+             WHERE bot_user_id = $1 AND revoked_at IS NULL",
+            vec![uuid(bot_user_id), utc(at)],
+        )
+        .await
+    }
+
     async fn find_webhook_holder(
         &self,
         token_hash: &str,
