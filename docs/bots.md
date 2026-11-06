@@ -69,7 +69,7 @@ contract is `specs/bots-v1.md`. A bot reaches nothing but these calls:
 | `GET /me` | `{ untrusted, id, name, workspaceId, runBy, readsGoTo }` |
 | `GET /channels` | `{ untrusted, channels: [{ id, name, private }] }`: the channels it was added to, archived ones left out |
 | `GET /channels/{id}/messages?before=&limit=` | `{ untrusted, messages, cursor }`: a page, oldest first. `limit` is 1 to 100, 50 when left out. To go further back, pass `cursor` as `before`; it is null on the oldest page |
-| `GET /channels/{id}/search?q=&limit=` | `{ untrusted, messages }`, newest first. `q` is 1 to 500 characters, and takes the operators of `search.md` but for `in:`, which answers `400`. `limit` is 1 to 100, and a search answers at most 50. No cursor |
+| `GET /channels/{id}/search?q=&limit=` | `{ untrusted, messages }`, newest first. `q` is 1 to 500 characters, and takes the operators of `search.md` but for `in:`, which answers `400`. `limit` is 1 to 100, and a search answers at most 50 even when `limit` is higher. No cursor |
 | `POST /channels/{id}/messages` | Body `{"text": "..."}`. Answers `201` and `{ id, channelId }` |
 | `GET /mentions?after=&limit=` | `{ untrusted, mentions, cursor }`: oldest first, `limit` as above |
 
@@ -144,7 +144,8 @@ token, its id and label. It never holds a token or its hash.
 
 Each call of the bot API writes one too, with the initiator `bot`: `bot.me`, `chat.list_channels`,
 `chat.get_recent_messages`, `chat.search_messages`, `chat.post_message` and `bot.mentions`. A call
-refused for its token, its limit or a channel the bot cannot see runs nothing and writes no entry.
+refused for its token, its limit or a channel the bot cannot see runs nothing and writes no entry. A
+poll for mentions that returned nothing writes none either, since nothing was handed over.
 
 ## Switching it off
 

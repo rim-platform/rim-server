@@ -104,7 +104,8 @@ pub trait BotService: Send + Sync {
     ) -> ServiceResult<bool>;
 
     /// The bot's mentions after `after`, or from the last 24 hours without it, at most `limit`.
-    /// A deleted message and a channel the bot has left are left out. Recorded in the audit log.
+    /// A deleted message and a channel the bot has left are left out. Recorded in the audit log,
+    /// but for a poll that succeeded with nothing to hand over.
     ///
     /// # Errors
     /// Propagates storage errors.

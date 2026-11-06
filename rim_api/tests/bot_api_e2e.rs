@@ -491,6 +491,12 @@ async fn every_call_answers_for_a_channel_the_bot_was_added_to() {
         mentions.json(),
         json!({ "untrusted": true, "mentions": [], "cursor": null })
     );
+    assert_eq!(s.audit_count(&bot.id, "bot.mentions").await, 0);
+
+    s.say(&ops, &format!("{} look", mention_of(&bot))).await;
+    let handed_over = s.get(&bot.token, "/mentions").await.json();
+    assert_eq!(handed_over["mentions"].as_array().expect("a list").len(), 1);
+    assert_eq!(s.audit_count(&bot.id, "bot.mentions").await, 1);
 
     for command_id in [
         "bot.me",

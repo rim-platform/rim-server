@@ -698,9 +698,11 @@ impl BotService for DefaultBotService {
                 u64::from(limit),
             )
             .await;
-        let args = serde_json::json!({ "limit": limit });
-        let error = rows.as_ref().err().map(ToString::to_string);
-        self.record_read(bot, AUDIT_MENTIONS, args, error).await;
+        if !rows.as_ref().is_ok_and(|found| found.is_empty()) {
+            let args = serde_json::json!({ "limit": limit });
+            let error = rows.as_ref().err().map(ToString::to_string);
+            self.record_read(bot, AUDIT_MENTIONS, args, error).await;
+        }
         let rows = rows?;
         let last = rows.last().map(|(mention, _)| BotMentionCursor {
             created_at: mention.created_at,
@@ -1823,7 +1825,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mentions_start_a_day_back_without_a_cursor_and_are_audited_as_the_bots_read() {
+    async fn an_empty_poll_starts_a_day_back_without_a_cursor_and_is_not_audited() {
         let (svc, audit) = with_mentions(Ok(vec![]), |after, since, limit| {
             let age = Utc::now() - since;
             after.is_none()
@@ -1837,6 +1839,37 @@ mod tests {
 
         assert!(page.messages.is_empty());
         assert_eq!(page.last, None);
+        assert!(audit.0.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_poll_that_hands_over_mentions_is_audited_as_the_bots_read() {
+        let bot = actor_of(ServerId::new());
+        let message = rim_core::message::model::Message {
+            id: rim_core::message::model::MessageId::new(),
+            conversation_id: rim_core::conversation::model::ConversationId::new(),
+            thread_id: None,
+            parent_message_id: None,
+            forwarded_from_message_id: None,
+            sent_at: Utc::now(),
+            edited_at: None,
+            sent_by: UserId::new(),
+            text: Some("look".to_string()),
+            is_deleted: false,
+            has_attachments: false,
+            encryption: None,
+            flagged_at: None,
+        };
+        let mention = rim_core::message_mention::model::MessageMention {
+            message_id: message.id,
+            mentioned_user_id: bot.user_id,
+            created_at: Utc::now(),
+        };
+        let (svc, audit) = with_mentions(Ok(vec![(mention, message)]), |_, _, _| true);
+
+        let page = svc.list_mentions(bot, None, 10).await.expect("a page");
+
+        assert_eq!(page.messages.len(), 1);
         let entries = audit.0.lock().expect("lock");
         let [entry] = entries.as_slice() else {
             panic!("{entries:?}");
