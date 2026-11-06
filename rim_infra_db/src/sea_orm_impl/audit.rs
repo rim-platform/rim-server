@@ -57,6 +57,7 @@ fn to_record(r: command_audit_log::Model) -> AuditLogEntryRecord {
         capability_check_outcome: r.capability_check_outcome,
         confirmation_outcome: r.confirmation_outcome,
         parent_audit_id: r.parent_audit_id,
+        run_id: r.run_id,
         created_at: r.created_at.into(),
     }
 }
@@ -81,6 +82,7 @@ impl AuditLogRepository for SeaOrmAuditLogRepository {
             capability_check_outcome: Set(entry.capability_check_outcome),
             confirmation_outcome: Set(entry.confirmation_outcome),
             parent_audit_id: Set(entry.parent_audit_id),
+            run_id: Set(entry.run_id),
             created_at: Set(created_at),
         };
         active.insert(&self.db).await.map_err(map_db_err)?;
@@ -103,6 +105,9 @@ impl AuditLogRepository for SeaOrmAuditLogRepository {
         }
         if let Some(typed_verb) = &query.typed_verb {
             select = select.filter(command_audit_log::Column::TypedVerb.eq(typed_verb.as_str()));
+        }
+        if let Some(run_id) = &query.run_id {
+            select = select.filter(command_audit_log::Column::RunId.eq(run_id.as_str()));
         }
         if let Some(since) = query.since {
             let since_tz: DateTimeWithTimeZone = since.into();

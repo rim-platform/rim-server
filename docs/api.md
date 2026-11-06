@@ -822,6 +822,14 @@ outside the conversation is `NOT_FOUND`.
 `MessageReport.reporterUserId` is null for a report the check filed, and
 `MessageReport.automatic: Boolean!` tells such a report from a member's.
 
+### Agent runs in the audit log
+
+`ExecuteCommandInput.runId: String` is an identifier the desktop app gives one stretch of an
+agent's calls: 1 to 64 ASCII letters, digits, `_` or `-`, or `VALIDATION`. It is kept when the
+initiator is `AGENT` and ignored otherwise (`docs/command_model.md`). `AuditLogEntry.runId` returns
+it, null when there is none, and `AuditLogFilterInput.runId` narrows `listAuditLog` to the entries
+of that run, within what the caller may read (`docs/security/audit-access-matrix.md`).
+
 ### Deleting a person's messages
 
 `memberMessageCounts(serverId: ID!, userId: ID!, since: DateTime): MemberMessageCounts!`

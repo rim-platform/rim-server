@@ -43,7 +43,7 @@ appear in two export files.
 Each line holds the fields of the admin audit view, plus the parent macro row:
 
 ```json
-{"id":"0192…","actorUserId":"0192…","serverId":"0192…","commandId":"/topic","initiator":"palette","argsRedacted":{"topic":"[redacted]"},"sensitivity":"low","dangerous":false,"confirmationKind":"none","typedVerb":"write","outcome":"success","errorKind":null,"capabilityCheckOutcome":null,"confirmationOutcome":null,"parentAuditId":null,"createdAt":"2026-07-12T03:00:00.123456+00:00"}
+{"id":"0192…","actorUserId":"0192…","serverId":"0192…","commandId":"/topic","initiator":"palette","argsRedacted":{"topic":"[redacted]"},"sensitivity":"low","dangerous":false,"confirmationKind":"none","typedVerb":"write","outcome":"success","errorKind":null,"capabilityCheckOutcome":null,"confirmationOutcome":null,"parentAuditId":null,"runId":null,"createdAt":"2026-07-12T03:00:00.123456+00:00"}
 ```
 
 `typedVerb` and `outcome` are the stored lowercase values (`delete`, `permission_denied`), not

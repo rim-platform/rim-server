@@ -109,6 +109,7 @@ impl Fixture {
             confirmation,
             is_pipe: false,
             initiator,
+            run_id: None,
         }
     }
 }

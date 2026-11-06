@@ -103,6 +103,9 @@ pub struct AuditLogEntryDto {
     /// dangling references — treat a missing parent as "macro execution did
     /// not complete," not as a data-integrity error.
     pub parent_audit_id: Option<Uuid>,
+    /// The identifier a client gave one stretch of an agent's calls. `None` unless the
+    /// initiator was `agent`.
+    pub run_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -112,6 +115,7 @@ pub struct ListAuditLogQuery {
     pub server_id: Option<Uuid>,
     pub command_id: Option<String>,
     pub typed_verb: Option<String>,
+    pub run_id: Option<String>,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     /// Cursor: `(created_at, id)` — last item from previous page.

@@ -29,6 +29,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `executeCommand` and `executeMacro` errors say what kind of refusal they are in a `refusal`
   extension (`DENIED`, `FAILED`, `EXPIRED`, `INVALID`), with `missing` naming a capability the caller
   lacks and `retrySafe` saying whether repeating a failed call is safe (`docs/command_model.md`).
+- `ExecuteCommandInput.runId` and `AuditLogEntry.runId`, with a `runId` filter on `listAuditLog`, link
+  an agent's calls in one stretch. `CommandInitiator::Agent` only. Audit exports gain `runId`.
+
+### Changed
+
+- **Upgrade:** a migration adds the column `command_audit_log.run_id` and the index
+  `idx_command_audit_log_actor_run_id`; on a large `command_audit_log` table, writes to it wait while
+  the index is built.
 
 ## [0.0.8] - 2026-11-03
 

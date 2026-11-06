@@ -358,6 +358,7 @@ async fn execute_list_members_projects_username_role_joined_and_drops_pii() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.list_members via Agent must succeed");
@@ -521,6 +522,7 @@ async fn execute_search_messages_batches_user_and_conversation_lookups_once() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.search_messages via Agent must succeed");
@@ -591,6 +593,7 @@ async fn execute_search_messages_clamps_limit_over_max() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("clamped limit must still succeed");
@@ -667,6 +670,7 @@ async fn execute_get_recent_messages_batches_author_lookup_once() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.get_recent_messages via Agent must succeed");
@@ -739,6 +743,7 @@ async fn execute_pin_message_calls_pin_service_and_returns_success_payload() {
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.pin_message via Agent must succeed");
@@ -824,6 +829,7 @@ async fn execute_toggle_reaction_flips_action_added_then_removed() {
             confirmation: Some(proof1),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("first toggle must succeed");
@@ -889,6 +895,7 @@ async fn execute_toggle_reaction_flips_action_added_then_removed() {
             confirmation: Some(proof2),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("second toggle must succeed");

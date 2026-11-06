@@ -53,6 +53,10 @@ pub struct ExecuteCommandCmd {
     /// `execute_command`, NOT `Macro`, so the agent confirmation rule applies
     /// to nested steps too.
     pub initiator: CommandInitiator,
+    /// The identifier the client gives one stretch of an agent's calls, kept on this call's
+    /// audit entry when [`Self::initiator`] is `Agent`. It is not part of what a confirmation
+    /// proof binds.
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]

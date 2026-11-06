@@ -116,6 +116,7 @@ async fn execute_command_denies_when_capability_check_rejects() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         })
         .await;
 
@@ -221,6 +222,7 @@ async fn execute_command_proceeds_when_capability_check_passes() {
         confirmation: None,
         is_pipe: false,
         initiator: CommandInitiator::Palette,
+        run_id: None,
     })
     .await
     .expect("gate approval should let the dispatch reach the inner service");

@@ -313,6 +313,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("execute_command for chat.list_channels must succeed under valid actor");

@@ -328,6 +328,7 @@ mod tests {
             capability_check_outcome: None,
             confirmation_outcome: None,
             parent_audit_id: None,
+            run_id: None,
             created_at: now - chrono::Duration::days(40),
         };
         let mut repo = MockAuditLogRepository::new();

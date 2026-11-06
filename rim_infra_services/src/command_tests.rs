@@ -331,6 +331,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: false,
                 initiator: rim_services::command::initiator::CommandInitiator::Palette,
+                run_id: None,
             })
             .await
             .unwrap();
@@ -1059,6 +1060,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: false,
                 initiator: rim_services::command::initiator::CommandInitiator::Palette,
+                run_id: None,
             })
             .await
             .expect("send must succeed");
@@ -1120,6 +1122,7 @@ mod tests {
                         confirmation: None,
                         is_pipe: false,
                         initiator: rim_services::command::initiator::CommandInitiator::Agent,
+                        run_id: None,
                     })
                     .await
         };
@@ -1178,6 +1181,7 @@ mod tests {
                     confirmation: None,
                     is_pipe: false,
                     initiator: rim_services::command::initiator::CommandInitiator::Agent,
+                    run_id: None,
                 })
                 .await
                 .expect("send should succeed");
@@ -1284,6 +1288,7 @@ mod tests {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         }
     }
 
@@ -1827,6 +1832,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: false,
                 initiator: CommandInitiator::Agent,
+                run_id: None,
             })
             .await
             .unwrap();
@@ -1856,6 +1862,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: false,
                 initiator: CommandInitiator::Palette,
+                run_id: None,
             })
             .await
             .unwrap();
@@ -1881,6 +1888,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: true,
                 initiator: CommandInitiator::Agent,
+                run_id: None,
             })
             .await
             .unwrap();
@@ -1910,6 +1918,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: true,
                 initiator: CommandInitiator::Palette,
+                run_id: None,
             })
             .await
             .unwrap();
@@ -2184,6 +2193,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: false,
                 initiator: rim_services::command::initiator::CommandInitiator::Palette,
+                run_id: None,
             })
             .await
             .unwrap_err();
@@ -2229,6 +2239,7 @@ mod tests {
                 confirmation: None,
                 is_pipe: false,
                 initiator: rim_services::command::initiator::CommandInitiator::Palette,
+                run_id: None,
             })
             .await
             .expect("read-only command runs");
@@ -3398,6 +3409,7 @@ mod tests {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         };
         let first = svc.execute_command(cmd.clone()).await?;
         let Some(challenge) = first.confirmation_required else {
@@ -4692,6 +4704,42 @@ mod tests {
         assert_eq!(kept["truncated"], serde_json::json!(true), "{kept}");
         assert_eq!(kept["bytes"], serde_json::json!(size));
         assert!(kept.to_string().len() <= 4096, "{kept}");
+    }
+
+    /// The `run_id` on the audit entry of a call with `initiator` and `run_id`.
+    async fn audited_run_id(initiator: CommandInitiator, run_id: Option<String>) -> Option<String> {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let written: Arc<std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>> =
+            Arc::new(std::sync::Mutex::new(vec![]));
+        let written_clone = written.clone();
+        let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+        audit_svc
+            .expect_write_entry()
+            .times(1)
+            .returning(move |entry| {
+                written_clone.lock().unwrap().push(entry);
+                Box::pin(async { Ok(()) })
+            });
+        let def = CommandDefinitionDto {
+            ai_callable: true,
+            ..rate_limited_cmd_def("test.run_id", 100)
+        };
+        let svc = service_with_builtins(vec![def], Some(Arc::new(audit_svc)));
+        let mut cmd = palette_cmd(actor, "test.run_id");
+        cmd.initiator = initiator;
+        cmd.run_id = run_id;
+
+        svc.execute_command(cmd).await.expect("runs");
+
+        written.lock().unwrap()[0].run_id.clone()
+    }
+
+    #[tokio::test]
+    async fn the_run_id_is_kept_only_for_an_agent() {
+        let id = || Some("r_1".to_string());
+        assert_eq!(audited_run_id(CommandInitiator::Agent, id()).await, id());
+        assert_eq!(audited_run_id(CommandInitiator::Palette, id()).await, None);
+        assert_eq!(audited_run_id(CommandInitiator::Agent, None).await, None);
     }
 
     #[tokio::test]

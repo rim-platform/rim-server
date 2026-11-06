@@ -23,6 +23,9 @@ pub struct AuditLogEntryRecord {
     /// Set on child rows emitted for macro steps; references the parent macro
     /// audit row. `None` for top-level command audit entries.
     pub parent_audit_id: Option<uuid::Uuid>,
+    /// The identifier a client gave one stretch of an agent's calls. `None` unless the
+    /// initiator was `agent`.
+    pub run_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -32,6 +35,7 @@ pub struct AuditLogListQuery {
     pub server_id: Option<uuid::Uuid>,
     pub command_id: Option<String>,
     pub typed_verb: Option<String>,
+    pub run_id: Option<String>,
     pub since: Option<chrono::DateTime<chrono::Utc>>,
     pub until: Option<chrono::DateTime<chrono::Utc>>,
     pub cursor: Option<(chrono::DateTime<chrono::Utc>, uuid::Uuid)>,
