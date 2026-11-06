@@ -239,5 +239,6 @@ poll for mentions that returned nothing writes none either, since nothing was ha
 ## Switching it off
 
 `RIM_FEATURES_DISABLED=bots` switches bots off for the whole instance (`operations/features.md`).
-Nothing can be created or managed, and tokens and webhooks are refused. Bots that exist stay members,
-still marked as bots with their disclosure.
+Nothing can be created or managed, and tokens and webhooks are refused. A bot can't be added to a
+channel, and it can still be removed. Bots that exist stay members, still marked as bots with their
+disclosure.
