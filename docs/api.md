@@ -762,7 +762,9 @@ each list.
   `UnreadCount.unreadAfter`, `markAsUnread` and the `ReadMarkerRewound` event; `bot_events`:
   `Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`, and
   `/api/bot/v1/events`; `pipeline_post_as_bot`: `PipelineActionGql.postAsBot` and
-  `PipelineActionInput.postAsBot`). A client asks
+  `PipelineActionInput.postAsBot`; `webhook_formats`: `IncomingWebhook.template`,
+  `CreateIncomingWebhookInput.template`, `updateIncomingWebhookFormat`, `webhookFormats` and
+  `previewWebhookFormat`). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 
@@ -988,8 +990,11 @@ does `addConversationMembers` naming a bot; `removeConversationMember` still rem
 | `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and webhooks and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
 | `createBotToken(botUserId, label): CreatedBotToken!` | Owner, Moderator | A new token, shown this once. `VALIDATION` for a label that is not 1 to 64 characters, a deactivated bot or a bot with 5 active tokens. |
 | `revokeBotToken(tokenId): BotToken!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown token and for a token of a bot in a workspace the caller does not moderate. |
-| `incomingWebhooks(serverId): [IncomingWebhook!]!` | Owner, Moderator | The workspace's webhooks, revoked ones included, never their token. `FORBIDDEN` for anyone else. |
-| `createIncomingWebhook(input): CreatedIncomingWebhook!` | Owner, Moderator | Creates the channel's webhook, bound to a bot, and adds the bot to the channel if it is not there. `CreatedIncomingWebhook.token` is shown this once. `FORBIDDEN` for anyone else and for a private channel the caller is not in. `VALIDATION` for anything but a plaintext channel that is not archived and for a bot of another workspace or a deactivated one. `CONFLICT` when the channel has a webhook that is not revoked. `NOT_FOUND` for an unknown conversation or bot. |
+| `incomingWebhooks(serverId): [IncomingWebhook!]!` | Owner, Moderator | The workspace's webhooks, revoked ones included, never their token. `template` is the webhook's own format, and null for a plain webhook and an unedited GitHub one. `FORBIDDEN` for anyone else. |
+| `createIncomingWebhook(input): CreatedIncomingWebhook!` | Owner, Moderator | Creates the channel's webhook, bound to a bot, and adds the bot to the channel if it is not there. `CreatedIncomingWebhook.token` is shown this once. `FORBIDDEN` for anyone else and for a private channel the caller is not in. `VALIDATION` for anything but a plaintext channel that is not archived and for a bot of another workspace or a deactivated one. `CONFLICT` when the channel has a webhook that is not revoked. `NOT_FOUND` for an unknown conversation or bot. With `input.template`, `preset` must be `PLAIN`, and a format that is refused is `VALIDATION`, naming the rule. |
+| `updateIncomingWebhookFormat(id, preset, template): IncomingWebhook!` | Owner, Moderator | Changes how the webhook turns a delivery into a message. The URL stays the same. `template` needs `preset` `PLAIN`; `PLAIN` or `GITHUB` with no `template` goes back to that preset. `VALIDATION` for a format that is refused, naming the rule, and for a revoked webhook. `FORBIDDEN` for a private channel the caller is not in. `NOT_FOUND` for an unknown webhook and for one of a workspace the caller does not moderate. |
+| `webhookFormats: [WebhookFormatInfo!]!` | Anyone signed in | The ready-made formats, the same for everyone: key, name, setup note, format, sample headers and sample body. |
+| `previewWebhookFormat(serverId, template, headers, body)` | Owner, Moderator | Runs a format on a sample as a delivery would, and posts and stores nothing. Answers the rule's number with the text and link, or why nothing would post, or why the format would be refused. `FORBIDDEN` for anyone else. `VALIDATION` for a sample over 256 KiB. |
 | `revokeIncomingWebhook(id): IncomingWebhook!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown webhook and for one of a workspace the caller does not moderate. |
 
 `runBy` and `readsGoTo` are 1 to 200 characters of plain text, trimmed. Text with a control or format

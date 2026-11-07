@@ -79,7 +79,8 @@ MUST say so where it shows it.
 
 Bots never join an encrypted conversation. A bot can only be a member of a channel. Adding one to a
 direct message, a group or any encrypted conversation MUST be refused, and channels stay plaintext
-(`docs/specs/e2ee-mls-v1.md`). The server has no keys for one, so this is a rule it can enforce.
+(`docs/specs/e2ee-mls-v1.md`). The server has no keys for one, so this is a rule it can enforce. A webhook
+can only be on a channel, so neither it nor its format reaches an encrypted conversation.
 
 ## The bot API
 
@@ -150,14 +151,124 @@ poll for events records how many of each kind it handed over, and no text or nam
   apply. A moderation action on the bot stops its webhook too.
 - A webhook's text MUST NOT mention anyone: `<@id>`, `@channel` and `@here` in what was received are
   made plain text.
-- The preset decides how the body becomes text.
-  - `plain`: `{"text": "..."}`, at most 4,000 characters.
-  - `github`: the `X-GitHub-Event` header decides. A published release, a pull request opened, closed
-    or merged and an issue opened or closed become a line with the repository, who did it, the title
-    and the link, with Markdown in what GitHub sent escaped. A `ping` and every other event answer
-    `202` and post nothing.
+- A webhook's format decides how the body becomes text (see "Webhook formats"). It is one of three.
+  - The preset `plain` and no `template`: `{"text": "..."}`, at most 4,000 characters.
+  - The preset `github` and no `template`: the format RIM ships for GitHub, where the `X-GitHub-Event`
+    header decides. A published release, a pull request opened, closed or merged and an issue opened or
+    closed become a line with the repository, who did it, the title and the link, with Markdown in what
+    GitHub sent escaped. A `ping` and every other event answer `202` and post nothing.
+  - The preset `plain` and a `template`: that format.
 - Signatures are not checked in this version, because checking `X-Hub-Signature-256` needs a secret kept
-  readable on the server. So the URL alone is enough to post, and it has to be kept like a password.
+  readable on the server. So the URL alone is enough to post, and it has to be kept like a password. A
+  format changes none of this.
+
+## Webhook formats
+
+A format says how what a service sends becomes a message, with no code and no new URL. An Owner or
+Moderator writes one or starts from a ready-made one. The GitHub behaviour above is a format RIM ships,
+written in this same language.
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "when": [
+        { "header": "X-GitHub-Event", "equals": "pull_request" },
+        { "field": "action", "equals": "closed" },
+        { "field": "pull_request.merged", "equals": "true" }
+      ],
+      "post": "{repository.full_name}: {sender.login} merged pull request #{pull_request.number}: {pull_request.title}",
+      "link": { "value": "{pull_request.html_url}", "origin": "https://github.com/" }
+    }
+  ]
+}
+```
+
+**Rules.** Rules are tried in order. The first whose conditions all hold decides, and later rules MUST
+NOT be read. A rule with no conditions always holds. When no rule holds, the answer is `202` and nothing
+is posted.
+
+**Conditions.** A condition is `{"header": name, "equals": text}` or `{"field": path, "equals": text}`,
+and `equals` is the only test.
+
+- A field compares as text: a string exactly, a number in decimal, a boolean as `true` or `false`. An
+  object, an array, `null` or a missing field MUST NOT hold.
+- A header's name matches in any case and its value exactly. A name MUST start with `x-` and MUST NOT
+  contain `token`, `secret`, `signature`, `auth`, `cookie` or `key`, in any case. Saving another is
+  refused, and the refusal names the header.
+- A delivery's headers are read only when their names start with `x-`. A value over 64 characters counts
+  as missing. At most 50 such headers are read, so a delivery with more can lose some.
+
+**Paths.** A path is keys with dots between them, each part `[A-Za-z0-9_-]+`, such as
+`alerts.0.labels.alertname`. A part reads that key of an object, and a number also reads that index of an
+array. A key holding a dot can't be reached.
+
+**`post`.** Literal text with `{path}` placeholders.
+
+- `{a|b}` takes the first path that has a value. `{{` and `}}` are literal braces. Anything else in braces
+  and a lone brace MUST be refused when saved, and so MUST a `post` that is blank.
+- A string that isn't blank, a number and a boolean are values. When a placeholder has none (missing,
+  blank, `null`, an object or an array), the rule MUST post nothing and answer `202`, without trying
+  later rules.
+- A value MUST be put on one line, with whitespace and control characters turned into single spaces, and
+  have its Markdown escaped. It MUST NOT be expanded again: a title of `{sender.login}` shows as that text.
+- The literal text is what the Owner or Moderator wrote, so its Markdown and line breaks stay.
+- Every mention in the result, the literal text's own included, MUST be made plain text, as for any
+  webhook. The result MUST then be cut to 1,000 characters, counting the link.
+
+**`link`,** optional, is a `value` written like `post` and an `origin`, which MUST be `https://`, a host,
+an optional port and a single `/`, and nothing else. The finished value is added after the text only if
+it starts with the origin, has something after it, is at most 512 characters and is printable ASCII
+without `<`, `>`, `(`, `)`, `[`, `]`, `\`, a backtick, a quote, `*` or `|`. Otherwise, and when a
+placeholder in it has no value, the message MUST still post, without a link.
+
+**When the body is read.** Header conditions are checked first, and the body MUST be parsed only when a
+rule that could still hold needs a field or a placeholder. So a `ping`, or an event no rule handles,
+answers `202` whatever its body. A body that must be read and isn't JSON answers `400` "The body must be
+JSON.", with nothing of the body in the answer.
+
+**Limits.** Each of these, an unknown key anywhere and a `version` other than `1` MUST be refused when
+saved, naming the rule's number where there is one, so a typo like `equal` can't make a rule always hold:
+20 rules; 5 conditions a rule; 1,000 characters of `post` as written; 30 placeholders a rule; 256
+characters a path; 64 a header name; 16 KiB the whole format as JSON.
+
+**What a format doesn't check.** Anyone holding the URL can send any header and any body, so a condition
+says which deliveries post and not who sent them. A format can't print a header, because `post` and `link`
+read the body alone. Refusing the names above keeps the usual headers for a shared secret out of what is
+stored. RIM can't recognise a secret under any other name or in an `equals` value.
+
+**Where it lives.** The column `template` of the webhook holds the format.
+
+| Webhook | `preset` | `template` |
+|---|---|---|
+| Plain | `plain` | null |
+| GitHub, unedited | `github` | null: it reads the format the running release ships |
+| Any other format | `plain` | the format, a copy that belongs to this webhook |
+
+- With a `template`, the `preset` MUST be `plain`. A copy doesn't change when RIM ships a newer format.
+- Only an Owner or Moderator can read a webhook's format, as for the list of webhooks.
+- Changing a format takes the same standing as creating a webhook, including being in a private channel,
+  and it MUST NOT change the URL. A revoked webhook MUST be refused. The audit entry holds ids and no
+  text of the format.
+- RIM ships ready-made formats, GitHub and Grafana, and lists them for any signed-in client. Only GitHub
+  is read live. Choosing another stores a copy.
+- There is no command for creating or changing a format, as there is none for creating a webhook, so
+  nothing that runs commands can change one.
+
+**Trying one.** A preview takes a format and a sample of headers and a body, at most 256 KiB, and says
+which rule would decide and what it would post, why nothing would post, or why the format would be
+refused. It MUST run the same code as a delivery, and it MUST NOT post or store anything. It is for an
+Owner or Moderator of that workspace.
+
+**Older clients and servers.**
+
+- A client MUST send `template` and call the new roots only when `serverInfo.capabilities` lists
+  `webhook_formats`, because an older server refuses the whole call. The preset values don't change, so a
+  client without formats reads every webhook, showing one with a `template` as `plain`, and can still revoke it.
+- A server without formats ignores `template`, so a webhook with one acts as `plain`: a body with a string
+  `text` posts that text, and any other body answers `400` and posts nothing. No listing breaks, and
+  upgrading again brings the format back. Migrating down drops the column and every format in it.
 
 ## A pipeline posting as a bot
 
@@ -203,6 +314,8 @@ Nobody confirms each post, because an Owner or Moderator chose this one.
   workspace.
 - A member from another server joining fires a Post as bot action like anyone, on the host, and its
   `{username}` is their username at home.
+- A webhook's format lives with the webhook, on the host. A delivery and a preview run there, and an Owner
+  or Moderator from another server changes a format through the same GraphQL on that host.
 - The public relay runs no agent behind a bot. A workspace on it can have bots run by whoever owns
   them, elsewhere, using the same API.
 
@@ -213,6 +326,9 @@ Nobody confirms each post, because an Owner or Moderator chose this one.
 - Edits, deletes, reactions and presence in `/events`: it has new messages and members joining.
 - A bot run by the server itself. `docs/vision.md` says how an owner may run one next to the server;
   it uses this same API and needs nothing more from this contract.
-- Signed webhooks and presets other than GitHub.
+- Signed webhooks.
+- In a format: conditions other than `equals`, loops over arrays, or several messages from one delivery.
+- Keeping what a service sent, a mode that listens for the next delivery, or a shared library of formats.
+  A format belongs to its webhook.
 - A Post as bot action on any trigger but Member Joined, a mention in its text, or a welcome queued past a
   limit.

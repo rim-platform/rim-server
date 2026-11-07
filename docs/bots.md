@@ -209,8 +209,8 @@ webhook and create another; the old URL stops working at once. Deactivating a bo
 their channels can have new ones.
 
 **Creating one.** An Owner or Moderator calls `createIncomingWebhook` with the channel, a bot of the
-workspace and a preset, `PLAIN` or `GITHUB`. A channel has one webhook that is not revoked; a second is
-`CONFLICT`, so revoke the first. Creating it adds the bot to the channel if it was not there, under the
+workspace and a preset, `PLAIN` or `GITHUB`, or `PLAIN` and a format (see "Webhook formats"). A channel
+has one webhook that is not revoked; a second is `CONFLICT`, so revoke the first. Creating it adds the bot to the channel if it was not there, under the
 rule for adding a bot. An Owner or Moderator creates one on a private channel only if they are in it,
 since they can't post where they can't read, even when the bot is there already. Only a plaintext channel
 that is not archived can have one.
@@ -218,9 +218,9 @@ that is not archived can have one.
 The answer holds `token`, `rimhook_` and 43 base64url characters, shown once; only its SHA-256 is
 stored. The URL is `POST /api/hooks/<token>` on the address of your server.
 
-`incomingWebhooks` lists a workspace's webhooks with when each was created, last used and revoked, for
-an Owner or Moderator. The last use is kept to the minute. `revokeIncomingWebhook` ends one. A caller
-who does not moderate its workspace gets `NOT_FOUND`, the same as for an unknown id.
+`incomingWebhooks` lists a workspace's webhooks with when each was created, last used and revoked and
+its format, for an Owner or Moderator. The last use is kept to the minute. `revokeIncomingWebhook` ends
+one. A caller who does not moderate its workspace gets `NOT_FOUND`, the same as for an unknown id.
 
 **Plain.** The body is JSON with a string `text`, at most 4,000 characters after trimming. Markdown in
 it stays as you wrote it.
@@ -230,8 +230,8 @@ curl -H 'Content-Type: application/json' -d '{"text":"The deploy is **done**."}'
   "https://rim.example/api/hooks/$RIM_WEBHOOK_TOKEN"
 ```
 
-**GitHub.** A webhook with the preset `GITHUB` takes what a repository or organization sends. In the
-repository's **Settings**, **Webhooks**, **Add webhook**:
+**GitHub.** A webhook with the preset `GITHUB` takes what a repository or organization sends, through a
+format RIM ships. In the repository's **Settings**, **Webhooks**, **Add webhook**:
 
 1. **Payload URL**: the webhook's URL.
 2. **Content type**: `application/json`. The form-encoded default cannot be read.
@@ -255,7 +255,7 @@ it points at `https://github.com/`. Any other event or action, or a handled one 
 needs, answers `202` and posts nothing.
 
 **A webhook mentions nobody.** `<@id>`, `@channel` and `@here` in what it receives are made plain text
-under both presets. People whose notification level is `ALL` hear of the post as of any other message.
+under every format. People whose notification level is `ALL` hear of the post as of any other message.
 
 **Answers.**
 
@@ -263,7 +263,7 @@ under both presets. People whose notification level is `ALL` hear of the post as
 |---|---|---|
 | `200` | `{"ok":true}` | It was posted. |
 | `202` | `{"ok":true,"ignored":true}` | Nothing to post. |
-| `400` | A refusal, as in "The API" | A body the preset cannot read, or text a command refuses. |
+| `400` | A refusal, as in "The API" | A body the webhook's format cannot read, or text a command refuses. |
 | `401` | `{"ok":false}` | The URL does not work: unknown, wrong shape or revoked, its bot deactivated, kicked, banned or out of the channel, or the feature off. The same bytes every time. |
 | `403` | A refusal | The bot is timed out, the channel is archived or posting is restricted to moderators. |
 | `413` | A refusal | The body is over 1 MiB. |
@@ -280,6 +280,138 @@ can hold the URL, so `self-hosting.md` says to keep it private.
 
 **Across servers.** A webhook lives on the server hosting its workspace and posts there as the bot. A
 member from another server gets those messages as they get anything from that host.
+
+## Webhook formats
+
+A format says how what a service sends becomes a message, so a service RIM knows nothing about can post
+without any code. An Owner or Moderator gives one to `createIncomingWebhook` as `template`, with the
+preset `PLAIN`, or changes a webhook's with `updateIncomingWebhookFormat`. The URL stays the same. The
+contract is `specs/bots-v1.md`.
+
+**A format doesn't say who sent something.** Anyone holding the URL can send any header and any body, and
+no signature is checked, so the URL is still the only thing to protect. A condition chooses what to post,
+and it keeps nobody out. Don't put a secret in a format: every Owner and Moderator of the workspace can
+read it.
+
+**A small one.** A backup script that posts when it finishes:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "when": [{ "field": "status", "equals": "failed" }],
+      "post": "**Backup failed** on {host}: {reason}"
+    },
+    {
+      "when": [{ "field": "status", "equals": "ok" }],
+      "post": "Backup finished on {host}."
+    }
+  ]
+}
+```
+
+```sh
+curl -H 'Content-Type: application/json' -d '{"status":"failed","host":"db-1","reason":"disk full"}' \
+  "https://rim.example/api/hooks/$RIM_WEBHOOK_TOKEN"
+```
+
+That posts `**Backup failed** on db-1: disk full`. A `status` of anything else matches no rule, so it
+answers `202` and posts nothing.
+
+**GitHub's, in the same language.** The preset `GITHUB` reads a format RIM ships, and `webhookFormats`
+shows it. This is its rule for a merged pull request. It comes before the rule for a closed one, because
+the first rule that holds decides:
+
+```json
+{
+  "when": [
+    { "header": "X-GitHub-Event", "equals": "pull_request" },
+    { "field": "action", "equals": "closed" },
+    { "field": "pull_request.merged", "equals": "true" }
+  ],
+  "post": "{repository.full_name}: {sender.login} merged pull request #{pull_request.number}: {pull_request.title}",
+  "link": { "value": "{pull_request.html_url}", "origin": "https://github.com/" }
+}
+```
+
+**Rules.** The first rule whose conditions all hold decides, and the rest aren't read. A rule with no
+conditions always holds.
+
+**Conditions.** Each is a `header` or a `field` with `equals`, always a string, so `"true"` and not `true`.
+There is no regular expression, "contains" or "not". For more than this, run a bot on the events feed.
+
+- A field compares as text: a string exactly, a number in decimal, a boolean as `true` or `false`. An
+  object, an array, `null` or a missing field doesn't hold.
+- A header's name matches in any case and its value exactly. Only names starting `x-` work, and none
+  containing `token`, `secret`, `signature`, `auth`, `cookie` or `key`, which are refused by name when you
+  save. Those are the usual places for a shared secret. RIM can't recognise one anywhere else.
+
+**Paths.** Keys with dots between them, and a number for a place in an array: `alerts.0.labels.alertname`.
+Each part is letters, digits, `_` and `-`. A key with a dot in it can't be reached.
+
+**The text.** `post` is your text with `{path}` placeholders. It keeps its Markdown and line breaks.
+
+- `{release.name|release.tag_name}` takes the first that has a value. `{{` and `}}` are literal braces, and
+  anything else in braces is refused when you save.
+- A value is put on one line and its Markdown is escaped. It is never expanded again, so a title of
+  `{sender.login}` shows as that text. A header can't be a placeholder, so a format can't print one.
+- `<@id>`, `@channel` and `@here` are made plain text in the whole post, your own text included, and the
+  post is cut to 1,000 characters, counting the link.
+
+**The link.** `link` is optional: a `value` written like `post` and an `origin` such as
+`https://github.com/`. It's added after the text only when it starts with the origin and holds nothing odd
+(`<`, `>`, brackets, quotes, a backtick, a backslash, `*`, `|`), up to 512 characters. Otherwise the message
+posts without it.
+
+**What it answers.**
+
+| What happened | Answer |
+|---|---|
+| A rule held and all its placeholders had values | `200`, posted |
+| No rule held | `202`, nothing posted |
+| The rule that held has a placeholder with no value: missing, blank, `null`, an object or an array | `202`, nothing posted, and later rules aren't tried |
+| The link has no value, or fails its check | `200`, posted without the link |
+| The body had to be read and isn't JSON | `400` "The body must be JSON." |
+
+Headers are checked first, and the body is read only when a rule that could still hold needs a field or a
+placeholder. So an event nobody handles answers `202` whatever its body. The rest of "Answers" above applies
+as to any webhook.
+
+**Limits,** refused when you save, with the rule's number:
+
+| What | At most |
+|---|---|
+| Rules | 20 |
+| Conditions in a rule | 5 |
+| `post` as written | 1,000 characters |
+| Placeholders in a rule | 30 |
+| A path | 256 characters |
+| A header name | 64 characters |
+| The whole format as JSON | 16 KiB |
+
+A key RIM doesn't know is refused too, so a typo like `equal` can't quietly make a rule always hold. When a
+delivery comes in, a header value over 64 characters counts as missing, and at most 50 `x-` headers are read.
+
+**Ready-made formats.** `webhookFormats` lists them with a setup note and a sample: GitHub and Grafana. A
+GitHub webhook left as it is gets the fixes of each release. Anything else is a copy that belongs to its
+webhook, so it stays as it is when RIM ships a newer one. That includes Grafana's, and GitHub's once you've
+edited it. To share a format, copy its JSON. `updateIncomingWebhookFormat` with `GITHUB` or `PLAIN` and no
+`template` goes back to that preset.
+
+**Trying one.** `previewWebhookFormat` takes a format, sample headers and a sample body of at most 256 KiB, and
+says which rule would decide and what it would post, or why nothing would. It runs what a delivery runs, and it
+posts and stores nothing.
+
+**An older app** shows a webhook with a format as Plain, and revoking it still works.
+
+**Rolling the server back** to a release without formats leaves a webhook with one acting as plain: a body with
+a string `text` posts that text, and any other body answers `400`. It still lists and can be revoked, and the
+next upgrade brings its format back. Migrating down drops the formats (`operations/upgrade.md`).
+
+**Encrypted conversations and other servers.** A webhook is only ever on a plaintext channel, so a format never
+reaches an encrypted conversation. A format lives with its webhook on the server hosting the workspace, and runs
+there. An Owner or Moderator from another server changes it through the same GraphQL on that host.
 
 ## Welcoming people from a pipeline
 
@@ -326,9 +458,9 @@ adds a Post as bot action to `createPipeline` or `updatePipeline`, in `PipelineA
 ## Audit
 
 Each management call writes an entry to the workspace's audit log: `bot.create`, `bot.update`,
-`bot.deactivate`, `bot.token.create`, `bot.token.revoke`, `bot.webhook.create` and
+`bot.deactivate`, `bot.token.create`, `bot.token.revoke`, `bot.webhook.create`, `bot.webhook.update` and
 `bot.webhook.revoke`. An entry holds the bot's id and, for a token, its id and label, and for a webhook,
-its id and channel. It never holds a token or its hash.
+its id and channel. It never holds a token or its hash, or the text of a format.
 
 Each call of the bot API writes one too, with the initiator `bot`: `bot.me`, `chat.list_channels`,
 `chat.get_recent_messages`, `chat.search_messages`, `chat.post_message`, `bot.mentions` and `bot.events`. A
