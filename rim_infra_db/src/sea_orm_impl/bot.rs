@@ -24,7 +24,7 @@ use crate::error::map_db_err;
 const SELECT_BOT: &str = r#"SELECT b.user_id, b.server_id,
         COALESCE(u.display_name, u.username) AS name, b.run_by, b.reads_go_to, b.created_by,
         COALESCE(c.display_name, c.username) AS added_by_name, b.created_at, b.deactivated_at,
-        b.sees_member_joins
+        b.member_joins_since
     FROM bot b
     JOIN "user" u ON u.id = b.user_id
     JOIN "user" c ON c.id = b.created_by"#;
@@ -53,7 +53,7 @@ struct BotRow {
     added_by_name: Option<String>,
     created_at: sea_orm::prelude::DateTimeWithTimeZone,
     deactivated_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
-    sees_member_joins: bool,
+    member_joins_since: Option<sea_orm::prelude::DateTimeWithTimeZone>,
 }
 
 impl From<BotRow> for Bot {
@@ -68,7 +68,7 @@ impl From<BotRow> for Bot {
             added_by_name: row.added_by_name,
             created_at: row.created_at.into(),
             deactivated_at: row.deactivated_at.map(Into::into),
-            sees_member_joins: row.sees_member_joins,
+            member_joins_since: row.member_joins_since.map(Into::into),
         }
     }
 }
@@ -169,8 +169,10 @@ impl BotRepository for SeaOrmBotRepository {
                    RETURNING id
                )
                INSERT INTO bot (user_id, server_id, run_by, reads_go_to, created_by,
-                   sees_member_joins)
-               SELECT id, $4::uuid, $5::text, $6::text, $7::uuid, $8::boolean FROM new_user"#,
+                   member_joins_since)
+               SELECT id, $4::uuid, $5::text, $6::text, $7::uuid,
+                   CASE WHEN $8::boolean THEN now() END
+               FROM new_user"#,
             vec![
                 uuid(user_id),
                 bot.username.into(),
@@ -278,7 +280,11 @@ impl BotRepository for SeaOrmBotRepository {
                    )
                    UPDATE bot SET run_by = COALESCE($3::text, run_by),
                        reads_go_to = COALESCE($4::text, reads_go_to),
-                       sees_member_joins = COALESCE($5::boolean, sees_member_joins)
+                       member_joins_since = CASE $5::boolean
+                           WHEN true THEN COALESCE(member_joins_since, now())
+                           WHEN false THEN NULL
+                           ELSE member_joins_since
+                       END
                    WHERE user_id = $1"#,
                 vec![
                     uuid(user_id),
@@ -590,7 +596,7 @@ impl BotRepository for SeaOrmBotRepository {
                JOIN bot b ON b.user_id = $1 AND b.server_id = sm.server_id
                WHERE sm.server_id = $2
                  AND sm.user_id <> $1
-                 AND sm.joined_at >= b.created_at
+                 AND sm.joined_at >= b.member_joins_since
                  AND sm.joined_at <= now() - make_interval(secs => $5::double precision)
                  AND (sm.joined_at, sm.id) > ($3::timestamptz, $4::uuid)
                ORDER BY sm.joined_at, sm.id

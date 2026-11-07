@@ -30,6 +30,7 @@ pub struct BotDto {
 impl From<Bot> for BotDto {
     fn from(bot: Bot) -> Self {
         Self {
+            sees_member_joins: bot.sees_member_joins(),
             user_id: bot.user_id,
             server_id: bot.server_id,
             name: bot.name,
@@ -38,7 +39,6 @@ impl From<Bot> for BotDto {
             added_by_name: bot.added_by_name,
             created_at: bot.created_at,
             deactivated_at: bot.deactivated_at,
-            sees_member_joins: bot.sees_member_joins,
         }
     }
 }

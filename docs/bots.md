@@ -153,9 +153,10 @@ Ignore a `type` you don't know: new ones can be added.
 - **`member_joined`** comes only while an Owner or Moderator has `seesMemberJoins` on for the bot, and `/me` says
   whether they do. It holds the person's id and name, whether they are a bot and when they joined: no email, key,
   device or how they joined. A bot joining counts, and so does a member from another server. Someone who left and
-  came back is a new event, and someone already gone by the time of the poll isn't one. The setting decides
-  what a poll hands over, not what was recorded when, so a cursor from before it was turned on gets the joins
-  since then too. It never goes back past when the bot was created, and it never lists the bot itself.
+  came back is a new event, and someone already gone by the time of the poll isn't one. A bot sees joins only
+  from when it was allowed to, whatever the cursor: turning it on starts from that moment, turning it on again
+  changes nothing, and turning it off stops them at once. Off and on again starts from the second time, so the
+  joins between never show. It never lists the bot itself.
 - **Not yet:** edits, deletes, reactions and presence.
 
 A row is handed over once it is 2 seconds old, by the database's clock, so a message reaches a bot at least that

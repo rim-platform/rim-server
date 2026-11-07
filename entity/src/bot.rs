@@ -14,7 +14,7 @@ pub struct Model {
     pub created_by: Uuid,
     pub created_at: DateTimeWithTimeZone,
     pub deactivated_at: Option<DateTimeWithTimeZone>,
-    pub sees_member_joins: bool,
+    pub member_joins_since: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

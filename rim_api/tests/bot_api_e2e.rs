@@ -1504,22 +1504,15 @@ async fn joins_need_the_setting_and_a_bot_of_another_workspace_sees_nothing_of_t
     .await;
     tokio::time::sleep(SETTLE).await;
     let page = s.events_after(&bot, &start, 50).await;
-    assert_eq!(seen(&page), ["+joins-off", "+Second", "+joins-remote"]);
-    assert_eq!(
-        page["events"][0]["user"]["id"],
-        json!(off.user_id.to_string())
-    );
-    assert_eq!(page["events"][1]["user"]["isBot"], true);
-    assert_eq!(page["events"][1]["user"]["id"], json!(helper.id));
-    assert_eq!(page["events"][2]["user"]["isBot"], false);
+    assert_eq!(seen(&page), ["+Second", "+joins-remote"]);
+    assert_eq!(page["events"][0]["user"]["isBot"], true);
+    assert_eq!(page["events"][0]["user"]["id"], json!(helper.id));
+    assert_eq!(page["events"][1]["user"]["isBot"], false);
 
-    // Nobody who was there before the bot, even from a cursor forged far back, and never itself.
+    // Nobody from before it was allowed, even from a cursor forged far back, and never itself.
     let forged = format!("0_{}", uuid::Uuid::nil().simple());
     let from_forged = s.events_after(&bot, &forged, 50).await;
-    assert_eq!(
-        seen(&from_forged),
-        ["+joins-off", "+Second", "+joins-remote"]
-    );
+    assert_eq!(seen(&from_forged), ["+Second", "+joins-remote"]);
 
     // A kick and a return is a new row, so a new event.
     let cursor = page["cursor"].as_str().expect("a cursor").to_string();
@@ -1607,5 +1600,68 @@ async fn the_feed_is_recorded_with_counts_and_a_bad_call_is_invalid() {
     let unknown = s.get("rimbot_nope", "/events").await;
     assert_eq!(unknown.status, StatusCode::UNAUTHORIZED);
     assert_eq!(unknown.bytes, BAD_TOKEN_BODY);
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bot_sees_joins_only_from_when_it_was_allowed_to() {
+    let s = scene("allowed", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let forged = format!("0_{}", uuid::Uuid::nil().simple());
+    let server = s.roles.server_id.clone();
+    let sees = |page: Value| page["bots"][0]["seesMemberJoins"].clone();
+
+    // A join while it is off stays hidden once it is on, even from a cursor forged far back.
+    s.ctx
+        .newcomer(&server, "allowed-before", ServerMemberRole::Member)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+    s.set_joins(&s.roles.alice, &bot, true).await;
+    let listed = s.gql(&s.roles.bob, LIST_BOTS, json!({ "s": server })).await;
+    assert_eq!(sees(listed), true);
+    assert_eq!(s.events_after(&bot, &forged, 50).await["events"], json!([]));
+
+    s.ctx
+        .newcomer(&server, "allowed-during", ServerMemberRole::Member)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        seen(&s.events_after(&bot, &forged, 50).await),
+        ["+allowed-during"]
+    );
+
+    // Turning it on twice doesn't move the start.
+    s.set_joins(&s.roles.mona, &bot, true).await;
+    assert_eq!(
+        seen(&s.events_after(&bot, &forged, 50).await),
+        ["+allowed-during"]
+    );
+
+    // Off stops at once.
+    s.set_joins(&s.roles.alice, &bot, false).await;
+    assert_eq!(s.events_after(&bot, &forged, 50).await["events"], json!([]));
+    assert_eq!(
+        s.get(&bot.token, "/me").await.json()["seesMemberJoins"],
+        false
+    );
+    let listed = s.gql(&s.roles.bob, LIST_BOTS, json!({ "s": server })).await;
+    assert_eq!(sees(listed), false);
+
+    // Off and on again doesn't reveal the gap between.
+    s.ctx
+        .newcomer(&server, "allowed-gap", ServerMemberRole::Member)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+    s.set_joins(&s.roles.alice, &bot, true).await;
+    assert_eq!(s.events_after(&bot, &forged, 50).await["events"], json!([]));
+
+    s.ctx
+        .newcomer(&server, "allowed-after", ServerMemberRole::Member)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        seen(&s.events_after(&bot, &forged, 50).await),
+        ["+allowed-after"]
+    );
     s.stop().await;
 }

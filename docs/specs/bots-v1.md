@@ -28,6 +28,8 @@ MUST say so where it shows it.
 - A bot sees members joining its workspace only if an Owner or Moderator turned that on for it with
   `seesMemberJoins`. It is off by default, and turning it on or off is recorded in the audit log. Who
   joins a workspace isn't channel content, and a guest cannot otherwise see the member directory.
+  A bot sees joins only from when it was allowed to. Turning it on starts from that moment, turning it
+  on again changes nothing, and turning it off and on starts again from the second time.
 - Bots are switched off for a whole instance with the `bots` feature in `RIM_FEATURES_DISABLED`.
   While it is off, nothing can be created, and bot tokens and webhooks are refused.
   With the feature off, a bot can't be added to a channel, and it can still be removed.
@@ -112,8 +114,8 @@ Under `/api/bot/v1`, authorized with `Authorization: Bearer rimbot_...`. JSON bo
     someone becoming a member of its workspace, and only while `seesMemberJoins` is on. It holds nothing
     more of them: no email, key, device or how they joined. A bot joining counts, and a member from
     another server does. The bot itself doesn't, and neither does anyone who joined before it was
-    created, whatever the cursor. Someone who left and came back is a new event. Someone who has left
-    by the time of the poll is not one.
+    allowed to see them, whatever the cursor. Someone who left and came back is a new event. Someone
+    who has left by the time of the poll is not one.
   - A row is handed over once it is at least 2 seconds old, by the database's clock. A row is stamped
     when its transaction starts and can be seen only when that commits, so a younger one could appear
     behind a cursor already past it. A transaction running longer than that can still be missed: this

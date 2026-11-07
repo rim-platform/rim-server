@@ -131,8 +131,8 @@ pub trait BotRepository: Send + Sync {
     ) -> RepoResult<Vec<BotFeedMessage>>;
 
     /// The members of `server_id` who joined strictly after `after`, oldest first by
-    /// `(joined_at, id)`, at most `limit`: anyone but the bot, not earlier than the bot itself was
-    /// created and at least `hold_back` old by the database's clock.
+    /// `(joined_at, id)`, at most `limit`: anyone but the bot, since the bot was allowed to see them
+    /// and at least `hold_back` old by the database's clock. Nothing while it isn't allowed.
     async fn list_feed_joins(
         &self,
         bot_user_id: UserId,

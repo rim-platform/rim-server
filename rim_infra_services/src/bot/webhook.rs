@@ -485,7 +485,7 @@ mod tests {
             added_by_name: None,
             created_at: Utc::now(),
             deactivated_at: None,
-            sees_member_joins: false,
+            member_joins_since: None,
         }
     }
 

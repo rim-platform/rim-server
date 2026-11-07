@@ -31,8 +31,16 @@ pub struct Bot {
     pub added_by_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub deactivated_at: Option<DateTime<Utc>>,
-    /// Whether an Owner or Moderator let it see members joining its workspace.
-    pub sees_member_joins: bool,
+    /// From when an Owner or Moderator let it see members joining its workspace; `None` while they
+    /// don't.
+    pub member_joins_since: Option<DateTime<Utc>>,
+}
+
+impl Bot {
+    /// Whether it may see members joining its workspace now.
+    pub fn sees_member_joins(&self) -> bool {
+        self.member_joins_since.is_some()
+    }
 }
 
 /// A new bot, with what its `user` row is created with.
@@ -44,6 +52,7 @@ pub struct NewBot {
     pub run_by: String,
     pub reads_go_to: String,
     pub created_by: UserId,
+    /// Whether it sees members joining its workspace, from its creation on.
     pub sees_member_joins: bool,
 }
 
@@ -53,6 +62,8 @@ pub struct BotPatch {
     pub name: Option<String>,
     pub run_by: Option<String>,
     pub reads_go_to: Option<String>,
+    /// Turning it on starts from now, and on a bot already on changes nothing. Turning it off
+    /// forgets the start.
     pub sees_member_joins: Option<bool>,
 }
 

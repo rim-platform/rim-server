@@ -708,8 +708,16 @@ async fn a_webhook_goes_with_its_channel() {
     assert_eq!(bots.find_webhook(webhook.id).await.unwrap(), None);
 }
 
+/// A patch that turns the setting on or off and leaves the rest.
+fn joins(on: bool) -> BotPatch {
+    BotPatch {
+        sees_member_joins: Some(on),
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
-async fn the_setting_starts_as_given_and_changes_only_when_named() {
+async fn the_setting_keeps_its_start_while_on_and_forgets_it_when_off() {
     let ctx = support::TestCtx::new().await;
     let (server, ada) = workspace(&ctx, "setting").await;
     let bots = repo(&ctx);
@@ -717,7 +725,9 @@ async fn the_setting_starts_as_given_and_changes_only_when_named() {
         .create_bot(new_bot(server.id, "bot-off", ada.id))
         .await
         .unwrap();
-    assert!(!off.sees_member_joins);
+    assert!(!off.sees_member_joins());
+    assert_eq!(off.member_joins_since, None);
+
     let on = bots
         .create_bot(NewBot {
             sees_member_joins: true,
@@ -725,7 +735,8 @@ async fn the_setting_starts_as_given_and_changes_only_when_named() {
         })
         .await
         .unwrap();
-    assert!(on.sees_member_joins);
+    assert!(on.sees_member_joins());
+    assert_eq!(on.member_joins_since, Some(on.created_at));
 
     let renamed = bots
         .update_bot(
@@ -737,18 +748,17 @@ async fn the_setting_starts_as_given_and_changes_only_when_named() {
         )
         .await
         .unwrap();
-    assert!(renamed.sees_member_joins);
-    let turned_off = bots
-        .update_bot(
-            on.user_id,
-            BotPatch {
-                sees_member_joins: Some(false),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert!(!turned_off.sees_member_joins);
+    assert_eq!(renamed.member_joins_since, on.member_joins_since);
+
+    let again = bots.update_bot(on.user_id, joins(true)).await.unwrap();
+    assert_eq!(again.member_joins_since, on.member_joins_since);
+
+    let turned_off = bots.update_bot(on.user_id, joins(false)).await.unwrap();
+    assert_eq!(turned_off.member_joins_since, None);
+    assert!(!turned_off.sees_member_joins());
+
+    let turned_on = bots.update_bot(on.user_id, joins(true)).await.unwrap();
+    assert!(turned_on.member_joins_since > on.member_joins_since);
 }
 
 #[tokio::test]
@@ -764,7 +774,10 @@ async fn joins_of_the_feed_keep_to_the_workspace_the_cursor_and_the_hold_back() 
         .unwrap();
 
     let bot = bots
-        .create_bot(new_bot(server.id, "bot-feed", ada.id))
+        .create_bot(NewBot {
+            sees_member_joins: true,
+            ..new_bot(server.id, "bot-feed", ada.id)
+        })
         .await
         .unwrap();
     members
@@ -815,13 +828,62 @@ async fn joins_of_the_feed_keep_to_the_workspace_the_cursor_and_the_hold_back() 
     let rest = list(past_first, Duration::zero(), 10).await.unwrap();
     assert_eq!(rest.len(), 1);
     assert_eq!(rest[0].user_id, omar.id);
+}
 
-    // From a cursor before the bot existed: only who joined since, never the bot or its creator.
+#[tokio::test]
+async fn joins_of_the_feed_start_from_when_the_bot_was_allowed_whatever_the_cursor() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "feed-allowed").await;
+    let bots = repo(&ctx);
+    let members = SeaOrmServerMemberRepository::new(ctx.db.clone());
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-allowed", ada.id))
+        .await
+        .unwrap();
     let long_ago = BotFeedPosition {
         at: Utc::now() - Duration::days(365),
         id: Uuid::nil(),
     };
-    let found = list(long_ago, Duration::zero(), 10).await.unwrap();
-    let ids: Vec<UserId> = found.iter().map(|join| join.user_id).collect();
-    assert_eq!(ids, [nia.id, omar.id]);
+    let found = || async {
+        bots.list_feed_joins(bot.user_id, server.id, long_ago, Duration::zero(), 50)
+            .await
+            .unwrap()
+            .iter()
+            .map(|join| join.user_id)
+            .collect::<Vec<UserId>>()
+    };
+    let join = |name: String| {
+        let (ctx, members, server_id) = (&ctx, &members, server.id);
+        async move {
+            let user = ctx.create_user(&name).await;
+            members
+                .add_member(server_id, user.id, ServerMemberRole::Member)
+                .await
+                .unwrap();
+            user.id
+        }
+    };
+
+    // While it is off nothing comes, even with an old cursor, and a join then stays hidden.
+    join("feed-allowed-before".to_string()).await;
+    assert!(found().await.is_empty());
+    bots.update_bot(bot.user_id, joins(true)).await.unwrap();
+    assert!(found().await.is_empty());
+
+    let during = join("feed-allowed-during".to_string()).await;
+    assert_eq!(found().await, [during]);
+
+    // Turning it on twice doesn't move the start.
+    bots.update_bot(bot.user_id, joins(true)).await.unwrap();
+    assert_eq!(found().await, [during]);
+
+    // Off stops at once, and on again doesn't reveal the gap between.
+    bots.update_bot(bot.user_id, joins(false)).await.unwrap();
+    assert!(found().await.is_empty());
+    join("feed-allowed-gap".to_string()).await;
+    bots.update_bot(bot.user_id, joins(true)).await.unwrap();
+    assert!(found().await.is_empty());
+
+    let after = join("feed-allowed-after".to_string()).await;
+    assert_eq!(found().await, [after]);
 }

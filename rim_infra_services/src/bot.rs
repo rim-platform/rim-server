@@ -266,7 +266,7 @@ impl DefaultBotService {
             .find_bot(bot.user_id)
             .await?
             .ok_or(ServiceError::NotFound)?
-            .sees_member_joins;
+            .sees_member_joins();
         let messages = self
             .repos
             .bot_repo
@@ -1100,7 +1100,7 @@ mod tests {
             added_by_name: Some("Ada".to_string()),
             created_at: Utc::now(),
             deactivated_at: None,
-            sees_member_joins: false,
+            member_joins_since: None,
         }
     }
 
@@ -2159,7 +2159,7 @@ mod tests {
     fn expect_setting(bots: &mut MockBotRepository, sees_member_joins: bool) {
         bots.expect_find_bot().returning(move |user_id| {
             ok(Some(Bot {
-                sees_member_joins,
+                member_joins_since: sees_member_joins.then(Utc::now),
                 ..bot_of(ServerId::new(), user_id)
             }))
         });
