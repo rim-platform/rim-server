@@ -42,6 +42,15 @@ const REVOKE: &str = "mutation($id: ID!) { revokeIncomingWebhook(id: $id) { id }
 const UPDATE_FORMAT: &str = r#"mutation($id: ID!, $preset: WebhookPreset!, $template: JSON) {
   updateIncomingWebhookFormat(id: $id, preset: $preset, template: $template) { id }
 }"#;
+const START_SESSION: &str = r#"mutation($s: ID!) {
+  startWebhookTestSession(serverId: $s) { id token }
+}"#;
+const DELIVERIES: &str = r#"query($id: ID!) {
+  webhookTestDeliveries(sessionId: $id) { deliveries { body } }
+}"#;
+const CREATE_KEEPING: &str = r#"mutation($input: CreateIncomingWebhookInput!) {
+  createIncomingWebhook(input: $input) { keptTestUrl }
+}"#;
 const PREVIEW: &str = r#"query($s: ID!, $t: JSON!, $h: [WebhookHeaderInput!]!, $b: String!) {
   previewWebhookFormat(serverId: $s, template: $t, headers: $h, body: $b) { outcome }
 }"#;
@@ -330,6 +339,48 @@ async fn no_outcome_of_the_route_lets_the_token_out() {
         .status();
     assert_eq!(delivered, StatusCode::OK);
 
+    // A test session over HTTP: a delivery with markers, a read, and saving that keeps its URL.
+    let started = over_http(START_SESSION, json!({ "s": r.server_id })).await;
+    let session = started["data"]["startWebhookTestSession"]["id"].clone();
+    let session_token = started["data"]["startWebhookTestSession"]["token"]
+        .as_str()
+        .expect("token")
+        .to_string();
+    let tested = http
+        .post(format!("{}/api/hooks/{session_token}", node.origin))
+        .header("x-marker", "marker-in-a-session-header")
+        .header("x-marker-token", "marker-in-a-refused-session-header")
+        .body("marker-in-a-session-body")
+        .send()
+        .await
+        .expect("a test delivery")
+        .status();
+    assert_eq!(tested, StatusCode::OK);
+    let read = over_http(DELIVERIES, json!({ "id": session })).await;
+    assert_eq!(
+        read["data"]["webhookTestDeliveries"]["deliveries"][0]["body"],
+        "marker-in-a-session-body"
+    );
+    let sessions_channel =
+        create_channel(&node.schema, &r.alice, &r.server_id, "sessions", false).await;
+    let kept = over_http(
+        CREATE_KEEPING,
+        json!({ "input": {
+            "conversationId": sessions_channel, "botUserId": format_bot, "preset": "PLAIN",
+            "testSessionId": session,
+        }}),
+    )
+    .await;
+    assert_eq!(kept["data"]["createIncomingWebhook"]["keptTestUrl"], true);
+    let promoted = http
+        .post(format!("{}/api/hooks/{session_token}", node.origin))
+        .body(json!({ "text": "kept" }).to_string())
+        .send()
+        .await
+        .expect("a delivery to the kept URL")
+        .status();
+    assert_eq!(promoted, StatusCode::OK);
+
     let log = captured.text();
     // The capture sees what matters: the server's `log` lines, the audit line of the post and the
     // webhook's id, so its silence about the token means something.
@@ -346,6 +397,8 @@ async fn no_outcome_of_the_route_lets_the_token_out() {
         "rimhook_",
         "/api/hooks/",
         format_token.as_str(),
+        session_token.as_str(),
+        hash_token(&session_token).as_str(),
     ] {
         assert!(!log.contains(secret), "the log holds {secret}");
     }

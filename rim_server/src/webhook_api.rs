@@ -1,4 +1,6 @@
-//! Incoming webhooks: `POST /api/hooks/{token}`, which posts to one channel as one bot.
+//! Incoming webhooks: `POST /api/hooks/{token}`, which posts to one channel as one bot. The same
+//! route takes deliveries to a test session's URL, which post nothing and are held in memory, and
+//! hands a copy of each webhook delivery to the test sessions listening on that webhook.
 //!
 //! The token is in the path, so nothing here may let it out: it is read from the match info, not
 //! through the path extractor, whose failure logs the request's path, and it goes into no span,
@@ -10,9 +12,11 @@ use std::sync::Arc;
 use actix_web::http::{StatusCode, header};
 use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::Utc;
+use rim_core::bot::model::WebhookTestSessionId;
 use rim_infra_services::KeyedRateLimiter;
 use rim_services::bot::dto::delivery_headers;
 use rim_services::bot::service::BotService;
+use rim_services::bot::test_session::MAX_TEST_BODY_BYTES;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::command::refusal::Refusal;
 use rim_services::command::service::CommandService;
@@ -35,12 +39,15 @@ const POSTED: &str = r#"{"ok":true}"#;
 const IGNORED: &str = r#"{"ok":true,"ignored":true}"#;
 /// The answer to every token that does not work, the same bytes whatever the cause.
 const BAD_TOKEN: &str = r#"{"ok":false}"#;
+/// The answer to a delivery a test session held.
+const TESTED: &str = r#"{"ok":true,"test":true}"#;
 
 /// What the webhook route uses, shared by the server's workers.
 pub(crate) struct WebhookApi {
     bots: Arc<dyn BotService>,
     commands: Arc<dyn CommandService>,
-    /// Each webhook's posts per minute, charged after its token is known to work.
+    /// Each webhook's posts per minute, charged after its token is known to work, and each test
+    /// session's deliveries per minute, under a key of their own.
     posts: KeyedRateLimiter,
 }
 
@@ -70,6 +77,52 @@ fn format_headers(req: &HttpRequest) -> Vec<(String, String)> {
     )
 }
 
+/// `req`'s `Content-Type`, when it is plain text.
+fn content_type(req: &HttpRequest) -> Option<String> {
+    req.headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+/// A delivery to test session `session`'s URL: charged against its own limit, held, and answered
+/// without posting anything.
+async fn test_delivery(
+    req: &HttpRequest,
+    api: &WebhookApi,
+    session: WebhookTestSessionId,
+    payload: web::Payload,
+) -> Result<HttpResponse, BotApiError> {
+    if let RateLimitDecision::Limited {
+        retry_after_seconds,
+    } = api
+        .posts
+        .check_and_record(&format!("test:{session}"), Utc::now())
+    {
+        rim_infra_services::metrics::rate_limited("webhook");
+        return Err(BotApiError::rate_limited(retry_after_seconds));
+    }
+    let headers = format_headers(req);
+    match read_bounded(req, payload, MAX_TEST_BODY_BYTES).await {
+        Ok(body) => {
+            api.bots
+                .record_test_delivery(session, content_type(req), &headers, &body, false);
+            Ok(answer(StatusCode::OK, TESTED))
+        }
+        Err(BodyError::TooLarge) => {
+            api.bots
+                .record_test_delivery(session, content_type(req), &headers, &[], true);
+            Err(BotApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Refusal::Invalid,
+                "The body is over 256 KiB.",
+                false,
+            ))
+        }
+        Err(BodyError::Read) => Err(BotApiError::invalid("The body could not be read.")),
+    }
+}
+
 /// `POST /api/hooks/{token}`. The limit is charged and the body read only once the token has
 /// passed, so a request without a working token costs no more than the lookup.
 async fn post(
@@ -79,7 +132,10 @@ async fn post(
 ) -> Result<HttpResponse, BotApiError> {
     let token = req.match_info().get("token").unwrap_or_default();
     let Some(webhook) = api.bots.resolve_webhook(token).await? else {
-        return Ok(answer(StatusCode::UNAUTHORIZED, BAD_TOKEN));
+        return match api.bots.resolve_test_session(token) {
+            Some(session) => test_delivery(&req, &api, session, payload).await,
+            None => Ok(answer(StatusCode::UNAUTHORIZED, BAD_TOKEN)),
+        };
     };
     if let RateLimitDecision::Limited {
         retry_after_seconds,
@@ -90,18 +146,23 @@ async fn post(
         rim_infra_services::metrics::rate_limited("webhook");
         return Err(BotApiError::rate_limited(retry_after_seconds));
     }
-    let body = read_bounded(&req, payload, MAX_BODY_BYTES)
-        .await
-        .map_err(|err| match err {
-            BodyError::TooLarge => BotApiError::new(
+    let headers = format_headers(&req);
+    let body = match read_bounded(&req, payload, MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(BodyError::TooLarge) => {
+            api.bots
+                .copy_to_test_sessions(webhook.id, content_type(&req), &headers, &[], true);
+            return Err(BotApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 Refusal::Invalid,
                 "The body is over 1 MiB.",
                 false,
-            ),
-            BodyError::Read => BotApiError::invalid("The body could not be read."),
-        })?;
-    let headers = format_headers(&req);
+            ));
+        }
+        Err(BodyError::Read) => return Err(BotApiError::invalid("The body could not be read.")),
+    };
+    api.bots
+        .copy_to_test_sessions(webhook.id, content_type(&req), &headers, &body, false);
     let Some(text) = api.bots.webhook_text(&webhook, &headers, &body)? else {
         return Ok(answer(StatusCode::ACCEPTED, IGNORED));
     };
@@ -138,6 +199,7 @@ mod tests {
     use rim_services::ServiceError;
     use rim_services::bot::dto::{IncomingWebhookDto, MAX_HEADER_VALUE_CHARS};
     use rim_services::bot::service::MockBotService;
+    use rim_services::bot::test_session::MAX_TEST_BODY_BYTES;
     use rim_services::command::dto::{CommandResultDto, CommandResultStatusDto};
     use rim_services::command::initiator::CommandInitiator;
     use rim_services::command::service::MockCommandService;
@@ -151,6 +213,8 @@ mod tests {
         bots: MockBotService,
         commands: MockCommandService,
         posts_per_window: u32,
+        /// Whether no test session exists, so no token is one's and copies go nowhere.
+        no_sessions: bool,
     }
 
     impl Fx {
@@ -159,6 +223,7 @@ mod tests {
                 bots: MockBotService::new(),
                 commands: MockCommandService::new(),
                 posts_per_window: POSTS_PER_WINDOW,
+                no_sessions: true,
             }
         }
 
@@ -178,7 +243,13 @@ mod tests {
             self
         }
 
-        fn api(self) -> web::Data<WebhookApi> {
+        fn api(mut self) -> web::Data<WebhookApi> {
+            if self.no_sessions {
+                self.bots.expect_resolve_test_session().returning(|_| None);
+                self.bots
+                    .expect_copy_to_test_sessions()
+                    .returning(|_, _, _, _, _| ());
+            }
             web::Data::new(WebhookApi {
                 bots: Arc::new(self.bots),
                 commands: Arc::new(self.commands),
@@ -441,5 +512,133 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    // ── Test sessions ────────────────────────────────────────────────────
+
+    /// A fixture where `TOKEN` is no webhook's but test session `session`'s.
+    fn for_session(session: WebhookTestSessionId) -> Fx {
+        let mut fx = Fx::new();
+        fx.no_sessions = false;
+        fx.bots
+            .expect_resolve_webhook()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        fx.bots
+            .expect_resolve_test_session()
+            .withf(|raw| raw == TOKEN)
+            .returning(move |_| Some(session));
+        fx
+    }
+
+    #[actix_web::test]
+    async fn a_delivery_to_a_test_url_is_held_with_its_x_headers_and_posts_nothing() {
+        let session = WebhookTestSessionId::new();
+        let mut fx = for_session(session);
+        fx.bots
+            .expect_record_test_delivery()
+            .withf(move |id, content_type, headers, body, too_large| {
+                *id == session
+                    && content_type.as_deref() == Some("application/json")
+                    && headers == [("x-github-event".to_string(), "ping".to_string())]
+                    && body == br#"{"zen":"hi"}"#
+                    && !too_large
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| ());
+        let request = request()
+            .insert_header((header::CONTENT_TYPE, "application/json"))
+            .insert_header(("X-GitHub-Event", "ping"))
+            .insert_header((header::AUTHORIZATION, "Bearer secret"))
+            .insert_header((header::COOKIE, "rim_session=abc"))
+            .set_payload(r#"{"zen":"hi"}"#);
+        let (status, bytes) = send(fx, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(bytes, r#"{"ok":true,"test":true}"#);
+    }
+
+    #[actix_web::test]
+    async fn a_test_url_holds_a_body_of_256_kib_and_refuses_one_past_it() {
+        let session = WebhookTestSessionId::new();
+        let mut fx = for_session(session);
+        fx.bots
+            .expect_record_test_delivery()
+            .withf(|_, _, _, body, too_large| body.len() == MAX_TEST_BODY_BYTES && !too_large)
+            .times(1)
+            .returning(|_, _, _, _, _| ());
+        let (status, _) = send(fx, request().set_payload(vec![b' '; MAX_TEST_BODY_BYTES])).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let mut fx = for_session(session);
+        fx.bots
+            .expect_record_test_delivery()
+            .withf(|_, _, _, body, too_large| body.is_empty() && *too_large)
+            .times(1)
+            .returning(|_, _, _, _, _| ());
+        let (status, bytes) = send(
+            fx,
+            request().set_payload(vec![b' '; MAX_TEST_BODY_BYTES + 1]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(bytes.contains("256 KiB"), "{bytes}");
+    }
+
+    #[actix_web::test]
+    async fn a_test_url_takes_thirty_deliveries_a_minute() {
+        let session = WebhookTestSessionId::new();
+        let mut fx = for_session(session);
+        fx.bots
+            .expect_record_test_delivery()
+            .times(30)
+            .returning(|_, _, _, _, _| ());
+        let app = actix_test::init_service(App::new().app_data(fx.api()).service(resource())).await;
+        for _ in 0..30 {
+            let held = actix_test::call_service(&app, request().to_request()).await;
+            assert_eq!(held.status(), StatusCode::OK);
+        }
+        let limited = actix_test::call_service(&app, request().to_request()).await;
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(limited.headers().contains_key(header::RETRY_AFTER));
+    }
+
+    #[actix_web::test]
+    async fn a_webhook_delivery_is_copied_to_its_sessions_and_still_posts() {
+        let webhook = a_webhook(WebhookPreset::Plain);
+        let webhook_id = webhook.id;
+        let mut fx = Fx::new().resolving(webhook).with_text(Some("hello"));
+        fx.no_sessions = false;
+        fx.bots
+            .expect_copy_to_test_sessions()
+            .withf(move |id, _, headers, body, too_large| {
+                *id == webhook_id
+                    && headers == [("x-event".to_string(), "deploy".to_string())]
+                    && body == br#"{"text":"hello"}"#
+                    && !too_large
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| ());
+        fx.commands
+            .expect_execute_command()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(posted()) }));
+        let request = request()
+            .insert_header(("x-event", "deploy"))
+            .set_payload(r#"{"text":"hello"}"#);
+        let (status, bytes) = send(fx, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(bytes, r#"{"ok":true}"#);
+    }
+
+    #[actix_web::test]
+    async fn a_webhook_delivery_past_its_limit_is_copied_as_too_large() {
+        let mut fx = Fx::new().resolving(a_webhook(WebhookPreset::Plain));
+        fx.no_sessions = false;
+        fx.bots
+            .expect_copy_to_test_sessions()
+            .withf(|_, _, _, body, too_large| body.is_empty() && *too_large)
+            .times(1)
+            .returning(|_, _, _, _, _| ());
+        let (status, _) = send(fx, request().set_payload(vec![b' '; MAX_BODY_BYTES + 1])).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

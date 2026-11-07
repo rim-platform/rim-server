@@ -304,15 +304,26 @@ fn check_header_name(name: &str) -> Result<(), String> {
             "Only headers starting with `x-` can be used, not `{name}`."
         ));
     }
-    if let Some(word) = REFUSED_HEADER_WORDS
-        .iter()
-        .find(|word| lower.contains(*word))
-    {
+    if let Some(word) = refused_word(&lower) {
         return Err(format!(
             "The header `{name}` can't be used: a name holding `{word}` usually carries a secret."
         ));
     }
     Ok(())
+}
+
+/// The first of [`REFUSED_HEADER_WORDS`] that `lower`, a header name in lowercase, contains.
+fn refused_word(lower: &str) -> Option<&'static str> {
+    REFUSED_HEADER_WORDS
+        .iter()
+        .find(|word| lower.contains(*word))
+        .copied()
+}
+
+/// Whether a format may not test the header `name`, in any case, because it usually carries a
+/// secret. A test session drops such a header by the same list.
+pub(crate) fn is_refused_header(name: &str) -> bool {
+    refused_word(&name.to_ascii_lowercase()).is_some()
 }
 
 /// Keys with dots between them, each part `[A-Za-z0-9_-]+`.

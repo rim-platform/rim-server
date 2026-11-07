@@ -10,7 +10,7 @@ use tracing::{instrument, warn};
 use rim_auth::session_token::{generate_bot_token, hash_token, is_bot_token_shape};
 use rim_core::bot::model::{
     Bot, BotFeedPosition, BotPatch, BotTokenId, IncomingWebhookId, NewBot, NewBotToken,
-    WebhookPreset,
+    WebhookPreset, WebhookTestSessionId,
 };
 use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::{ConversationId, ConversationType};
@@ -29,9 +29,11 @@ use rim_services::audit::service::AuditLogService;
 use rim_services::bot::dto::{
     BotActorDto, BotDto, BotEventDto, BotEventsPage, BotInfoDto, BotMentionCursor, BotMentionsPage,
     BotMessageDto, BotTokenDto, CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto,
-    IncomingWebhookDto, WebhookFormatInfoDto, WebhookPreviewDto,
+    IncomingWebhookDto, StartedTestSessionDto, TestDeliveriesDto, WebhookFormatInfoDto,
+    WebhookPreviewDto,
 };
 use rim_services::bot::service::BotService;
+use rim_services::bot::test_session::{InMemoryTestSessionStore, WebhookTestSessionStore};
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
@@ -51,6 +53,7 @@ use crate::reserved_names::ReservedNames;
 use crate::signup::normalize_username;
 use crate::util::{add_workspace_member, ensure_workspace_features};
 
+mod test_session;
 mod webhook;
 pub(crate) mod webhook_format;
 pub(crate) mod webhook_text;
@@ -115,6 +118,8 @@ pub struct DefaultBotService {
     limits: InstanceLimits,
     /// Runs each creation in one transaction; without it, unit tests use the service's own repos.
     db: Option<DatabaseConnection>,
+    /// Webhook test sessions, held in this process's memory.
+    test_sessions: Arc<dyn WebhookTestSessionStore>,
 }
 
 impl DefaultBotService {
@@ -136,7 +141,15 @@ impl DefaultBotService {
             reserved_names: ReservedNames::default(),
             limits: InstanceLimits::default(),
             db: None,
+            test_sessions: Arc::new(InMemoryTestSessionStore::new()),
         }
+    }
+
+    /// Hold test sessions in `store` in place of a store of this service's own.
+    #[cfg(test)]
+    pub(crate) fn with_test_sessions(mut self, store: Arc<dyn WebhookTestSessionStore>) -> Self {
+        self.test_sessions = store;
+        self
     }
 
     pub fn with_audit_log_service(mut self, audit_log_service: Arc<dyn AuditLogService>) -> Self {
@@ -919,9 +932,80 @@ impl BotService for DefaultBotService {
         bot_user_id: UserId,
         preset: WebhookPreset,
         template: Option<serde_json::Value>,
+        test_session: Option<WebhookTestSessionId>,
     ) -> ServiceResult<CreatedIncomingWebhookDto> {
-        self.create_incoming_webhook(actor, conversation_id, bot_user_id, preset, template)
+        self.create_incoming_webhook(
+            actor,
+            conversation_id,
+            bot_user_id,
+            preset,
+            template,
+            test_session,
+        )
+        .await
+    }
+
+    async fn start_test_session(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        webhook_id: Option<IncomingWebhookId>,
+    ) -> ServiceResult<StartedTestSessionDto> {
+        self.start_webhook_test_session(actor, server_id, webhook_id)
             .await
+    }
+
+    async fn end_test_session(&self, actor: Actor, id: WebhookTestSessionId) -> ServiceResult<()> {
+        self.end_webhook_test_session(actor, id).await
+    }
+
+    async fn test_deliveries(
+        &self,
+        actor: Actor,
+        id: WebhookTestSessionId,
+        after: u64,
+    ) -> ServiceResult<TestDeliveriesDto> {
+        self.webhook_test_deliveries(actor, id, after).await
+    }
+
+    fn resolve_test_session(&self, raw: &str) -> Option<WebhookTestSessionId> {
+        self.resolve_webhook_test_session(raw)
+    }
+
+    fn record_test_delivery(
+        &self,
+        id: WebhookTestSessionId,
+        content_type: Option<String>,
+        headers: &[(String, String)],
+        body: &[u8],
+        too_large: bool,
+    ) {
+        self.record_webhook_test_delivery(
+            id,
+            content_type.as_deref(),
+            headers,
+            (!too_large).then_some(body),
+        );
+    }
+
+    fn copy_to_test_sessions(
+        &self,
+        webhook_id: IncomingWebhookId,
+        content_type: Option<String>,
+        headers: &[(String, String)],
+        body: &[u8],
+        too_large: bool,
+    ) {
+        self.copy_to_webhook_test_sessions(
+            webhook_id,
+            content_type.as_deref(),
+            headers,
+            (!too_large).then_some(body),
+        );
+    }
+
+    fn sweep_test_sessions(&self) {
+        self.sweep_webhook_test_sessions();
     }
 
     async fn update_webhook_format(

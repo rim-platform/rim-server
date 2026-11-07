@@ -8,6 +8,7 @@ purges are idempotent, so a second run finds nothing left to do.
 | Job | Interval | Setting | What it does |
 |---|---|---|---|
 | Presence and typing | 30 seconds | none | Moves users without a heartbeat to away after 90 seconds and offline after 180, and drops stale typing indicators. |
+| Webhook test sessions | 30 seconds | none | Drops webhook test sessions past their expiry, and what they hold, from memory (`bots.md`, "Seeing what a service sends"). |
 | Pipeline evaluator | on every event | none | Runs the workspace pipelines that match each event. |
 | Notification digest | 15 minutes | `RIM_NOTIFICATION_DIGEST_INTERVAL_SECS` (at least 60) | Emails due notification digests. Off when the email feature is disabled. |
 | Notification and MLS retention | hourly | none | Deletes notifications older than 90 days and the MLS rows the encryption retention rules let go. |

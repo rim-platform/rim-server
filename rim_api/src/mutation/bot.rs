@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_graphql::*;
-use rim_core::bot::model::{BotTokenId, IncomingWebhookId};
+use rim_core::bot::model::{BotTokenId, IncomingWebhookId, WebhookTestSessionId};
 use rim_core::conversation::model::ConversationId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
@@ -13,7 +13,7 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
     Bot, BotToken, CreateBotInput, CreateIncomingWebhookInput, CreatedBot, CreatedBotToken,
-    CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput, WebhookPreset,
+    CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput, WebhookPreset, WebhookTestSession,
 };
 
 #[derive(Default)]
@@ -121,6 +121,11 @@ impl BotMutations {
         let actor = require_actor(ctx)?;
         let conversation_id = parse_uuid_id::<ConversationId>(&input.conversation_id)?;
         let bot_user_id = parse_uuid_id::<UserId>(&input.bot_user_id)?;
+        let test_session = input
+            .test_session_id
+            .as_ref()
+            .map(parse_uuid_id::<WebhookTestSessionId>)
+            .transpose()?;
         let created = ctx
             .data::<Arc<dyn BotService>>()?
             .create_webhook(
@@ -129,6 +134,7 @@ impl BotMutations {
                 bot_user_id,
                 input.preset.into(),
                 input.template.map(|template| template.0),
+                test_session,
             )
             .await
             .map_err(map_service_error)?;
@@ -173,5 +179,42 @@ impl BotMutations {
             .await
             .map_err(map_service_error)?;
         Ok(webhook.into())
+    }
+
+    /// Open a test session that holds what arrives, in memory, for the caller alone. Without
+    /// `webhookId` it answers a token for a URL that posts nothing; with one it copies that
+    /// webhook's deliveries. Owner or Moderator; `FORBIDDEN` without the standing of creating a
+    /// webhook or changing that one's format, `NOT_FOUND` for an unknown webhook or one of another
+    /// workspace, `RATE_LIMITED` past 3 open sessions in the workspace or 20 on the server.
+    async fn start_webhook_test_session(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        webhook_id: Option<ID>,
+    ) -> Result<WebhookTestSession> {
+        let actor = require_actor(ctx)?;
+        let server_id = parse_uuid_id::<ServerId>(&server_id)?;
+        let webhook_id = webhook_id
+            .as_ref()
+            .map(parse_uuid_id::<IncomingWebhookId>)
+            .transpose()?;
+        let started = ctx
+            .data::<Arc<dyn BotService>>()?
+            .start_test_session(Actor::new(actor), server_id, webhook_id)
+            .await
+            .map_err(map_service_error)?;
+        Ok(started.into())
+    }
+
+    /// Drop a test session and what it holds. Its starter alone; `NOT_FOUND` for anyone else and
+    /// for one that ended.
+    async fn end_webhook_test_session(&self, ctx: &Context<'_>, session_id: ID) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let id = parse_uuid_id::<WebhookTestSessionId>(&session_id)?;
+        ctx.data::<Arc<dyn BotService>>()?
+            .end_test_session(Actor::new(actor), id)
+            .await
+            .map_err(map_service_error)?;
+        Ok(true)
     }
 }

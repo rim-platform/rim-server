@@ -2,7 +2,9 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use rim_core::bot::model::{BotFeedPosition, BotTokenId, IncomingWebhookId, WebhookPreset};
+use rim_core::bot::model::{
+    BotFeedPosition, BotTokenId, IncomingWebhookId, WebhookPreset, WebhookTestSessionId,
+};
 use rim_core::conversation::model::ConversationId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
@@ -10,7 +12,7 @@ use rim_core::user::model::UserId;
 use crate::bot::dto::{
     BotActorDto, BotDto, BotEventsPage, BotInfoDto, BotMentionCursor, BotMentionsPage, BotTokenDto,
     CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto, IncomingWebhookDto,
-    WebhookFormatInfoDto, WebhookPreviewDto,
+    StartedTestSessionDto, TestDeliveriesDto, WebhookFormatInfoDto, WebhookPreviewDto,
 };
 use crate::{Actor, ServiceResult};
 
@@ -155,7 +157,9 @@ pub trait BotService: Send + Sync {
     /// or a deactivated one, and for anything but a plaintext channel that is not archived;
     /// `Conflict` when the channel already has a webhook that is not revoked. `template` is the
     /// webhook's own format, which needs the preset `Plain`; a format that is refused is
-    /// `Validation`, naming the rule.
+    /// `Validation`, naming the rule. With `test_session`, the caller's open unbound session of the
+    /// workspace, the webhook keeps that session's token and the session ends; an expired or ended
+    /// one gives a new token, and someone else's or another workspace's is `Validation`.
     async fn create_webhook(
         &self,
         actor: Actor,
@@ -163,7 +167,71 @@ pub trait BotService: Send + Sync {
         bot_user_id: UserId,
         preset: WebhookPreset,
         template: Option<serde_json::Value>,
+        test_session: Option<WebhookTestSessionId>,
     ) -> ServiceResult<CreatedIncomingWebhookDto>;
+
+    /// Open a test session held in memory for its starter alone: unbound with a URL that posts
+    /// nothing, or bound to `webhook_id`, copying its deliveries. Owner or Moderator, and for a
+    /// bound one the standing of changing that webhook's format.
+    ///
+    /// # Errors
+    /// `PermissionDenied` without the standing; `NotFound` for an unknown webhook or one of another
+    /// workspace; `Validation` for a revoked one; `RateLimited` when the workspace or the server
+    /// holds as many sessions as it may.
+    async fn start_test_session(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        webhook_id: Option<IncomingWebhookId>,
+    ) -> ServiceResult<StartedTestSessionDto>;
+
+    /// End a test session at once. Its starter alone.
+    ///
+    /// # Errors
+    /// `NotFound` for anyone else and for a session that ended.
+    async fn end_test_session(&self, actor: Actor, id: WebhookTestSessionId) -> ServiceResult<()>;
+
+    /// What a test session holds after `after`, oldest first, with the read extending it. Its
+    /// starter alone, while they keep the standing to start it.
+    ///
+    /// # Errors
+    /// `NotFound` for anyone else, for a session that ended and once the starter lacks the
+    /// standing.
+    async fn test_deliveries(
+        &self,
+        actor: Actor,
+        id: WebhookTestSessionId,
+        after: u64,
+    ) -> ServiceResult<TestDeliveriesDto>;
+
+    /// The open unbound test session `raw` is the token of, or `None`, also while bots are off.
+    fn resolve_test_session(&self, raw: &str) -> Option<WebhookTestSessionId>;
+
+    /// Hold a delivery in test session `id`: its `Content-Type`, the `x-` headers
+    /// [`crate::bot::dto::delivery_headers`] kept, less those a format refuses, and its body. With
+    /// `too_large` the body was too large to read, and `body` is ignored.
+    fn record_test_delivery(
+        &self,
+        id: WebhookTestSessionId,
+        content_type: Option<String>,
+        headers: &[(String, String)],
+        body: &[u8],
+        too_large: bool,
+    );
+
+    /// Hold a delivery to `webhook_id` in each test session bound to it, as
+    /// [`Self::record_test_delivery`] holds one.
+    fn copy_to_test_sessions(
+        &self,
+        webhook_id: IncomingWebhookId,
+        content_type: Option<String>,
+        headers: &[(String, String)],
+        body: &[u8],
+        too_large: bool,
+    );
+
+    /// Drop every test session past its expiry.
+    fn sweep_test_sessions(&self);
 
     /// Set how a webhook turns a delivery into a message: `preset` alone, or a `template` with the
     /// preset `Plain`. The URL stays the same. The standing of creating one.
