@@ -23,6 +23,7 @@ How the programmable layer works, independent of the transport:
   and version negotiation, for client authors.
 - `messaging.md`: conversations, channels, roles and moderation, notification rules, threads.
 - `bots.md`: bot accounts of a workspace: creating them, their tokens and disclosure, and the bot API.
+- `home-layout.md`: the Home layout saved to an account: what is stored, the checks, newest edit wins.
 - `pagination.md`: the cursor pagination contract.
 - `message-change-feed.md`: the change feed client caches sync from.
 - `search.md`: full-text search syntax, ranking and visibility.
