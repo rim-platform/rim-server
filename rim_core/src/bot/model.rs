@@ -161,6 +161,9 @@ pub struct IncomingWebhook {
     pub conversation_id: ConversationId,
     pub bot_user_id: UserId,
     pub preset: WebhookPreset,
+    /// The webhook's own format as it was saved, read only when a delivery comes; `None` for a
+    /// webhook that follows its preset.
+    pub template: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
@@ -173,6 +176,8 @@ pub struct NewIncomingWebhook {
     pub conversation_id: ConversationId,
     pub bot_user_id: UserId,
     pub preset: WebhookPreset,
+    /// Its own format, checked before it is stored; `None` to follow the preset.
+    pub template: Option<serde_json::Value>,
     pub token_hash: String,
     pub created_by: UserId,
 }

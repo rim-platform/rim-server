@@ -549,6 +549,7 @@ fn new_webhook(
         conversation_id: channel,
         bot_user_id: bot,
         preset: WebhookPreset::Github,
+        template: None,
         token_hash: hash.to_string(),
         created_by,
     }
@@ -614,6 +615,84 @@ async fn a_channel_has_one_webhook_that_is_not_revoked() {
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_webhooks_format_is_stored_changed_and_kept_off_a_revoked_one() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "hook-format").await;
+    let bots = repo(&ctx);
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-hook-format", ada.id))
+        .await
+        .unwrap();
+    let channel = channel_of(&ctx, &server).await;
+    let format = serde_json::json!({ "version": 1, "rules": [{ "post": "Deployed {version}" }] });
+    let created = bots
+        .create_webhook(NewIncomingWebhook {
+            preset: WebhookPreset::Plain,
+            template: Some(format.clone()),
+            ..new_webhook(&server, channel, bot.user_id, "fmt", ada.id)
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.template, Some(format.clone()));
+    let held = bots.find_webhook_holder("fmt").await.unwrap().unwrap();
+    assert_eq!(held.webhook.template, Some(format));
+
+    let github = bots
+        .update_webhook_format(created.id, WebhookPreset::Github, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (github.preset, github.template),
+        (WebhookPreset::Github, None)
+    );
+    let other = serde_json::json!({ "version": 1, "rules": [{ "post": "x" }] });
+    let changed = bots
+        .update_webhook_format(created.id, WebhookPreset::Plain, Some(other.clone()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.template, Some(other.clone()));
+    assert_eq!(
+        bots.find_webhook_holder("fmt")
+            .await
+            .unwrap()
+            .unwrap()
+            .webhook
+            .id,
+        created.id,
+        "the same token"
+    );
+
+    bots.revoke_webhook(created.id, Utc::now()).await.unwrap();
+    assert_eq!(
+        bots.update_webhook_format(created.id, WebhookPreset::Plain, None)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        bots.find_webhook(created.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .template,
+        Some(other),
+        "a revoked webhook keeps what it had"
+    );
+    assert_eq!(
+        bots.update_webhook_format(
+            rim_core::bot::model::IncomingWebhookId::new(),
+            WebhookPreset::Plain,
+            None
+        )
+        .await
+        .unwrap(),
+        None
     );
 }
 

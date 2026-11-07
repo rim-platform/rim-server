@@ -1,4 +1,4 @@
-//! Incoming webhooks: who may create and revoke one, the channel it is bound to, whether a
+//! Incoming webhooks: who may create, change and revoke one, the channel it is bound to, whether a
 //! presented token works and what its body becomes. Running the post is the transport's, through
 //! the command the bot API runs.
 
@@ -11,16 +11,30 @@ use rim_core::conversation::model::{ConversationId, ConversationType};
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
-use rim_services::bot::dto::{CreatedIncomingWebhookDto, IncomingWebhookDto};
+use rim_services::bot::dto::{
+    CreatedIncomingWebhookDto, IncomingWebhookDto, WebhookFormatInfoDto, WebhookPreviewDto,
+    delivery_headers,
+};
 use rim_services::command::verb::TypedVerb;
 use rim_services::conversation::command::AddConversationMembersCmd;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
-use super::webhook_text::{DecodeError, github_text, plain_text};
+use super::webhook_format::{GITHUB, Rendered, SHIPPED, WebhookFormat, parse_format, render};
+use super::webhook_text::{DecodeError, plain_text};
 use super::{DefaultBotService, last_use_is_stale};
 
 const AUDIT_WEBHOOK_CREATE: &str = "bot.webhook.create";
+const AUDIT_WEBHOOK_UPDATE: &str = "bot.webhook.update";
 const AUDIT_WEBHOOK_REVOKE: &str = "bot.webhook.revoke";
+
+/// The largest sample a preview takes, its headers and body together, in bytes.
+const MAX_SAMPLE_BYTES: usize = 256 * 1024;
+
+/// The refusal of a format on a webhook of the GitHub preset.
+const FORMAT_NEEDS_PLAIN: &str = "A webhook with its own format has the preset PLAIN.";
+
+/// The refusal of a change to a revoked webhook.
+const REVOKED_WEBHOOK: &str = "A revoked webhook cannot be changed.";
 
 /// The refusal of a second webhook on a channel.
 const CHANNEL_HAS_ONE: &str = "This channel already has a webhook. Revoke it first.";
@@ -28,22 +42,80 @@ const CHANNEL_HAS_ONE: &str = "This channel already has a webhook. Revoke it fir
 /// The refusal of a webhook for a bot that is deactivated.
 const DEACTIVATED_BOT: &str = "A deactivated bot cannot have a webhook.";
 
-/// The text `body` becomes under `preset`, or `None` when there is nothing to post. The GitHub
-/// preset posts nothing without an event to go by.
+/// The text a delivery of `headers` and `body` to `webhook` becomes, or `None` when there is
+/// nothing to post: its own format, the shipped GitHub format for the GitHub preset, or the plain
+/// `{"text"}` body.
 ///
 /// # Errors
-/// `Validation` for a body the preset cannot read.
+/// `Validation` for a body the webhook cannot read; `Internal` for a format that doesn't pass its
+/// checks, logged with the webhook's id alone.
 pub(super) fn text_of(
-    preset: WebhookPreset,
-    event: Option<&str>,
+    webhook: &IncomingWebhookDto,
+    headers: &[(String, String)],
     body: &[u8],
 ) -> ServiceResult<Option<String>> {
-    let decoded = match (preset, event) {
-        (WebhookPreset::Plain, _) => plain_text(body),
-        (WebhookPreset::Github, Some(event)) => github_text(event, body),
-        (WebhookPreset::Github, None) => Ok(None),
+    let format = match (&webhook.template, webhook.preset) {
+        (None, WebhookPreset::Plain) => return plain_text(body).map_err(refused_body),
+        (None, WebhookPreset::Github) => GITHUB.parsed(),
+        (Some(stored), _) => parse_format(stored),
+    }
+    .map_err(|_| {
+        warn!(webhook_id = %webhook.id, "a webhook's format does not pass its checks");
+        ServiceError::internal(anyhow::anyhow!(
+            "a webhook's format does not pass its checks"
+        ))
+    })?;
+    render(&format, headers, body)
+        .map(|rendered| rendered.message())
+        .map_err(refused_body)
+}
+
+fn refused_body(DecodeError(reason): DecodeError) -> ServiceError {
+    ServiceError::Validation(reason.to_string())
+}
+
+/// `template` checked for a webhook of `preset`: `None` when there is none, which any preset
+/// takes, and a format only with the preset `Plain`.
+///
+/// # Errors
+/// `Validation` for a format with another preset and for one that is refused, naming the rule.
+fn checked_template(
+    preset: WebhookPreset,
+    template: Option<&serde_json::Value>,
+) -> ServiceResult<Option<WebhookFormat>> {
+    let Some(template) = template else {
+        return Ok(None);
     };
-    decoded.map_err(|DecodeError(reason)| ServiceError::Validation(reason.to_string()))
+    if preset != WebhookPreset::Plain {
+        return Err(ServiceError::Validation(FORMAT_NEEDS_PLAIN.to_string()));
+    }
+    parse_format(template)
+        .map(Some)
+        .map_err(|e| ServiceError::Validation(e.to_string()))
+}
+
+/// The ready-made formats, as a client lists them.
+///
+/// # Errors
+/// `Internal` for a shipped format that isn't JSON, which the tests rule out.
+pub(super) fn shipped_formats() -> ServiceResult<Vec<WebhookFormatInfoDto>> {
+    SHIPPED
+        .iter()
+        .map(|shipped| {
+            Ok(WebhookFormatInfoDto {
+                key: shipped.key.to_string(),
+                name: shipped.name.to_string(),
+                setup_note: shipped.setup_note.to_string(),
+                format: shipped.json().map_err(ServiceError::internal)?,
+                sample_headers: shipped
+                    .sample_headers
+                    .iter()
+                    .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                    .collect(),
+                sample_body: shipped.sample_body.to_string(),
+            })
+        })
+        .collect()
 }
 
 impl DefaultBotService {
@@ -58,6 +130,7 @@ impl DefaultBotService {
         conversation_id: ConversationId,
         bot_user_id: UserId,
         preset: WebhookPreset,
+        template: Option<serde_json::Value>,
     ) -> ServiceResult<CreatedIncomingWebhookDto> {
         self.require_feature()?;
         let conversation = self
@@ -104,6 +177,7 @@ impl DefaultBotService {
         {
             return Err(ServiceError::PermissionDenied);
         }
+        checked_template(preset, template.as_ref())?;
         if self
             .repos
             .bot_repo
@@ -149,6 +223,7 @@ impl DefaultBotService {
                 conversation_id,
                 bot_user_id,
                 preset,
+                template,
                 token_hash: hash_token(&token),
                 created_by: actor.user_id,
             })
@@ -174,6 +249,117 @@ impl DefaultBotService {
         Ok(CreatedIncomingWebhookDto {
             webhook: created.into(),
             token,
+        })
+    }
+
+    #[instrument(name = "bot.webhook.update", skip_all, fields(webhook_id = %id))]
+    pub(super) async fn update_incoming_webhook_format(
+        &self,
+        actor: Actor,
+        id: IncomingWebhookId,
+        preset: WebhookPreset,
+        template: Option<serde_json::Value>,
+    ) -> ServiceResult<IncomingWebhookDto> {
+        self.require_feature()?;
+        let webhook = self
+            .repos
+            .bot_repo
+            .find_webhook(id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        // The same answer as an unknown id, so an outsider learns nothing about a webhook.
+        self.ensure_moderator(webhook.server_id, actor.user_id)
+            .await
+            .map_err(|e| match e {
+                ServiceError::PermissionDenied => ServiceError::NotFound,
+                other => other,
+            })?;
+        let conversation = self
+            .repos
+            .conversation_repo
+            .get_by_id(webhook.conversation_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        // Changing what posts into a private channel takes the standing that creating it takes.
+        if conversation.is_private
+            && !self
+                .repos
+                .conversation_member_repo
+                .is_member(webhook.conversation_id, actor.user_id)
+                .await?
+        {
+            return Err(ServiceError::PermissionDenied);
+        }
+        if webhook.revoked_at.is_some() {
+            return Err(ServiceError::Validation(REVOKED_WEBHOOK.to_string()));
+        }
+        checked_template(preset, template.as_ref())?;
+        let updated = self
+            .repos
+            .bot_repo
+            .update_webhook_format(id, preset, template)
+            .await?
+            .ok_or_else(|| ServiceError::Validation(REVOKED_WEBHOOK.to_string()))?;
+        self.audit(
+            actor.user_id,
+            updated.server_id,
+            AUDIT_WEBHOOK_UPDATE,
+            serde_json::json!({
+                "webhook_id": updated.id.to_string(),
+                "conversation_id": updated.conversation_id.to_string(),
+                "bot_user_id": updated.bot_user_id.to_string(),
+            }),
+            TypedVerb::Write,
+        )
+        .await;
+        Ok(updated.into())
+    }
+
+    pub(super) async fn preview_incoming_webhook_format(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        template: serde_json::Value,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> ServiceResult<WebhookPreviewDto> {
+        self.require_feature()?;
+        self.ensure_moderator(server_id, actor.user_id).await?;
+        let sample_bytes = body.len()
+            + headers
+                .iter()
+                .map(|(name, value)| name.len() + value.len())
+                .sum::<usize>();
+        if sample_bytes > MAX_SAMPLE_BYTES {
+            return Err(ServiceError::Validation(
+                "The sample is over 256 KiB.".to_string(),
+            ));
+        }
+        let format = match parse_format(&template) {
+            Ok(format) => format,
+            Err(refused) => {
+                return Ok(WebhookPreviewDto::FormatRefused {
+                    rule: refused.rule,
+                    reason: refused.reason,
+                });
+            }
+        };
+        let headers = delivery_headers(
+            headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+        );
+        Ok(match render(&format, &headers, body.as_bytes()) {
+            Ok(Rendered::Post { rule, text, link }) => {
+                WebhookPreviewDto::Posts { rule, text, link }
+            }
+            Ok(Rendered::NoRule) => WebhookPreviewDto::NoRule,
+            Ok(Rendered::NoValue { rule, placeholder }) => {
+                WebhookPreviewDto::NoValue { rule, placeholder }
+            }
+            Err(DecodeError(reason)) => WebhookPreviewDto::BodyRefused {
+                reason: reason.to_string(),
+            },
         })
     }
 
@@ -419,6 +605,7 @@ mod tests {
                     conversation_id: new.conversation_id,
                     bot_user_id: new.bot_user_id,
                     preset: new.preset,
+                    template: new.template,
                     created_at: Utc::now(),
                     last_used_at: None,
                     revoked_at: None,
@@ -496,6 +683,7 @@ mod tests {
             conversation_id: fx.channel,
             bot_user_id: fx.bot,
             preset: WebhookPreset::Plain,
+            template: None,
             created_at: Utc::now(),
             last_used_at: None,
             revoked_at: None,
@@ -511,7 +699,7 @@ mod tests {
         channel: ConversationId,
         bot: UserId,
     ) -> ServiceResult<CreatedIncomingWebhookDto> {
-        BotService::create_webhook(svc, actor(), channel, bot, WebhookPreset::Github).await
+        BotService::create_webhook(svc, actor(), channel, bot, WebhookPreset::Github, None).await
     }
 
     fn assert_validation<T: std::fmt::Debug>(result: ServiceResult<T>) {
@@ -992,7 +1180,451 @@ mod tests {
         assert!(BotService::resolve_webhook(&svc, GOOD_TOKEN).await.is_err());
     }
 
+    // ── formats ──────────────────────────────────────────────────────────
+
+    fn a_format() -> serde_json::Value {
+        serde_json::json!({ "version": 1, "rules": [
+            { "when": [{ "field": "status", "equals": "failed" }], "post": "Backup failed on {host}" },
+        ]})
+    }
+
+    #[tokio::test]
+    async fn a_format_is_stored_with_the_plain_preset_and_checked_before_anything_is_written() {
+        let fx = Fx::new();
+        let (channel, bot) = (fx.channel, fx.bot);
+        let fx = fx
+            .with_role(Some(ServerMemberRole::Moderator))
+            .with_conversation(|_| {})
+            .with_bot()
+            .with_channel_members(|_| true)
+            .with_no_active_webhook()
+            .with_insert();
+        let (svc, _) = fx.build();
+        let created = BotService::create_webhook(
+            &svc,
+            actor(),
+            channel,
+            bot,
+            WebhookPreset::Plain,
+            Some(a_format()),
+        )
+        .await
+        .expect("created");
+        assert_eq!(created.webhook.template, Some(a_format()));
+
+        // Neither refusal reaches the repository: nothing above expects an insert.
+        for (preset, template) in [
+            (WebhookPreset::Github, a_format()),
+            (
+                WebhookPreset::Plain,
+                serde_json::json!({ "version": 1, "rules": [{ "post": "{" }] }),
+            ),
+        ] {
+            let fx = Fx::new();
+            let (channel, bot) = (fx.channel, fx.bot);
+            let fx = fx
+                .with_role(Some(ServerMemberRole::Moderator))
+                .with_conversation(|_| {})
+                .with_bot()
+                .with_channel_members(|_| true);
+            let (svc, _) = fx.build();
+            assert_validation(
+                BotService::create_webhook(&svc, actor(), channel, bot, preset, Some(template))
+                    .await,
+            );
+        }
+    }
+
+    /// A fixture whose webhook `webhook` is found and whose channel `shape` says.
+    fn updating(
+        role: Option<ServerMemberRole>,
+        webhook: impl Fn(&Fx) -> IncomingWebhook,
+        shape: impl Fn(&mut Conversation) + Send + 'static,
+    ) -> (Fx, IncomingWebhookId) {
+        let mut fx = Fx::new().with_role(role).with_conversation(shape);
+        let found = webhook(&fx);
+        let id = found.id;
+        fx.bots
+            .expect_find_webhook()
+            .returning(move |_| ok(Some(found.clone())));
+        (fx, id)
+    }
+
+    async fn update(
+        svc: &DefaultBotService,
+        id: IncomingWebhookId,
+        preset: WebhookPreset,
+        template: Option<serde_json::Value>,
+    ) -> ServiceResult<IncomingWebhookDto> {
+        BotService::update_webhook_format(svc, actor(), id, preset, template).await
+    }
+
+    #[tokio::test]
+    async fn an_update_stores_the_format_and_audits_ids_alone() {
+        let (mut fx, id) = updating(Some(ServerMemberRole::Moderator), a_webhook, |_| {});
+        let (server_id, channel, bot) = (fx.server_id, fx.channel, fx.bot);
+        fx.bots
+            .expect_update_webhook_format()
+            .withf(|_, preset, template| {
+                *preset == WebhookPreset::Plain && template.as_ref() == Some(&a_format())
+            })
+            .times(1)
+            .returning(move |id, preset, template| {
+                ok(Some(IncomingWebhook {
+                    id,
+                    server_id,
+                    conversation_id: channel,
+                    bot_user_id: bot,
+                    preset,
+                    template,
+                    created_at: Utc::now(),
+                    last_used_at: None,
+                    revoked_at: None,
+                }))
+            });
+        let (svc, audit) = fx.build();
+        let updated = update(&svc, id, WebhookPreset::Plain, Some(a_format()))
+            .await
+            .expect("updated");
+        assert_eq!(updated.template, Some(a_format()));
+        let entries = audit.0.lock().expect("lock");
+        let [entry] = entries.as_slice() else {
+            panic!("{entries:?}");
+        };
+        assert_eq!(entry.command_id, AUDIT_WEBHOOK_UPDATE);
+        assert_eq!(
+            entry.args_redacted,
+            serde_json::json!({
+                "webhook_id": id.to_string(),
+                "conversation_id": channel.to_string(),
+                "bot_user_id": bot.to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_update_back_to_a_preset_stores_no_format() {
+        let (mut fx, id) = updating(Some(ServerMemberRole::Owner), a_webhook, |_| {});
+        let (server_id, channel, bot) = (fx.server_id, fx.channel, fx.bot);
+        fx.bots
+            .expect_update_webhook_format()
+            .withf(|_, preset, template| *preset == WebhookPreset::Github && template.is_none())
+            .times(1)
+            .returning(move |id, preset, template| {
+                ok(Some(IncomingWebhook {
+                    id,
+                    server_id,
+                    conversation_id: channel,
+                    bot_user_id: bot,
+                    preset,
+                    template,
+                    created_at: Utc::now(),
+                    last_used_at: None,
+                    revoked_at: None,
+                }))
+            });
+        let (svc, _) = fx.build();
+        let updated = update(&svc, id, WebhookPreset::Github, None)
+            .await
+            .expect("updated");
+        assert_eq!(updated.preset, WebhookPreset::Github);
+    }
+
+    #[tokio::test]
+    async fn an_update_answers_not_found_outside_the_actors_moderation() {
+        for role in [None, Some(ServerMemberRole::Member)] {
+            let (fx, id) = updating(role, a_webhook, |_| {});
+            let (svc, _) = fx.build();
+            assert!(matches!(
+                update(&svc, id, WebhookPreset::Plain, Some(a_format())).await,
+                Err(ServiceError::NotFound)
+            ));
+        }
+        let mut fx = Fx::new();
+        fx.bots.expect_find_webhook().returning(|_| ok(None));
+        let (svc, _) = fx.build();
+        assert!(matches!(
+            update(&svc, IncomingWebhookId::new(), WebhookPreset::Plain, None).await,
+            Err(ServiceError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_update_of_a_private_channel_takes_a_moderator_who_is_in_it() {
+        let (fx, id) = updating(
+            Some(ServerMemberRole::Moderator),
+            a_webhook,
+            |conversation| conversation.is_private = true,
+        );
+        let fx = fx.with_channel_members(|_| false);
+        let (svc, _) = fx.build();
+        assert!(matches!(
+            update(&svc, id, WebhookPreset::Plain, Some(a_format())).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_update_refuses_a_revoked_webhook_and_a_format_that_does_not_pass() {
+        let revoked = |fx: &Fx| IncomingWebhook {
+            revoked_at: Some(Utc::now()),
+            ..a_webhook(fx)
+        };
+        let (fx, id) = updating(Some(ServerMemberRole::Moderator), revoked, |_| {});
+        let (svc, _) = fx.build();
+        assert_validation(update(&svc, id, WebhookPreset::Plain, Some(a_format())).await);
+
+        for (preset, template) in [
+            (WebhookPreset::Github, a_format()),
+            (
+                WebhookPreset::Plain,
+                serde_json::json!({ "version": 1, "rules": [{ "post": "x", "when": [{ "header": "X-Api-Key", "equals": "k" }] }] }),
+            ),
+        ] {
+            let (fx, id) = updating(Some(ServerMemberRole::Moderator), a_webhook, |_| {});
+            let (svc, _) = fx.build();
+            let refused = update(&svc, id, preset, Some(template)).await;
+            assert_validation(refused);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_update_that_loses_a_race_with_a_revoke_is_refused_and_not_audited() {
+        let (mut fx, id) = updating(Some(ServerMemberRole::Moderator), a_webhook, |_| {});
+        fx.bots
+            .expect_update_webhook_format()
+            .returning(|_, _, _| ok(None));
+        let (svc, audit) = fx.build();
+        assert_validation(update(&svc, id, WebhookPreset::Plain, None).await);
+        assert!(audit.0.lock().expect("lock").is_empty());
+    }
+
+    async fn preview(
+        svc: &DefaultBotService,
+        server_id: ServerId,
+        template: serde_json::Value,
+        headers: Vec<(String, String)>,
+        body: &str,
+    ) -> ServiceResult<WebhookPreviewDto> {
+        BotService::preview_webhook_format(
+            svc,
+            actor(),
+            server_id,
+            template,
+            headers,
+            body.to_string(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_preview_says_what_would_post_or_why_not() {
+        let fx = Fx::new().with_role(Some(ServerMemberRole::Moderator));
+        let server_id = fx.server_id;
+        let (svc, audit) = fx.build();
+        for (template, headers, body, expected) in [
+            (
+                a_format(),
+                vec![],
+                r#"{"status":"failed","host":"db-1"}"#,
+                WebhookPreviewDto::Posts {
+                    rule: 1,
+                    text: "Backup failed on db-1".to_string(),
+                    link: None,
+                },
+            ),
+            (
+                a_format(),
+                vec![],
+                r#"{"status":"ok"}"#,
+                WebhookPreviewDto::NoRule,
+            ),
+            (
+                a_format(),
+                vec![],
+                r#"{"status":"failed"}"#,
+                WebhookPreviewDto::NoValue {
+                    rule: 1,
+                    placeholder: "host".to_string(),
+                },
+            ),
+            (
+                a_format(),
+                vec![],
+                "status=failed",
+                WebhookPreviewDto::BodyRefused {
+                    reason: "The body must be JSON.".to_string(),
+                },
+            ),
+            (
+                serde_json::json!({ "version": 1, "rules": [{ "post": "x" }, { "post": "{" }] }),
+                vec![],
+                "{}",
+                WebhookPreviewDto::FormatRefused {
+                    rule: Some(2),
+                    reason: "A `{` has no `}`. Write `{{` for a brace.".to_string(),
+                },
+            ),
+            (
+                serde_json::json!({ "version": 1, "rules": [
+                    { "when": [{ "header": "X-Event", "equals": "push" }], "post": "pushed" },
+                ]}),
+                vec![("X-Event".to_string(), "push".to_string())],
+                "not json",
+                WebhookPreviewDto::Posts {
+                    rule: 1,
+                    text: "pushed".to_string(),
+                    link: None,
+                },
+            ),
+            (
+                serde_json::json!({ "version": 1, "rules": [
+                    { "when": [{ "header": "X-Event", "equals": "e".repeat(65) }], "post": "x" },
+                ]}),
+                vec![("X-Event".to_string(), "e".repeat(65))],
+                "{}",
+                WebhookPreviewDto::NoRule,
+            ),
+        ] {
+            assert_eq!(
+                preview(&svc, server_id, template, headers, body)
+                    .await
+                    .expect("a preview"),
+                expected
+            );
+        }
+        assert!(
+            audit.0.lock().expect("lock").is_empty(),
+            "nothing is recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_preview_is_for_a_moderator_and_a_sample_of_at_most_256_kib() {
+        for role in [None, Some(ServerMemberRole::Member)] {
+            let fx = Fx::new().with_role(role);
+            let server_id = fx.server_id;
+            let (svc, _) = fx.build();
+            assert!(matches!(
+                preview(&svc, server_id, a_format(), vec![], "{}").await,
+                Err(ServiceError::PermissionDenied)
+            ));
+        }
+        let fx = Fx::new().with_role(Some(ServerMemberRole::Owner));
+        let server_id = fx.server_id;
+        let (svc, _) = fx.build();
+        let at_limit = " ".repeat(MAX_SAMPLE_BYTES - 7);
+        assert!(
+            preview(
+                &svc,
+                server_id,
+                a_format(),
+                vec![("x-a".to_string(), "bc".to_string())],
+                &format!("{{}}{at_limit}")
+            )
+            .await
+            .is_ok()
+        );
+        assert_validation(
+            preview(
+                &svc,
+                server_id,
+                a_format(),
+                vec![("x-a".to_string(), "bcd".to_string())],
+                &format!("{{}}{at_limit}"),
+            )
+            .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn the_new_calls_refuse_while_the_feature_is_off() {
+        let mut fx = Fx::new();
+        fx.disabled.push(ServerFeature::Bots);
+        let server_id = fx.server_id;
+        let (svc, _) = fx.build();
+        let off =
+            |e: &ServiceError| matches!(e, ServiceError::FeatureDisabled(ServerFeature::Bots));
+        assert!(off(&update(
+            &svc,
+            IncomingWebhookId::new(),
+            WebhookPreset::Plain,
+            None
+        )
+        .await
+        .expect_err("off")));
+        assert!(off(&BotService::webhook_formats(&svc).expect_err("off")));
+        assert!(off(&preview(&svc, server_id, a_format(), vec![], "{}")
+            .await
+            .expect_err("off")));
+    }
+
+    #[test]
+    fn the_shipped_formats_are_listed_with_their_samples() {
+        let formats = shipped_formats().expect("listed");
+        let keys: Vec<&str> = formats.iter().map(|format| format.key.as_str()).collect();
+        assert_eq!(keys, ["github", "grafana"]);
+        for format in &formats {
+            assert!(parse_format(&format.format).is_ok(), "{}", format.key);
+            assert!(!format.setup_note.is_empty());
+        }
+        assert_eq!(
+            formats[0].sample_headers,
+            [("X-GitHub-Event".to_string(), "pull_request".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_stored_format_is_used_and_one_that_does_not_pass_is_internal() {
+        let webhook = |template: serde_json::Value| IncomingWebhookDto {
+            id: IncomingWebhookId::new(),
+            server_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            bot_user_id: UserId::new(),
+            preset: WebhookPreset::Plain,
+            template: Some(template),
+            created_at: Utc::now(),
+            last_used_at: None,
+            revoked_at: None,
+        };
+        let body = br#"{"status":"failed","host":"db-1"}"#;
+        assert_eq!(
+            super::text_of(&webhook(a_format()), &[], body).expect("text"),
+            Some("Backup failed on db-1".to_string())
+        );
+        let unreadable = serde_json::json!({ "version": 2, "rules": [] });
+        assert!(matches!(
+            super::text_of(&webhook(unreadable), &[], body),
+            Err(ServiceError::Internal(_))
+        ));
+    }
+
     // ── text ─────────────────────────────────────────────────────────────
+
+    /// The text a delivery to a webhook of `preset` with no format of its own becomes, sent with
+    /// `event` as its `X-GitHub-Event` header when there is one.
+    fn text_of(
+        preset: WebhookPreset,
+        event: Option<&str>,
+        body: &[u8],
+    ) -> ServiceResult<Option<String>> {
+        let webhook = IncomingWebhookDto {
+            id: IncomingWebhookId::new(),
+            server_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            bot_user_id: UserId::new(),
+            preset,
+            template: None,
+            created_at: Utc::now(),
+            last_used_at: None,
+            revoked_at: None,
+        };
+        let headers: Vec<(String, String)> = event
+            .map(|event| ("x-github-event".to_string(), event.to_string()))
+            .into_iter()
+            .collect();
+        super::text_of(&webhook, &headers, body)
+    }
 
     #[test]
     fn each_preset_reads_its_body_and_a_github_body_needs_an_event() {

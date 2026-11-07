@@ -219,6 +219,8 @@ pub struct IncomingWebhookDto {
     pub conversation_id: ConversationId,
     pub bot_user_id: UserId,
     pub preset: WebhookPreset,
+    /// Its own format; `None` for one that follows its preset.
+    pub template: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
@@ -232,11 +234,65 @@ impl From<IncomingWebhook> for IncomingWebhookDto {
             conversation_id: webhook.conversation_id,
             bot_user_id: webhook.bot_user_id,
             preset: webhook.preset,
+            template: webhook.template,
             created_at: webhook.created_at,
             last_used_at: webhook.last_used_at,
             revoked_at: webhook.revoked_at,
         }
     }
+}
+
+/// The most characters of a delivery's header value a format reads; a longer one counts as missing.
+pub const MAX_HEADER_VALUE_CHARS: usize = 64;
+/// The most `x-` headers of a delivery a format reads.
+pub const MAX_DELIVERY_HEADERS: usize = 50;
+
+/// The headers of a delivery a format reads, from `(name, value)` pairs: names starting `x-`, in
+/// lowercase, with a value of at most [`MAX_HEADER_VALUE_CHARS`], and at most
+/// [`MAX_DELIVERY_HEADERS`] of them. A preview reads a sample the same way.
+pub fn delivery_headers<'a>(
+    headers: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<(String, String)> {
+    headers
+        .into_iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value))
+        .filter(|(name, value)| {
+            name.starts_with("x-") && value.chars().count() <= MAX_HEADER_VALUE_CHARS
+        })
+        .take(MAX_DELIVERY_HEADERS)
+        .map(|(name, value)| (name, value.to_string()))
+        .collect()
+}
+
+/// A ready-made webhook format RIM ships, the same for everyone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookFormatInfoDto {
+    pub key: String,
+    pub name: String,
+    /// What to set up on the service's side.
+    pub setup_note: String,
+    pub format: serde_json::Value,
+    pub sample_headers: Vec<(String, String)>,
+    pub sample_body: String,
+}
+
+/// What a sample delivery would come to under a format. Rules are counted from 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebhookPreviewDto {
+    /// Rule `rule` holds and posts `text`, then `link` when there is one.
+    Posts {
+        rule: usize,
+        text: String,
+        link: Option<String>,
+    },
+    /// No rule holds, so nothing would post.
+    NoRule,
+    /// Rule `rule` holds, but `placeholder` has no value, so nothing would post.
+    NoValue { rule: usize, placeholder: String },
+    /// The body would be refused with `reason`.
+    BodyRefused { reason: String },
+    /// The format would be refused with `reason`, about rule `rule` when it names one.
+    FormatRefused { rule: Option<usize>, reason: String },
 }
 
 /// A new incoming webhook and its token, shown this once. `Debug` leaves the token out.
@@ -251,5 +307,39 @@ impl fmt::Debug for CreatedIncomingWebhookDto {
         f.debug_struct("CreatedIncomingWebhookDto")
             .field("webhook", &self.webhook)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_delivery_keeps_its_short_x_headers_in_lowercase_and_nothing_else() {
+        let long = "e".repeat(MAX_HEADER_VALUE_CHARS + 1);
+        let limit = "e".repeat(MAX_HEADER_VALUE_CHARS);
+        let kept = delivery_headers([
+            ("X-GitHub-Event", "push"),
+            ("authorization", "Bearer secret"),
+            ("cookie", "a=b"),
+            ("content-type", "application/json"),
+            ("x-long", long.as_str()),
+            ("x-limit", limit.as_str()),
+        ]);
+        assert_eq!(
+            kept,
+            [
+                ("x-github-event".to_string(), "push".to_string()),
+                ("x-limit".to_string(), limit.clone()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_delivery_keeps_at_most_fifty_headers() {
+        let names: Vec<String> = (0..60).map(|n| format!("x-h{n}")).collect();
+        let kept = delivery_headers(names.iter().map(|name| (name.as_str(), "v")));
+        assert_eq!(kept.len(), MAX_DELIVERY_HEADERS);
+        assert_eq!(kept[0].0, "x-h0");
     }
 }

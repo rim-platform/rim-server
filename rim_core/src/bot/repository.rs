@@ -6,7 +6,7 @@ use mockall::automock;
 use crate::bot::model::{
     Bot, BotFeedJoin, BotFeedMessage, BotFeedPosition, BotPatch, BotToken, BotTokenHolder,
     BotTokenId, IncomingWebhook, IncomingWebhookHolder, IncomingWebhookId, NewBot, NewBotToken,
-    NewIncomingWebhook,
+    NewIncomingWebhook, WebhookPreset,
 };
 use crate::conversation::model::ConversationId;
 use crate::repository::error::RepoResult;
@@ -100,6 +100,15 @@ pub trait BotRepository: Send + Sync {
         &self,
         id: IncomingWebhookId,
         at: DateTime<Utc>,
+    ) -> RepoResult<Option<IncomingWebhook>>;
+
+    /// Set the preset and format of a webhook not yet revoked. Returns the webhook as it now is, or
+    /// `None` when there is no such webhook or it is revoked.
+    async fn update_webhook_format(
+        &self,
+        id: IncomingWebhookId,
+        preset: WebhookPreset,
+        template: Option<serde_json::Value>,
     ) -> RepoResult<Option<IncomingWebhook>>;
 
     /// Stamp every webhook of the bot not yet revoked as revoked at `at`. Returns how many.

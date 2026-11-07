@@ -10,8 +10,8 @@ use std::sync::Arc;
 use actix_web::http::{StatusCode, header};
 use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::Utc;
-use rim_core::bot::model::WebhookPreset;
 use rim_infra_services::KeyedRateLimiter;
+use rim_services::bot::dto::delivery_headers;
 use rim_services::bot::service::BotService;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::command::refusal::Refusal;
@@ -28,8 +28,6 @@ const WINDOW_SECS: u64 = 60;
 const POSTS_PER_WINDOW: u32 = 30;
 /// The largest request body, in bytes.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
-/// The longest `X-GitHub-Event` read; a longer one is no event.
-const MAX_EVENT_CHARS: usize = 64;
 
 /// The answer to a post that ran.
 const POSTED: &str = r#"{"ok":true}"#;
@@ -62,13 +60,14 @@ fn answer(status: StatusCode, body: &'static str) -> HttpResponse {
         .body(body)
 }
 
-/// The event of `req`'s `X-GitHub-Event` header, read for the GitHub preset alone.
-fn github_event(req: &HttpRequest, preset: WebhookPreset) -> Option<String> {
-    if preset != WebhookPreset::Github {
-        return None;
-    }
-    let event = req.headers().get("x-github-event")?.to_str().ok()?;
-    (event.chars().count() <= MAX_EVENT_CHARS).then(|| event.to_string())
+/// The headers of `req` a format reads: the `x-` ones of plain text, as
+/// [`delivery_headers`] keeps them.
+fn format_headers(req: &HttpRequest) -> Vec<(String, String)> {
+    delivery_headers(
+        req.headers()
+            .iter()
+            .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?))),
+    )
 }
 
 /// `POST /api/hooks/{token}`. The limit is charged and the body read only once the token has
@@ -102,8 +101,8 @@ async fn post(
             ),
             BodyError::Read => BotApiError::invalid("The body could not be read."),
         })?;
-    let event = github_event(&req, webhook.preset);
-    let Some(text) = api.bots.webhook_text(webhook.preset, event, body)? else {
+    let headers = format_headers(&req);
+    let Some(text) = api.bots.webhook_text(&webhook, &headers, &body)? else {
         return Ok(answer(StatusCode::ACCEPTED, IGNORED));
     };
     let args = json!({
@@ -132,12 +131,12 @@ pub(crate) fn resource() -> actix_web::Resource {
 mod tests {
     use actix_web::test as actix_test;
     use actix_web::{App, body};
-    use rim_core::bot::model::IncomingWebhookId;
+    use rim_core::bot::model::{IncomingWebhookId, WebhookPreset};
     use rim_core::conversation::model::ConversationId;
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
     use rim_services::ServiceError;
-    use rim_services::bot::dto::IncomingWebhookDto;
+    use rim_services::bot::dto::{IncomingWebhookDto, MAX_HEADER_VALUE_CHARS};
     use rim_services::bot::service::MockBotService;
     use rim_services::command::dto::{CommandResultDto, CommandResultStatusDto};
     use rim_services::command::initiator::CommandInitiator;
@@ -195,6 +194,7 @@ mod tests {
             conversation_id: ConversationId::new(),
             bot_user_id: UserId::new(),
             preset,
+            template: None,
             created_at: Utc::now(),
             last_used_at: None,
             revoked_at: None,
@@ -317,35 +317,46 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn the_event_header_is_read_for_the_github_preset_alone_and_capped() {
+    async fn the_event_header_reaches_the_format_capped_and_no_other_header_does() {
+        let event = |value: String| vec![("x-github-event".to_string(), value)];
         for (preset, sent, expected) in [
             (
                 WebhookPreset::Github,
                 Some("issues".to_string()),
+                event("issues".to_string()),
+            ),
+            (
+                WebhookPreset::Plain,
                 Some("issues".to_string()),
+                event("issues".to_string()),
             ),
-            (WebhookPreset::Plain, Some("issues".to_string()), None),
-            (WebhookPreset::Github, None, None),
+            (WebhookPreset::Github, None, vec![]),
             (
                 WebhookPreset::Github,
-                Some("e".repeat(MAX_EVENT_CHARS)),
-                Some("e".repeat(MAX_EVENT_CHARS)),
+                Some("e".repeat(MAX_HEADER_VALUE_CHARS)),
+                event("e".repeat(MAX_HEADER_VALUE_CHARS)),
             ),
             (
                 WebhookPreset::Github,
-                Some("e".repeat(MAX_EVENT_CHARS + 1)),
-                None,
+                Some("e".repeat(MAX_HEADER_VALUE_CHARS + 1)),
+                vec![],
             ),
         ] {
             let mut fx = Fx::new().resolving(a_webhook(preset));
+            let webhook_preset = preset;
             fx.bots
                 .expect_webhook_text()
-                .withf(move |_, event, _| *event == expected)
+                .withf(move |webhook, headers, _| {
+                    webhook.preset == webhook_preset && headers == expected.as_slice()
+                })
                 .times(1)
                 .returning(|_, _, _| Ok(None));
-            let mut request = request().set_payload("{}");
+            let mut request = request()
+                .set_payload("{}")
+                .insert_header((header::AUTHORIZATION, "Bearer secret"))
+                .insert_header((header::COOKIE, "rim_session=abc"));
             if let Some(sent) = sent {
-                request = request.insert_header(("x-github-event", sent));
+                request = request.insert_header(("X-GitHub-Event", sent));
             }
             let (status, _) = send(fx, request).await;
             assert_eq!(status, StatusCode::ACCEPTED);

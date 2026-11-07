@@ -23,6 +23,15 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Webhook formats: an Owner or Moderator can say how an incoming webhook turns a delivery into a
+  message, with rules that test an `x-` header or a body field and a text with placeholders, and
+  change it later without a new URL (`CreateIncomingWebhookInput.template`, `IncomingWebhook.template`,
+  `updateIncomingWebhookFormat`, `specs/bots-v1.md`). `webhookFormats` lists the ready-made ones,
+  GitHub and Grafana, and `previewWebhookFormat` tries a format on a sample. Listed in
+  `serverInfo.capabilities` as `webhook_formats`. The GitHub preset is now the shipped GitHub format,
+  so a value from GitHub loses its format characters, such as a bidirectional override, and a pull
+  request or issue number sent as a string posts. A server rolled back to a release without formats
+  treats a webhook that has one as plain.
 - A pipeline can welcome people: an Owner or Moderator can add a Post as bot action to the Member Joined
   trigger (`PipelineActionInput.postAsBot`, `PipelineActionGql.postAsBot`, `specs/bots-v1.md`). Listed in
   `serverInfo.capabilities` as `pipeline_post_as_bot`. A server rolled back to a release without it can't

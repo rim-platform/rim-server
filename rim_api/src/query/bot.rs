@@ -9,7 +9,9 @@ use rim_services::bot::service::BotService;
 use crate::auth_context::require_actor;
 use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
-use crate::types::{Bot, BotToken, IncomingWebhook};
+use crate::types::{
+    Bot, BotToken, IncomingWebhook, WebhookFormatInfo, WebhookFormatPreview, WebhookHeader,
+};
 
 #[derive(Default)]
 pub(crate) struct BotQueries;
@@ -58,5 +60,46 @@ impl BotQueries {
             .await
             .map_err(map_service_error)?;
         Ok(webhooks.into_iter().map(Into::into).collect())
+    }
+
+    /// The ready-made webhook formats, the same for everyone signed in. `FEATURE_DISABLED` while
+    /// the `bots` feature is off.
+    async fn webhook_formats(&self, ctx: &Context<'_>) -> Result<Vec<WebhookFormatInfo>> {
+        require_actor(ctx)?;
+        let formats = ctx
+            .data::<Arc<dyn BotService>>()?
+            .webhook_formats()
+            .map_err(map_service_error)?;
+        Ok(formats.into_iter().map(Into::into).collect())
+    }
+
+    /// What a sample delivery would come to under `template`, as a delivery runs it. Nothing is
+    /// posted or stored. Owner or Moderator of the workspace; `FORBIDDEN` for anyone else,
+    /// `VALIDATION` for a sample over 256 KiB.
+    async fn preview_webhook_format(
+        &self,
+        ctx: &Context<'_>,
+        server_id: ID,
+        template: Json<serde_json::Value>,
+        headers: Vec<WebhookHeader>,
+        body: String,
+    ) -> Result<WebhookFormatPreview> {
+        let actor = require_actor(ctx)?;
+        let server_id = parse_uuid_id::<ServerId>(&server_id)?;
+        let preview = ctx
+            .data::<Arc<dyn BotService>>()?
+            .preview_webhook_format(
+                Actor::new(actor),
+                server_id,
+                template.0,
+                headers
+                    .into_iter()
+                    .map(|header| (header.name, header.value))
+                    .collect(),
+                body,
+            )
+            .await
+            .map_err(map_service_error)?;
+        Ok(preview.into())
     }
 }

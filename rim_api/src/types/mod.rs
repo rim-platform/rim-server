@@ -51,7 +51,8 @@ pub use audit::{
 };
 pub use bot::{
     Bot, BotInfo, BotToken, CreateBotInput, CreateIncomingWebhookInput, CreatedBot,
-    CreatedBotToken, CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput, WebhookPreset,
+    CreatedBotToken, CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput, WebhookFormatInfo,
+    WebhookFormatPreview, WebhookHeader, WebhookPreset, WebhookPreviewOutcome,
 };
 pub use channel_lens::{
     ChannelLens, FilterConditionGql, FilterConditionInput, FilterField, FilterLogic, FilterOp,

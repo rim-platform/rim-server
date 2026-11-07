@@ -1,5 +1,5 @@
 use async_graphql::dataloader::DataLoader;
-use async_graphql::{Context, Enum, ID, InputObject, Result, SimpleObject};
+use async_graphql::{Context, Enum, ID, InputObject, Json, Result, SimpleObject};
 use chrono::{DateTime, Utc};
 use rim_core::user::model::UserId;
 
@@ -198,6 +198,8 @@ pub struct IncomingWebhook {
     /// The bot it posts as.
     pub bot_user_id: ID,
     pub preset: WebhookPreset,
+    /// Its own format; null for a webhook that follows its preset, such as an unedited GitHub one.
+    pub template: Option<Json<serde_json::Value>>,
     pub created_at: DateTime<Utc>,
     /// When it was last used, to the minute; null when it never was.
     pub last_used_at: Option<DateTime<Utc>>,
@@ -212,6 +214,7 @@ impl From<rim_services::bot::dto::IncomingWebhookDto> for IncomingWebhook {
             conversation_id: ID(value.conversation_id.to_string()),
             bot_user_id: ID(value.bot_user_id.to_string()),
             preset: value.preset.into(),
+            template: value.template.map(Json),
             created_at: value.created_at,
             last_used_at: value.last_used_at,
             revoked_at: value.revoked_at,
@@ -244,4 +247,122 @@ pub struct CreateIncomingWebhookInput {
     /// The bot it posts as, an active bot of the channel's workspace.
     pub bot_user_id: ID,
     pub preset: WebhookPreset,
+    /// The webhook's own format, with the preset `PLAIN`. Sent only to a server that lists the
+    /// capability `webhook_formats`.
+    pub template: Option<Json<serde_json::Value>>,
+}
+
+/// A header of a sample delivery.
+#[derive(SimpleObject, InputObject, Clone, Debug)]
+#[graphql(input_name = "WebhookHeaderInput")]
+pub struct WebhookHeader {
+    pub name: String,
+    pub value: String,
+}
+
+/// A ready-made webhook format RIM ships, the same for everyone.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct WebhookFormatInfo {
+    /// A short name that stays the same, such as `github`.
+    pub key: String,
+    pub name: String,
+    /// What to set up on the service's side.
+    pub setup_note: String,
+    pub format: Json<serde_json::Value>,
+    pub sample_headers: Vec<WebhookHeader>,
+    /// A delivery's body as the service sends it.
+    pub sample_body: String,
+}
+
+impl From<rim_services::bot::dto::WebhookFormatInfoDto> for WebhookFormatInfo {
+    fn from(value: rim_services::bot::dto::WebhookFormatInfoDto) -> Self {
+        Self {
+            key: value.key,
+            name: value.name,
+            setup_note: value.setup_note,
+            format: Json(value.format),
+            sample_headers: value
+                .sample_headers
+                .into_iter()
+                .map(|(name, value)| WebhookHeader { name, value })
+                .collect(),
+            sample_body: value.sample_body,
+        }
+    }
+}
+
+/// What a sample delivery would come to.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WebhookPreviewOutcome {
+    /// A rule holds and posts.
+    Posts,
+    /// No rule holds, so nothing would post.
+    NoRule,
+    /// The rule that holds has a placeholder with no value, so nothing would post.
+    NoValue,
+    /// The body would be refused.
+    BodyRefused,
+    /// The format would be refused.
+    FormatRefused,
+}
+
+/// What a sample delivery would come to under a format. Nothing is posted or stored.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct WebhookFormatPreview {
+    pub outcome: WebhookPreviewOutcome,
+    /// The rule that decides or that a refusal is about, counted from 1.
+    pub rule: Option<i32>,
+    /// What would post, without the link.
+    pub text: Option<String>,
+    /// The link after the text, when it passes its check.
+    pub link: Option<String>,
+    /// The placeholder with no value, as written between its braces.
+    pub placeholder: Option<String>,
+    /// Why the body or the format would be refused.
+    pub reason: Option<String>,
+}
+
+impl From<rim_services::bot::dto::WebhookPreviewDto> for WebhookFormatPreview {
+    fn from(value: rim_services::bot::dto::WebhookPreviewDto) -> Self {
+        use rim_services::bot::dto::WebhookPreviewDto as Dto;
+        let rule = |rule: usize| i32::try_from(rule).ok();
+        let empty = |outcome| Self {
+            outcome,
+            rule: None,
+            text: None,
+            link: None,
+            placeholder: None,
+            reason: None,
+        };
+        match value {
+            Dto::Posts {
+                rule: at,
+                text,
+                link,
+            } => Self {
+                rule: rule(at),
+                text: Some(text),
+                link,
+                ..empty(WebhookPreviewOutcome::Posts)
+            },
+            Dto::NoRule => empty(WebhookPreviewOutcome::NoRule),
+            Dto::NoValue {
+                rule: at,
+                placeholder,
+            } => Self {
+                rule: rule(at),
+                placeholder: Some(placeholder),
+                ..empty(WebhookPreviewOutcome::NoValue)
+            },
+            Dto::BodyRefused { reason } => Self {
+                reason: Some(reason),
+                ..empty(WebhookPreviewOutcome::BodyRefused)
+            },
+            Dto::FormatRefused { rule: at, reason } => Self {
+                rule: at.and_then(rule),
+                reason: Some(reason),
+                ..empty(WebhookPreviewOutcome::FormatRefused)
+            },
+        }
+    }
 }

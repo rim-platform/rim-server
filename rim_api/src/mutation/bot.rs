@@ -13,7 +13,7 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
     Bot, BotToken, CreateBotInput, CreateIncomingWebhookInput, CreatedBot, CreatedBotToken,
-    CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput,
+    CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput, WebhookPreset,
 };
 
 #[derive(Default)]
@@ -128,6 +128,7 @@ impl BotMutations {
                 conversation_id,
                 bot_user_id,
                 input.preset.into(),
+                input.template.map(|template| template.0),
             )
             .await
             .map_err(map_service_error)?;
@@ -142,6 +143,33 @@ impl BotMutations {
         let webhook = ctx
             .data::<Arc<dyn BotService>>()?
             .revoke_webhook(Actor::new(actor), id)
+            .await
+            .map_err(map_service_error)?;
+        Ok(webhook.into())
+    }
+
+    /// Change how a webhook turns a delivery into a message. The URL stays the same. A `template`
+    /// needs the preset `PLAIN`; `PLAIN` or `GITHUB` with no `template` goes back to that preset.
+    /// `VALIDATION` for a format that is refused, naming the rule, and for a revoked webhook;
+    /// `FORBIDDEN` for a private channel the caller is not in; `NOT_FOUND` for an unknown webhook
+    /// and for one of a workspace the caller does not moderate.
+    async fn update_incoming_webhook_format(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        preset: WebhookPreset,
+        template: Option<Json<serde_json::Value>>,
+    ) -> Result<IncomingWebhook> {
+        let actor = require_actor(ctx)?;
+        let id = parse_uuid_id::<IncomingWebhookId>(&id)?;
+        let webhook = ctx
+            .data::<Arc<dyn BotService>>()?
+            .update_webhook_format(
+                Actor::new(actor),
+                id,
+                preset.into(),
+                template.map(|template| template.0),
+            )
             .await
             .map_err(map_service_error)?;
         Ok(webhook.into())

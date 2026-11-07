@@ -1,6 +1,7 @@
 //! A webhook's token in its URL path reaches no log line, span, audit row or metric: every outcome
 //! of the route is driven against a real server with everything the process logs captured at the
-//! `trace` level, `log` lines from Actix included. Its own binary, since a logger is global.
+//! `trace` level, `log` lines from Actix included. Nor does what a format, a preview's sample or a
+//! delivery holds, sent over HTTP as a client sends it. Its own binary, since a logger is global.
 //!
 //! Run with:
 //! ```sh
@@ -15,6 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use reqwest::StatusCode;
 use rim_auth::session_token::hash_token;
+use rim_core::auth::model::SessionId;
+use rim_core::server_member::model::ServerMemberRole;
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 use tracing_subscriber::Layer;
@@ -26,6 +29,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use support::TestCtx;
 use support::graphql::{Caller, exec_ok};
 use support::nodes::{S2S_TABLES, start};
+use support::relay::{key_signup, keys, open_registration};
 use support::roles::create_channel;
 
 const CREATE_BOT: &str = r#"mutation($input: CreateBotInput!) {
@@ -35,6 +39,12 @@ const CREATE: &str = r#"mutation($input: CreateIncomingWebhookInput!) {
   createIncomingWebhook(input: $input) { token webhook { id } }
 }"#;
 const REVOKE: &str = "mutation($id: ID!) { revokeIncomingWebhook(id: $id) { id } }";
+const UPDATE_FORMAT: &str = r#"mutation($id: ID!, $preset: WebhookPreset!, $template: JSON) {
+  updateIncomingWebhookFormat(id: $id, preset: $preset, template: $template) { id }
+}"#;
+const PREVIEW: &str = r#"query($s: ID!, $t: JSON!, $h: [WebhookHeaderInput!]!, $b: String!) {
+  previewWebhookFormat(serverId: $s, template: $t, headers: $h, body: $b) { outcome }
+}"#;
 const TIMEOUT: &str = r#"mutation($s: ID!, $u: ID!, $until: DateTime!) {
   timeoutMember(serverId: $s, userId: $u, until: $until) { userId }
 }"#;
@@ -103,7 +113,7 @@ async fn no_outcome_of_the_route_lets_the_token_out() {
         .await
         .expect("truncate");
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
-    let node = start(&url, |_| {}).await;
+    let node = start(&url, open_registration).await;
     let r = ctx.roles("logs").await;
     let http = reqwest::Client::new();
 
@@ -196,6 +206,130 @@ async fn no_outcome_of_the_route_lets_the_token_out() {
         .status();
     assert_eq!(refused, StatusCode::UNAUTHORIZED);
 
+    // A format, previews and a delivery over HTTP, each holding a marker of its own.
+    let (signup, cookies) = key_signup(&http, &node, "mod", &keys(41), json!({})).await;
+    let user_id: uuid::Uuid = signup["data"]["signupWithKey"]["userId"]
+        .as_str()
+        .expect("user id")
+        .parse()
+        .expect("uuid");
+    let moderator = Caller {
+        user_id: user_id.into(),
+        session_id: SessionId::new(),
+    };
+    ctx.join(&r.server_id, &moderator, ServerMemberRole::Moderator)
+        .await;
+    let cookie = format!(
+        "rim_session={}; rim_csrf={}",
+        cookies["rim_session"], cookies["rim_csrf"]
+    );
+    let over_http = async |query: &str, variables: Value| -> Value {
+        let answer: Value = http
+            .post(format!("{}/api", node.origin))
+            .header("cookie", &cookie)
+            .header("x-csrf-token", &cookies["rim_csrf"])
+            .json(&json!({ "query": query, "variables": variables }))
+            .send()
+            .await
+            .expect("graphql")
+            .json()
+            .await
+            .expect("json");
+        assert!(answer.get("errors").is_none(), "{answer}");
+        answer
+    };
+    let format = json!({ "version": 1, "rules": [
+        { "when": [{ "field": "status", "equals": "failed" }], "post": "Backup failed on {host}" },
+        { "when": [{ "field": "status", "equals": "ok" }], "post": "marker-in-the-format" },
+    ]});
+    let backups = create_channel(&node.schema, &r.alice, &r.server_id, "backups", false).await;
+    let format_bot = gql(
+        &node,
+        &r.alice,
+        CREATE_BOT,
+        json!({ "input": {
+            "serverId": r.server_id, "name": "Backups", "runBy": "Ada", "readsGoTo": "Nowhere",
+        }}),
+    )
+    .await["createBot"]["bot"]["userId"]
+        .as_str()
+        .expect("bot")
+        .to_string();
+    let created = over_http(
+        CREATE,
+        json!({ "input": {
+            "conversationId": backups, "botUserId": format_bot, "preset": "PLAIN",
+            "template": format,
+        }}),
+    )
+    .await;
+    let format_token = created["data"]["createIncomingWebhook"]["token"]
+        .as_str()
+        .expect("token")
+        .to_string();
+    let format_id = created["data"]["createIncomingWebhook"]["webhook"]["id"].clone();
+    over_http(
+        UPDATE_FORMAT,
+        json!({ "id": format_id, "preset": "PLAIN", "template": format }),
+    )
+    .await;
+    for (template, body) in [
+        (
+            format.clone(),
+            json!({ "status": "failed", "host": "marker-in-a-sample" }).to_string(),
+        ),
+        (
+            format.clone(),
+            "marker-in-a-body-that-is-not-json".to_string(),
+        ),
+        (
+            json!({ "version": 1, "rules": [{ "post": "{marker-in-a-refused-format" }] }),
+            "{}".to_string(),
+        ),
+    ] {
+        let preview = over_http(
+            PREVIEW,
+            json!({
+                "s": r.server_id, "t": template, "b": body,
+                "h": [{ "name": "X-Marker", "value": "marker-in-a-header" }],
+            }),
+        )
+        .await;
+        assert!(preview["data"]["previewWebhookFormat"]["outcome"].is_string());
+    }
+    // A refusal, which comes back as a GraphQL error naming the header.
+    let refused: Value = http
+        .post(format!("{}/api", node.origin))
+        .header("cookie", &cookie)
+        .header("x-csrf-token", &cookies["rim_csrf"])
+        .json(&json!({ "query": UPDATE_FORMAT, "variables": {
+            "id": format_id, "preset": "PLAIN",
+            "template": { "version": 1, "rules": [{ "post": "x",
+                "when": [{ "header": "X-Marker-Key", "equals": "marker-in-a-refused-value" }] }] },
+        }}))
+        .send()
+        .await
+        .expect("graphql")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "VALIDATION",
+        "{refused}"
+    );
+    let delivered = http
+        .post(format!("{}/api/hooks/{format_token}", node.origin))
+        .header("x-marker", "marker-in-a-delivery-header")
+        .body(
+            json!({ "status": "failed", "host": "db-1", "extra": "marker-in-a-delivery" })
+                .to_string(),
+        )
+        .send()
+        .await
+        .expect("a delivery")
+        .status();
+    assert_eq!(delivered, StatusCode::OK);
+
     let log = captured.text();
     // The capture sees what matters: the server's `log` lines, the audit line of the post and the
     // webhook's id, so its silence about the token means something.
@@ -211,9 +345,23 @@ async fn no_outcome_of_the_route_lets_the_token_out() {
         unknown.as_str(),
         "rimhook_",
         "/api/hooks/",
+        format_token.as_str(),
     ] {
         assert!(!log.contains(secret), "the log holds {secret}");
     }
+    assert!(
+        log.contains("UPDATE incoming_webhook SET preset"),
+        "the statement that stores a format is seen"
+    );
+    assert!(
+        !log.contains("marker-"),
+        "the log holds what a format, a sample or a delivery held: {}",
+        log.lines()
+            .filter(|line| line.contains("marker-"))
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 
     // Nor does an audit row hold it.
     let rows = ctx

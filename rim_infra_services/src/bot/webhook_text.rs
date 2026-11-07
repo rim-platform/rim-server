@@ -1,22 +1,22 @@
 //! How the body of an incoming webhook becomes the text of a message. Pure functions: a body in,
-//! text with no mention left in it out, or nothing to post.
+//! text with no mention left in it out, or nothing to post. The pieces a format's message is made
+//! of are here too.
 
 use serde_json::Value;
 
+use crate::display_name::is_control_or_format;
 use crate::notification::decide::CHANNEL_MENTION_TOKENS;
 
 /// What a mention token is broken with: it shows as nothing.
 const ZERO_WIDTH_SPACE: char = '\u{200b}';
 /// The most characters of the text of a `plain` post, after trimming.
 const MAX_PLAIN_CHARS: usize = 4_000;
-/// The most characters of the line a GitHub event becomes.
+/// The most characters of a message a format makes, its link included.
 const MAX_LINE_CHARS: usize = 1_000;
-/// The longest link a line keeps, in characters. GitHub's own stay far below it.
+/// The longest link a message keeps, in characters. GitHub's own stay far below it.
 const MAX_LINK_CHARS: usize = 512;
-/// Where a link in a line may point.
-const GITHUB_ORIGIN: &str = "https://github.com/";
 
-/// A body the preset cannot read. It says why, in words a sender can act on and with nothing of
+/// A body the webhook cannot read. It says why, in words a sender can act on and with nothing of
 /// the body in it.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DecodeError(pub(crate) &'static str);
@@ -85,81 +85,47 @@ pub(crate) fn plain_text(body: &[u8]) -> Result<Option<String>, DecodeError> {
     Ok(Some(neutralize_mentions(text)))
 }
 
-/// The line a GitHub `event` becomes. `None` for an event or action that posts nothing, whatever
-/// the body is, and for a handled one missing a field the line needs.
-///
-/// # Errors
-/// [`DecodeError`] when a handled event's body is not JSON.
-pub(crate) fn github_text(event: &str, body: &[u8]) -> Result<Option<String>, DecodeError> {
-    if !matches!(event, "release" | "pull_request" | "issues") {
-        return Ok(None);
-    }
-    let payload: Value =
-        serde_json::from_slice(body).map_err(|_| DecodeError("The body must be JSON."))?;
-    Ok(match event {
-        "release" => release_line(&payload),
-        "pull_request" => change_line(&payload, "pull_request", "pull request", true),
-        _ => change_line(&payload, "issue", "issue", false),
-    })
-}
-
-/// `{repo}: {sender} published release {name or tag}`, for a published release alone.
-fn release_line(payload: &Value) -> Option<String> {
-    if payload["action"].as_str() != Some("published") {
-        return None;
-    }
-    let (repo, sender) = repo_and_sender(payload)?;
-    let release = &payload["release"];
-    let name = value_of(&release["name"]).or_else(|| value_of(&release["tag_name"]))?;
-    Some(line(
-        &format!("{repo}: {sender} published release {name}"),
-        &release["html_url"],
-    ))
-}
-
-/// `{repo}: {sender} {verb} {noun} #{number}: {title}`, for what `key` holds being opened or
-/// closed. A closed one that `can_merge` and was merged is `merged`.
-fn change_line(payload: &Value, key: &str, noun: &str, can_merge: bool) -> Option<String> {
-    let item = &payload[key];
-    let verb = match payload["action"].as_str()? {
-        "opened" => "opened",
-        "closed" if can_merge && item["merged"].as_bool() == Some(true) => "merged",
-        "closed" => "closed",
-        _ => return None,
-    };
-    let (repo, sender) = repo_and_sender(payload)?;
-    let number = item["number"].as_u64()?;
-    let title = value_of(&item["title"])?;
-    Some(line(
-        &format!("{repo}: {sender} {verb} {noun} #{number}: {title}"),
-        &item["html_url"],
-    ))
-}
-
-fn repo_and_sender(payload: &Value) -> Option<(String, String)> {
-    Some((
-        value_of(&payload["repository"]["full_name"])?,
-        value_of(&payload["sender"]["login"])?,
-    ))
-}
-
-/// A string from the payload ready for a line: on one line, with its Markdown escaped. `None`
-/// when it is absent, not a string or blank.
-fn value_of(value: &Value) -> Option<String> {
-    let one_line = value
-        .as_str()?
-        .split(|c: char| c.is_whitespace() || c.is_control())
+/// A value from a delivery ready for a message: a string that isn't blank, a number or a
+/// boolean, on one line, with whitespace and control characters turned into single spaces, format
+/// characters removed and its Markdown escaped. `None` for anything else, and for a string left
+/// blank by this.
+pub(super) fn value_of(value: &Value) -> Option<String> {
+    let text = raw_of(value)?;
+    let cleaned: String = text
+        .chars()
+        .filter_map(|c| {
+            if c.is_whitespace() || c.is_control() {
+                Some(' ')
+            } else if is_control_or_format(c) {
+                None
+            } else {
+                Some(c)
+            }
+        })
+        .collect();
+    let one_line = cleaned
+        .split(' ')
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
     (!one_line.is_empty()).then(|| escape_markdown(&one_line))
 }
 
-/// `html_url` when it can be a link: a plain address under [`GITHUB_ORIGIN`] of a sensible length,
-/// holding nothing Markdown or a mention could use.
-fn link_of(html_url: &Value) -> Option<&str> {
-    let url = html_url.as_str()?;
-    let rest = url.strip_prefix(GITHUB_ORIGIN)?;
+/// A value from a delivery as it was sent: a string that isn't blank, a number in decimal or a
+/// boolean as `true` or `false`. `None` for anything else.
+pub(super) fn raw_of(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+/// `url` when it can be a link: a plain address under `origin` of a sensible length, holding
+/// nothing Markdown or a mention could use.
+pub(super) fn link_of<'a>(url: &'a str, origin: &str) -> Option<&'a str> {
+    let rest = url.strip_prefix(origin)?;
     let plain = rest.bytes().all(|b| {
         b.is_ascii_graphic()
             && !matches!(
@@ -170,18 +136,13 @@ fn link_of(html_url: &Value) -> Option<&str> {
     (plain && !rest.is_empty() && url.len() <= MAX_LINK_CHARS).then_some(url)
 }
 
-/// The finished line: `text` neutralized and cut so that it and the link fit in
-/// [`MAX_LINE_CHARS`]. Neutralizing comes first, so what it adds counts and the cut cannot make a
-/// token, which needs its closing `>`.
-fn line(text: &str, html_url: &Value) -> String {
-    let link = link_of(html_url);
-    let room = MAX_LINE_CHARS - link.map_or(0, |url| url.len() + 1);
+/// `text` neutralized and cut so that it and `link`, after a space, fit in [`MAX_LINE_CHARS`].
+/// Neutralizing comes first, so what it adds counts and the cut cannot make a token, which needs
+/// its closing `>`.
+pub(super) fn fitted(text: &str, link: Option<&str>) -> String {
+    let room = MAX_LINE_CHARS - link.map_or(0, |url| url.chars().count() + 1);
     let text = neutralize_mentions(text);
-    let text = cut_chars(&text, room);
-    match link {
-        Some(url) => format!("{text} {url}"),
-        None => text.to_string(),
-    }
+    cut_chars(&text, room).to_string()
 }
 
 /// `text` cut to at most `max` characters on a character boundary, without a backslash left at the
@@ -203,6 +164,7 @@ fn cut_chars(text: &str, max: usize) -> &str {
 mod tests {
     use serde_json::json;
 
+    use crate::bot::webhook_format::{GITHUB, render};
     use crate::mention::parse_mention_ids;
     use crate::notification::decide::contains_whole_word;
 
@@ -244,6 +206,14 @@ mod tests {
                 "html_url": "https://github.com/acme/widgets/releases/tag/v1.2.0",
             },
         })
+    }
+
+    /// What a delivery with the `X-GitHub-Event` header `event` and `body` posts under the shipped
+    /// GitHub format.
+    fn github_text(event: &str, body: &[u8]) -> Result<Option<String>, DecodeError> {
+        let format = GITHUB.parsed().expect("the shipped format");
+        let headers = [("x-github-event".to_string(), event.to_string())];
+        render(&format, &headers, body).map(|rendered| rendered.message())
     }
 
     fn github(event: &str, payload: &Value) -> Option<String> {
@@ -519,7 +489,10 @@ mod tests {
     fn a_field_of_the_wrong_type_or_blank_posts_nothing() {
         let mut payload = pull_request("opened", false);
         payload["pull_request"]["number"] = json!("7");
-        assert_eq!(github("pull_request", &payload), None);
+        assert_eq!(
+            github("pull_request", &payload).as_deref(),
+            Some(format!("acme/widgets: ada opened pull request #7: Fix it {LINK}").as_str())
+        );
 
         let mut payload = pull_request("opened", false);
         payload["pull_request"]["title"] = json!(" \n ");
