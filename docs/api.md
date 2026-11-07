@@ -759,7 +759,9 @@ each list.
   `User.bot`, `ServerMember.isBot` and `ServerMember.bot`; `command_run_id`:
   `ExecuteCommandInput.runId` and `AuditLogEntry.runId`; `incoming_webhooks`: `IncomingWebhook`,
   `incomingWebhooks`, `createIncomingWebhook` and `revokeIncomingWebhook`; `read_marker`:
-  `UnreadCount.unreadAfter`, `markAsUnread` and the `ReadMarkerRewound` event). A client asks
+  `UnreadCount.unreadAfter`, `markAsUnread` and the `ReadMarkerRewound` event; `bot_events`:
+  `Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`, and
+  `/api/bot/v1/events`). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 
@@ -980,8 +982,8 @@ does `addConversationMembers` naming a bot; `removeConversationMember` still rem
 |---|---|---|
 | `bots(serverId): [Bot!]!` | Any member | The workspace's bots, deactivated ones included. `FORBIDDEN` for anyone else. |
 | `botTokens(botUserId): [BotToken!]!` | Owner, Moderator | The bot's tokens, revoked ones included, never their secret. `FORBIDDEN` for anyone else, `NOT_FOUND` for an unknown bot. |
-| `createBot(input): CreatedBot!` | Owner, Moderator | Creates a bot, a guest of the workspace in no channel, and its first token, labelled `default`. `CreatedBot.token` is shown this once. `VALIDATION` for the direct space, a bad field or a workspace with 25 active bots. |
-| `updateBot(input): Bot!` | Owner, Moderator | Changes the fields given. |
+| `createBot(input): CreatedBot!` | Owner, Moderator | Creates a bot, a guest of the workspace in no channel, and its first token, labelled `default`. `CreatedBot.token` is shown this once. `seesMemberJoins` is off when left out. `VALIDATION` for the direct space, a bad field or a workspace with 25 active bots. |
+| `updateBot(input): Bot!` | Owner, Moderator | Changes the fields given, `seesMemberJoins` among them, which says whether the bot gets `member_joined` events. |
 | `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and webhooks and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
 | `createBotToken(botUserId, label): CreatedBotToken!` | Owner, Moderator | A new token, shown this once. `VALIDATION` for a label that is not 1 to 64 characters, a deactivated bot or a bot with 5 active tokens. |
 | `revokeBotToken(tokenId): BotToken!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown token and for a token of a bot in a workspace the caller does not moderate. |

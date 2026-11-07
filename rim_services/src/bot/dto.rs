@@ -2,7 +2,8 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use rim_core::bot::model::{
-    Bot, BotToken, BotTokenId, IncomingWebhook, IncomingWebhookId, WebhookPreset,
+    Bot, BotFeedMessage, BotFeedPosition, BotToken, BotTokenId, IncomingWebhook, IncomingWebhookId,
+    WebhookPreset,
 };
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::{Message, MessageId};
@@ -23,11 +24,13 @@ pub struct BotDto {
     pub added_by_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub deactivated_at: Option<DateTime<Utc>>,
+    pub sees_member_joins: bool,
 }
 
 impl From<Bot> for BotDto {
     fn from(bot: Bot) -> Self {
         Self {
+            sees_member_joins: bot.sees_member_joins(),
             user_id: bot.user_id,
             server_id: bot.server_id,
             name: bot.name,
@@ -160,6 +163,20 @@ impl From<Message> for BotMessageDto {
     }
 }
 
+impl From<BotFeedMessage> for BotMessageDto {
+    fn from(message: BotFeedMessage) -> Self {
+        Self {
+            id: message.id,
+            conversation_id: message.conversation_id,
+            thread_id: message.thread_id,
+            author_id: message.sent_by,
+            text: message.text,
+            sent_at: message.sent_at,
+            edited_at: message.edited_at,
+        }
+    }
+}
+
 /// Where a bot's reading of its mentions got to: the last mention it was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BotMentionCursor {
@@ -173,6 +190,25 @@ pub struct BotMentionsPage {
     pub messages: Vec<BotMessageDto>,
     /// `None` when the page is empty.
     pub last: Option<BotMentionCursor>,
+}
+
+/// One thing a bot's feed tells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BotEventDto {
+    /// A message in one of its channels. `mentioned` says whether it mentions the bot.
+    Message {
+        message: BotMessageDto,
+        mentioned: bool,
+    },
+    /// A member joining its workspace.
+    MemberJoined { user_id: UserId, at: DateTime<Utc> },
+}
+
+/// One page of a bot's feed, oldest first, and where the next call goes on from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotEventsPage {
+    pub events: Vec<BotEventDto>,
+    pub cursor: BotFeedPosition,
 }
 
 /// An incoming webhook as its workspace's Owner and Moderators see it. Never its hash.

@@ -27,6 +27,7 @@ pub const CAPABILITIES: &[&str] = &[
     "command_run_id",
     "incoming_webhooks",
     "read_marker",
+    "bot_events",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.
@@ -192,7 +193,9 @@ impl ServerInfo {
     /// `conversation_member_removals` (`conversationMemberRemovals`), `notification_events`
     /// (`notificationEvents`), `bot_disclosure` (`User.isBot`, `User.bot`, `ServerMember.isBot`,
     /// `ServerMember.bot`), `command_run_id` (`ExecuteCommandInput.runId`, `AuditLogEntry.runId`),
-    /// `read_marker` (`UnreadCount.unreadAfter`, `markAsUnread`, the `ReadMarkerRewound` event).
+    /// `read_marker` (`UnreadCount.unreadAfter`, `markAsUnread`, the `ReadMarkerRewound` event),
+    /// `bot_events` (`Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`,
+    /// and `/api/bot/v1/events`).
     /// A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES

@@ -2,10 +2,14 @@
 //! `user` row of the kind `bot`, so it is keyed by its [`UserId`].
 
 use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use crate::conversation::model::ConversationId;
+use crate::message::model::MessageId;
+use crate::message_thread::model::MessageThreadId;
 use crate::model_id;
 use crate::server::model::ServerId;
+use crate::server_member::model::ServerMemberId;
 use crate::user::model::UserId;
 
 model_id!(BotTokenId);
@@ -27,6 +31,16 @@ pub struct Bot {
     pub added_by_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub deactivated_at: Option<DateTime<Utc>>,
+    /// From when an Owner or Moderator let it see members joining its workspace; `None` while they
+    /// don't.
+    pub member_joins_since: Option<DateTime<Utc>>,
+}
+
+impl Bot {
+    /// Whether it may see members joining its workspace now.
+    pub fn sees_member_joins(&self) -> bool {
+        self.member_joins_since.is_some()
+    }
 }
 
 /// A new bot, with what its `user` row is created with.
@@ -38,6 +52,8 @@ pub struct NewBot {
     pub run_by: String,
     pub reads_go_to: String,
     pub created_by: UserId,
+    /// Whether it sees members joining its workspace, from its creation on.
+    pub sees_member_joins: bool,
 }
 
 /// The fields of a bot to change; `None` leaves a field as it is.
@@ -46,6 +62,39 @@ pub struct BotPatch {
     pub name: Option<String>,
     pub run_by: Option<String>,
     pub reads_go_to: Option<String>,
+    /// Turning it on starts from now, and on a bot already on changes nothing. Turning it off
+    /// forgets the start.
+    pub sees_member_joins: Option<bool>,
+}
+
+/// A position in a bot's feed of events: a time and the id of the row at it. Rows of every kind
+/// sort together by this pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BotFeedPosition {
+    pub at: DateTime<Utc>,
+    pub id: Uuid,
+}
+
+/// A message of a bot's feed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotFeedMessage {
+    pub id: MessageId,
+    pub conversation_id: ConversationId,
+    pub thread_id: Option<MessageThreadId>,
+    pub sent_by: UserId,
+    pub text: Option<String>,
+    pub sent_at: DateTime<Utc>,
+    pub edited_at: Option<DateTime<Utc>>,
+    /// Whether the message mentions the bot reading it.
+    pub mentioned: bool,
+}
+
+/// A member joining the workspace, in a bot's feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotFeedJoin {
+    pub member_id: ServerMemberId,
+    pub user_id: UserId,
+    pub joined_at: DateTime<Utc>,
 }
 
 /// A bot's token, never with its hash.

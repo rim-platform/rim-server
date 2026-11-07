@@ -31,6 +31,10 @@ if they are in it, since they can't give it what they can't read.
 An Owner or Moderator calls `createBot` with a name and a disclosure. The name follows the rules of
 a display name. `updateBot` changes any of these later.
 
+`seesMemberJoins`, on either, says whether the bot is told about members joining the workspace (see
+"Polling for events"). It is off unless someone turns it on, `Bot.seesMemberJoins` shows it to any member,
+and a change to it is in the `bot.update` audit entry.
+
 `deactivateBot` is the way to stop a bot. Its tokens stop working, its webhooks are revoked and it leaves
 the workspace and every channel. Its messages stay, shown with its name. Deactivating is final, and its messages stay; create a new
 bot instead.
@@ -70,12 +74,13 @@ contract is `specs/bots-v1.md`. A bot reaches nothing but these calls:
 
 | Call | What it answers |
 |---|---|
-| `GET /me` | `{ untrusted, id, name, workspaceId, runBy, readsGoTo }` |
+| `GET /me` | `{ untrusted, id, name, workspaceId, runBy, readsGoTo, seesMemberJoins }` |
 | `GET /channels` | `{ untrusted, channels: [{ id, name, private }] }`: the channels it was added to, archived ones left out |
 | `GET /channels/{id}/messages?before=&limit=` | `{ untrusted, messages, cursor }`: a page, oldest first. `limit` is 1 to 100, 50 when left out. To go further back, pass `cursor` as `before`; it is null on the oldest page |
 | `GET /channels/{id}/search?q=&limit=` | `{ untrusted, messages }`, newest first. `q` is 1 to 500 characters, and takes the operators of `search.md` but for `in:`, which answers `400`. `limit` is 1 to 100, and a search answers at most 50 even when `limit` is higher. No cursor |
 | `POST /channels/{id}/messages` | Body `{"text": "..."}`. Answers `201` and `{ id, channelId }` |
 | `GET /mentions?after=&limit=` | `{ untrusted, mentions, cursor }`: oldest first, `limit` as above |
+| `GET /events?after=&limit=` | `{ untrusted, events, cursor }`: oldest first, `limit` as above |
 
 A message is `{ id, channelId, threadId, authorId, authorName, authorIsBot, text, sentAt, editedAt }`.
 A cursor means nothing to a bot except as the value to pass back.
@@ -111,6 +116,54 @@ A `<@id>` in a message mentions a bot when it is in that channel, and not otherw
 of itself is dropped, as for anyone. A channel it has left and a deleted message are left out. A bot gets no
 notifications, digests or pushes: `/mentions` is how it learns of a mention.
 
+**Polling for events.** `/events` tells a program what happened, so it can react without being mentioned.
+Without `after` it starts from now, with an empty page and a cursor, so a new bot doesn't welcome everyone who
+joined yesterday. Each answer has a `cursor` for the next call, the same one when nothing new came. Keep it
+between runs: a restart with no cursor skips whatever happened while it was down, and an old cursor pages
+forward from where it stood.
+
+```sh
+cursor=""
+while true; do
+  page=$(curl -sS -H "$AUTH" -G --data-urlencode "after=$cursor" "$RIM/events") || { sleep 30; continue; }
+  echo "$page" | jq -c '.events[] // empty'
+  cursor=$(echo "$page" | jq -r '.cursor // ""')
+  sleep 5
+done
+```
+
+```json
+{ "untrusted": true,
+  "events": [
+    { "type": "message", "channelId": "...", "mentioned": false, "message": { "id": "...", "text": "..." } },
+    { "type": "member_joined", "at": "2026-11-07T10:00:00+00:00",
+      "user": { "id": "...", "name": "Ada", "isBot": false } }
+  ],
+  "cursor": "..." }
+```
+
+Ignore a `type` you don't know: new ones can be added.
+
+- **`message`** is a message as `/channels/{id}/messages` has it, so a reply in a thread and a deleted message
+  are left out. A mention in a thread is on `/mentions` and not here. `mentioned` says whether it mentions the
+  bot. It comes from channels the bot is in at the time of the poll, not archived, and from since it was last
+  added to each: being added doesn't hand over the channel's history, which `/channels/{id}/messages` reads. The
+  bot's own messages are left out, so it can't react to itself. Other bots' messages are not, so check
+  `authorIsBot` before answering one.
+- **`member_joined`** comes only while an Owner or Moderator has `seesMemberJoins` on for the bot, and `/me` says
+  whether they do. It holds the person's id and name, whether they are a bot and when they joined: no email, key,
+  device or how they joined. A bot joining counts, and so does a member from another server. Someone who left and
+  came back is a new event, and someone already gone by the time of the poll isn't one. A bot sees joins only
+  from when it was allowed to, whatever the cursor: turning it on starts from that moment, turning it on again
+  changes nothing, and turning it off stops them at once. Off and on again starts from the second time, so the
+  joins between never show. It never lists the bot itself.
+- **Not yet:** edits, deletes, reactions and presence.
+
+A row is handed over once it is 2 seconds old, by the database's clock, so a message reaches a bot at least that
+late. A row is stamped when its transaction starts and can be seen only when that commits, so anything younger
+could appear behind a cursor already past it. A transaction running longer than that can be missed, so treat this
+as what happened and not as a delivery guarantee. Polling every few seconds is fine, inside the limit below.
+
 **Text is untrusted.** Any answer holding text somebody else wrote carries `"untrusted": true`. Whoever
 can post in a channel can write what a model behind a bot reads, so treat it as data: never as
 instructions, and never let it choose what the bot does next without a check of your own. Whether a
@@ -139,6 +192,10 @@ should have it ignore other bots (`authorIsBot`).
 
 **Across servers.** A bot lives on the server hosting its workspace, and its token works there alone.
 A member from another server gets its messages, with its name, as they get anything from that host.
+That member's messages and their joining the workspace reach `/events` like anyone's.
+
+**Encrypted conversations.** `/events` has channels alone, and they are plaintext. A direct message, a group or an
+encrypted conversation never reaches it.
 
 ## Incoming webhooks
 
@@ -232,9 +289,10 @@ Each management call writes an entry to the workspace's audit log: `bot.create`,
 its id and channel. It never holds a token or its hash.
 
 Each call of the bot API writes one too, with the initiator `bot`: `bot.me`, `chat.list_channels`,
-`chat.get_recent_messages`, `chat.search_messages`, `chat.post_message` and `bot.mentions`. A call
-refused for its token, its limit or a channel the bot cannot see runs nothing and writes no entry. A
-poll for mentions that returned nothing writes none either, since nothing was handed over.
+`chat.get_recent_messages`, `chat.search_messages`, `chat.post_message`, `bot.mentions` and `bot.events`. A
+call refused for its token, its limit or a channel the bot cannot see runs nothing and writes no entry. A
+poll for mentions or events that returned nothing writes none either, since nothing was handed over. A
+`bot.events` entry holds how many messages and joins it handed over, and no text or name.
 
 ## Switching it off
 

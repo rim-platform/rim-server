@@ -60,6 +60,8 @@ pub struct Bot {
     pub created_at: DateTime<Utc>,
     /// When it was deactivated; null while it is active.
     pub deactivated_at: Option<DateTime<Utc>>,
+    /// Whether an Owner or Moderator let it see members joining the workspace.
+    pub sees_member_joins: bool,
 }
 
 impl From<rim_services::bot::dto::BotDto> for Bot {
@@ -73,6 +75,7 @@ impl From<rim_services::bot::dto::BotDto> for Bot {
             added_by_name: value.added_by_name,
             created_at: value.created_at,
             deactivated_at: value.deactivated_at,
+            sees_member_joins: value.sees_member_joins,
         }
     }
 }
@@ -144,6 +147,8 @@ pub struct CreateBotInput {
     pub run_by: String,
     /// Where what it reads goes: 1 to 200 characters of plain text.
     pub reads_go_to: String,
+    /// Whether it sees members joining the workspace; off when left out.
+    pub sees_member_joins: Option<bool>,
 }
 
 /// Change a bot; a field left out stays as it is.
@@ -153,6 +158,8 @@ pub struct UpdateBotInput {
     pub name: Option<String>,
     pub run_by: Option<String>,
     pub reads_go_to: Option<String>,
+    /// Whether it sees members joining the workspace.
+    pub sees_member_joins: Option<bool>,
 }
 
 /// How an incoming webhook's body becomes text.
