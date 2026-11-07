@@ -425,8 +425,9 @@ sessions".
 `/api/hooks/<token>` on your server's address into the service. A delivery to it posts nothing and answers
 `{"ok":true,"test":true}`. When you save, pass the session's id as `testSessionId` to
 `createIncomingWebhook`, and the webhook keeps that token: the URL in the service starts posting, with nothing
-to change. If the session ran out first, the webhook gets a new token, so check the answer's token against the
-one you pasted.
+to change. The answer then has `keptTestUrl` true and an empty `token`, since RIM holds only the token's hash and
+you already have the URL. If the session ran out first, `keptTestUrl` is false and `token` is a new one, shown
+once: put that URL in the service instead.
 
 **For an existing webhook.** `startWebhookTestSession(serverId, webhookId)` has no URL of its own. The webhook
 keeps posting under its saved format, and the session gets a copy of each delivery while it is open.

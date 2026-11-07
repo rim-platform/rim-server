@@ -295,10 +295,12 @@ its owner once they no longer have the standing to start it.
 
 **Saving promotes an unbound session.** `createIncomingWebhook` takes `testSessionId`. When the session is the
 caller's, for the channel's workspace and still open, the new webhook keeps that session's token, so a URL
-already pasted into a service starts posting with nothing to change, and the session ends. When it has expired
-or ended, the webhook gets a new token as without one, so a client compares the answer's token with the
-session's to tell the person the URL changed. Someone else's session,
-or one of another workspace, MUST be refused. A session can be promoted once.
+already pasted into a service starts posting with nothing to change, and the session ends. The answer's
+`keptTestUrl` is then true and its `token` is the empty string: the server holds only the token's hash, and
+the client already has the URL. When the session has expired or ended, `keptTestUrl` is false and `token` is
+a new one, shown once, as without a session. A client MUST read `keptTestUrl` to tell the person whether the
+URL changed. Someone else's session, or one of another workspace, MUST be refused. A session can be promoted
+once. A client that never sends `testSessionId` always gets a real token.
 
 **What a delivery holds.** When it arrived, its `Content-Type`, the `x-` headers as a format reads them, and the
 body as text. The header names a format may not use (see "Webhook formats") MUST be dropped, by the same list,
