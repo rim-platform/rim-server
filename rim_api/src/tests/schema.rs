@@ -241,6 +241,7 @@ async fn server_info_lists_its_capabilities() {
         "incoming_webhooks",
         "read_marker",
         "bot_events",
+        "pipeline_post_as_bot",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),

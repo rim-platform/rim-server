@@ -623,6 +623,8 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            bot_repo: Arc::clone(&self.bot_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 

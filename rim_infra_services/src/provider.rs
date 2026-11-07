@@ -519,7 +519,8 @@ impl DefaultAppServiceProvider {
             )
             .with_direct_space(federation.direct_space_id)
             .with_limits(limits)
-            .with_default_workspace(default_workspace_rules),
+            .with_default_workspace(default_workspace_rules)
+            .with_feature_gate(Arc::clone(&feature_gate)),
         );
 
         let device_link_service: Arc<dyn DeviceLinkService> =

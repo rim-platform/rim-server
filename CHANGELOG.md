@@ -23,6 +23,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- A pipeline can welcome people: an Owner or Moderator can add a Post as bot action to the Member Joined
+  trigger (`PipelineActionInput.postAsBot`, `PipelineActionGql.postAsBot`, `specs/bots-v1.md`). Listed in
+  `serverInfo.capabilities` as `pipeline_post_as_bot`. A server rolled back to a release without it can't
+  read a pipeline that has one, so remove those first.
 - Bots can poll `GET /api/bot/v1/events` for new messages in their channels and, if allowed, members
   joining. An Owner or Moderator allows it with `Bot.seesMemberJoins`, in `createBot` and `updateBot`,
   and `GET /api/bot/v1/me` says whether it is on (`specs/bots-v1.md`). Listed in

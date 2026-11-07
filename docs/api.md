@@ -761,7 +761,8 @@ each list.
   `incomingWebhooks`, `createIncomingWebhook` and `revokeIncomingWebhook`; `read_marker`:
   `UnreadCount.unreadAfter`, `markAsUnread` and the `ReadMarkerRewound` event; `bot_events`:
   `Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`, and
-  `/api/bot/v1/events`). A client asks
+  `/api/bot/v1/events`; `pipeline_post_as_bot`: `PipelineActionGql.postAsBot` and
+  `PipelineActionInput.postAsBot`). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 
