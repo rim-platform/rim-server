@@ -5,7 +5,8 @@ use std::time::Instant;
 use async_trait::async_trait;
 use dashmap::DashMap;
 
-use rim_core::conversation::model::{Conversation, ConversationId};
+use rim_core::bot::repository::BotRepository;
+use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::pipeline::model::{
@@ -14,8 +15,10 @@ use rim_core::pipeline::model::{
 };
 use rim_core::pipeline::repository::PipelineRepository;
 use rim_core::server::model::ServerId;
+use rim_core::server_feature::model::ServerFeature;
 use rim_core::server_member::repository::ServerMemberRepository;
-use rim_core::user::model::UserId;
+use rim_core::user::model::{User, UserHandle, UserId};
+use rim_core::user::repository::UserRepository;
 use rim_services::command::bounds::{
     MAX_DESCRIPTION_CHARS, MAX_STEP_ARGS_BYTES, ensure_args_size, ensure_chars,
     ensure_command_id_size,
@@ -26,16 +29,22 @@ use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::command::service::CommandService;
 use rim_services::events::visibility::user_can_see_event_as;
 use rim_services::events::{Broadcaster, WorkspaceEvent};
+use rim_services::feature::service::FeatureGate;
 use rim_services::limits::{InstanceLimits, ensure_below, member_share};
 use rim_services::pipeline::dto::{
-    FilterConditionDto, PipelineActionDto, PipelineDto, PipelineFilterDto, PipelineFiredResult,
-    PipelineTriggerDto,
+    FilterConditionDto, POST_AS_BOT_ARGS_KEY, POST_AS_BOT_COMMAND, PipelineActionDto, PipelineDto,
+    PipelineFilterDto, PipelineFiredResult, PipelineTriggerDto, PipelineTriggerKindDto,
+    post_as_bot_args,
 };
 use rim_services::pipeline::request::{
     CreatePipelineCmd, DeletePipelineCmd, ListPipelinesCmd, TogglePipelineCmd, UpdatePipelineCmd,
 };
 use rim_services::pipeline::service::PipelineService;
 use rim_services::{Actor, ServiceError, ServiceResult};
+
+use crate::bot::webhook_text::{escape_markdown, neutralize_mentions};
+use crate::display_name::is_control_or_format;
+use crate::message::MAX_MESSAGE_TEXT_LENGTH;
 
 const MAX_PIPELINES_PER_USER_PER_SERVER: u64 = 50;
 const RATE_LIMIT_WINDOW_SECS: u64 = 60;
@@ -48,6 +57,11 @@ const MAX_FILTER_CONDITIONS: usize = 5;
 const MAX_FILTER_PATTERN_CHARS: usize = 256;
 /// The refusal of a pipeline action naming a user command or a macro.
 const COMPOSED_ACTION: &str = "pipeline actions must not reference user commands or macros";
+/// The refusal of a command that claims to be a Post as bot action and is not one this pipeline
+/// has: a client that does not know the action cannot change it.
+const CHANGED_POST_AS_BOT: &str = "this is a Post as bot action, which this app cannot change: update the app or remove the action";
+/// The most characters of an unknown placeholder a refusal repeats.
+const MAX_PLACEHOLDER_CHARS_SHOWN: usize = 64;
 
 #[derive(Clone)]
 pub struct PipelineRepos {
@@ -57,6 +71,10 @@ pub struct PipelineRepos {
     pub conversation_repo: Arc<dyn ConversationRepository>,
     /// Answers whether a creator is a member of that conversation.
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
+    /// Answers whether a Post as bot action's bot is active in the workspace.
+    pub bot_repo: Arc<dyn BotRepository>,
+    /// Gives a Post as bot action who joined.
+    pub user_repo: Arc<dyn UserRepository>,
 }
 
 /// One workspace event and what has been decided about who may see it, so pipelines that share
@@ -95,6 +113,8 @@ pub struct DefaultPipelineService {
     /// The server's default workspace, where no per-workspace cap applies and accounts in
     /// probation create none; `None` where none is wired.
     default_workspace: Option<crate::default_workspace_rules::DefaultWorkspaceRules>,
+    /// Whether bots are switched on for the instance; without it they count as on.
+    feature_gate: Option<Arc<dyn FeatureGate>>,
 }
 
 impl DefaultPipelineService {
@@ -112,7 +132,13 @@ impl DefaultPipelineService {
             direct_space_id: None,
             limits: InstanceLimits::default(),
             default_workspace: None,
+            feature_gate: None,
         }
+    }
+
+    pub fn with_feature_gate(mut self, feature_gate: Arc<dyn FeatureGate>) -> Self {
+        self.feature_gate = Some(feature_gate);
+        self
     }
 
     pub fn with_default_workspace(
@@ -177,6 +203,216 @@ impl DefaultPipelineService {
             Ok(())
         } else {
             Err(ServiceError::PermissionDenied)
+        }
+    }
+
+    /// `FeatureDisabled` while the instance has bots off.
+    fn require_bots(&self) -> ServiceResult<()> {
+        match &self.feature_gate {
+            Some(gate) => gate.require(ServerFeature::Bots),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether `user_id` is an Owner or Moderator of `server_id`.
+    async fn is_moderator(&self, server_id: ServerId, user_id: UserId) -> ServiceResult<bool> {
+        Ok(self
+            .repos
+            .server_member_repo
+            .get_member(server_id, user_id)
+            .await?
+            .is_some_and(|member| member.member_role.is_moderator()))
+    }
+
+    /// Why the bot cannot post in the channel for those in `people`, or `None` when it can: it is
+    /// active and in `server_id`, the channel is a plaintext channel there that is not archived,
+    /// the bot is in it and, when it is private, so is each of `people`. A private channel they are
+    /// not in reads as one that does not exist.
+    ///
+    /// # Errors
+    /// A repository failure while looking any of it up.
+    async fn post_target_problem(
+        &self,
+        server_id: ServerId,
+        bot_user_id: UserId,
+        conversation_id: ConversationId,
+        people: &[UserId],
+    ) -> ServiceResult<Option<&'static str>> {
+        const NO_CHANNEL: &str = "it must post in a plaintext channel that is not archived";
+        let bot = self.repos.bot_repo.find_bot(bot_user_id).await?;
+        if !bot.is_some_and(|bot| bot.server_id == server_id && bot.deactivated_at.is_none()) {
+            return Ok(Some("it must post as an active bot of this workspace"));
+        }
+        let conversation = self
+            .repos
+            .conversation_repo
+            .get_by_id(conversation_id)
+            .await?;
+        let Some(conversation) = conversation.filter(|conversation| {
+            conversation.server_id == server_id
+                && conversation.conversation_type == ConversationType::Channel
+                && !conversation.is_encrypted()
+                && conversation.archived_at.is_none()
+        }) else {
+            return Ok(Some(NO_CHANNEL));
+        };
+        if conversation.is_private {
+            for person in people {
+                if !self
+                    .repos
+                    .conversation_member_repo
+                    .is_member(conversation_id, *person)
+                    .await?
+                {
+                    return Ok(Some(NO_CHANNEL));
+                }
+            }
+        }
+        if !self
+            .repos
+            .conversation_member_repo
+            .is_member(conversation_id, bot_user_id)
+            .await?
+        {
+            return Ok(Some("the bot must be in the channel: add it there first"));
+        }
+        Ok(None)
+    }
+
+    /// Refuses a save whose Post as bot actions the people involved may not make. Any such action
+    /// needs the Member Joined trigger and bots on. One the pipeline does not already have also
+    /// needs `actor` and its creator to be Owner or Moderator and a target it can post in, which a
+    /// kept one has checked again each time it fires.
+    ///
+    /// # Errors
+    /// `PermissionDenied` for an `actor` who is neither, `FeatureDisabled` while bots are off and
+    /// `Validation` for the rest.
+    async fn ensure_post_as_bot_allowed(
+        &self,
+        server_id: ServerId,
+        actor: UserId,
+        creator: UserId,
+        existing: Option<&Pipeline>,
+        trigger: &PipelineTriggerDto,
+        actions: &[PipelineActionDto],
+    ) -> ServiceResult<()> {
+        let posts = actions
+            .iter()
+            .filter(|action| matches!(action, PipelineActionDto::PostAsBot { .. }));
+        if posts.clone().next().is_none() {
+            return Ok(());
+        }
+        if !matches!(trigger.kind, PipelineTriggerKindDto::MemberJoined) {
+            return Err(ServiceError::Validation(
+                "a Post as bot action can only run on the Member Joined trigger for now".into(),
+            ));
+        }
+        self.require_bots()?;
+        for post in posts {
+            let PipelineActionDto::PostAsBot {
+                bot_user_id,
+                conversation_id,
+                ..
+            } = post
+            else {
+                continue;
+            };
+            let as_stored = PipelineAction::from(post.clone());
+            if existing.is_some_and(|pipeline| pipeline.actions.contains(&as_stored)) {
+                continue;
+            }
+            if !self.is_moderator(server_id, actor).await? {
+                return Err(ServiceError::PermissionDenied);
+            }
+            if !self.is_moderator(server_id, creator).await? {
+                return Err(ServiceError::Validation(
+                    "this pipeline's creator is not an Owner or Moderator, so a Post as bot action on it would never run"
+                        .into(),
+                ));
+            }
+            if let Some(problem) = self
+                .post_target_problem(server_id, *bot_user_id, *conversation_id, &[actor, creator])
+                .await?
+            {
+                return Err(ServiceError::Validation(format!(
+                    "a Post as bot action cannot run: {problem}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Run a Post as bot action of `pipeline` for `joiner`, after checking again everything its
+    /// save checked. The author is the bot, under the gates of any post of a bot.
+    ///
+    /// # Errors
+    /// Why nothing was posted, for the log.
+    async fn post_as_bot(
+        &self,
+        pipeline: &Pipeline,
+        joiner: Option<&User>,
+        bot_user_id: UserId,
+        conversation_id: ConversationId,
+        text: &str,
+    ) -> Result<(), String> {
+        let server_id = pipeline.server_id;
+        self.require_bots().map_err(|e| e.to_string())?;
+        if !matches!(pipeline.trigger.kind, PipelineTriggerKind::MemberJoined) {
+            return Err("its trigger is not Member Joined".to_string());
+        }
+        let joiner = joiner.ok_or("who joined could not be read")?;
+        if joiner.is_bot {
+            return Err("a bot joined".to_string());
+        }
+        let creator = pipeline.created_by;
+        if !self
+            .is_moderator(server_id, creator)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            return Err("its creator is no longer an Owner or Moderator".to_string());
+        }
+        if let Some(problem) = self
+            .post_target_problem(server_id, bot_user_id, conversation_id, &[creator])
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            return Err(problem.to_string());
+        }
+        let result = self
+            .command_service
+            .execute_command(ExecuteCommandCmd {
+                actor: Actor::new(bot_user_id),
+                command_id: POST_AS_BOT_COMMAND.to_string(),
+                args: Some(serde_json::json!({
+                    "server_id": server_id.to_string(),
+                    "conversation_id": conversation_id.to_string(),
+                    "text": render_post_text(text, joiner),
+                })),
+                context: Some(CommandContextDto {
+                    workspace_id: Some(server_id),
+                    conversation_id: Some(conversation_id),
+                    thread_id: None,
+                    selected_text: None,
+                    selected_message_id: None,
+                    selected_message_ids: vec![],
+                    focused_surface: None,
+                    active_panel: None,
+                }),
+                confirmation: None,
+                is_pipe: false,
+                initiator: CommandInitiator::Bot,
+                run_id: None,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        use rim_services::command::dto::CommandResultStatusDto;
+        match result.status {
+            CommandResultStatusDto::Success => Ok(()),
+            CommandResultStatusDto::ConfirmationRequired => {
+                Err("the post asked for a confirmation".to_string())
+            }
+            CommandResultStatusDto::Error => Err(result.message),
         }
     }
 
@@ -339,11 +575,11 @@ impl DefaultPipelineService {
         Ok(())
     }
 
-    /// Refuses more than [`MAX_ACTIONS`] actions, or an action that names a user command, a
+    /// Refuses more than [`MAX_ACTIONS`] actions, an action that names a user command, a
     /// macro or no builtin command, has a command id longer than 256 bytes, or has arguments
-    /// that serialize to more than [`MAX_STEP_ARGS_BYTES`]. A user command is refused because
-    /// each action runs with its own budget of builtin steps, which a user command could fill on
-    /// every firing.
+    /// that serialize to more than [`MAX_STEP_ARGS_BYTES`], and a Post as bot text
+    /// [`validate_post_text`] refuses. A user command is refused because each action runs with
+    /// its own budget of builtin steps, which a user command could fill on every firing.
     ///
     /// # Errors
     ///
@@ -355,7 +591,13 @@ impl DefaultPipelineService {
             )));
         }
         for action in actions {
-            let PipelineActionDto::ExecuteCommand { command_id, args } = action;
+            let (command_id, args) = match action {
+                PipelineActionDto::ExecuteCommand { command_id, args } => (command_id, args),
+                PipelineActionDto::PostAsBot { text, .. } => {
+                    validate_post_text(text)?;
+                    continue;
+                }
+            };
             if is_composed_command(command_id) {
                 return Err(ServiceError::Validation(COMPOSED_ACTION.to_string()));
             }
@@ -529,6 +771,141 @@ impl DefaultPipelineService {
     }
 }
 
+/// `actions` with each command a client sent back in place of a Post as bot action turned back into
+/// that action. Such a client knows only `commandId` and `args`, so saving a pipeline it did not
+/// change must not turn the bot's post into a command run as the pipeline's creator.
+///
+/// # Errors
+/// `Validation` for a command marked as a Post as bot action that `existing` does not have.
+fn restore_post_as_bot(
+    existing: Option<&Pipeline>,
+    actions: Vec<PipelineActionDto>,
+) -> ServiceResult<Vec<PipelineActionDto>> {
+    actions
+        .into_iter()
+        .map(|action| {
+            let args = match &action {
+                PipelineActionDto::ExecuteCommand {
+                    command_id,
+                    args: Some(args),
+                } if command_id == POST_AS_BOT_COMMAND
+                    && args.get(POST_AS_BOT_ARGS_KEY).is_some() =>
+                {
+                    args
+                }
+                _ => return Ok(action),
+            };
+            existing
+                .into_iter()
+                .flat_map(|pipeline| &pipeline.actions)
+                .find_map(|kept| match kept {
+                    PipelineAction::PostAsBot {
+                        bot_user_id,
+                        conversation_id,
+                        text,
+                    } if post_as_bot_args(*bot_user_id, *conversation_id, text) == *args => {
+                        Some(PipelineActionDto::from(kept.clone()))
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| ServiceError::Validation(CHANGED_POST_AS_BOT.to_string()))
+        })
+        .collect()
+}
+
+/// What each `{...}` in `text` names, in order; a `{` with no `}` after it is plain text.
+fn placeholders(text: &str) -> impl Iterator<Item = &str> {
+    text.split('{')
+        .skip(1)
+        .filter_map(|part| part.split_once('}').map(|(name, _)| name))
+}
+
+/// Refuses a Post as bot text that is empty, over a message's limit or holds a `{...}` other than
+/// `{username}` and `{name}`, so a typo doesn't get posted to everyone.
+///
+/// # Errors
+/// `Validation` naming the bound or the placeholder.
+fn validate_post_text(text: &str) -> ServiceResult<()> {
+    let chars = text.trim().chars().count();
+    if chars == 0 || chars > MAX_MESSAGE_TEXT_LENGTH {
+        return Err(ServiceError::Validation(format!(
+            "a Post as bot text must be 1 to {MAX_MESSAGE_TEXT_LENGTH} characters"
+        )));
+    }
+    if let Some(unknown) = placeholders(text).find(|name| !matches!(*name, "username" | "name")) {
+        let shown: String = unknown.chars().take(MAX_PLACEHOLDER_CHARS_SHOWN).collect();
+        return Err(ServiceError::Validation(format!(
+            "a Post as bot text takes only {{username}} and {{name}}, not {{{shown}}}"
+        )));
+    }
+    Ok(())
+}
+
+/// A value somebody else wrote, made safe to put in a post: no control or format character, which
+/// could break a line or reorder the text around it, and no Markdown.
+fn plain_value(value: &str) -> String {
+    let kept: String = value
+        .chars()
+        .filter(|c| !is_control_or_format(*c))
+        .collect();
+    escape_markdown(&kept)
+}
+
+/// The text a Post as bot action posts for `joiner`: its placeholders filled in one pass, so a name
+/// holding a placeholder stays as it is, and every mention in the result made plain, the template's
+/// own included.
+fn render_post_text(template: &str, joiner: &User) -> String {
+    let username = match &joiner.handle {
+        UserHandle::Home { username, .. } => username.as_str(),
+        UserHandle::Local | UserHandle::Unknown => joiner.username.as_str(),
+    };
+    let username = plain_value(username);
+    let name = joiner
+        .display_name
+        .as_deref()
+        .map(plain_value)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| username.clone());
+
+    let mut filled = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('{') {
+        let Some((placeholder, tail)) = after.split_once('}') else {
+            break;
+        };
+        filled.push_str(before);
+        match placeholder {
+            "username" => filled.push_str(&username),
+            "name" => filled.push_str(&name),
+            other => {
+                filled.push('{');
+                filled.push_str(other);
+                filled.push('}');
+            }
+        }
+        rest = tail;
+    }
+    filled.push_str(rest);
+    neutralize_mentions(&filled)
+}
+
+/// Whether `pipeline` has a Post as bot action.
+fn posts_as_bot(pipeline: &Pipeline) -> bool {
+    pipeline
+        .actions
+        .iter()
+        .any(|action| matches!(action, PipelineAction::PostAsBot { .. }))
+}
+
+/// Whether every action of `pipeline` is a Post as bot action.
+fn only_posts_as_bot(pipeline: &Pipeline) -> bool {
+    !pipeline.actions.is_empty()
+        && pipeline
+            .actions
+            .iter()
+            .all(|action| matches!(action, PipelineAction::PostAsBot { .. }))
+}
+
 /// Whether `command_id` names a user command or a macro, which a pipeline action may not run.
 fn is_composed_command(command_id: &str) -> bool {
     command_id.starts_with("user.") || command_id.starts_with("macro.")
@@ -580,6 +957,10 @@ fn event_message_text(event: &WorkspaceEvent) -> Option<String> {
 impl PipelineService for DefaultPipelineService {
     async fn create(&self, cmd: CreatePipelineCmd) -> ServiceResult<PipelineDto> {
         self.ensure_member(cmd.server_id, cmd.actor.user_id).await?;
+        let cmd = CreatePipelineCmd {
+            actions: restore_post_as_bot(None, cmd.actions)?,
+            ..cmd
+        };
         Self::validate_definition(
             &cmd.name,
             cmd.description.as_deref(),
@@ -588,6 +969,15 @@ impl PipelineService for DefaultPipelineService {
             &cmd.actions,
             cmd.cooldown_secs,
         )?;
+        self.ensure_post_as_bot_allowed(
+            cmd.server_id,
+            cmd.actor.user_id,
+            cmd.actor.user_id,
+            None,
+            &cmd.trigger,
+            &cmd.actions,
+        )
+        .await?;
 
         // Quota check
         let in_default_workspace = self
@@ -701,6 +1091,10 @@ impl PipelineService for DefaultPipelineService {
             .ok_or(ServiceError::NotFound)?;
 
         self.ensure_can_manage(&existing, cmd.actor.user_id).await?;
+        let cmd = UpdatePipelineCmd {
+            actions: restore_post_as_bot(Some(&existing), cmd.actions)?,
+            ..cmd
+        };
         Self::validate_definition(
             &cmd.name,
             cmd.description.as_deref(),
@@ -709,6 +1103,15 @@ impl PipelineService for DefaultPipelineService {
             &cmd.actions,
             cmd.cooldown_secs,
         )?;
+        self.ensure_post_as_bot_allowed(
+            existing.server_id,
+            cmd.actor.user_id,
+            existing.created_by,
+            Some(&existing),
+            &cmd.trigger,
+            &cmd.actions,
+        )
+        .await?;
 
         let trigger: PipelineTrigger = cmd.trigger.into();
         let filter = cmd.filter.map(PipelineFilter::from);
@@ -793,6 +1196,18 @@ impl PipelineService for DefaultPipelineService {
 
         let mut results = Vec::new();
         let mut audience = EventAudience::new(&event, server_id);
+        let joiner = match &event {
+            WorkspaceEvent::MemberJoined { user_id, .. } if pipelines.iter().any(posts_as_bot) => {
+                match self.repos.user_repo.get_by_id(*user_id).await {
+                    Ok(joiner) => joiner,
+                    Err(e) => {
+                        tracing::warn!(user_id = %user_id, "could not read who joined: {e}");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
 
         for pipeline in &pipelines {
             if !Self::matches_trigger(pipeline, &event) {
@@ -819,6 +1234,18 @@ impl PipelineService for DefaultPipelineService {
                     pipeline_name: pipeline.name.clone(),
                     actions_executed: 0,
                     skipped_reason: Some("filter did not match".into()),
+                });
+                continue;
+            }
+
+            // A bot joining doesn't fire a pipeline that would only welcome it, so it spends none
+            // of the cooldown or the firings of the next person to join.
+            if only_posts_as_bot(pipeline) && joiner.as_ref().is_some_and(|joiner| joiner.is_bot) {
+                results.push(PipelineFiredResult {
+                    pipeline_id: pipeline.id.to_string(),
+                    pipeline_name: pipeline.name.clone(),
+                    actions_executed: 0,
+                    skipped_reason: Some("a bot joined".into()),
                 });
                 continue;
             }
@@ -895,6 +1322,30 @@ impl PipelineService for DefaultPipelineService {
             let mut actions_executed = 0;
             for action in pipeline.actions.iter().take(MAX_ACTIONS) {
                 match action {
+                    PipelineAction::PostAsBot {
+                        bot_user_id,
+                        conversation_id,
+                        text,
+                    } => match self
+                        .post_as_bot(
+                            pipeline,
+                            joiner.as_ref(),
+                            *bot_user_id,
+                            *conversation_id,
+                            text,
+                        )
+                        .await
+                    {
+                        Ok(()) => actions_executed += 1,
+                        Err(reason) => {
+                            tracing::warn!(
+                                pipeline_id = %pipeline.id,
+                                bot_user_id = %bot_user_id,
+                                reason = %reason,
+                                "pipeline's Post as bot action skipped",
+                            );
+                        }
+                    },
                     PipelineAction::ExecuteCommand { command_id, .. }
                         if is_composed_command(command_id) =>
                     {
@@ -1012,6 +1463,9 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use rim_core::bot::repository::MockBotRepository;
+    use rim_core::user::repository::MockUserRepository;
+
     use super::*;
     use rim_core::conversation::model::{ConversationType, PostingPolicy};
     use rim_core::conversation::repository::MockConversationRepository;
@@ -1103,6 +1557,8 @@ mod tests {
                 server_member_repo: Arc::new(member_repo),
                 conversation_repo: Arc::new(MockConversationRepository::new()),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                bot_repo: Arc::new(MockBotRepository::new()),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             Arc::new(MockCommandService::new()),
             Arc::new(rim_services::events::NoopBroadcaster),
@@ -2089,6 +2545,8 @@ mod tests {
                     server_member_repo: Arc::new(self.member_repo()),
                     conversation_repo: Arc::new(self.conversation_repo()),
                     conversation_member_repo: Arc::new(self.conversation_member_repo()),
+                    bot_repo: Arc::new(MockBotRepository::new()),
+                    user_repo: Arc::new(MockUserRepository::new()),
                 },
                 Arc::new(command_service),
                 Arc::clone(&events) as Arc<dyn Broadcaster>,
@@ -2350,6 +2808,8 @@ mod tests {
                 server_member_repo: Arc::new(members),
                 conversation_repo: Arc::new(conversations),
                 conversation_member_repo: Arc::new(conversation_members),
+                bot_repo: Arc::new(MockBotRepository::new()),
+                user_repo: Arc::new(MockUserRepository::new()),
             },
             Arc::new(command_service),
             Arc::new(rim_services::events::NoopBroadcaster),
@@ -2655,5 +3115,226 @@ mod tests {
 
         assert_eq!(h.commands(), MAX_ACTIONS - 1);
         assert_eq!(results[0].actions_executed, MAX_ACTIONS - 1);
+    }
+
+    // ── Post as bot ──────────────────────────────────────────────────────
+
+    fn joiner(username: &str, display_name: Option<&str>, handle: UserHandle) -> User {
+        let now = chrono::Utc::now();
+        User {
+            id: UserId::new(),
+            username: username.to_string(),
+            created_at: now,
+            updated_at: now,
+            last_login_at: None,
+            display_name: display_name.map(str::to_string),
+            avatar_url: None,
+            status_text: None,
+            bio: None,
+            email: None,
+            timezone: None,
+            principal_id: None,
+            deletion_scheduled_for: None,
+            profile_locked_until: None,
+            handle,
+            is_bot: false,
+        }
+    }
+
+    fn post_dto(bot_user_id: UserId, conversation_id: ConversationId) -> PipelineActionDto {
+        PipelineActionDto::PostAsBot {
+            bot_user_id,
+            conversation_id,
+            text: "Hello {name}".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_post_text_takes_two_placeholders_and_names_any_other() {
+        for good in [
+            "Hello",
+            "Hello {name}",
+            "{username} and {name}",
+            "a { with no end",
+            "an end } with no start",
+        ] {
+            assert!(validate_post_text(good).is_ok(), "{good}");
+        }
+        for bad in ["", "   ", "{}", "{Name}", "{ name }", "{name} {nmae}"] {
+            assert!(
+                matches!(validate_post_text(bad), Err(ServiceError::Validation(_))),
+                "{bad}"
+            );
+        }
+        let Err(ServiceError::Validation(message)) = validate_post_text("Hi {usernme}") else {
+            panic!("refused");
+        };
+        assert!(message.contains("{usernme}"), "{message}");
+        let long = format!("{{{}}}", "x".repeat(500));
+        let Err(ServiceError::Validation(message)) = validate_post_text(&long) else {
+            panic!("refused");
+        };
+        assert!(message.len() < 200, "{message}");
+        assert!(validate_post_text(&"x".repeat(MAX_MESSAGE_TEXT_LENGTH)).is_ok());
+        assert!(validate_post_text(&"x".repeat(MAX_MESSAGE_TEXT_LENGTH + 1)).is_err());
+    }
+
+    #[test]
+    fn a_rendered_post_shows_names_and_lets_nothing_through() {
+        let plain = joiner("ada", Some("Ada L"), UserHandle::Local);
+        assert_eq!(
+            render_post_text("Hi {name} ({username})", &plain),
+            "Hi Ada L (ada)"
+        );
+        assert_eq!(render_post_text("a { b", &plain), "a { b");
+
+        // Someone from another server by their name at home, and a name of nothing shown falls back.
+        let remote = joiner(
+            "remote-3f2a",
+            Some("\u{202e}\u{200b}"),
+            UserHandle::Home {
+                username: "rita".to_string(),
+                domain: "elsewhere.example".to_string(),
+            },
+        );
+        assert_eq!(render_post_text("{username} {name}", &remote), "rita rita");
+        let unknown = joiner("remote-3f2a", None, UserHandle::Unknown);
+        assert_eq!(render_post_text("{name}", &unknown), "remote-3f2a");
+
+        // A name is not filled in again, and everything it tries is made plain.
+        let hostile = joiner(
+            "mallory",
+            Some("{username} @Channel <@abc> *b*\u{202e}\nx"),
+            UserHandle::Local,
+        );
+        let text = render_post_text("@here {name}", &hostile);
+        assert!(text.contains("{username}"), "{text:?}");
+        assert!(!text.contains("mallory"), "{text:?}");
+        assert!(!text.contains("@here"), "{text:?}");
+        assert!(!text.contains("@Channel"), "{text:?}");
+        assert!(!text.contains("<@"), "{text:?}");
+        assert!(text.contains("\\*b\\*"), "{text:?}");
+        assert!(!text.contains(['\u{202e}', '\n']), "{text:?}");
+    }
+
+    #[test]
+    fn a_command_sent_back_for_a_post_becomes_it_again_only_when_unchanged() {
+        let (bot, channel) = (UserId::new(), ConversationId::new());
+        let mut pipeline = make_pipeline(ServerId::new(), UserId::new());
+        pipeline.actions = vec![post_dto(bot, channel).into()];
+        let sent_back = |args| PipelineActionDto::ExecuteCommand {
+            command_id: POST_AS_BOT_COMMAND.to_string(),
+            args: Some(args),
+        };
+        let same = post_as_bot_args(bot, channel, "Hello {name}");
+
+        let restored =
+            restore_post_as_bot(Some(&pipeline), vec![sent_back(same.clone())]).expect("kept");
+        assert_eq!(restored, vec![post_dto(bot, channel)]);
+
+        for refused in [
+            restore_post_as_bot(None, vec![sent_back(same)]),
+            restore_post_as_bot(
+                Some(&pipeline),
+                vec![sent_back(post_as_bot_args(bot, channel, "Other"))],
+            ),
+        ] {
+            assert!(matches!(refused, Err(ServiceError::Validation(_))));
+        }
+
+        // A plain post with no mark, or any other command, passes through.
+        let plain = vec![
+            sent_back(serde_json::json!({ "text": "Hi" })),
+            PipelineActionDto::ExecuteCommand {
+                command_id: "state.get".to_string(),
+                args: None,
+            },
+        ];
+        assert_eq!(
+            restore_post_as_bot(Some(&pipeline), plain.clone()).expect("passes"),
+            plain
+        );
+    }
+
+    #[tokio::test]
+    async fn a_post_stops_before_any_lookup_with_bots_off_no_joiner_or_a_bot_joining() {
+        let server_id = ServerId::new();
+        let mut pipeline = make_pipeline(server_id, UserId::new());
+        pipeline.trigger.kind = PipelineTriggerKind::MemberJoined;
+        let (bot, channel) = (UserId::new(), ConversationId::new());
+        let person = joiner("ada", None, UserHandle::Local);
+        let a_bot = User {
+            is_bot: true,
+            ..joiner("bot-x", None, UserHandle::Unknown)
+        };
+        let new_service = || {
+            DefaultPipelineService::new(
+                PipelineRepos {
+                    pipeline_repo: Arc::new(MockPipelineRepository::new()),
+                    server_member_repo: Arc::new(MockServerMemberRepository::new()),
+                    conversation_repo: Arc::new(MockConversationRepository::new()),
+                    conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                    bot_repo: Arc::new(MockBotRepository::new()),
+                    user_repo: Arc::new(MockUserRepository::new()),
+                },
+                Arc::new(MockCommandService::new()),
+                Arc::new(rim_services::events::NoopBroadcaster),
+            )
+        };
+
+        let off = new_service().with_feature_gate(Arc::new(
+            crate::feature_gate::InstanceFeatureGate::new(&[ServerFeature::Bots], &[]),
+        ));
+        assert!(
+            off.post_as_bot(&pipeline, Some(&person), bot, channel, "Hi")
+                .await
+                .is_err()
+        );
+        assert!(
+            off.ensure_post_as_bot_allowed(
+                server_id,
+                UserId::new(),
+                UserId::new(),
+                None,
+                &PipelineTriggerDto {
+                    kind: PipelineTriggerKindDto::MemberJoined,
+                    conversation_id: None,
+                },
+                &[post_dto(bot, channel)],
+            )
+            .await
+            .is_err_and(|e| matches!(e, ServiceError::FeatureDisabled(_)))
+        );
+
+        let on = new_service();
+        for who in [None, Some(&a_bot)] {
+            assert!(
+                on.post_as_bot(&pipeline, who, bot, channel, "Hi")
+                    .await
+                    .is_err()
+            );
+        }
+        let mut other_trigger = pipeline.clone();
+        other_trigger.trigger.kind = PipelineTriggerKind::NewMessage;
+        assert!(
+            on.post_as_bot(&other_trigger, Some(&person), bot, channel, "Hi")
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_pipeline_is_told_apart_by_its_actions() {
+        let mut pipeline = make_pipeline(ServerId::new(), UserId::new());
+        pipeline.actions = vec![];
+        assert!(!posts_as_bot(&pipeline) && !only_posts_as_bot(&pipeline));
+        let post: PipelineAction = post_dto(UserId::new(), ConversationId::new()).into();
+        pipeline.actions = vec![post.clone()];
+        assert!(posts_as_bot(&pipeline) && only_posts_as_bot(&pipeline));
+        pipeline.actions.push(PipelineAction::ExecuteCommand {
+            command_id: "state.get".to_string(),
+            args: None,
+        });
+        assert!(posts_as_bot(&pipeline) && !only_posts_as_bot(&pipeline));
     }
 }

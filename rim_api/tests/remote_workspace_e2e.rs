@@ -1080,6 +1080,75 @@ async fn a_remote_member_sees_a_bot_of_the_workspace_as_a_bot() {
 /// A remote member hears of a rename on `w`, and leaves through her relay: her own stream
 /// carries the departure, the host ends her delegations and her relay ends the subscription.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_members_join_fires_a_welcome_with_their_home_username() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let rita = sign_up(&r, "rita", 2).await;
+    let (ws, general, invite) = workspace(&h, &hannah).await;
+
+    let bot = hannah
+        .ok(
+            r#"mutation($input: CreateBotInput!) { createBot(input: $input) { bot { userId } } }"#,
+            json!({ "input": {
+                "serverId": ws, "name": "Greeter", "runBy": "Hannah", "readsGoTo": "Nowhere",
+            }}),
+        )
+        .await["createBot"]["bot"]["userId"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    hannah
+        .ok(
+            r#"mutation($s: ID!, $c: ID!, $u: [ID!]!) {
+                addConversationMembers(serverId: $s, conversationId: $c, userIds: $u) { memberIds }
+            }"#,
+            json!({ "s": ws, "c": general, "u": [bot] }),
+        )
+        .await;
+    hannah
+        .ok(
+            "mutation($input: CreatePipelineInput!) { createPipeline(input: $input) { id } }",
+            json!({ "input": {
+                "serverId": ws,
+                "name": "Welcome",
+                "trigger": { "kind": "MEMBER_JOINED" },
+                "actions": [{
+                    "commandId": "chat.post_message",
+                    "postAsBot": {
+                        "botUserId": bot,
+                        "conversationId": general,
+                        "text": "Welcome {username}, shown as {name}",
+                    },
+                }],
+            }}),
+        )
+        .await;
+
+    rita.join(&h, &r, &ws, Some(&invite)).await;
+
+    let posted = eventually("the welcome on the host", || async {
+        hannah
+            .ok(
+                r#"query($s: ID!, $c: ID!) {
+                    messages(serverId: $s, conversationId: $c, dir: AFTER, limit: 20, includeDeleted: false) {
+                        items { text author { id isBot } }
+                    }
+                }"#,
+                json!({ "s": ws, "c": general }),
+            )
+            .await["messages"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|message| message["author"]["id"] == json!(bot))
+            .cloned()
+    })
+    .await;
+    assert_eq!(posted["author"]["isBot"], true);
+    assert_eq!(posted["text"], "Welcome rita, shown as rita");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_remote_member_sees_a_rename_and_leaves_through_the_relay() {
     let (h, r) = nodes().await;
     let hannah = sign_up(&h, "hannah", 1).await;

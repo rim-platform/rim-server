@@ -281,6 +281,48 @@ can hold the URL, so `self-hosting.md` says to keep it private.
 **Across servers.** A webhook lives on the server hosting its workspace and posts there as the bot. A
 member from another server gets those messages as they get anything from that host.
 
+## Welcoming people from a pipeline
+
+A pipeline on the Member Joined trigger can post as a bot with no program behind it. An Owner or Moderator
+adds a Post as bot action to `createPipeline` or `updatePipeline`, in `PipelineActionInput`:
+
+```json
+{ "commandId": "chat.post_message",
+  "postAsBot": { "botUserId": "...", "conversationId": "...", "text": "Welcome, {name}!" } }
+```
+
+- **The bot posts without asking anyone,** each time someone joins, so only an Owner or Moderator can add or
+  change this, and only on a pipeline created by one. Anyone who may change the pipeline can keep it unchanged.
+- **The bot and channel.** An active bot of the workspace, and a plaintext channel that isn't archived with the
+  bot already in it: adding a bot to a channel stays its own step. For a private channel, the person saving and
+  the pipeline's creator must be in it.
+- **The text** is 1 to 10,000 characters and takes `{username}` and `{name}`. Anything else in braces is refused
+  by name, so a typo doesn't get posted to everyone. `{username}` is the person's username, at their home server
+  if they are from another one. `{name}` is their display name, or their username without one.
+- **A name can't do anything.** A display name is written by whoever's joining, so control and format characters
+  are removed from it and its Markdown is escaped. `<@id>`, `@channel` and `@here` are made plain text in the
+  whole post, your own text included, so a welcome mentions nobody. People whose notification level is `ALL`
+  hear of the post as of any other message.
+- **It's checked again each time it fires:** the creator is still an Owner or Moderator, the bot is active and in
+  the channel, and the channel is still plaintext and not archived. If not, it posts nothing and the server logs a
+  warning with the pipeline and the reason. A bot joining doesn't fire it, so bots can't welcome each other. A
+  pipeline with other actions runs those for a bot too.
+- **It's the bot's post.** Its badge, message budget, slow mode, moderation and audit entry all apply, and the entry
+  holds no text.
+- **Past a limit, a welcome is skipped, not queued.** That is the pipeline's cooldown or the bot's budget. As for
+  any pipeline, more than 10 firings in a minute switches it off and tells its creator, so a rush of people joining
+  can stop your welcomes until someone turns it back on.
+- **Every member can see it,** as they see every pipeline: `PipelineActionGql.postAsBot` has the text, the bot and
+  the channel's id. Don't put anything in the text you wouldn't show them. Saying which channel is the client's
+  job, and it doesn't name one the member can't see.
+- **An older app** shows the action as the command `chat.post_message` with its `args`, and warns it would be skipped,
+  which isn't so. Saving the pipeline from there keeps the action. Changing those `args` is refused, and removing
+  the action works.
+- **Rolling the server back** to a release without this action can't read a pipeline that has one, and the workspace's
+  pipelines stop firing and listing. Remove these actions first.
+- **Encrypted conversations and other servers.** It never posts into an encrypted conversation. A member from
+  another server joining fires it on the server hosting the workspace, like anyone joining.
+
 ## Audit
 
 Each management call writes an entry to the workspace's audit log: `bot.create`, `bot.update`,

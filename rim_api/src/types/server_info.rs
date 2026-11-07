@@ -28,6 +28,7 @@ pub const CAPABILITIES: &[&str] = &[
     "incoming_webhooks",
     "read_marker",
     "bot_events",
+    "pipeline_post_as_bot",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.
@@ -195,7 +196,8 @@ impl ServerInfo {
     /// `ServerMember.bot`), `command_run_id` (`ExecuteCommandInput.runId`, `AuditLogEntry.runId`),
     /// `read_marker` (`UnreadCount.unreadAfter`, `markAsUnread`, the `ReadMarkerRewound` event),
     /// `bot_events` (`Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`,
-    /// and `/api/bot/v1/events`).
+    /// and `/api/bot/v1/events`), `pipeline_post_as_bot` (`PipelineActionGql.postAsBot`,
+    /// `PipelineActionInput.postAsBot`).
     /// A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES

@@ -52,7 +52,7 @@ use crate::signup::normalize_username;
 use crate::util::{add_workspace_member, ensure_workspace_features};
 
 mod webhook;
-mod webhook_text;
+pub(crate) mod webhook_text;
 
 /// The most bots a workspace holds that are not deactivated.
 const MAX_ACTIVE_BOTS: u64 = 25;

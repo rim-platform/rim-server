@@ -114,6 +114,15 @@ impl From<PipelineActionDto> for PipelineAction {
             PipelineActionDto::ExecuteCommand { command_id, args } => {
                 Self::ExecuteCommand { command_id, args }
             }
+            PipelineActionDto::PostAsBot {
+                bot_user_id,
+                conversation_id,
+                text,
+            } => Self::PostAsBot {
+                bot_user_id,
+                conversation_id,
+                text,
+            },
         }
     }
 }
@@ -137,6 +146,32 @@ pub enum PipelineActionDto {
         command_id: String,
         args: Option<serde_json::Value>,
     },
+    PostAsBot {
+        bot_user_id: UserId,
+        conversation_id: ConversationId,
+        text: String,
+    },
+}
+
+/// The command a Post as bot action runs, which is what a client that does not know the action is
+/// shown.
+pub const POST_AS_BOT_COMMAND: &str = "chat.post_message";
+
+/// The key that marks a command's arguments as those of a Post as bot action.
+pub const POST_AS_BOT_ARGS_KEY: &str = "bot_user_id";
+
+/// The arguments a client that does not know a Post as bot action is shown, and sends back when it
+/// saves the pipeline.
+pub fn post_as_bot_args(
+    bot_user_id: UserId,
+    conversation_id: ConversationId,
+    text: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        POST_AS_BOT_ARGS_KEY: bot_user_id.to_string(),
+        "conversation_id": conversation_id.to_string(),
+        "text": text,
+    })
 }
 
 impl From<PipelineAction> for PipelineActionDto {
@@ -145,6 +180,15 @@ impl From<PipelineAction> for PipelineActionDto {
             PipelineAction::ExecuteCommand { command_id, args } => {
                 Self::ExecuteCommand { command_id, args }
             }
+            PipelineAction::PostAsBot {
+                bot_user_id,
+                conversation_id,
+                text,
+            } => Self::PostAsBot {
+                bot_user_id,
+                conversation_id,
+                text,
+            },
         }
     }
 }

@@ -347,7 +347,8 @@ call with its own budget of 100 builtin steps, and a pipeline fires on events ot
 reference user commands or macros". An action must name a builtin command: `createPipeline` and
 `updatePipeline` refuse any other id, a plugin command included, with `VALIDATION` "Unknown
 command: <id>". A pipeline saved before these limits runs at most its first 10 actions and skips
-an action naming a user command or a macro.
+an action naming a user command or a macro. A Post as bot action is the one that runs without a
+confirmation, as a bot rather than as the pipeline's creator (`bots.md`).
 
 The server keeps at most 32 unanswered confirmation challenges per user; issuing one more drops
 that user's challenge closest to expiry, which then answers `CONFIRMATION_STALE`. A pipeline's

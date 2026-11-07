@@ -30,6 +30,8 @@ MUST say so where it shows it.
   joins a workspace isn't channel content, and a guest cannot otherwise see the member directory.
   A bot sees joins only from when it was allowed to. Turning it on starts from that moment, turning it
   on again changes nothing, and turning it off and on starts again from the second time.
+- A pipeline's Post as bot action posts as a bot when someone joins (see "A pipeline posting as a
+  bot").
 - Bots are switched off for a whole instance with the `bots` feature in `RIM_FEATURES_DISABLED`.
   While it is off, nothing can be created, and bot tokens and webhooks are refused.
   With the feature off, a bot can't be added to a channel, and it can still be removed.
@@ -157,6 +159,41 @@ poll for events records how many of each kind it handed over, and no text or nam
 - Signatures are not checked in this version, because checking `X-Hub-Signature-256` needs a secret kept
   readable on the server. So the URL alone is enough to post, and it has to be kept like a password.
 
+## A pipeline posting as a bot
+
+A pipeline with the Member Joined trigger can have a Post as bot action: a bot, a channel and a text.
+Nobody confirms each post, because an Owner or Moderator chose this one.
+
+- **Member Joined only, in this version.** A bot post triggered by new messages could make bots set each
+  other off. A bot joining doesn't fire it, so bots can't welcome each other.
+- **It needs authority both when it is saved and when it fires.**
+- When it is saved, adding or changing one takes an Owner or Moderator, and a pipeline whose creator is one.
+  The bot MUST be active and in this workspace. The channel MUST be a plaintext channel of the workspace
+  that is not archived, with the bot already in it, and it is never added for you. If the channel is
+  private, the person saving and the pipeline's creator MUST be in it, since they can't post where they
+  can't read. Anyone who may change the pipeline may keep an action unchanged.
+- When it fires, the server MUST check again that the pipeline's creator is an Owner or Moderator, the bot
+  is active and in the channel, and the channel is still plaintext and not archived, with the creator in
+  it if it is private. If any fails it posts nothing and logs a warning naming the pipeline and the
+  reason. An encrypted conversation is never posted into. Bots being switched off stops it too.
+- **The author is the bot.** It runs `chat.post_message` with the initiator `BOT` and the bot as actor, so
+  its badge, budget, slow mode, moderation and audit all apply. The audit entry holds no text. This doesn't
+  weaken the rule that a pipeline's `ExecuteCommand` actions never confirm themselves.
+- **The text** is 1 to 10,000 characters, with the placeholders `{username}` and `{name}` and nothing else in
+  braces: any other `{...}` is refused by name. `{username}` is someone's username, at their home server if
+  they are from another one, and `{name}` is their display name, or their username without one.
+- **A joining person's name MUST NOT be able to do anything.** Control and format characters are removed from
+  what fills a placeholder and its Markdown is escaped. Every mention in the result, `<@id>`, `@channel` and
+  `@here`, is made plain text, the text's own included.
+- **Every member can see it,** as they see every pipeline of the workspace: the text, the bot and the channel's
+  id. A client MUST NOT show the name of a channel the member can't see.
+- **A burst of joins is limited, not queued.** The pipeline's cooldown and the bot's budget skip a welcome past
+  their limit, and it never comes later. As for any pipeline, more than 10 firings in a minute switches it
+  off and tells its creator.
+- A client that doesn't know the action reads it as the command `chat.post_message` with the bot, channel and
+  text in `args`. When it saves the pipeline and sends those back unchanged, the action is kept. Different
+  `args` are refused, so it never turns into a command run as the creator.
+
 ## Across servers
 
 - A bot lives on the server that hosts its workspace. A member from another server sees its messages
@@ -164,6 +201,8 @@ poll for events records how many of each kind it handed over, and no text or nam
 - A bot is never a remote user, is not offered to other servers and has no home relay. Its token works
   on that one server. It takes no part in the direct space and cannot message anyone outside the
   workspace.
+- A member from another server joining fires a Post as bot action like anyone, on the host, and its
+  `{username}` is their username at home.
 - The public relay runs no agent behind a bot. A workspace on it can have bots run by whoever owns
   them, elsewhere, using the same API.
 
@@ -175,3 +214,5 @@ poll for events records how many of each kind it handed over, and no text or nam
 - A bot run by the server itself. `docs/vision.md` says how an owner may run one next to the server;
   it uses this same API and needs nothing more from this contract.
 - Signed webhooks and presets other than GitHub.
+- A Post as bot action on any trigger but Member Joined, a mention in its text, or a welcome queued past a
+  limit.
