@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "when": [{ "field": "status", "equals": "firing" }],
+      "post": "**Firing:** {commonLabels.alertname|alerts.0.labels.alertname|title}: {commonAnnotations.summary|alerts.0.annotations.summary|alerts.0.annotations.description|title}"
+    },
+    {
+      "when": [{ "field": "status", "equals": "resolved" }],
+      "post": "**Resolved:** {commonLabels.alertname|alerts.0.labels.alertname|title}: {commonAnnotations.summary|alerts.0.annotations.summary|alerts.0.annotations.description|title}"
+    }
+  ]
+}

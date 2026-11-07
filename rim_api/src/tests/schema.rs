@@ -242,6 +242,7 @@ async fn server_info_lists_its_capabilities() {
         "read_marker",
         "bot_events",
         "pipeline_post_as_bot",
+        "webhook_formats",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
@@ -664,12 +665,15 @@ fn bot_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
         "bots(serverId: ID!): [Bot!]! botTokens(botUserId: ID!): [BotToken!]! \
-         incomingWebhooks(serverId: ID!): [IncomingWebhook!]! }",
+         incomingWebhooks(serverId: ID!): [IncomingWebhook!]! webhookFormats: \
+         [WebhookFormatInfo!]! previewWebhookFormat(serverId: ID!, template: JSON!, headers: \
+         [WebhookHeaderInput!]!, body: String!): WebhookFormatPreview! }",
         "createBot(input: CreateBotInput!): CreatedBot! updateBot(input: UpdateBotInput!): Bot! \
          deactivateBot(botUserId: ID!): Bot! createBotToken(botUserId: ID!, label: String!): \
          CreatedBotToken! revokeBotToken(tokenId: ID!): BotToken! createIncomingWebhook(input: \
          CreateIncomingWebhookInput!): CreatedIncomingWebhook! revokeIncomingWebhook(id: ID!): \
-         IncomingWebhook! }",
+         IncomingWebhook! updateIncomingWebhookFormat(id: ID!, preset: WebhookPreset!, template: \
+         JSON): IncomingWebhook! }",
         "type BotInfo { runBy: String! readsGoTo: String! addedByName: String }",
         "type Bot { userId: ID! serverId: ID! name: String! runBy: String! readsGoTo: String! \
          addedByName: String createdAt: DateTime! deactivatedAt: DateTime seesMemberJoins: Boolean! }",
@@ -679,10 +683,17 @@ fn bot_sdl_matches_the_contract() {
         "type CreatedBotToken { botToken: BotToken! token: String! }",
         "enum WebhookPreset { PLAIN GITHUB }",
         "type IncomingWebhook { id: ID! conversationId: ID! botUserId: ID! preset: WebhookPreset! \
-         createdAt: DateTime! lastUsedAt: DateTime revokedAt: DateTime }",
+         template: JSON createdAt: DateTime! lastUsedAt: DateTime revokedAt: DateTime }",
         "type CreatedIncomingWebhook { webhook: IncomingWebhook! token: String! }",
         "input CreateIncomingWebhookInput { conversationId: ID! botUserId: ID! preset: \
-         WebhookPreset! }",
+         WebhookPreset! template: JSON }",
+        "type WebhookHeader { name: String! value: String! }",
+        "input WebhookHeaderInput { name: String! value: String! }",
+        "type WebhookFormatInfo { key: String! name: String! setupNote: String! format: JSON! \
+         sampleHeaders: [WebhookHeader!]! sampleBody: String! }",
+        "enum WebhookPreviewOutcome { POSTS NO_RULE NO_VALUE BODY_REFUSED FORMAT_REFUSED }",
+        "type WebhookFormatPreview { outcome: WebhookPreviewOutcome! rule: Int text: String link: \
+         String placeholder: String reason: String }",
         "bannedUntil: DateTime isBot: Boolean! bot: BotInfo }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");

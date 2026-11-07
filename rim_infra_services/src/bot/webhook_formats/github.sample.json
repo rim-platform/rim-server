@@ -1,0 +1,12 @@
+{
+  "action": "closed",
+  "number": 7,
+  "pull_request": {
+    "number": 7,
+    "title": "Fix the login redirect",
+    "html_url": "https://github.com/acme/widgets/pull/7",
+    "merged": true
+  },
+  "repository": { "full_name": "acme/widgets" },
+  "sender": { "login": "ada" }
+}

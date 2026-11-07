@@ -133,6 +133,7 @@ fn webhook_of(model: incoming_webhook::Model) -> RepoResult<IncomingWebhook> {
         conversation_id: model.conversation_id.into(),
         bot_user_id: model.bot_user_id.into(),
         preset,
+        template: model.template,
         created_at: model.created_at.into(),
         last_used_at: model.last_used_at.map(Into::into),
         revoked_at: model.revoked_at.map(Into::into),
@@ -415,6 +416,7 @@ impl BotRepository for SeaOrmBotRepository {
             conversation_id: Set(webhook.conversation_id.into()),
             bot_user_id: Set(webhook.bot_user_id.into()),
             preset: Set(webhook.preset.as_str().to_string()),
+            template: Set(webhook.template),
             token_hash: Set(webhook.token_hash),
             created_by: Set(webhook.created_by.into()),
             ..Default::default()
@@ -468,6 +470,29 @@ impl BotRepository for SeaOrmBotRepository {
             vec![uuid(id), utc(at)],
         )
         .await?;
+        self.find_webhook(id).await
+    }
+
+    async fn update_webhook_format(
+        &self,
+        id: IncomingWebhookId,
+        preset: WebhookPreset,
+        template: Option<serde_json::Value>,
+    ) -> RepoResult<Option<IncomingWebhook>> {
+        let changed = self
+            .execute(
+                "UPDATE incoming_webhook SET preset = $2, template = $3 \
+                 WHERE id = $1 AND revoked_at IS NULL",
+                vec![
+                    uuid(id),
+                    preset.as_str().into(),
+                    Value::Json(template.map(Box::new)),
+                ],
+            )
+            .await?;
+        if changed == 0 {
+            return Ok(None);
+        }
         self.find_webhook(id).await
     }
 

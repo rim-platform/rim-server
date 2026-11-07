@@ -11,6 +11,8 @@ pub struct Model {
     pub bot_user_id: Uuid,
     #[sea_orm(column_type = "Text")]
     pub preset: String,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub template: Option<serde_json::Value>,
     #[sea_orm(column_type = "Text", unique)]
     pub token_hash: String,
     pub created_by: Uuid,

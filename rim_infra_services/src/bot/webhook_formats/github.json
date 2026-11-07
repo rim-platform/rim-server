@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "when": [
+        { "header": "X-GitHub-Event", "equals": "release" },
+        { "field": "action", "equals": "published" }
+      ],
+      "post": "{repository.full_name}: {sender.login} published release {release.name|release.tag_name}",
+      "link": { "value": "{release.html_url}", "origin": "https://github.com/" }
+    },
+    {
+      "when": [
+        { "header": "X-GitHub-Event", "equals": "pull_request" },
+        { "field": "action", "equals": "opened" }
+      ],
+      "post": "{repository.full_name}: {sender.login} opened pull request #{pull_request.number}: {pull_request.title}",
+      "link": { "value": "{pull_request.html_url}", "origin": "https://github.com/" }
+    },
+    {
+      "when": [
+        { "header": "X-GitHub-Event", "equals": "pull_request" },
+        { "field": "action", "equals": "closed" },
+        { "field": "pull_request.merged", "equals": "true" }
+      ],
+      "post": "{repository.full_name}: {sender.login} merged pull request #{pull_request.number}: {pull_request.title}",
+      "link": { "value": "{pull_request.html_url}", "origin": "https://github.com/" }
+    },
+    {
+      "when": [
+        { "header": "X-GitHub-Event", "equals": "pull_request" },
+        { "field": "action", "equals": "closed" }
+      ],
+      "post": "{repository.full_name}: {sender.login} closed pull request #{pull_request.number}: {pull_request.title}",
+      "link": { "value": "{pull_request.html_url}", "origin": "https://github.com/" }
+    },
+    {
+      "when": [
+        { "header": "X-GitHub-Event", "equals": "issues" },
+        { "field": "action", "equals": "opened" }
+      ],
+      "post": "{repository.full_name}: {sender.login} opened issue #{issue.number}: {issue.title}",
+      "link": { "value": "{issue.html_url}", "origin": "https://github.com/" }
+    },
+    {
+      "when": [
+        { "header": "X-GitHub-Event", "equals": "issues" },
+        { "field": "action", "equals": "closed" }
+      ],
+      "post": "{repository.full_name}: {sender.login} closed issue #{issue.number}: {issue.title}",
+      "link": { "value": "{issue.html_url}", "origin": "https://github.com/" }
+    }
+  ]
+}

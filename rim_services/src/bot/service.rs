@@ -10,6 +10,7 @@ use rim_core::user::model::UserId;
 use crate::bot::dto::{
     BotActorDto, BotDto, BotEventsPage, BotInfoDto, BotMentionCursor, BotMentionsPage, BotTokenDto,
     CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto, IncomingWebhookDto,
+    WebhookFormatInfoDto, WebhookPreviewDto,
 };
 use crate::{Actor, ServiceResult};
 
@@ -152,14 +153,52 @@ pub trait BotService: Send + Sync {
     /// # Errors
     /// `NotFound` for an unknown conversation or bot; `Validation` for a bot of another workspace
     /// or a deactivated one, and for anything but a plaintext channel that is not archived;
-    /// `Conflict` when the channel already has a webhook that is not revoked.
+    /// `Conflict` when the channel already has a webhook that is not revoked. `template` is the
+    /// webhook's own format, which needs the preset `Plain`; a format that is refused is
+    /// `Validation`, naming the rule.
     async fn create_webhook(
         &self,
         actor: Actor,
         conversation_id: ConversationId,
         bot_user_id: UserId,
         preset: WebhookPreset,
+        template: Option<serde_json::Value>,
     ) -> ServiceResult<CreatedIncomingWebhookDto>;
+
+    /// Set how a webhook turns a delivery into a message: `preset` alone, or a `template` with the
+    /// preset `Plain`. The URL stays the same. The standing of creating one.
+    ///
+    /// # Errors
+    /// `NotFound` for an unknown webhook and for one of a workspace the actor does not moderate;
+    /// `PermissionDenied` for a private channel the actor is not in; `Validation` for a revoked
+    /// webhook and for a format that is refused, naming the rule.
+    async fn update_webhook_format(
+        &self,
+        actor: Actor,
+        id: IncomingWebhookId,
+        preset: WebhookPreset,
+        template: Option<serde_json::Value>,
+    ) -> ServiceResult<IncomingWebhookDto>;
+
+    /// The ready-made formats RIM ships.
+    ///
+    /// # Errors
+    /// `FeatureDisabled` while bots are off.
+    fn webhook_formats(&self) -> ServiceResult<Vec<WebhookFormatInfoDto>>;
+
+    /// What a sample of `headers` and `body` would come to under `template`, as a delivery runs
+    /// it. Nothing is posted or stored. Owner or Moderator of the workspace.
+    ///
+    /// # Errors
+    /// `PermissionDenied` for anyone else; `Validation` for a sample over 256 KiB.
+    async fn preview_webhook_format(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        template: serde_json::Value,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> ServiceResult<WebhookPreviewDto>;
 
     /// Revoke a webhook. Revoking it again changes nothing. Owner or Moderator of its workspace.
     ///
@@ -186,15 +225,16 @@ pub trait BotService: Send + Sync {
     /// Propagates storage errors.
     async fn resolve_webhook(&self, raw: &str) -> ServiceResult<Option<IncomingWebhookDto>>;
 
-    /// The text `body` becomes under `preset`, with no mention left in it, or `None` when there is
-    /// nothing to post. `event` is the `X-GitHub-Event` header, read by the GitHub preset alone.
+    /// The text a delivery to `webhook` becomes, with no mention left in it, or `None` when there
+    /// is nothing to post. `headers` are what [`crate::bot::dto::delivery_headers`] keeps.
     ///
     /// # Errors
-    /// `Validation` for a body the preset cannot read.
+    /// `Validation` for a body the webhook cannot read; `Internal` for a stored format that no
+    /// longer passes its checks.
     fn webhook_text(
         &self,
-        preset: WebhookPreset,
-        event: Option<String>,
-        body: Vec<u8>,
+        webhook: &IncomingWebhookDto,
+        headers: &[(String, String)],
+        body: &[u8],
     ) -> ServiceResult<Option<String>>;
 }

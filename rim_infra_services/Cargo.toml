@@ -61,6 +61,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 [dev-dependencies]
 mockall = "0.15"
 tempfile = "3"
+proptest = "1"
 rim_core = { path = "../rim_core", features = ["mocks"] }
 rim_services = { path = "../rim_services", features = ["mocks"] }
 rim_auth = { path = "../rim_auth", features = ["testing"] }

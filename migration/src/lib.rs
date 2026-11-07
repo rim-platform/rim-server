@@ -137,6 +137,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261106_092601_add_message_mention_user_time_index::Migration),
             Box::new(m20261106_121740_create_incoming_webhook::Migration),
             Box::new(m20261107_014136_add_bot_sees_member_joins::Migration),
+            Box::new(m20261107_085948_add_incoming_webhook_template::Migration),
         ]
     }
 }
@@ -261,3 +262,4 @@ mod m20261106_070423_create_bot;
 mod m20261106_092601_add_message_mention_user_time_index;
 mod m20261106_121740_create_incoming_webhook;
 mod m20261107_014136_add_bot_sees_member_joins;
+mod m20261107_085948_add_incoming_webhook_template;

@@ -29,7 +29,7 @@ use rim_services::audit::service::AuditLogService;
 use rim_services::bot::dto::{
     BotActorDto, BotDto, BotEventDto, BotEventsPage, BotInfoDto, BotMentionCursor, BotMentionsPage,
     BotMessageDto, BotTokenDto, CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto,
-    IncomingWebhookDto,
+    IncomingWebhookDto, WebhookFormatInfoDto, WebhookPreviewDto,
 };
 use rim_services::bot::service::BotService;
 use rim_services::command::initiator::CommandInitiator;
@@ -52,6 +52,7 @@ use crate::signup::normalize_username;
 use crate::util::{add_workspace_member, ensure_workspace_features};
 
 mod webhook;
+pub(crate) mod webhook_format;
 pub(crate) mod webhook_text;
 
 /// The most bots a workspace holds that are not deactivated.
@@ -917,8 +918,37 @@ impl BotService for DefaultBotService {
         conversation_id: ConversationId,
         bot_user_id: UserId,
         preset: WebhookPreset,
+        template: Option<serde_json::Value>,
     ) -> ServiceResult<CreatedIncomingWebhookDto> {
-        self.create_incoming_webhook(actor, conversation_id, bot_user_id, preset)
+        self.create_incoming_webhook(actor, conversation_id, bot_user_id, preset, template)
+            .await
+    }
+
+    async fn update_webhook_format(
+        &self,
+        actor: Actor,
+        id: IncomingWebhookId,
+        preset: WebhookPreset,
+        template: Option<serde_json::Value>,
+    ) -> ServiceResult<IncomingWebhookDto> {
+        self.update_incoming_webhook_format(actor, id, preset, template)
+            .await
+    }
+
+    fn webhook_formats(&self) -> ServiceResult<Vec<WebhookFormatInfoDto>> {
+        self.require_feature()?;
+        webhook::shipped_formats()
+    }
+
+    async fn preview_webhook_format(
+        &self,
+        actor: Actor,
+        server_id: ServerId,
+        template: serde_json::Value,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> ServiceResult<WebhookPreviewDto> {
+        self.preview_incoming_webhook_format(actor, server_id, template, headers, body)
             .await
     }
 
@@ -944,11 +974,11 @@ impl BotService for DefaultBotService {
 
     fn webhook_text(
         &self,
-        preset: WebhookPreset,
-        event: Option<String>,
-        body: Vec<u8>,
+        webhook: &IncomingWebhookDto,
+        headers: &[(String, String)],
+        body: &[u8],
     ) -> ServiceResult<Option<String>> {
-        webhook::text_of(preset, event.as_deref(), &body)
+        webhook::text_of(webhook, headers, body)
     }
 }
 

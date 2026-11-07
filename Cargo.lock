@@ -5164,6 +5164,7 @@ dependencies = [
  "openmls",
  "openmls_rust_crypto",
  "openmls_traits",
+ "proptest",
  "regex",
  "reqwest",
  "rim_auth",

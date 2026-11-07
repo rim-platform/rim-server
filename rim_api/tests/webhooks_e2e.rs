@@ -931,3 +931,307 @@ async fn a_body_past_a_limit_is_refused() {
     assert_eq!(s.bot_texts(&ops, &bot).await.len(), 1);
     s.stop().await;
 }
+
+const CREATE_WITH_FORMAT: &str = r#"mutation($input: CreateIncomingWebhookInput!) {
+  createIncomingWebhook(input: $input) { token webhook { id preset template } }
+}"#;
+const UPDATE_FORMAT: &str = r#"mutation($id: ID!, $preset: WebhookPreset!, $template: JSON) {
+  updateIncomingWebhookFormat(id: $id, preset: $preset, template: $template) {
+    id preset template revokedAt
+  }
+}"#;
+const LIST_FORMATS: &str =
+    r#"query($s: ID!) { incomingWebhooks(serverId: $s) { id preset template } }"#;
+const FORMATS: &str = r#"query {
+  webhookFormats { key name setupNote format sampleHeaders { name value } sampleBody }
+}"#;
+const PREVIEW: &str = r#"query($s: ID!, $t: JSON!, $h: [WebhookHeaderInput!]!, $b: String!) {
+  previewWebhookFormat(serverId: $s, template: $t, headers: $h, body: $b) {
+    outcome rule text link placeholder reason
+  }
+}"#;
+
+fn backup_format() -> Value {
+    json!({ "version": 1, "rules": [
+        { "when": [{ "field": "status", "equals": "failed" }],
+          "post": "**Backup failed** on {host}: {reason}" },
+        { "when": [{ "field": "status", "equals": "ok" }], "post": "Backup finished on {host}." },
+    ]})
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_format_turns_a_delivery_into_a_post_and_an_update_keeps_the_url() {
+    let s = scene("format", |_| {}).await;
+    let r = &s.roles;
+    let bot = s.bot("Backups").await;
+    let ops = s.channel("ops", false).await;
+
+    let created = s
+        .gql(
+            &r.alice,
+            CREATE_WITH_FORMAT,
+            json!({ "input": {
+                "conversationId": ops, "botUserId": bot, "preset": "PLAIN",
+                "template": backup_format(),
+            }}),
+        )
+        .await;
+    let created = &created["createIncomingWebhook"];
+    assert_eq!(created["webhook"]["preset"], "PLAIN");
+    assert_eq!(created["webhook"]["template"], backup_format());
+    let id = created["webhook"]["id"].as_str().expect("id").to_string();
+    let token = created["token"].as_str().expect("token").to_string();
+    let listed = s
+        .gql(&r.alice, LIST_FORMATS, json!({ "s": r.server_id }))
+        .await;
+    assert_eq!(listed["incomingWebhooks"][0]["template"], backup_format());
+
+    let failed = json!({ "status": "failed", "host": "db-1", "reason": "disk *full* @here" });
+    let answer = s
+        .post_to(&token, None, failed.to_string().into_bytes())
+        .await;
+    assert_eq!(
+        (answer.status, answer.bytes.as_str()),
+        (StatusCode::OK, POSTED_BODY)
+    );
+    let unknown = s
+        .post_to(
+            &token,
+            None,
+            json!({ "status": "running" }).to_string().into_bytes(),
+        )
+        .await;
+    assert_eq!(
+        (unknown.status, unknown.bytes.as_str()),
+        (StatusCode::ACCEPTED, IGNORED_BODY)
+    );
+    let unreadable = s.post_to(&token, None, b"status=failed".to_vec()).await;
+    assert_eq!(unreadable.status, StatusCode::BAD_REQUEST);
+    assert_eq!(unreadable.json()["message"], "The body must be JSON.");
+
+    // The same URL, a new format.
+    let pushed = json!({ "version": 1, "rules": [
+        { "when": [{ "header": "X-Event", "equals": "deploy" }], "post": "Deployed {version}" },
+    ]});
+    let updated = s
+        .gql(
+            &r.mona,
+            UPDATE_FORMAT,
+            json!({ "id": id, "preset": "PLAIN", "template": pushed }),
+        )
+        .await;
+    assert_eq!(updated["updateIncomingWebhookFormat"]["template"], pushed);
+    let response = s
+        .http
+        .post(format!("{}/api/hooks/{token}", s.node.origin))
+        .header("x-event", "deploy")
+        .body(json!({ "version": "2.0" }).to_string())
+        .send()
+        .await
+        .expect("a post");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Back to a preset: GitHub's shipped format, with no copy stored.
+    let github = s
+        .gql(
+            &r.alice,
+            UPDATE_FORMAT,
+            json!({ "id": id, "preset": "GITHUB", "template": null }),
+        )
+        .await;
+    assert_eq!(github["updateIncomingWebhookFormat"]["preset"], "GITHUB");
+    assert_eq!(
+        github["updateIncomingWebhookFormat"]["template"],
+        Value::Null
+    );
+    let answer = s
+        .post_to(
+            &token,
+            Some("issues"),
+            issue_payload("opened").to_string().into_bytes(),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::OK);
+
+    assert_eq!(
+        s.bot_texts(&ops, &bot).await,
+        [
+            "**Backup failed** on db-1: disk \\*full\\* @\u{200b}here".to_string(),
+            "Deployed 2.0".to_string(),
+            "acme/widgets: ada opened issue #9: It broke https://github.com/acme/widgets/issues/9"
+                .to_string(),
+        ]
+    );
+    assert_eq!(
+        s.count(
+            "SELECT count(*) AS n FROM command_audit_log WHERE command_id = 'bot.webhook.update' \
+             AND args_redacted->>'webhook_id' = $1 AND args_redacted::text NOT LIKE '%Deployed%'",
+            vec![id.as_str().into()],
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        s.count(
+            "SELECT count(*) AS n FROM incoming_webhook WHERE id = $1 AND token_hash = $2",
+            vec![
+                uuid(&id),
+                rim_auth::session_token::hash_token(&token).into()
+            ],
+        )
+        .await,
+        1
+    );
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_format_is_changed_only_with_the_standing_of_creating_one() {
+    let s = scene("format-who", |_| {}).await;
+    let r = &s.roles;
+    let bot = s.bot("Deploys").await;
+    let ops = s.channel("ops", false).await;
+    let hook = s.webhook(&ops, &bot, "PLAIN").await;
+    let vars = json!({ "id": hook.id, "preset": "PLAIN", "template": backup_format() });
+
+    for who in [&r.bob, &r.gina] {
+        let (code, _) = s.refused(who, UPDATE_FORMAT, vars.clone()).await;
+        assert_eq!(code, "NOT_FOUND");
+    }
+    let (code, _) = s
+        .refused(
+            &r.alice,
+            UPDATE_FORMAT,
+            json!({ "id": unknown_id(), "preset": "PLAIN" }),
+        )
+        .await;
+    assert_eq!(code, "NOT_FOUND");
+
+    // A format with the GitHub preset, and one that is refused, naming its rule.
+    let (code, _) = s
+        .refused(
+            &r.alice,
+            UPDATE_FORMAT,
+            json!({ "id": hook.id, "preset": "GITHUB", "template": backup_format() }),
+        )
+        .await;
+    assert_eq!(code, "VALIDATION");
+    let bad = json!({ "version": 1, "rules": [
+        { "post": "x" },
+        { "when": [{ "header": "X-Hub-Signature-256", "equals": "sha256=1" }], "post": "y" },
+    ]});
+    let (code, message) = s
+        .refused(
+            &r.alice,
+            UPDATE_FORMAT,
+            json!({ "id": hook.id, "preset": "PLAIN", "template": bad }),
+        )
+        .await;
+    assert_eq!(code, "VALIDATION");
+    assert!(message.starts_with("Rule 2: "), "{message}");
+    let lobby = s.channel("lobby", false).await;
+    let (code, _) = s
+        .refused(
+            &r.alice,
+            CREATE_WITH_FORMAT,
+            json!({ "input": {
+                "conversationId": lobby, "botUserId": bot, "preset": "GITHUB",
+                "template": backup_format(),
+            }}),
+        )
+        .await;
+    assert_eq!(code, "VALIDATION");
+
+    // A private channel takes a Moderator who is in it.
+    let secret = s.channel("secret", true).await;
+    let private = s.webhook(&secret, &bot, "PLAIN").await;
+    let (code, _) = s
+        .refused(
+            &r.mona,
+            UPDATE_FORMAT,
+            json!({ "id": private.id, "preset": "PLAIN", "template": backup_format() }),
+        )
+        .await;
+    assert_eq!(code, "FORBIDDEN");
+
+    // A revoked webhook is refused.
+    s.gql(&r.alice, REVOKE, json!({ "id": hook.id })).await;
+    let (code, _) = s.refused(&r.alice, UPDATE_FORMAT, vars).await;
+    assert_eq!(code, "VALIDATION");
+    assert_eq!(
+        s.count(
+            "SELECT count(*) AS n FROM incoming_webhook WHERE template IS NOT NULL",
+            vec![],
+        )
+        .await,
+        0
+    );
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_ready_made_formats_are_listed_and_a_preview_is_for_moderators() {
+    let s = scene("format-preview", |_| {}).await;
+    let r = &s.roles;
+
+    let formats = s.gql(&r.gina, FORMATS, json!({})).await;
+    let formats = formats["webhookFormats"].as_array().expect("formats");
+    let keys: Vec<&str> = formats
+        .iter()
+        .map(|f| f["key"].as_str().expect("key"))
+        .collect();
+    assert_eq!(keys, ["github", "grafana"]);
+    assert_eq!(
+        formats[0]["sampleHeaders"],
+        json!([{ "name": "X-GitHub-Event", "value": "pull_request" }])
+    );
+
+    let github = &formats[0];
+    let vars = json!({
+        "s": r.server_id,
+        "t": github["format"],
+        "h": github["sampleHeaders"],
+        "b": github["sampleBody"],
+    });
+    let preview = s.gql(&r.mona, PREVIEW, vars.clone()).await;
+    assert_eq!(
+        preview["previewWebhookFormat"],
+        json!({
+            "outcome": "POSTS", "rule": 3,
+            "text": "acme/widgets: ada merged pull request #7: Fix the login redirect",
+            "link": "https://github.com/acme/widgets/pull/7",
+            "placeholder": null, "reason": null,
+        })
+    );
+    let grafana = &formats[1];
+    let preview = s
+        .gql(
+            &r.alice,
+            PREVIEW,
+            json!({ "s": r.server_id, "t": grafana["format"], "h": [], "b": grafana["sampleBody"] }),
+        )
+        .await;
+    assert_eq!(
+        preview["previewWebhookFormat"]["text"],
+        "**Firing:** TestAlert: Notification test"
+    );
+    let refused = s
+        .gql(
+            &r.alice,
+            PREVIEW,
+            json!({ "s": r.server_id, "t": { "version": 1, "rules": [{ "post": "{" }] },
+                    "h": [], "b": "{}" }),
+        )
+        .await;
+    assert_eq!(refused["previewWebhookFormat"]["outcome"], "FORMAT_REFUSED");
+    assert_eq!(refused["previewWebhookFormat"]["rule"], 1);
+
+    for who in [&r.bob, &r.gina] {
+        let (code, _) = s.refused(who, PREVIEW, vars.clone()).await;
+        assert_eq!(code, "FORBIDDEN");
+    }
+    let big = json!({ "s": r.server_id, "t": github["format"], "h": [], "b": " ".repeat(256 * 1024 + 1) });
+    let (code, _) = s.refused(&r.alice, PREVIEW, big).await;
+    assert_eq!(code, "VALIDATION");
+    s.stop().await;
+}
