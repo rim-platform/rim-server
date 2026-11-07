@@ -25,6 +25,9 @@ MUST say so where it shows it.
   so it cannot sign in.
 - A bot that was kicked or banned keeps its row and counts against the limit until it's deactivated.
 - A person cannot start a direct message or a group with a bot.
+- A bot sees members joining its workspace only if an Owner or Moderator turned that on for it with
+  `seesMemberJoins`. It is off by default, and turning it on or off is recorded in the audit log. Who
+  joins a workspace isn't channel content, and a guest cannot otherwise see the member directory.
 - Bots are switched off for a whole instance with the `bots` feature in `RIM_FEATURES_DISABLED`.
   While it is off, nothing can be created, and bot tokens and webhooks are refused.
   With the feature off, a bot can't be added to a channel, and it can still be removed.
@@ -57,7 +60,7 @@ MUST say so where it shows it.
 - An Owner or Moderator adds it to a public channel without joining it, and to a private channel only
   if they are in it, since they can't give it what they can't read.
 - A bot's grants are the channels it was added to, and in them only: read messages, search, post a
-  message and see its mentions. Every other command is out of its reach, because the API offers
+  message, see its mentions and poll for new messages. Every other command is out of its reach, because the API offers
   nothing else.
 - A bot's actions need no confirmation. A post and a search run as commands with the initiator
   `BOT`, under the same capability, role, timeout, rate limit and audit gates as anyone else. A read
@@ -65,7 +68,8 @@ MUST say so where it shows it.
   writes its own audit entry. The dispatcher gates apply to commands. A moderation timeout, slow
   mode, a ban or an archived channel applies to it as to a person.
 - A `<@id>` mention reaches a bot when it is in that channel, and not otherwise.
-- A bot gets no notifications, digests or pushes. It reads its mentions from `/mentions`.
+- A bot gets no notifications, digests or pushes. It reads its mentions from `/mentions`, and what
+  happened from `/events`.
 
 ## Encrypted conversations
 
@@ -79,12 +83,13 @@ Under `/api/bot/v1`, authorized with `Authorization: Bearer rimbot_...`. JSON bo
 
 | Call | What |
 |---|---|
-| `GET /me` | The bot's id, name, workspace, `runBy` and `readsGoTo` |
+| `GET /me` | The bot's id, name, workspace, `runBy`, `readsGoTo` and `seesMemberJoins` |
 | `GET /channels` | The channels it was added to: id, name, private |
 | `GET /channels/{id}/messages?before=&limit=` | Messages, oldest first in the page, at most 100 |
 | `GET /channels/{id}/search?q=&limit=` | Messages matching `q`, at most 100, no cursor |
 | `POST /channels/{id}/messages` | Body `{"text": "..."}`. Posts it, answers its id |
 | `GET /mentions?after=&limit=` | Where it was mentioned since the cursor, oldest first, at most 100 |
+| `GET /events?after=&limit=` | What happened since the cursor, oldest first, at most 100 |
 
 - A channel it was not added to and one that does not exist get the same `404`.
 - A message is its id, channel, thread, author's name, whether the author is a bot, text and times.
@@ -93,6 +98,26 @@ Under `/api/bot/v1`, authorized with `Authorization: Bearer rimbot_...`. JSON bo
   the last 24 hours. A bot learns about a mention by polling: it runs where its owner chooses, often
   behind a router, and the server makes no outbound call to it. A channel it has since left is left
   out.
+- `/events` answers `events` and a `cursor` for the next call, the one it was given when nothing new
+  came. Events of every type sort together by time, then id, and a cursor is one position among them.
+  Without `after` the page is empty and the cursor is now, so nothing from before the first call is
+  replayed. A cursor that is old still pages forward.
+  - A client MUST ignore an event whose `type` it does not know. New types can be added.
+  - `{"type": "message", "channelId": "...", "mentioned": bool, "message": {...}}` is a message as
+    `/channels/{id}/messages` has it, so a thread reply and a deleted message are left out. `mentioned`
+    comes from the same record as `/mentions`, so a mention in a thread reply is on `/mentions` and not
+    here. It is in a channel the bot is in at the time of the poll, not archived, sent since the bot
+    was last added to it. The bot's own messages are left out, so it can't react to itself.
+  - `{"type": "member_joined", "at": "...", "user": {"id": "...", "name": "...", "isBot": bool}}` is
+    someone becoming a member of its workspace, and only while `seesMemberJoins` is on. It holds nothing
+    more of them: no email, key, device or how they joined. A bot joining counts, and a member from
+    another server does. The bot itself doesn't, and neither does anyone who joined before it was
+    created, whatever the cursor. Someone who left and came back is a new event. Someone who has left
+    by the time of the poll is not one.
+  - A row is handed over once it is at least 2 seconds old, by the database's clock. A row is stamped
+    when its transaction starts and can be seen only when that commits, so a younger one could appear
+    behind a cursor already past it. A transaction running longer than that can still be missed: this
+    feed tells a program what happened and isn't a delivery guarantee.
 - A refusal is `{"refusal": "DENIED" | "FAILED" | "EXPIRED" | "INVALID", "message": "...", "retrySafe":
   bool}`, the same kinds as `docs/command_model.md`, "Refusals". Status: `400` invalid, `401` token,
   `403` denied, `404` not found, `429` with `Retry-After`, `5xx` failed.
@@ -100,7 +125,8 @@ Under `/api/bot/v1`, authorized with `Authorization: Bearer rimbot_...`. JSON bo
   budget of the author also apply.
 
 Reads are recorded in the audit log with the initiator `BOT`, as the gates above record any command.
-A poll for mentions that returned nothing isn't recorded, since nothing was handed over.
+A poll for mentions or events that returned nothing isn't recorded, since nothing was handed over. A
+poll for events records how many of each kind it handed over, and no text or name.
 
 ## Incoming webhooks
 
@@ -143,6 +169,7 @@ A poll for mentions that returned nothing isn't recorded, since nothing was hand
 
 - Replies in a thread from the bot API, editing, reactions, attachments and any other command.
 - Outbound webhooks and a mention pushed to the bot. It polls.
+- Edits, deletes, reactions and presence in `/events`: it has new messages and members joining.
 - A bot run by the server itself. `docs/vision.md` says how an owner may run one next to the server;
   it uses this same API and needs nothing more from this contract.
 - Signed webhooks and presets other than GitHub.

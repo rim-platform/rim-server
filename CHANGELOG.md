@@ -23,6 +23,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Bots can poll `GET /api/bot/v1/events` for new messages in their channels and, if allowed, members
+  joining. An Owner or Moderator allows it with `Bot.seesMemberJoins`, in `createBot` and `updateBot`,
+  and `GET /api/bot/v1/me` says whether it is on (`specs/bots-v1.md`). Listed in
+  `serverInfo.capabilities` as `bot_events`.
 - A conversation can be marked unread from a message, with `markAsUnread` or
   `chat.mark_as_unread`, and `unreadCounts` says where its unread messages begin
   (`UnreadCount.unreadAfter`). The person's other clients learn of it from a `ReadMarkerRewound`

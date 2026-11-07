@@ -1,5 +1,5 @@
 //! The bot API on a real server over a real database: every call, the bytes a bot sees for what
-//! it cannot reach, the gates a command applies to a bot, and polling for mentions.
+//! it cannot reach, the gates a command applies to a bot, and polling for mentions and events.
 //!
 //! Run with:
 //! ```sh
@@ -13,9 +13,10 @@ use reqwest::{Method, StatusCode};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 
+use rim_core::server_member::model::ServerMemberRole;
 use rim_server::config::RIMConfig;
 
-use support::graphql::{Caller, exec_ok};
+use support::graphql::{Caller, exec_err_code, exec_ok};
 use support::nodes::{Node, S2S_TABLES, start};
 use support::relay::{RESET, key_signup, keys, open_registration};
 use support::roles::{Roles, create_channel};
@@ -56,6 +57,12 @@ const POSTING: &str = r#"mutation($s: ID!, $c: ID!) {
 const ARCHIVE: &str = r#"mutation($s: ID!, $c: ID!) {
   setConversationArchived(serverId: $s, conversationId: $c, archived: true) { id }
 }"#;
+const REPLY: &str =
+    r#"mutation($input: ReplyToMessageInput!) { replyToMessage(input: $input) { id } }"#;
+const UPDATE_BOT: &str = r#"mutation($input: UpdateBotInput!) {
+  updateBot(input: $input) { userId seesMemberJoins }
+}"#;
+const LIST_BOTS: &str = "query($s: ID!) { bots(serverId: $s) { userId seesMemberJoins } }";
 const DEACTIVATE: &str = "mutation($id: ID!) { deactivateBot(botUserId: $id) { userId } }";
 const TOKENS: &str = "query($id: ID!) { botTokens(botUserId: $id) { id } }";
 const REVOKE: &str = "mutation($id: ID!) { revokeBotToken(tokenId: $id) { id } }";
@@ -376,6 +383,7 @@ async fn every_call_answers_for_a_channel_the_bot_was_added_to() {
             "workspaceId": s.roles.server_id,
             "runBy": "The docs team",
             "readsGoTo": "A model the docs team runs",
+            "seesMemberJoins": false,
         })
     );
 
@@ -1005,5 +1013,599 @@ async fn nobody_can_claim_to_be_a_bot_through_graphql() {
             .await,
         0
     );
+    s.stop().await;
+}
+
+/// How long a row of the feed waits, and a little more.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(2_100);
+
+impl Scene {
+    /// Let `who` allow or stop `bot` seeing members join.
+    async fn set_joins(&self, who: &Caller, bot: &TestBot, on: bool) {
+        self.gql(
+            who,
+            UPDATE_BOT,
+            json!({ "input": { "botUserId": bot.id, "seesMemberJoins": on } }),
+        )
+        .await;
+    }
+
+    /// The cursor of a first poll, which must hand nothing over.
+    async fn start_events(&self, bot: &TestBot) -> String {
+        let answer = self.get(&bot.token, "/events").await;
+        assert_eq!(answer.status, StatusCode::OK, "{}", answer.bytes);
+        let page = answer.json();
+        assert_eq!(page["events"], json!([]));
+        assert_eq!(page["untrusted"], true);
+        page["cursor"].as_str().expect("a cursor").to_string()
+    }
+
+    /// One page of the feed after `cursor`.
+    async fn events_after(&self, bot: &TestBot, cursor: &str, limit: u32) -> Value {
+        let answer = self
+            .get(&bot.token, &format!("/events?after={cursor}&limit={limit}"))
+            .await;
+        assert_eq!(answer.status, StatusCode::OK, "{}", answer.bytes);
+        answer.json()
+    }
+
+    /// Run `sql` with `values` on the database underneath.
+    async fn sql(&self, sql: &str, values: Vec<sea_orm::Value>) {
+        self.ctx
+            .conn
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                sql,
+                values,
+            ))
+            .await
+            .expect(sql);
+    }
+
+    /// A conversation written straight to the database with `bot` a member and a message from
+    /// `bob`, past every check that would refuse it.
+    async fn forced_conversation(
+        &self,
+        server_id: &str,
+        kind: &str,
+        encrypted: bool,
+        bot: &TestBot,
+        text: &str,
+    ) {
+        let id = uuid::Uuid::now_v7();
+        let server: uuid::Uuid = server_id.parse().expect("server");
+        let member: uuid::Uuid = bot.id.parse().expect("bot");
+        self.sql(
+            "INSERT INTO conversation (id, conversation_type, title, server_id, encrypted_at) \
+             VALUES ($1, $2::text::conversation_type, $3, $4, \
+                     CASE WHEN $5::boolean THEN now() END)",
+            vec![
+                id.into(),
+                kind.into(),
+                format!("forced-{id}").into(),
+                server.into(),
+                encrypted.into(),
+            ],
+        )
+        .await;
+        self.sql(
+            "INSERT INTO conversation_member (id, user_id, conversation_id) VALUES ($1, $2, $3)",
+            vec![uuid::Uuid::now_v7().into(), member.into(), id.into()],
+        )
+        .await;
+        self.sql(
+            "INSERT INTO message (id, conversation_id, sent_by, text) VALUES ($1, $2, $3, $4)",
+            vec![
+                uuid::Uuid::now_v7().into(),
+                id.into(),
+                uuid::Uuid::from(self.roles.bob.user_id).into(),
+                text.into(),
+            ],
+        )
+        .await;
+    }
+
+    /// What the audit log holds for `command_id` by `actor`, newest first, as text.
+    async fn audit_args(&self, actor: &str, command_id: &str) -> Vec<String> {
+        self.ctx
+            .conn
+            .query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT args_redacted::text AS args FROM command_audit_log \
+                 WHERE actor_user_id = $1 AND command_id = $2 ORDER BY created_at DESC",
+                [
+                    actor.parse::<uuid::Uuid>().expect("uuid").into(),
+                    command_id.into(),
+                ],
+            ))
+            .await
+            .expect("audit")
+            .iter()
+            .map(|row| row.try_get::<String>("", "args").expect("args"))
+            .collect()
+    }
+}
+
+/// A page's events in short: a message's text, or `+name` for a member joining.
+fn seen(page: &Value) -> Vec<String> {
+    page["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .map(|event| match event["type"].as_str().expect("a type") {
+            "message" => event["message"]["text"].as_str().expect("text").to_string(),
+            "member_joined" => format!("+{}", event["user"]["name"].as_str().expect("a name")),
+            other => panic!("an unknown type: {other}"),
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_feed_starts_now_and_gives_both_kinds_in_order_across_pages() {
+    let s = scene("feed", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let ops = s.channel_with("ops", false, &bot).await;
+    let other = s.channel_with("other", true, &bot).await;
+    s.set_joins(&s.roles.alice, &bot, true).await;
+
+    // Everything from before the first poll stays out, however long a later poll waits.
+    s.say(&ops, "before the first poll").await;
+    let start = s.start_events(&bot).await;
+    assert_eq!(s.events_after(&bot, &start, 50).await["events"], json!([]));
+
+    s.say(&ops, "one").await;
+    s.ctx
+        .newcomer(&s.roles.server_id, "feed-nia", ServerMemberRole::Member)
+        .await;
+    s.say(&other, "two").await;
+    tokio::time::sleep(SETTLE).await;
+
+    let first = s.events_after(&bot, &start, 2).await;
+    assert_eq!(seen(&first), ["one", "+feed-nia"]);
+    assert_eq!(first["untrusted"], true);
+    let event = &first["events"][0];
+    assert_eq!(event["channelId"], json!(ops));
+    assert_eq!(event["mentioned"], false);
+    assert_eq!(event["message"]["authorName"], "feed-bob");
+    assert_eq!(event["message"]["authorIsBot"], false);
+    let joined = &first["events"][1];
+    assert_eq!(joined["user"]["isBot"], false);
+    assert!(joined["at"].is_string());
+    let mut fields: Vec<&String> = joined["user"].as_object().expect("user").keys().collect();
+    fields.sort();
+    assert_eq!(fields, ["id", "isBot", "name"]);
+
+    let cursor = first["cursor"].as_str().expect("a cursor");
+    let second = s.events_after(&bot, cursor, 2).await;
+    assert_eq!(seen(&second), ["two"]);
+    assert_eq!(second["events"][0]["channelId"], json!(other));
+
+    // Nothing new: the same cursor comes back, and nothing repeats.
+    let cursor = second["cursor"].as_str().expect("a cursor");
+    let empty = s.events_after(&bot, cursor, 2).await;
+    assert_eq!(empty["events"], json!([]));
+    assert_eq!(empty["cursor"], json!(cursor));
+
+    // An old cursor still pages forward from where it stood.
+    assert_eq!(
+        seen(&s.events_after(&bot, &start, 50).await),
+        ["one", "+feed-nia", "two"]
+    );
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rows_tied_across_both_tables_are_each_given_once() {
+    let s = scene("tied", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let ops = s.channel_with("ops", false, &bot).await;
+    s.set_joins(&s.roles.alice, &bot, true).await;
+    let start = s.start_events(&bot).await;
+
+    let first = s.say(&ops, "first").await;
+    let second = s.say(&ops, "second").await;
+    let nia = s
+        .ctx
+        .newcomer(&s.roles.server_id, "tied-nia", ServerMemberRole::Member)
+        .await;
+    let omar = s
+        .ctx
+        .newcomer(&s.roles.server_id, "tied-omar", ServerMemberRole::Member)
+        .await;
+    let server: uuid::Uuid = s.roles.server_id.parse().expect("server");
+
+    // One instant for all four rows, after the cursor and soon old enough.
+    tokio::time::sleep(SETTLE).await;
+    let tied = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let tied = sea_orm::prelude::DateTimeWithTimeZone::from(tied);
+    for id in [&first, &second] {
+        s.sql(
+            "UPDATE message SET sent_at = $1 WHERE id = $2",
+            vec![tied.into(), id.parse::<uuid::Uuid>().expect("id").into()],
+        )
+        .await;
+    }
+    for who in [&nia, &omar] {
+        s.sql(
+            "UPDATE server_member SET joined_at = $1 WHERE server_id = $2 AND user_id = $3",
+            vec![
+                tied.into(),
+                server.into(),
+                uuid::Uuid::from(who.user_id).into(),
+            ],
+        )
+        .await;
+    }
+    tokio::time::sleep(SETTLE).await;
+
+    let mut cursor = start;
+    let mut walked = Vec::new();
+    loop {
+        let page = s.events_after(&bot, &cursor, 1).await;
+        let found = seen(&page);
+        if found.is_empty() {
+            break;
+        }
+        assert_eq!(found.len(), 1);
+        walked.extend(found);
+        cursor = page["cursor"].as_str().expect("a cursor").to_string();
+    }
+    walked.sort();
+    assert_eq!(walked, ["+tied-nia", "+tied-omar", "first", "second"]);
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_comes_as_the_messages_route_has_it_with_the_same_ones_left_out() {
+    let s = scene("parity", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let ops = s.channel_with("ops", false, &bot).await;
+    let at_bot = mention_of(&bot);
+    let start = s.start_events(&bot).await;
+
+    let plain = s.say(&ops, "plain").await;
+    s.say(&ops, &format!("{at_bot} look")).await;
+    s.gql(
+        &s.roles.bob,
+        REPLY,
+        json!({ "input": {
+            "serverId": s.roles.server_id,
+            "conversationId": ops,
+            "rootMessageId": plain,
+            "text": format!("{at_bot} in a thread"),
+        }}),
+    )
+    .await;
+    let deleted = s.say(&ops, "deleted").await;
+    s.gql(
+        &s.roles.bob,
+        DELETE,
+        json!({ "input": {
+            "serverId": s.roles.server_id, "conversationId": ops, "messageId": deleted,
+        }}),
+    )
+    .await;
+    assert_eq!(
+        s.post(&bot.token, &ops, "the bot's own").await.status,
+        StatusCode::CREATED
+    );
+    tokio::time::sleep(SETTLE).await;
+
+    let page = s.events_after(&bot, &start, 50).await;
+    let look = format!("{at_bot} look");
+    assert_eq!(seen(&page), ["plain", look.as_str()]);
+    assert_eq!(page["events"][0]["mentioned"], false);
+    assert_eq!(page["events"][1]["mentioned"], true);
+
+    // The same message reads the same on the route for the channel, which also has no thread
+    // reply or deleted message.
+    let listed = s
+        .get(&bot.token, &format!("/channels/{ops}/messages?limit=100"))
+        .await
+        .json();
+    let listed: Vec<&Value> = listed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["authorId"] != json!(bot.id))
+        .collect();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(&page["events"][0]["message"], listed[0]);
+    assert_eq!(&page["events"][1]["message"], listed[1]);
+
+    // The mention in a thread is on `/mentions`, and not in the feed.
+    let mentions = s.get(&bot.token, "/mentions").await.json();
+    let in_a_thread = format!("{at_bot} in a thread");
+    assert!(texts(&mentions["mentions"]).contains(&in_a_thread.as_str()));
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_row_younger_than_two_seconds_waits_for_a_later_poll() {
+    let s = scene("hold", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let ops = s.channel_with("ops", false, &bot).await;
+    let start = s.start_events(&bot).await;
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    let id = s.say(&ops, "fresh").await;
+    assert_eq!(s.events_after(&bot, &start, 50).await["events"], json!([]));
+
+    let id: uuid::Uuid = id.parse().expect("id");
+    s.sql(
+        "UPDATE message SET sent_at = now() - interval '1 second' WHERE id = $1",
+        vec![id.into()],
+    )
+    .await;
+    assert_eq!(s.events_after(&bot, &start, 50).await["events"], json!([]));
+
+    s.sql(
+        "UPDATE message SET sent_at = now() - interval '2500 milliseconds' WHERE id = $1",
+        vec![id.into()],
+    )
+    .await;
+    assert_eq!(seen(&s.events_after(&bot, &start, 50).await), ["fresh"]);
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_channel_counts_while_the_bot_is_in_it_and_never_from_before_it_was_added() {
+    let s = scene("member", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let ops = s.channel_with("ops", false, &bot).await;
+    let later = s.channel("later", true).await;
+    s.add(&later, &s.roles.bob.user_id.to_string()).await;
+    let shut = s.channel_with("shut", false, &bot).await;
+    let start = s.start_events(&bot).await;
+
+    s.say(&later, "before the bot was added").await;
+    s.say(&ops, "ops, while it is in").await;
+    s.say(&shut, "in a channel archived later").await;
+    s.gql(
+        &s.roles.alice,
+        ARCHIVE,
+        json!({ "s": s.roles.server_id, "c": shut }),
+    )
+    .await;
+    tokio::time::sleep(SETTLE).await;
+    s.add(&later, &bot.id).await;
+    s.say(&later, "after the bot was added").await;
+    tokio::time::sleep(SETTLE).await;
+
+    let page = s.events_after(&bot, &start, 50).await;
+    assert_eq!(
+        seen(&page),
+        ["ops, while it is in", "after the bot was added"]
+    );
+
+    // Removed: what it did not read yet stops at once, and so does what comes later.
+    s.say(&ops, "ops, just before it left").await;
+    tokio::time::sleep(SETTLE).await;
+    s.gql(
+        &s.roles.alice,
+        REMOVE_MEMBER,
+        json!({ "s": s.roles.server_id, "c": ops, "u": bot.id }),
+    )
+    .await;
+    s.say(&ops, "ops, after it left").await;
+    tokio::time::sleep(SETTLE).await;
+    let cursor = page["cursor"].as_str().expect("a cursor");
+    assert_eq!(s.events_after(&bot, cursor, 50).await["events"], json!([]));
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nothing_but_a_plaintext_channel_of_its_workspace_reaches_the_feed() {
+    let s = scene("forced", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let start = s.start_events(&bot).await;
+    let here = s.roles.server_id.clone();
+    let there = s.roles.other_server_id.clone();
+    s.forced_conversation(&here, "direct", false, &bot, "a direct message")
+        .await;
+    s.forced_conversation(&here, "group", false, &bot, "a group")
+        .await;
+    s.forced_conversation(&here, "channel", true, &bot, "encrypted")
+        .await;
+    s.forced_conversation(&there, "channel", false, &bot, "another workspace")
+        .await;
+    s.forced_conversation(&here, "channel", false, &bot, "a real channel")
+        .await;
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(
+        seen(&s.events_after(&bot, &start, 50).await),
+        ["a real channel"]
+    );
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn joins_need_the_setting_and_a_bot_of_another_workspace_sees_nothing_of_this_one() {
+    let s = scene("joins", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let start = s.start_events(&bot).await;
+    let me = s.get(&bot.token, "/me").await.json();
+    assert_eq!(me["seesMemberJoins"], false);
+
+    let elsewhere = s
+        .gql(
+            &s.roles.olive,
+            CREATE_BOT,
+            json!({ "input": {
+                "serverId": s.roles.other_server_id,
+                "name": "Elsewhere",
+                "runBy": "Olive",
+                "readsGoTo": "Nowhere",
+                "seesMemberJoins": true,
+            }}),
+        )
+        .await;
+    let elsewhere = TestBot {
+        id: elsewhere["createBot"]["bot"]["userId"]
+            .as_str()
+            .expect("id")
+            .to_string(),
+        token: elsewhere["createBot"]["token"]
+            .as_str()
+            .expect("token")
+            .to_string(),
+    };
+    assert_eq!(
+        s.get(&elsewhere.token, "/me").await.json()["seesMemberJoins"],
+        true
+    );
+    let elsewhere_start = s.start_events(&elsewhere).await;
+
+    let off = s
+        .ctx
+        .newcomer(&s.roles.server_id, "joins-off", ServerMemberRole::Member)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(s.events_after(&bot, &start, 50).await["events"], json!([]));
+
+    // A Member cannot turn it on; a Moderator can, and any member sees that it is on.
+    let refused = exec_err_code(
+        &s.node.schema,
+        s.roles.bob.request(
+            UPDATE_BOT,
+            json!({ "input": { "botUserId": bot.id, "seesMemberJoins": true } }),
+        ),
+    )
+    .await;
+    assert_eq!(refused, "FORBIDDEN");
+    s.set_joins(&s.roles.mona, &bot, true).await;
+    assert_eq!(
+        s.get(&bot.token, "/me").await.json()["seesMemberJoins"],
+        true
+    );
+    let listed = s
+        .gql(&s.roles.bob, LIST_BOTS, json!({ "s": s.roles.server_id }))
+        .await;
+    assert_eq!(listed["bots"][0]["seesMemberJoins"], true);
+    let recorded = s
+        .audit_args(&s.roles.mona.user_id.to_string(), "bot.update")
+        .await;
+    assert!(
+        recorded[0].contains("\"sees_member_joins\": true"),
+        "{recorded:?}"
+    );
+
+    // A bot joining counts, marked as one; so does a member from another server.
+    let helper = s.bot("Second").await;
+    let guest = s
+        .ctx
+        .newcomer(&s.roles.server_id, "joins-remote", ServerMemberRole::Member)
+        .await;
+    s.sql(
+        r#"UPDATE "user" SET kind = 'remote' WHERE id = $1"#,
+        vec![uuid::Uuid::from(guest.user_id).into()],
+    )
+    .await;
+    tokio::time::sleep(SETTLE).await;
+    let page = s.events_after(&bot, &start, 50).await;
+    assert_eq!(seen(&page), ["+joins-off", "+Second", "+joins-remote"]);
+    assert_eq!(
+        page["events"][0]["user"]["id"],
+        json!(off.user_id.to_string())
+    );
+    assert_eq!(page["events"][1]["user"]["isBot"], true);
+    assert_eq!(page["events"][1]["user"]["id"], json!(helper.id));
+    assert_eq!(page["events"][2]["user"]["isBot"], false);
+
+    // Nobody who was there before the bot, even from a cursor forged far back, and never itself.
+    let forged = format!("0_{}", uuid::Uuid::nil().simple());
+    let from_forged = s.events_after(&bot, &forged, 50).await;
+    assert_eq!(
+        seen(&from_forged),
+        ["+joins-off", "+Second", "+joins-remote"]
+    );
+
+    // A kick and a return is a new row, so a new event.
+    let cursor = page["cursor"].as_str().expect("a cursor").to_string();
+    s.gql(
+        &s.roles.alice,
+        KICK,
+        json!({ "s": s.roles.server_id, "u": off.user_id.to_string() }),
+    )
+    .await;
+    s.ctx
+        .join(&s.roles.server_id, &off, ServerMemberRole::Member)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        seen(&s.events_after(&bot, &cursor, 50).await),
+        ["+joins-off"]
+    );
+
+    // Turned off: nothing more, at once.
+    s.set_joins(&s.roles.alice, &bot, false).await;
+    assert_eq!(s.events_after(&bot, &cursor, 50).await["events"], json!([]));
+
+    // The other workspace's bot saw none of it.
+    assert_eq!(
+        s.events_after(&elsewhere, &elsewhere_start, 50).await["events"],
+        json!([])
+    );
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_feed_is_recorded_with_counts_and_a_bad_call_is_invalid() {
+    let s = scene("record", |_| {}).await;
+    let bot = s.bot("Helper").await;
+    let ops = s.channel_with("ops", false, &bot).await;
+    s.set_joins(&s.roles.alice, &bot, true).await;
+    let start = s.start_events(&bot).await;
+    assert_eq!(s.events_after(&bot, &start, 50).await["events"], json!([]));
+    assert_eq!(s.audit_count(&bot.id, "bot.events").await, 0);
+
+    s.say(&ops, "a very private sentence").await;
+    s.ctx
+        .newcomer(&s.roles.server_id, "record-nia", ServerMemberRole::Member)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        s.events_after(&bot, &start, 50).await["events"]
+            .as_array()
+            .expect("events")
+            .len(),
+        2
+    );
+    assert_eq!(s.audit_count(&bot.id, "bot.events").await, 1);
+    let recorded = s.audit_args(&bot.id, "bot.events").await;
+    assert!(recorded[0].contains("\"messages\": 1"), "{recorded:?}");
+    assert!(recorded[0].contains("\"member_joined\": 1"), "{recorded:?}");
+    assert!(!recorded[0].contains("private"), "{recorded:?}");
+    assert!(!recorded[0].contains("record-nia"), "{recorded:?}");
+
+    assert_eq!(
+        s.events_after(&bot, &start, 1).await["events"]
+            .as_array()
+            .expect("events")
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.events_after(&bot, &start, 100).await["events"]
+            .as_array()
+            .expect("events")
+            .len(),
+        2
+    );
+    for path in [
+        "/events?after=nope",
+        "/events?after=12_",
+        "/events?limit=0",
+        "/events?limit=101",
+        "/events?limit=many",
+    ] {
+        let answer = s.get(&bot.token, path).await;
+        assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(answer.json()["refusal"], "INVALID");
+    }
+    let unknown = s.get("rimbot_nope", "/events").await;
+    assert_eq!(unknown.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unknown.bytes, BAD_TOKEN_BODY);
     s.stop().await;
 }

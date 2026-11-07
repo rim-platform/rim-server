@@ -1,11 +1,12 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
 use crate::bot::model::{
-    Bot, BotPatch, BotToken, BotTokenHolder, BotTokenId, IncomingWebhook, IncomingWebhookHolder,
-    IncomingWebhookId, NewBot, NewBotToken, NewIncomingWebhook,
+    Bot, BotFeedJoin, BotFeedMessage, BotFeedPosition, BotPatch, BotToken, BotTokenHolder,
+    BotTokenId, IncomingWebhook, IncomingWebhookHolder, IncomingWebhookId, NewBot, NewBotToken,
+    NewIncomingWebhook,
 };
 use crate::conversation::model::ConversationId;
 use crate::repository::error::RepoResult;
@@ -112,4 +113,32 @@ pub trait BotRepository: Send + Sync {
 
     /// Record that a webhook was used at `at`.
     async fn touch_webhook(&self, id: IncomingWebhookId, at: DateTime<Utc>) -> RepoResult<()>;
+
+    /// The database's clock, which stamps messages and memberships.
+    async fn feed_now(&self) -> RepoResult<DateTime<Utc>>;
+
+    /// The messages of the bot's feed strictly after `after`, oldest first by `(sent_at, id)`, at
+    /// most `limit`: top-level and not deleted, as a channel's message list has them, by someone
+    /// else, sent since the bot joined the channel and at least `hold_back` old by the database's
+    /// clock, in plaintext channels of `server_id` that are not archived and that it is in now.
+    async fn list_feed_messages(
+        &self,
+        bot_user_id: UserId,
+        server_id: ServerId,
+        after: BotFeedPosition,
+        hold_back: Duration,
+        limit: u64,
+    ) -> RepoResult<Vec<BotFeedMessage>>;
+
+    /// The members of `server_id` who joined strictly after `after`, oldest first by
+    /// `(joined_at, id)`, at most `limit`: anyone but the bot, not earlier than the bot itself was
+    /// created and at least `hold_back` old by the database's clock.
+    async fn list_feed_joins(
+        &self,
+        bot_user_id: UserId,
+        server_id: ServerId,
+        after: BotFeedPosition,
+        hold_back: Duration,
+        limit: u64,
+    ) -> RepoResult<Vec<BotFeedJoin>>;
 }

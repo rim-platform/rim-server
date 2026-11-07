@@ -36,13 +36,15 @@ impl BotMutations {
                 input.name,
                 input.run_by,
                 input.reads_go_to,
+                input.sees_member_joins.unwrap_or(false),
             )
             .await
             .map_err(map_service_error)?;
         Ok(created.into())
     }
 
-    /// Change a bot's name or what is said about it. Owner or Moderator of its workspace.
+    /// Change a bot's name, what is said about it or whether it sees members joining. Owner or
+    /// Moderator of its workspace.
     async fn update_bot(&self, ctx: &Context<'_>, input: UpdateBotInput) -> Result<Bot> {
         let actor = require_actor(ctx)?;
         let user_id = parse_uuid_id::<UserId>(&input.bot_user_id)?;
@@ -54,6 +56,7 @@ impl BotMutations {
                 input.name,
                 input.run_by,
                 input.reads_go_to,
+                input.sees_member_joins,
             )
             .await
             .map_err(map_service_error)?;

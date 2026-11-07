@@ -9,7 +9,8 @@ use tracing::{instrument, warn};
 
 use rim_auth::session_token::{generate_bot_token, hash_token, is_bot_token_shape};
 use rim_core::bot::model::{
-    Bot, BotPatch, BotTokenId, IncomingWebhookId, NewBot, NewBotToken, WebhookPreset,
+    Bot, BotFeedPosition, BotPatch, BotTokenId, IncomingWebhookId, NewBot, NewBotToken,
+    WebhookPreset,
 };
 use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::{ConversationId, ConversationType};
@@ -26,8 +27,9 @@ use rim_infra_db::{TransactionScope, begin_transaction};
 use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::AuditLogService;
 use rim_services::bot::dto::{
-    BotActorDto, BotDto, BotInfoDto, BotMentionCursor, BotMentionsPage, BotMessageDto, BotTokenDto,
-    CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto, IncomingWebhookDto,
+    BotActorDto, BotDto, BotEventDto, BotEventsPage, BotInfoDto, BotMentionCursor, BotMentionsPage,
+    BotMessageDto, BotTokenDto, CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto,
+    IncomingWebhookDto,
 };
 use rim_services::bot::service::BotService;
 use rim_services::command::initiator::CommandInitiator;
@@ -75,9 +77,14 @@ const AUDIT_DEACTIVATE: &str = "bot.deactivate";
 const AUDIT_TOKEN_CREATE: &str = "bot.token.create";
 const AUDIT_TOKEN_REVOKE: &str = "bot.token.revoke";
 const AUDIT_MENTIONS: &str = "bot.mentions";
+const AUDIT_EVENTS: &str = "bot.events";
 
 /// How far back a bot's first look at its mentions goes, in hours.
 const FIRST_MENTIONS_WINDOW_HOURS: i64 = 24;
+/// How old a row must be before a bot's feed hands it over, in seconds. A row is stamped when its
+/// transaction starts and seen when it commits, so a younger one could still appear behind a
+/// cursor that has moved past it.
+const EVENT_HOLD_BACK_SECS: i64 = 2;
 
 /// The repositories a bot is managed with. Inside a transaction, built from its handle.
 #[derive(Clone)]
@@ -243,6 +250,69 @@ impl DefaultBotService {
             .await?)
     }
 
+    /// The events of the bot's feed after `after`, oldest first, each with its position. Each kind
+    /// is read up to `limit`, so the merged page holds the first `limit` of them all.
+    async fn feed_events(
+        &self,
+        bot: BotActorDto,
+        after: BotFeedPosition,
+        limit: u32,
+    ) -> ServiceResult<Vec<(BotFeedPosition, BotEventDto)>> {
+        let hold_back = Duration::seconds(EVENT_HOLD_BACK_SECS);
+        let limit = u64::from(limit);
+        let sees_joins = self
+            .repos
+            .bot_repo
+            .find_bot(bot.user_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?
+            .sees_member_joins;
+        let messages = self
+            .repos
+            .bot_repo
+            .list_feed_messages(bot.user_id, bot.server_id, after, hold_back, limit)
+            .await?;
+        let joins = if sees_joins {
+            self.repos
+                .bot_repo
+                .list_feed_joins(bot.user_id, bot.server_id, after, hold_back, limit)
+                .await?
+        } else {
+            Vec::new()
+        };
+        let mut events = Vec::with_capacity(messages.len() + joins.len());
+        for message in messages {
+            let position = BotFeedPosition {
+                at: message.sent_at,
+                id: message.id.into(),
+            };
+            let mentioned = message.mentioned;
+            events.push((
+                position,
+                BotEventDto::Message {
+                    message: message.into(),
+                    mentioned,
+                },
+            ));
+        }
+        for join in joins {
+            let position = BotFeedPosition {
+                at: join.joined_at,
+                id: join.member_id.into(),
+            };
+            events.push((
+                position,
+                BotEventDto::MemberJoined {
+                    user_id: join.user_id,
+                    at: join.joined_at,
+                },
+            ));
+        }
+        events.sort_by_key(|(position, _)| *position);
+        events.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(events)
+    }
+
     async fn audit(
         &self,
         actor: UserId,
@@ -344,6 +414,7 @@ impl BotService for DefaultBotService {
         name: String,
         run_by: String,
         reads_go_to: String,
+        sees_member_joins: bool,
     ) -> ServiceResult<CreatedBotDto> {
         self.require_feature()?;
         ensure_workspace_features(self.direct_space_id, server_id)?;
@@ -370,6 +441,7 @@ impl BotService for DefaultBotService {
                 run_by,
                 reads_go_to,
                 created_by: actor.user_id,
+                sees_member_joins,
             })
             .await?;
         add_workspace_member(
@@ -407,6 +479,7 @@ impl BotService for DefaultBotService {
                 "bot_user_id": bot.user_id.to_string(),
                 "token_id": first_token.id.to_string(),
                 "label": first_token.label,
+                "sees_member_joins": sees_member_joins,
             }),
             TypedVerb::Write,
         )
@@ -425,6 +498,7 @@ impl BotService for DefaultBotService {
         name: Option<String>,
         run_by: Option<String>,
         reads_go_to: Option<String>,
+        sees_member_joins: Option<bool>,
     ) -> ServiceResult<BotDto> {
         let bot = self.managed_bot(actor.user_id, user_id).await?;
         let patch = BotPatch {
@@ -437,6 +511,7 @@ impl BotService for DefaultBotService {
             reads_go_to: reads_go_to
                 .map(|field| plain_text(&field, "readsGoTo", MAX_DISCLOSURE_CHARS))
                 .transpose()?,
+            sees_member_joins,
         };
         let renamed = patch.name.is_some();
         let updated = self.repos.bot_repo.update_bot(user_id, patch).await?;
@@ -446,11 +521,15 @@ impl BotService for DefaultBotService {
                 user_id,
             });
         }
+        let mut args = serde_json::json!({ "bot_user_id": user_id.to_string() });
+        if let Some(sees_member_joins) = sees_member_joins {
+            args["sees_member_joins"] = sees_member_joins.into();
+        }
         self.audit(
             actor.user_id,
             bot.server_id,
             AUDIT_UPDATE,
-            serde_json::json!({ "bot_user_id": user_id.to_string() }),
+            args,
             TypedVerb::Write,
         )
         .await;
@@ -741,6 +820,49 @@ impl BotService for DefaultBotService {
         })
     }
 
+    async fn list_events(
+        &self,
+        bot: BotActorDto,
+        after: Option<BotFeedPosition>,
+        limit: u32,
+    ) -> ServiceResult<BotEventsPage> {
+        let Some(after) = after else {
+            return Ok(BotEventsPage {
+                events: Vec::new(),
+                cursor: BotFeedPosition {
+                    at: self.repos.bot_repo.feed_now().await?,
+                    id: uuid::Uuid::nil(),
+                },
+            });
+        };
+        let events = self.feed_events(bot, after, limit).await;
+        match &events {
+            Ok(found) if found.is_empty() => {}
+            Ok(found) => {
+                let joined = found
+                    .iter()
+                    .filter(|(_, event)| matches!(event, BotEventDto::MemberJoined { .. }))
+                    .count();
+                let args = serde_json::json!({
+                    "limit": limit,
+                    "messages": found.len() - joined,
+                    "member_joined": joined,
+                });
+                self.record_read(bot, AUDIT_EVENTS, args, None).await;
+            }
+            Err(e) => {
+                let args = serde_json::json!({ "limit": limit });
+                self.record_read(bot, AUDIT_EVENTS, args, Some(e.to_string()))
+                    .await;
+            }
+        }
+        let events = events?;
+        Ok(BotEventsPage {
+            cursor: events.last().map_or(after, |(position, _)| *position),
+            events: events.into_iter().map(|(_, event)| event).collect(),
+        })
+    }
+
     async fn record_read(
         &self,
         bot: BotActorDto,
@@ -834,14 +956,14 @@ impl BotService for DefaultBotService {
 mod tests {
     use std::sync::Mutex;
 
-    use rim_core::bot::model::{BotToken, BotTokenHolder};
+    use rim_core::bot::model::{BotFeedJoin, BotFeedMessage, BotToken, BotTokenHolder};
     use rim_core::bot::repository::MockBotRepository;
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
     use rim_core::message_mention::repository::MockMessageMentionRepository;
     use rim_core::moderation::model::ServerBan;
     use rim_core::moderation::repository::MockModerationRepository;
-    use rim_core::repository::error::{RepoError, RepoResult};
+    use rim_core::repository::error::{RepoError, RepoErrorKind, RepoResult};
     use rim_core::server_member::model::{ServerMember, ServerMemberId};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_services::audit::dto::{AuditLogEntryDto, AuditLogPage, ListAuditLogQuery};
@@ -978,6 +1100,7 @@ mod tests {
             added_by_name: Some("Ada".to_string()),
             created_at: Utc::now(),
             deactivated_at: None,
+            sees_member_joins: false,
         }
     }
 
@@ -1035,6 +1158,7 @@ mod tests {
             "Helper".to_string(),
             "Ada".to_string(),
             "Nowhere".to_string(),
+            false,
         )
         .await
     }
@@ -1070,7 +1194,7 @@ mod tests {
         let svc = Fx::new().feature_off().build();
         let id = UserId::new();
         assert_feature_off(create(&svc, ServerId::new()).await);
-        assert_feature_off(svc.update_bot(actor(), id, None, None, None).await);
+        assert_feature_off(svc.update_bot(actor(), id, None, None, None, None).await);
         assert_feature_off(svc.deactivate_bot(actor(), id).await);
         assert_feature_off(svc.create_token(actor(), id, "ci".to_string()).await);
         assert_feature_off(svc.revoke_token(actor(), BotTokenId::new()).await);
@@ -1125,6 +1249,7 @@ mod tests {
                     name.to_string(),
                     run_by.to_string(),
                     reads_go_to.to_string(),
+                    false,
                 )
                 .await;
             assert_validation(result);
@@ -1205,6 +1330,7 @@ mod tests {
                 " Helper ".to_string(),
                 "  Ada ".to_string(),
                 " Nowhere".to_string(),
+                false,
             )
             .await
             .expect("created");
@@ -1253,13 +1379,13 @@ mod tests {
         let mut fx = Fx::new().with_role(Some(ServerMemberRole::Member));
         expect_bot(&mut fx.bots, ServerId::new(), id);
         let svc = fx.build();
-        assert_denied(svc.update_bot(actor(), id, None, None, None).await);
+        assert_denied(svc.update_bot(actor(), id, None, None, None, None).await);
 
         let mut fx = Fx::new();
         fx.bots.expect_find_bot().returning(|_| ok(None));
         let svc = fx.build();
         assert!(matches!(
-            svc.update_bot(actor(), id, None, None, None).await,
+            svc.update_bot(actor(), id, None, None, None, None).await,
             Err(ServiceError::NotFound)
         ));
     }
@@ -1283,6 +1409,7 @@ mod tests {
                     name.map(str::to_string),
                     run_by.map(str::to_string),
                     reads_go_to.map(str::to_string),
+                    None,
                 )
                 .await,
             );
@@ -1301,7 +1428,7 @@ mod tests {
         let audit = fx.audit_handle();
         let events = fx.events_handle();
         let svc = fx.build();
-        svc.update_bot(actor(), id, None, Some(" Grace ".to_string()), None)
+        svc.update_bot(actor(), id, None, Some(" Grace ".to_string()), None, None)
             .await
             .expect("updated");
         assert!(events.0.lock().expect("lock").is_empty());
@@ -1319,7 +1446,7 @@ mod tests {
             .returning(move |user_id, _| ok(bot_of(server_id, user_id)));
         let events = fx.events_handle();
         let svc = fx.build();
-        svc.update_bot(actor(), id, Some("New".to_string()), None, None)
+        svc.update_bot(actor(), id, Some("New".to_string()), None, None, None)
             .await
             .expect("updated");
         assert!(matches!(
@@ -1988,5 +2115,211 @@ mod tests {
         })
         .await;
         assert!(answer.is_some());
+    }
+
+    // ── The feed of events ───────────────────────────────────────────────
+
+    fn feed_actor() -> BotActorDto {
+        BotActorDto {
+            user_id: UserId::new(),
+            server_id: ServerId::new(),
+            token_id: BotTokenId::new(),
+        }
+    }
+
+    fn position_at(seconds: i64) -> BotFeedPosition {
+        BotFeedPosition {
+            at: DateTime::from_timestamp(1_700_000_000 + seconds, 0).expect("time"),
+            id: uuid::Uuid::nil(),
+        }
+    }
+
+    fn feed_message(at: DateTime<Utc>, id: uuid::Uuid, mentioned: bool) -> BotFeedMessage {
+        BotFeedMessage {
+            id: id.into(),
+            conversation_id: ConversationId::new(),
+            thread_id: None,
+            sent_by: UserId::new(),
+            text: Some("a secret".to_string()),
+            sent_at: at,
+            edited_at: None,
+            mentioned,
+        }
+    }
+
+    fn feed_join(at: DateTime<Utc>, id: uuid::Uuid) -> BotFeedJoin {
+        BotFeedJoin {
+            member_id: id.into(),
+            user_id: UserId::new(),
+            joined_at: at,
+        }
+    }
+
+    /// `bots` finds a bot that may or may not see members joining.
+    fn expect_setting(bots: &mut MockBotRepository, sees_member_joins: bool) {
+        bots.expect_find_bot().returning(move |user_id| {
+            ok(Some(Bot {
+                sees_member_joins,
+                ..bot_of(ServerId::new(), user_id)
+            }))
+        });
+    }
+
+    #[tokio::test]
+    async fn the_first_poll_starts_at_the_databases_now_and_hands_nothing_over() {
+        let now = position_at(50).at;
+        let mut fx = Fx::new();
+        fx.bots.expect_feed_now().returning(move || ok(now));
+        let audit = fx.audit_handle();
+        let page = fx
+            .build()
+            .list_events(feed_actor(), None, 50)
+            .await
+            .expect("page");
+        assert!(page.events.is_empty());
+        assert_eq!(
+            page.cursor,
+            BotFeedPosition {
+                at: now,
+                id: uuid::Uuid::nil(),
+            }
+        );
+        assert!(audit.0.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn both_kinds_merge_by_time_then_id_and_the_page_stops_at_its_limit() {
+        let at = position_at(10).at;
+        let later = position_at(20).at;
+        let low = uuid::Uuid::from_u128(1);
+        let middle = uuid::Uuid::from_u128(2);
+        let high = uuid::Uuid::from_u128(3);
+        let last = uuid::Uuid::from_u128(4);
+        let mut fx = Fx::new();
+        expect_setting(&mut fx.bots, true);
+        fx.bots
+            .expect_list_feed_messages()
+            .withf(|_, _, _, hold_back, limit| *hold_back == Duration::seconds(2) && *limit == 3)
+            .returning(move |_, _, _, _, _| {
+                ok(vec![
+                    feed_message(at, middle, true),
+                    feed_message(later, last, false),
+                ])
+            });
+        fx.bots
+            .expect_list_feed_joins()
+            .withf(|_, _, _, hold_back, limit| *hold_back == Duration::seconds(2) && *limit == 3)
+            .returning(move |_, _, _, _, _| ok(vec![feed_join(at, low), feed_join(at, high)]));
+        let audit = fx.audit_handle();
+        let page = fx
+            .build()
+            .list_events(feed_actor(), Some(position_at(0)), 3)
+            .await
+            .expect("page");
+
+        assert_eq!(page.events.len(), 3);
+        assert!(matches!(page.events[0], BotEventDto::MemberJoined { .. }));
+        assert!(matches!(
+            page.events[1],
+            BotEventDto::Message {
+                mentioned: true,
+                ..
+            }
+        ));
+        assert!(matches!(page.events[2], BotEventDto::MemberJoined { .. }));
+        // The cursor is the last event handed over, so the one cut off comes next.
+        assert_eq!(page.cursor, BotFeedPosition { at, id: high });
+
+        let entries = audit.0.lock().expect("lock");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command_id, AUDIT_EVENTS);
+        assert_eq!(entries[0].initiator, "bot");
+        assert_eq!(
+            entries[0].args_redacted,
+            serde_json::json!({ "limit": 3, "messages": 1, "member_joined": 2 })
+        );
+        assert!(!entries[0].args_redacted.to_string().contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn joins_are_not_read_while_the_setting_is_off_and_an_empty_poll_is_not_recorded() {
+        let mut fx = Fx::new();
+        expect_setting(&mut fx.bots, false);
+        fx.bots
+            .expect_list_feed_messages()
+            .returning(|_, _, _, _, _| ok(Vec::new()));
+        fx.bots.expect_list_feed_joins().never();
+        let audit = fx.audit_handle();
+        let after = position_at(5);
+        let page = fx
+            .build()
+            .list_events(feed_actor(), Some(after), 50)
+            .await
+            .expect("page");
+        assert!(page.events.is_empty());
+        assert_eq!(page.cursor, after);
+        assert!(audit.0.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_poll_is_recorded_and_returned() {
+        let mut fx = Fx::new();
+        expect_setting(&mut fx.bots, false);
+        fx.bots
+            .expect_list_feed_messages()
+            .returning(|_, _, _, _, _| {
+                Box::pin(async { Err(RepoError::new(RepoErrorKind::Internal)) })
+            });
+        let audit = fx.audit_handle();
+        let result = fx
+            .build()
+            .list_events(feed_actor(), Some(position_at(5)), 50)
+            .await;
+        assert!(result.is_err());
+        let entries = audit.0.lock().expect("lock");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].outcome.as_str(), AuditOutcome::Error.as_str());
+        assert_eq!(entries[0].args_redacted, serde_json::json!({ "limit": 50 }));
+    }
+
+    #[tokio::test]
+    async fn a_poll_for_a_bot_that_is_gone_is_not_found() {
+        let mut fx = Fx::new();
+        fx.bots.expect_find_bot().returning(|_| ok(None));
+        assert!(matches!(
+            fx.build()
+                .list_events(feed_actor(), Some(position_at(5)), 50)
+                .await,
+            Err(ServiceError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn turning_on_the_setting_is_on_record_and_another_update_says_nothing_of_it() {
+        let id = UserId::new();
+        let server_id = ServerId::new();
+        for (given, recorded) in [
+            (Some(true), Some(serde_json::json!(true))),
+            (Some(false), Some(serde_json::json!(false))),
+            (None, None),
+        ] {
+            let mut fx = Fx::new().with_role(Some(ServerMemberRole::Moderator));
+            expect_bot(&mut fx.bots, server_id, id);
+            fx.bots
+                .expect_update_bot()
+                .withf(move |_, patch| patch.sees_member_joins == given)
+                .returning(move |_, _| ok(bot_of(server_id, id)));
+            let audit = fx.audit_handle();
+            fx.build()
+                .update_bot(actor(), id, None, None, None, given)
+                .await
+                .expect("updated");
+            let entries = audit.0.lock().expect("lock");
+            assert_eq!(entries[0].command_id, AUDIT_UPDATE);
+            assert_eq!(
+                entries[0].args_redacted.get("sees_member_joins"),
+                recorded.as_ref()
+            );
+        }
     }
 }

@@ -1,5 +1,6 @@
 //! The bot API under `/api/bot/v1`, the only routes a bot token works on: who the bot is, the
-//! channels it was added to, reading, searching and posting in them, and polling for its mentions.
+//! channels it was added to, reading, searching and posting in them, and polling for its mentions
+//! and for what happened.
 //!
 //! A request is authorized by its `Authorization: Bearer` header alone; a session cookie means
 //! nothing here. Each route runs a fixed command with the initiator `Bot` or, where a command does
@@ -13,6 +14,7 @@ use std::sync::Arc;
 use actix_web::http::{StatusCode, header};
 use actix_web::{HttpRequest, HttpResponse, ResponseError, web};
 use chrono::{DateTime, Utc};
+use rim_core::bot::model::BotFeedPosition;
 use rim_core::conversation::model::ConversationId;
 use rim_core::conversation::repository::ChannelListFilter;
 use rim_core::message::model::MessageId;
@@ -20,7 +22,7 @@ use rim_core::repository::pagination::PageDir;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_infra_services::KeyedRateLimiter;
-use rim_services::bot::dto::{BotActorDto, BotMentionCursor, BotMessageDto};
+use rim_services::bot::dto::{BotActorDto, BotEventDto, BotMentionCursor, BotMessageDto};
 use rim_services::bot::service::BotService;
 use rim_services::command::dto::{CommandContextDto, CommandResultStatusDto};
 use rim_services::command::initiator::CommandInitiator;
@@ -168,24 +170,29 @@ impl BotApi {
         result
     }
 
+    /// The users `ids` names, looked up in one batch.
+    async fn users_by_id(
+        &self,
+        ids: impl Iterator<Item = UserId>,
+    ) -> Result<HashMap<UserId, UserDto>, BotApiError> {
+        let ids: Vec<UserId> = ids.collect::<HashSet<_>>().into_iter().collect();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        Ok(self
+            .users
+            .get_users_by_ids(&ids)
+            .await?
+            .into_iter()
+            .map(|user| (user.id, user))
+            .collect())
+    }
+
     /// `messages` as their JSON, with their authors looked up in one batch.
     async fn messages_json(&self, messages: Vec<BotMessageDto>) -> Result<Vec<Value>, BotApiError> {
-        let author_ids: Vec<UserId> = messages
-            .iter()
-            .map(|m| m.author_id)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        let authors: HashMap<UserId, UserDto> = if author_ids.is_empty() {
-            HashMap::new()
-        } else {
-            self.users
-                .get_users_by_ids(&author_ids)
-                .await?
-                .into_iter()
-                .map(|user| (user.id, user))
-                .collect()
-        };
+        let authors = self
+            .users_by_id(messages.iter().map(|message| message.author_id))
+            .await?;
         Ok(messages
             .iter()
             .map(|message| message_json(message, authors.get(&message.author_id)))
@@ -446,12 +453,41 @@ fn message_json(message: &BotMessageDto, author: Option<&UserDto>) -> Value {
         "channelId": message.conversation_id.to_string(),
         "threadId": message.thread_id.map(|id| id.to_string()),
         "authorId": message.author_id.to_string(),
-        "authorName": author.map(|user| user.display_name.as_ref().unwrap_or(&user.username)),
+        "authorName": author.map(user_name),
         "authorIsBot": author.is_some_and(|user| user.is_bot),
         "text": message.text,
         "sentAt": message.sent_at.to_rfc3339(),
         "editedAt": message.edited_at.map(|at| at.to_rfc3339()),
     })
+}
+
+/// The name a user shows under.
+fn user_name(user: &UserDto) -> &String {
+    user.display_name.as_ref().unwrap_or(&user.username)
+}
+
+/// One event of the feed as the API answers it.
+fn event_json(event: &BotEventDto, users: &HashMap<UserId, UserDto>) -> Value {
+    match event {
+        BotEventDto::Message { message, mentioned } => json!({
+            "type": "message",
+            "channelId": message.conversation_id.to_string(),
+            "mentioned": mentioned,
+            "message": message_json(message, users.get(&message.author_id)),
+        }),
+        BotEventDto::MemberJoined { user_id, at } => {
+            let user = users.get(user_id);
+            json!({
+                "type": "member_joined",
+                "at": at.to_rfc3339(),
+                "user": {
+                    "id": user_id.to_string(),
+                    "name": user.map(user_name),
+                    "isBot": user.is_some_and(|user| user.is_bot),
+                },
+            })
+        }
+    }
 }
 
 /// `GET /me`.
@@ -466,6 +502,7 @@ async fn me(req: HttpRequest, api: web::Data<BotApi>) -> Result<HttpResponse, Bo
         "workspaceId": found.server_id.to_string(),
         "runBy": found.run_by,
         "readsGoTo": found.reads_go_to,
+        "seesMemberJoins": found.sees_member_joins,
     })))
 }
 
@@ -658,6 +695,33 @@ async fn mentions(req: HttpRequest, api: web::Data<BotApi>) -> Result<HttpRespon
     })))
 }
 
+/// `GET /events`: what happened after `after`, oldest first, and the `cursor` of the next call,
+/// which is the one given when nothing new came. Without `after` the page is empty and the cursor
+/// is now.
+async fn events(req: HttpRequest, api: web::Data<BotApi>) -> Result<HttpResponse, BotApiError> {
+    let bot = api.authorize(&req).await?;
+    let query = call_query(&req)?;
+    let limit = page_limit(query.limit.as_deref())?;
+    let after = cursor_param(query.after.as_deref())?.map(|(at, id)| BotFeedPosition { at, id });
+    let page = api.bots.list_events(bot, after, limit).await?;
+    let users = api
+        .users_by_id(page.events.iter().map(|event| match event {
+            BotEventDto::Message { message, .. } => message.author_id,
+            BotEventDto::MemberJoined { user_id, .. } => *user_id,
+        }))
+        .await?;
+    let events: Vec<Value> = page
+        .events
+        .iter()
+        .map(|event| event_json(event, &users))
+        .collect();
+    Ok(HttpResponse::Ok().json(json!({
+        "untrusted": true,
+        "events": events,
+        "cursor": encode_cursor(page.cursor.at, page.cursor.id),
+    })))
+}
+
 /// A path under the API that is none of its calls: the same `404` as anything else not there.
 async fn no_such_call() -> HttpResponse {
     BotApiError::not_found().error_response()
@@ -675,6 +739,7 @@ pub(crate) fn scope() -> actix_web::Scope {
         )
         .service(web::resource("/channels/{id}/search").route(web::get().to(search)))
         .service(web::resource("/mentions").route(web::get().to(mentions)))
+        .service(web::resource("/events").route(web::get().to(events)))
         .default_service(web::to(no_such_call))
 }
 
@@ -683,7 +748,7 @@ mod tests {
     use actix_web::test as actix_test;
     use actix_web::{App, body};
     use rim_core::bot::model::BotTokenId;
-    use rim_services::bot::dto::{BotDto, BotMentionsPage};
+    use rim_services::bot::dto::{BotDto, BotEventsPage, BotMentionsPage};
     use rim_services::bot::service::MockBotService;
     use rim_services::command::dto::CommandResultDto;
     use rim_services::command::service::MockCommandService;
@@ -865,6 +930,7 @@ mod tests {
                     added_by_name: None,
                     created_at: Utc::now(),
                     deactivated_at: None,
+                    sees_member_joins: false,
                 })
             })
         });
@@ -1160,6 +1226,103 @@ mod tests {
         assert_eq!(retry_after.as_deref(), Some("42"));
         let answer: Value = serde_json::from_str(&bytes).expect("json");
         assert_eq!(answer["retrySafe"], true);
+    }
+
+    fn a_user(id: UserId, username: &str, display_name: Option<&str>, is_bot: bool) -> UserDto {
+        UserDto {
+            id,
+            username: username.to_string(),
+            display_name: display_name.map(str::to_string),
+            avatar_url: None,
+            status_text: None,
+            bio: None,
+            principal_id: None,
+            handle: None,
+            is_bot,
+            deletion_scheduled_for: None,
+            profile_locked_until: None,
+        }
+    }
+
+    #[actix_web::test]
+    async fn a_page_of_events_answers_both_kinds_and_nothing_more_of_a_member() {
+        let (author, joined, joined_bot, gone) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let at = DateTime::from_timestamp_micros(1_700_000_000_000_000).expect("time");
+        let cursor = BotFeedPosition {
+            at,
+            id: Uuid::now_v7(),
+        };
+        let message = BotMessageDto {
+            author_id: author,
+            ..BotMessageDto::from(message_dto())
+        };
+        let events = vec![
+            BotEventDto::Message {
+                message: message.clone(),
+                mentioned: true,
+            },
+            BotEventDto::MemberJoined {
+                user_id: joined,
+                at,
+            },
+            BotEventDto::MemberJoined {
+                user_id: joined_bot,
+                at,
+            },
+            BotEventDto::MemberJoined { user_id: gone, at },
+        ];
+        let mut fx = Fx::new().authenticated(a_bot());
+        fx.bots
+            .expect_list_events()
+            .withf(move |_, after, limit| after.is_none() && *limit == 7)
+            .returning(move |_, _, _| {
+                let events = events.clone();
+                Box::pin(async move { Ok(BotEventsPage { events, cursor }) })
+            });
+        fx.users.expect_get_users_by_ids().returning(move |_| {
+            Box::pin(async move {
+                Ok(vec![
+                    a_user(author, "ada", Some("Ada"), false),
+                    a_user(joined, "grace", None, false),
+                    a_user(joined_bot, "bot-helper", Some("Helper"), true),
+                ])
+            })
+        });
+        let (status, _, bytes) = send(fx, get("/events?limit=7")).await;
+        assert_eq!(status, StatusCode::OK, "{bytes}");
+        let answer: Value = serde_json::from_str(&bytes).expect("json");
+        assert_eq!(answer["untrusted"], true);
+        assert_eq!(answer["cursor"], json!(encode_cursor(cursor.at, cursor.id)));
+        assert_eq!(answer["events"][0]["type"], "message");
+        assert_eq!(answer["events"][0]["mentioned"], true);
+        assert_eq!(
+            answer["events"][0]["channelId"],
+            json!(message.conversation_id.to_string())
+        );
+        assert_eq!(answer["events"][0]["message"]["authorName"], "Ada");
+        assert_eq!(
+            answer["events"][1],
+            json!({
+                "type": "member_joined",
+                "at": at.to_rfc3339(),
+                "user": { "id": joined.to_string(), "name": "grace", "isBot": false },
+            })
+        );
+        assert_eq!(answer["events"][2]["user"]["name"], "Helper");
+        assert_eq!(answer["events"][2]["user"]["isBot"], true);
+        assert_eq!(answer["events"][3]["user"]["name"], Value::Null);
+    }
+
+    #[actix_web::test]
+    async fn a_bad_limit_or_cursor_on_events_stops_before_the_service() {
+        for path in ["/events?limit=0", "/events?limit=101", "/events?after=nope"] {
+            let fx = Fx::new().authenticated(a_bot());
+            let (status, _, bytes) = send(fx, get(path)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+            let answer: Value = serde_json::from_str(&bytes).expect("json");
+            assert_eq!(answer["refusal"], "INVALID");
+        }
     }
 
     #[actix_web::test]

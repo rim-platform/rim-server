@@ -2,14 +2,14 @@ use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
 
-use rim_core::bot::model::{BotTokenId, IncomingWebhookId, WebhookPreset};
+use rim_core::bot::model::{BotFeedPosition, BotTokenId, IncomingWebhookId, WebhookPreset};
 use rim_core::conversation::model::ConversationId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
 use crate::bot::dto::{
-    BotActorDto, BotDto, BotInfoDto, BotMentionCursor, BotMentionsPage, BotTokenDto, CreatedBotDto,
-    CreatedBotTokenDto, CreatedIncomingWebhookDto, IncomingWebhookDto,
+    BotActorDto, BotDto, BotEventsPage, BotInfoDto, BotMentionCursor, BotMentionsPage, BotTokenDto,
+    CreatedBotDto, CreatedBotTokenDto, CreatedIncomingWebhookDto, IncomingWebhookDto,
 };
 use crate::{Actor, ServiceResult};
 
@@ -33,6 +33,7 @@ pub trait BotService: Send + Sync {
         name: String,
         run_by: String,
         reads_go_to: String,
+        sees_member_joins: bool,
     ) -> ServiceResult<CreatedBotDto>;
 
     /// Change the fields given. Owner or Moderator.
@@ -43,6 +44,7 @@ pub trait BotService: Send + Sync {
         name: Option<String>,
         run_by: Option<String>,
         reads_go_to: Option<String>,
+        sees_member_joins: Option<bool>,
     ) -> ServiceResult<BotDto>;
 
     /// Deactivate a bot: its tokens stop working, its webhooks are revoked and it leaves the
@@ -116,6 +118,22 @@ pub trait BotService: Send + Sync {
         after: Option<BotMentionCursor>,
         limit: u32,
     ) -> ServiceResult<BotMentionsPage>;
+
+    /// What happened after `after`, at most `limit` events, oldest first: messages in the bot's
+    /// channels and, when it may see them, members joining. Without `after` the page is empty and
+    /// its cursor is now, so nothing from before the first call is replayed. Rows younger than two
+    /// seconds wait for a later call, so one committing late is not passed by the cursor. Recorded
+    /// in the audit log with how many of each kind and never any text, but for a poll that
+    /// succeeded with nothing to hand over.
+    ///
+    /// # Errors
+    /// `NotFound` when the bot is gone; propagates storage errors.
+    async fn list_events(
+        &self,
+        bot: BotActorDto,
+        after: Option<BotFeedPosition>,
+        limit: u32,
+    ) -> ServiceResult<BotEventsPage>;
 
     /// Record in the audit log a read of the bot that ran without the command dispatcher, with the
     /// initiator `bot`. `error` is what it failed with. A failed write is logged, never returned.

@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use entity::{bot_token, incoming_webhook};
 use rim_core::bot::model::{
-    Bot, BotPatch, BotToken, BotTokenHolder, BotTokenId, IncomingWebhook, IncomingWebhookHolder,
-    IncomingWebhookId, NewBot, NewBotToken, NewIncomingWebhook, WebhookPreset,
+    Bot, BotFeedJoin, BotFeedMessage, BotFeedPosition, BotPatch, BotToken, BotTokenHolder,
+    BotTokenId, IncomingWebhook, IncomingWebhookHolder, IncomingWebhookId, NewBot, NewBotToken,
+    NewIncomingWebhook, WebhookPreset,
 };
 use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::ConversationId;
@@ -22,7 +23,8 @@ use crate::error::map_db_err;
 /// A bot with its name and the name of whoever added it.
 const SELECT_BOT: &str = r#"SELECT b.user_id, b.server_id,
         COALESCE(u.display_name, u.username) AS name, b.run_by, b.reads_go_to, b.created_by,
-        COALESCE(c.display_name, c.username) AS added_by_name, b.created_at, b.deactivated_at
+        COALESCE(c.display_name, c.username) AS added_by_name, b.created_at, b.deactivated_at,
+        b.sees_member_joins
     FROM bot b
     JOIN "user" u ON u.id = b.user_id
     JOIN "user" c ON c.id = b.created_by"#;
@@ -51,6 +53,7 @@ struct BotRow {
     added_by_name: Option<String>,
     created_at: sea_orm::prelude::DateTimeWithTimeZone,
     deactivated_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+    sees_member_joins: bool,
 }
 
 impl From<BotRow> for Bot {
@@ -65,8 +68,38 @@ impl From<BotRow> for Bot {
             added_by_name: row.added_by_name,
             created_at: row.created_at.into(),
             deactivated_at: row.deactivated_at.map(Into::into),
+            sees_member_joins: row.sees_member_joins,
         }
     }
+}
+
+#[derive(FromQueryResult)]
+struct FeedMessageRow {
+    id: Uuid,
+    conversation_id: Uuid,
+    thread_id: Option<Uuid>,
+    sent_by: Uuid,
+    text: Option<String>,
+    sent_at: sea_orm::prelude::DateTimeWithTimeZone,
+    edited_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+    mentioned: bool,
+}
+
+#[derive(FromQueryResult)]
+struct FeedJoinRow {
+    id: Uuid,
+    user_id: Uuid,
+    joined_at: sea_orm::prelude::DateTimeWithTimeZone,
+}
+
+#[derive(FromQueryResult)]
+struct NowRow {
+    now: sea_orm::prelude::DateTimeWithTimeZone,
+}
+
+/// A hold-back as the seconds a SQL parameter carries.
+fn seconds(hold_back: Duration) -> Value {
+    (hold_back.num_milliseconds() as f64 / 1000.0).into()
 }
 
 #[derive(FromQueryResult)]
@@ -135,8 +168,9 @@ impl BotRepository for SeaOrmBotRepository {
                    VALUES ($1, $2, $3, 'bot')
                    RETURNING id
                )
-               INSERT INTO bot (user_id, server_id, run_by, reads_go_to, created_by)
-               SELECT id, $4::uuid, $5::text, $6::text, $7::uuid FROM new_user"#,
+               INSERT INTO bot (user_id, server_id, run_by, reads_go_to, created_by,
+                   sees_member_joins)
+               SELECT id, $4::uuid, $5::text, $6::text, $7::uuid, $8::boolean FROM new_user"#,
             vec![
                 uuid(user_id),
                 bot.username.into(),
@@ -145,6 +179,7 @@ impl BotRepository for SeaOrmBotRepository {
                 bot.run_by.into(),
                 bot.reads_go_to.into(),
                 uuid(bot.created_by),
+                bot.sees_member_joins.into(),
             ],
         )
         .await?;
@@ -242,13 +277,15 @@ impl BotRepository for SeaOrmBotRepository {
                        WHERE id = $1 AND kind = 'bot' AND $2::text IS NOT NULL
                    )
                    UPDATE bot SET run_by = COALESCE($3::text, run_by),
-                       reads_go_to = COALESCE($4::text, reads_go_to)
+                       reads_go_to = COALESCE($4::text, reads_go_to),
+                       sees_member_joins = COALESCE($5::boolean, sees_member_joins)
                    WHERE user_id = $1"#,
                 vec![
                     uuid(user_id),
                     patch.name.into(),
                     patch.run_by.into(),
                     patch.reads_go_to.into(),
+                    patch.sees_member_joins.into(),
                 ],
             )
             .await?;
@@ -463,5 +500,120 @@ impl BotRepository for SeaOrmBotRepository {
         )
         .await?;
         Ok(())
+    }
+
+    async fn feed_now(&self) -> RepoResult<DateTime<Utc>> {
+        let row = NowRow::find_by_statement(statement("SELECT now() AS now", vec![]))
+            .one(&self.db)
+            .await
+            .map_err(map_db_err)?
+            .ok_or_else(|| RepoError::new(RepoErrorKind::NotFound))?;
+        Ok(row.now.into())
+    }
+
+    async fn list_feed_messages(
+        &self,
+        bot_user_id: UserId,
+        server_id: ServerId,
+        after: BotFeedPosition,
+        hold_back: Duration,
+        limit: u64,
+    ) -> RepoResult<Vec<BotFeedMessage>> {
+        // One bounded walk of `(conversation_id, sent_at, id)` per channel, so a poll costs the
+        // same however much history lies behind or ahead of the cursor.
+        let rows = FeedMessageRow::find_by_statement(statement(
+            r#"SELECT m.id, m.conversation_id, m.thread_id, m.sent_by, m.text, m.sent_at,
+                   m.edited_at,
+                   EXISTS (SELECT 1 FROM message_mention mm
+                           WHERE mm.message_id = m.id AND mm.mentioned_user_id = $1) AS mentioned
+               FROM conversation_member cm
+               JOIN conversation c ON c.id = cm.conversation_id
+               CROSS JOIN LATERAL (
+                   SELECT id, conversation_id, thread_id, sent_by, text, sent_at, edited_at
+                   FROM message
+                   WHERE conversation_id = c.id
+                     AND thread_id IS NULL
+                     AND is_deleted = false
+                     AND sent_by <> $1
+                     AND sent_at >= cm.joined_at
+                     AND sent_at <= now() - make_interval(secs => $5::double precision)
+                     AND (sent_at, id) > ($3::timestamptz, $4::uuid)
+                   ORDER BY sent_at, id
+                   LIMIT $6
+               ) m
+               WHERE cm.user_id = $1
+                 AND cm.pending_since IS NULL
+                 AND c.server_id = $2
+                 AND c.conversation_type = 'channel'
+                 AND c.encrypted_at IS NULL
+                 AND c.archived_at IS NULL
+               ORDER BY m.sent_at, m.id
+               LIMIT $6"#,
+            vec![
+                uuid(bot_user_id),
+                uuid(server_id),
+                utc(after.at),
+                after.id.into(),
+                seconds(hold_back),
+                (limit as i64).into(),
+            ],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| BotFeedMessage {
+                id: row.id.into(),
+                conversation_id: row.conversation_id.into(),
+                thread_id: row.thread_id.map(Into::into),
+                sent_by: row.sent_by.into(),
+                text: row.text,
+                sent_at: row.sent_at.into(),
+                edited_at: row.edited_at.map(Into::into),
+                mentioned: row.mentioned,
+            })
+            .collect())
+    }
+
+    async fn list_feed_joins(
+        &self,
+        bot_user_id: UserId,
+        server_id: ServerId,
+        after: BotFeedPosition,
+        hold_back: Duration,
+        limit: u64,
+    ) -> RepoResult<Vec<BotFeedJoin>> {
+        let rows = FeedJoinRow::find_by_statement(statement(
+            r#"SELECT sm.id, sm.user_id, sm.joined_at
+               FROM server_member sm
+               JOIN bot b ON b.user_id = $1 AND b.server_id = sm.server_id
+               WHERE sm.server_id = $2
+                 AND sm.user_id <> $1
+                 AND sm.joined_at >= b.created_at
+                 AND sm.joined_at <= now() - make_interval(secs => $5::double precision)
+                 AND (sm.joined_at, sm.id) > ($3::timestamptz, $4::uuid)
+               ORDER BY sm.joined_at, sm.id
+               LIMIT $6"#,
+            vec![
+                uuid(bot_user_id),
+                uuid(server_id),
+                utc(after.at),
+                after.id.into(),
+                seconds(hold_back),
+                (limit as i64).into(),
+            ],
+        ))
+        .all(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| BotFeedJoin {
+                member_id: row.id.into(),
+                user_id: row.user_id.into(),
+                joined_at: row.joined_at.into(),
+            })
+            .collect())
     }
 }

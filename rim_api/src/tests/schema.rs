@@ -240,6 +240,7 @@ async fn server_info_lists_its_capabilities() {
         "command_run_id",
         "incoming_webhooks",
         "read_marker",
+        "bot_events",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
@@ -670,7 +671,7 @@ fn bot_sdl_matches_the_contract() {
          IncomingWebhook! }",
         "type BotInfo { runBy: String! readsGoTo: String! addedByName: String }",
         "type Bot { userId: ID! serverId: ID! name: String! runBy: String! readsGoTo: String! \
-         addedByName: String createdAt: DateTime! deactivatedAt: DateTime }",
+         addedByName: String createdAt: DateTime! deactivatedAt: DateTime seesMemberJoins: Boolean! }",
         "type BotToken { id: ID! label: String! createdAt: DateTime! lastUsedAt: DateTime \
          revokedAt: DateTime }",
         "type CreatedBot { bot: Bot! token: String! }",

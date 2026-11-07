@@ -6,7 +6,9 @@ use chrono::{Duration, DurationRound, Utc};
 use migration::{Migrator, MigratorTrait};
 use rim_core::account_deletion::model::TOMBSTONE_DISPLAY_NAME;
 use rim_core::account_deletion::repository::AccountDeletionRepository;
-use rim_core::bot::model::{BotPatch, NewBot, NewBotToken, NewIncomingWebhook, WebhookPreset};
+use rim_core::bot::model::{
+    BotFeedPosition, BotPatch, NewBot, NewBotToken, NewIncomingWebhook, WebhookPreset,
+};
 use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::ConversationId;
 use rim_core::repository::error::RepoErrorKind;
@@ -53,6 +55,7 @@ fn new_bot(server_id: ServerId, username: &str, created_by: UserId) -> NewBot {
         run_by: "Ada".to_string(),
         reads_go_to: "Nowhere".to_string(),
         created_by,
+        sees_member_joins: false,
     }
 }
 
@@ -703,4 +706,122 @@ async fn a_webhook_goes_with_its_channel() {
         .await
         .unwrap();
     assert_eq!(bots.find_webhook(webhook.id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn the_setting_starts_as_given_and_changes_only_when_named() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "setting").await;
+    let bots = repo(&ctx);
+    let off = bots
+        .create_bot(new_bot(server.id, "bot-off", ada.id))
+        .await
+        .unwrap();
+    assert!(!off.sees_member_joins);
+    let on = bots
+        .create_bot(NewBot {
+            sees_member_joins: true,
+            ..new_bot(server.id, "bot-on", ada.id)
+        })
+        .await
+        .unwrap();
+    assert!(on.sees_member_joins);
+
+    let renamed = bots
+        .update_bot(
+            on.user_id,
+            BotPatch {
+                name: Some("Renamed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(renamed.sees_member_joins);
+    let turned_off = bots
+        .update_bot(
+            on.user_id,
+            BotPatch {
+                sees_member_joins: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!turned_off.sees_member_joins);
+}
+
+#[tokio::test]
+async fn joins_of_the_feed_keep_to_the_workspace_the_cursor_and_the_hold_back() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "feed-joins").await;
+    let (other, _) = workspace(&ctx, "feed-joins-other").await;
+    let bots = repo(&ctx);
+    let members = SeaOrmServerMemberRepository::new(ctx.db.clone());
+    members
+        .add_member(server.id, ada.id, ServerMemberRole::Owner)
+        .await
+        .unwrap();
+
+    let bot = bots
+        .create_bot(new_bot(server.id, "bot-feed", ada.id))
+        .await
+        .unwrap();
+    members
+        .add_member(server.id, bot.user_id, ServerMemberRole::Guest)
+        .await
+        .unwrap();
+    let start = BotFeedPosition {
+        at: bots.feed_now().await.unwrap(),
+        id: Uuid::nil(),
+    };
+
+    let nia = ctx.create_user("feed-joins-nia").await;
+    let omar = ctx.create_user("feed-joins-omar").await;
+    let elsewhere = ctx.create_user("feed-joins-elsewhere").await;
+    members
+        .add_member(server.id, nia.id, ServerMemberRole::Member)
+        .await
+        .unwrap();
+    members
+        .add_member(server.id, omar.id, ServerMemberRole::Member)
+        .await
+        .unwrap();
+    members
+        .add_member(other.id, elsewhere.id, ServerMemberRole::Member)
+        .await
+        .unwrap();
+
+    let list = |after, hold_back, limit| {
+        bots.list_feed_joins(bot.user_id, server.id, after, hold_back, limit)
+    };
+    assert!(
+        list(start, Duration::hours(1), 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "every row is younger than the hold-back"
+    );
+    let found = list(start, Duration::zero(), 10).await.unwrap();
+    let ids: Vec<UserId> = found.iter().map(|join| join.user_id).collect();
+    assert_eq!(ids, [nia.id, omar.id]);
+
+    let first = list(start, Duration::zero(), 1).await.unwrap();
+    assert_eq!(first[0].user_id, nia.id);
+    let past_first = BotFeedPosition {
+        at: first[0].joined_at,
+        id: first[0].member_id.into(),
+    };
+    let rest = list(past_first, Duration::zero(), 10).await.unwrap();
+    assert_eq!(rest.len(), 1);
+    assert_eq!(rest[0].user_id, omar.id);
+
+    // From a cursor before the bot existed: only who joined since, never the bot or its creator.
+    let long_ago = BotFeedPosition {
+        at: Utc::now() - Duration::days(365),
+        id: Uuid::nil(),
+    };
+    let found = list(long_ago, Duration::zero(), 10).await.unwrap();
+    let ids: Vec<UserId> = found.iter().map(|join| join.user_id).collect();
+    assert_eq!(ids, [nia.id, omar.id]);
 }
