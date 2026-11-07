@@ -766,7 +766,8 @@ each list.
   `CreateIncomingWebhookInput.template`, `updateIncomingWebhookFormat`, `webhookFormats` and
   `previewWebhookFormat`; `webhook_test_sessions`: `startWebhookTestSession`, `endWebhookTestSession`,
   `webhookTestDeliveries`, `CreateIncomingWebhookInput.testSessionId` and
-  `CreatedIncomingWebhook.keptTestUrl`). A client asks
+  `CreatedIncomingWebhook.keptTestUrl`; `home_layout`: `HomeLayout`, `HomeLayoutSaved`,
+  `homeLayout`, `saveHomeLayout` and `resetHomeLayout`). A client asks
   for such a field only when its name is listed, so it keeps working against older servers; it
   ignores names it does not know.
 
@@ -1018,3 +1019,19 @@ address it is signed in to (`bots.md`, "Incoming webhooks").
 plaintext channel are `VALIDATION` ("A bot can only be in a channel"). `addConversationMembers`
 naming a bot is `FORBIDDEN` for anyone but an Owner or Moderator, and `setMemberRole` on a bot is
 `VALIDATION`.
+
+### Home layout
+
+A signed-in person's Home layout, one per account, kept on their home server (`home-layout.md`
+has the layout's format, the checks and the rules). Each root needs a session; the mutations
+need the CSRF header.
+
+| Root | Does |
+|---|---|
+| `homeLayout: HomeLayout` | The caller's layout, `{ layout: JSON!, editedAt: DateTime!, updatedAt: DateTime! }`, or null when none is stored. |
+| `saveHomeLayout(layout: JSON!, editedAt: DateTime!): HomeLayoutSaved!` | Stores the layout unless the stored one has a later `editedAt`, an `editedAt` later than the server's clock counting as the clock. Answers `{ kept: Boolean!, layout: HomeLayout! }`: `kept` true with the layout just stored, or false with the stored one that was kept. `VALIDATION` names the check a layout fails. |
+| `resetHomeLayout: Boolean!` | Deletes the stored layout, so the default shows. Answers whether a layout was stored. |
+
+A person from another server gets `FORBIDDEN` from all three. The mutations count against
+`RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` like any other and write no audit entry. Present when
+`serverInfo.capabilities` lists `home_layout`.

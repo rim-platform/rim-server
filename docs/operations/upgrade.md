@@ -158,6 +158,11 @@ a body with a string `text` posts that text, and any other body answers `400` an
 lists and can be revoked, and the next upgrade brings its format back. A webhook on the GitHub preset with
 no format of its own keeps working.
 
+**Home layouts.** The table stays, but an older binary has no `homeLayout`, `saveHomeLayout` or
+`resetHomeLayout` and doesn't list `home_layout`. The app then shows its default Home with no way
+to edit it, and a save it sends before it notices is refused as an unknown field and says the
+layout wasn't saved. The stored layouts are untouched and come back with the next upgrade.
+
 **Further back.** Restore the backup taken before the upgrade (`docs/self-hosting.md`,
 "Restore"). Everything written since that backup is lost.
 
