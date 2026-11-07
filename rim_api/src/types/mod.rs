@@ -18,6 +18,7 @@ pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
+pub(crate) mod home_layout;
 pub(crate) mod instance_moderation;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
@@ -87,6 +88,7 @@ pub use e2ee::{
     PrincipalDevices, ReportEncryptedMessageInput, RequestMlsReaddInput, SendEncryptedMessageInput,
     SubmitMlsCommitInput,
 };
+pub use home_layout::{HomeLayout, HomeLayoutSaved};
 pub use instance_moderation::{
     InstanceAbuseReport, InstanceAccount, InstanceIpBlock, InstanceIpBlockOutcome,
     InstancePrincipalBlock, InstancePrincipalBlockOutcome, InstancePrincipalUnblockOutcome,

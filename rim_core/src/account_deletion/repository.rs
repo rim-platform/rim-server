@@ -58,8 +58,9 @@ pub trait AccountDeletionRepository: Send + Sync {
     async fn purge_credentials(&self, user_id: UserId, now: DateTime<Utc>)
     -> RepoResult<PurgeStep>;
 
-    /// Delete the account's notification rules and notifications, keybinds, commands, channel
-    /// lenses, workspace state entries and custom emoji, and the macros no kept pipeline runs.
+    /// Delete the account's notification rules and notifications, keybinds, Home layout,
+    /// commands, channel lenses, workspace state entries and custom emoji, and the macros no kept
+    /// pipeline runs.
     async fn purge_personal_data(&self, user_id: UserId) -> RepoResult<PurgeStep>;
 
     /// Delete the account's relay queue, DM requests, contacts, blocks and subscriptions.

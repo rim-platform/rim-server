@@ -617,6 +617,13 @@ impl AppServiceProvider for TestAppServiceProvider {
         // No resolver test here calls it, so an unprimed mock is enough.
         Arc::new(rim_services::session_key::service::MockSessionKeyService::new())
     }
+
+    fn home_layout_service(
+        &self,
+    ) -> Arc<dyn rim_services::home_layout::service::HomeLayoutService> {
+        // No resolver test here calls it, so an unprimed mock is enough.
+        Arc::new(rim_services::home_layout::service::MockHomeLayoutService::new())
+    }
 }
 
 /// `request` on an instance where `disabled` are switched off: request data takes precedence

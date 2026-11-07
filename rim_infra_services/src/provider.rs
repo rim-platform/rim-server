@@ -135,6 +135,7 @@ pub struct DefaultAppServiceProvider {
     account_password_service:
         Arc<dyn rim_services::account_password::service::AccountPasswordService>,
     session_key_service: Arc<dyn rim_services::session_key::service::SessionKeyService>,
+    home_layout_service: Arc<dyn rim_services::home_layout::service::HomeLayoutService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -590,6 +591,13 @@ impl DefaultAppServiceProvider {
             .with_limits(limits),
         );
 
+        let home_layout_service: Arc<dyn rim_services::home_layout::service::HomeLayoutService> =
+            Arc::new(crate::home_layout::DefaultHomeLayoutService::new(Arc::new(
+                rim_infra_db::sea_orm_impl::home_layout::SeaOrmHomeLayoutRepository::new(
+                    rim_infra_db::DbHandle::from(db.clone()),
+                ),
+            )));
+
         Self {
             audit_log_service,
             auth_service,
@@ -633,6 +641,7 @@ impl DefaultAppServiceProvider {
             public_join_link_service,
             account_password_service,
             session_key_service,
+            home_layout_service,
         }
     }
 
@@ -800,5 +809,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::session_key::service::SessionKeyService> {
         Arc::clone(&self.session_key_service)
+    }
+
+    fn home_layout_service(
+        &self,
+    ) -> Arc<dyn rim_services::home_layout::service::HomeLayoutService> {
+        Arc::clone(&self.home_layout_service)
     }
 }

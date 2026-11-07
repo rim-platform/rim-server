@@ -46,6 +46,7 @@ pub mod file_storage;
 pub mod franking_keys;
 // pub: the composition root (rim_server/src/app.rs) builds DefaultHostService and the outbox
 // writer and sender tasks.
+pub(crate) mod home_layout;
 pub mod host;
 /// Public for `rim_server`, whose `invite` command issues, lists and revokes the operator's
 /// instance invites.

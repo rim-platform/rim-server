@@ -200,6 +200,7 @@ TRUNCATE TABLE
   device_key,
   device_link,
   device_request_seen,
+  home_layout,
   host_delegation,
   host_event_stream,
   incoming_webhook,

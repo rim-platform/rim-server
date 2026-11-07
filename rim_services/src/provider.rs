@@ -93,4 +93,6 @@ pub trait AppServiceProvider: Send + Sync {
     ) -> Arc<dyn crate::account_password::service::AccountPasswordService>;
     /// The keep keys and reload keys of sessions, and the reload window.
     fn session_key_service(&self) -> Arc<dyn crate::session_key::service::SessionKeyService>;
+    /// The signed-in person's Home layout.
+    fn home_layout_service(&self) -> Arc<dyn crate::home_layout::service::HomeLayoutService>;
 }

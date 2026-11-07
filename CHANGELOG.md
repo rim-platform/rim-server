@@ -23,6 +23,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Home layout: a signed-in person's Home is saved on their own server, one layout per account, so
+  every device shows the same boxes in the same order (`homeLayout`, `saveHomeLayout`,
+  `resetHomeLayout`, `docs/home-layout.md`). The edit made last wins: a save carries `editedAt`, and
+  one older than the stored layout answers `kept: false` with the stored one. The server checks the
+  layout's shape and size only, keeps no audit entry and never logs it, and the account purge removes
+  it. Listed in `serverInfo.capabilities` as `home_layout`.
 - Webhook test sessions: an Owner or Moderator can see what a service really sends, held in memory
   for at most an hour and readable only by them (`startWebhookTestSession`, `webhookTestDeliveries`,
   `endWebhookTestSession`, `specs/bots-v1.md`). A new webhook's test URL posts nothing, and saving the

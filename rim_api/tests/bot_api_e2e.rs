@@ -293,21 +293,23 @@ async fn a_bot_token_works_only_here_and_a_session_cookie_works_nowhere_here() {
     let bot = s.bot("Helper").await;
     let origin = s.node.origin.clone();
 
-    let answer: Value = s
-        .http
-        .post(format!("{origin}/api"))
-        .bearer_auth(&bot.token)
-        .json(&json!({ "query": "{ me { id } }" }))
-        .send()
-        .await
-        .expect("graphql")
-        .json()
-        .await
-        .expect("json");
-    assert_eq!(
-        answer["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
-        "{answer}"
-    );
+    for query in ["{ me { id } }", "{ homeLayout { editedAt } }"] {
+        let answer: Value = s
+            .http
+            .post(format!("{origin}/api"))
+            .bearer_auth(&bot.token)
+            .json(&json!({ "query": query }))
+            .send()
+            .await
+            .expect("graphql")
+            .json()
+            .await
+            .expect("json");
+        assert_eq!(
+            answer["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+            "{query}: {answer}"
+        );
+    }
     for (method, path, refused_with) in [
         (Method::GET, "/api/ws", StatusCode::UNAUTHORIZED),
         (Method::POST, "/api/files/upload", StatusCode::FORBIDDEN),

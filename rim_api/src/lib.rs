@@ -157,6 +157,7 @@ pub fn build_schema(
         .data(user_loader)
         .data(bot_info_loader)
         .data(service_provider.bot_service())
+        .data(service_provider.home_layout_service())
         .data(reaction_loader)
         .data(mention_loader)
         .data(pin_loader)
