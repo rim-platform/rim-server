@@ -16,6 +16,7 @@ pub mod dm_policy;
 pub mod e2ee;
 pub mod events;
 pub mod feature;
+pub mod home_layout;
 pub mod host;
 pub mod ip_block;
 pub mod key_auth;

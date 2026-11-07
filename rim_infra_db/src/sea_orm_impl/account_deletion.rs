@@ -556,6 +556,7 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                         "keybinds",
                         "DELETE FROM keybind WHERE scope = 'user' AND subject_id = $1",
                     ),
+                    ("home_layout", "DELETE FROM home_layout WHERE user_id = $1"),
                     (
                         "macros",
                         "DELETE FROM macro m WHERE m.user_id = $1 \

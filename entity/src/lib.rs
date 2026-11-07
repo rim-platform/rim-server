@@ -24,6 +24,7 @@ mod custom_emoji_mapper;
 pub mod device_key;
 pub mod device_link;
 pub mod device_request_seen;
+pub mod home_layout;
 pub mod host_delegation;
 pub mod host_event_stream;
 pub mod incoming_webhook;

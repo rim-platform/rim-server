@@ -12,6 +12,7 @@ pub mod default_workspace;
 pub mod device_link;
 pub mod dm_policy;
 pub mod e2ee;
+pub mod home_layout;
 pub mod host;
 pub mod instance_invite;
 pub mod invite;

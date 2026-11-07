@@ -244,6 +244,7 @@ async fn server_info_lists_its_capabilities() {
         "pipeline_post_as_bot",
         "webhook_formats",
         "webhook_test_sessions",
+        "home_layout",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
@@ -660,7 +661,7 @@ fn account_password_sdl_matches_the_contract() {
     }
 }
 
-/// The bot roots, appended last, and the types they answer.
+/// The bot roots, followed by the Home layout roots, and the types they answer.
 #[test]
 fn bot_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
@@ -669,14 +670,14 @@ fn bot_sdl_matches_the_contract() {
          incomingWebhooks(serverId: ID!): [IncomingWebhook!]! webhookFormats: \
          [WebhookFormatInfo!]! previewWebhookFormat(serverId: ID!, template: JSON!, headers: \
          [WebhookHeaderInput!]!, body: String!): WebhookFormatPreview! webhookTestDeliveries(sessionId: \
-         ID!, after: Int): WebhookTestDeliveries! }",
+         ID!, after: Int): WebhookTestDeliveries! homeLayout: HomeLayout }",
         "createBot(input: CreateBotInput!): CreatedBot! updateBot(input: UpdateBotInput!): Bot! \
          deactivateBot(botUserId: ID!): Bot! createBotToken(botUserId: ID!, label: String!): \
          CreatedBotToken! revokeBotToken(tokenId: ID!): BotToken! createIncomingWebhook(input: \
          CreateIncomingWebhookInput!): CreatedIncomingWebhook! revokeIncomingWebhook(id: ID!): \
          IncomingWebhook! updateIncomingWebhookFormat(id: ID!, preset: WebhookPreset!, template: \
          JSON): IncomingWebhook! startWebhookTestSession(serverId: ID!, webhookId: ID): \
-         WebhookTestSession! endWebhookTestSession(sessionId: ID!): Boolean! }",
+         WebhookTestSession! endWebhookTestSession(sessionId: ID!): Boolean! saveHomeLayout(",
         "type BotInfo { runBy: String! readsGoTo: String! addedByName: String }",
         "type Bot { userId: ID! serverId: ID! name: String! runBy: String! readsGoTo: String! \
          addedByName: String createdAt: DateTime! deactivatedAt: DateTime seesMemberJoins: Boolean! }",
@@ -704,6 +705,21 @@ fn bot_sdl_matches_the_contract() {
         "type WebhookFormatPreview { outcome: WebhookPreviewOutcome! rule: Int text: String link: \
          String placeholder: String reason: String }",
         "bannedUntil: DateTime isBot: Boolean! bot: BotInfo }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
+/// The Home layout roots, appended last, and the types they answer.
+#[test]
+fn home_layout_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "homeLayout: HomeLayout }",
+        "saveHomeLayout(layout: JSON!, editedAt: DateTime!): HomeLayoutSaved! \
+         resetHomeLayout: Boolean! }",
+        "type HomeLayout { layout: JSON! editedAt: DateTime! updatedAt: DateTime! }",
+        "type HomeLayoutSaved { kept: Boolean! layout: HomeLayout! }",
     ] {
         assert!(sdl.contains(expected), "SDL lacks `{expected}`");
     }
