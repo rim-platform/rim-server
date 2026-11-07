@@ -80,7 +80,8 @@ MUST say so where it shows it.
 Bots never join an encrypted conversation. A bot can only be a member of a channel. Adding one to a
 direct message, a group or any encrypted conversation MUST be refused, and channels stay plaintext
 (`docs/specs/e2ee-mls-v1.md`). The server has no keys for one, so this is a rule it can enforce. A webhook
-can only be on a channel, so neither it nor its format reaches an encrypted conversation.
+can only be on a channel, so neither it nor its format reaches an encrypted conversation. An unbound test
+session posts nowhere, and a bound one copies what reaches a plaintext channel's webhook.
 
 ## The bot API
 
@@ -272,6 +273,69 @@ Owner or Moderator of that workspace.
   `text` posts that text, and any other body answers `400` and posts nothing. No listing breaks, and
   upgrading again brings the format back. Migrating down drops the column and every format in it.
 
+## Webhook test sessions
+
+A test session lets an Owner or Moderator see what a service really sends, so a format can be written
+against it. It is held in memory for a short time and seen only by the person who started it.
+
+**Two kinds.**
+
+- **Unbound,** for a webhook not made yet: `startWebhookTestSession(serverId)` answers an id, a token and an
+  expiry. The URL is `POST /api/hooks/{token}`, the same shape as a webhook's. A delivery to it MUST NOT post
+  anything, and it answers `200` `{"ok":true,"test":true}`.
+- **Bound** to an existing webhook: `startWebhookTestSession(serverId, webhookId)` has no URL of its own.
+  Deliveries to the webhook's URL go on as before, under its saved format, its answers and its limits, and
+  the session keeps a copy of each one that passes the webhook's own rate limit. Without a session, nothing
+  of a delivery is kept.
+
+**Who.** Starting one takes the standing of creating a webhook in that workspace, and for a bound one the
+standing of changing that webhook's format, including being in its private channel. A session belongs to the
+person who started it. Reading it MUST be refused with `NOT_FOUND` for anyone else, for one that ended, and for
+its owner once they no longer have the standing to start it.
+
+**Saving promotes an unbound session.** `createIncomingWebhook` takes `testSessionId`. When the session is the
+caller's, for the channel's workspace and still open, the new webhook keeps that session's token, so a URL
+already pasted into a service starts posting with nothing to change, and the session ends. When it has expired
+or ended, the webhook gets a new token as without one, so a client compares the answer's token with the
+session's to tell the person the URL changed. Someone else's session,
+or one of another workspace, MUST be refused. A session can be promoted once.
+
+**What a delivery holds.** When it arrived, its `Content-Type`, the `x-` headers as a format reads them, and the
+body as text. The header names a format may not use (see "Webhook formats") MUST be dropped, by the same list,
+so a header such as `x-gitlab-token` is never kept. No address, `Authorization`, cookie or other header is kept.
+
+- A body over 256 KiB is held as "too large" without its bytes, and an unbound session answers `413`.
+- A body that isn't UTF-8 is held as "not text" without its bytes.
+- A body is held exactly as it came. A client MUST show it as plain text, with invisible characters shown, and
+  never as Markdown.
+- What it would post isn't worked out when a delivery arrives. A client asks a preview, under whatever format
+  it is showing.
+
+**Limits.** This is an unauthenticated route that fills memory, so each of these is enforced:
+
+- 20 deliveries and 1 MiB a session. Past either, the oldest are dropped.
+- 3 open sessions a workspace and 20 an instance. Starting one past either answers `RATE_LIMITED`.
+- 30 deliveries a minute to an unbound session, then `429`. The per-address limit of `/api` applies too. A bound
+  session takes nothing from the webhook's own limit.
+- A session lasts 15 minutes from its start or its last read, and never more than an hour from its start. Expired
+  sessions are dropped by a sweep, and `endWebhookTestSession` drops one at once. Revoking a webhook ends its
+  bound sessions.
+
+**Reading it.** `webhookTestDeliveries(sessionId, after)` answers the deliveries after `after`, oldest first, and
+the session's expiry. Each read extends the session as above.
+
+**Where it is held.** Sessions are held in the memory of the server process, as confirmations and rate limits
+are. A restart drops them. A server is one process: nothing supports running several on one database yet.
+
+**What it records.** What a session holds MUST NOT reach the database, a log line, an audit entry or a metric.
+Starting and ending one write audit entries holding ids alone, and the sweep writes none. A request to a
+session's URL counts in the HTTP metrics as a request to any webhook does. The token MUST NOT be logged. It is
+held in memory as its SHA-256, and only promotion stores that hash, as for any webhook.
+
+- There is no command for any of this, so nothing that runs commands reaches it. Bots being switched off stops it.
+- A client MUST call these roots and send `testSessionId` only when `serverInfo.capabilities` lists
+  `webhook_test_sessions`.
+
 ## A pipeline posting as a bot
 
 A pipeline with the Member Joined trigger can have a Post as bot action: a bot, a channel and a text.
@@ -318,6 +382,8 @@ Nobody confirms each post, because an Owner or Moderator chose this one.
   `{username}` is their username at home.
 - A webhook's format lives with the webhook, on the host. A delivery and a preview run there, and an Owner
   or Moderator from another server changes a format through the same GraphQL on that host.
+- A test session and its URL live on the host too, and its URL is built from the host's address as a webhook's
+  is.
 - The public relay runs no agent behind a bot. A workspace on it can have bots run by whoever owns
   them, elsewhere, using the same API.
 
@@ -330,7 +396,7 @@ Nobody confirms each post, because an Owner or Moderator chose this one.
   it uses this same API and needs nothing more from this contract.
 - Signed webhooks.
 - In a format: conditions other than `equals`, loops over arrays, or several messages from one delivery.
-- Keeping what a service sent, a mode that listens for the next delivery, or a shared library of formats.
-  A format belongs to its webhook.
+- A permanent log of what a service sent: a test session keeps it for at most an hour. A shared library of
+  formats: a format belongs to its webhook.
 - A Post as bot action on any trigger but Member Joined, a mention in its text, or a welcome queued past a
   limit.
