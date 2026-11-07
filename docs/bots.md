@@ -354,8 +354,10 @@ Each part is letters, digits, `_` and `-`. A key with a dot in it can't be reach
 
 - `{release.name|release.tag_name}` takes the first that has a value. `{{` and `}}` are literal braces, and
   anything else in braces is refused when you save.
-- A value is put on one line and its Markdown is escaped. It is never expanded again, so a title of
-  `{sender.login}` shows as that text. A header can't be a placeholder, so a format can't print one.
+- A value is put on one line: whitespace and control characters become single spaces, and format characters
+  are removed, so a bidi override can't reorder the message and a joined emoji can come apart. Its Markdown is
+  escaped. It is never expanded again, so a title of `{sender.login}` shows as that text. A header can't be a
+  placeholder, so a format can't print one.
 - `<@id>`, `@channel` and `@here` are made plain text in the whole post, your own text included, and the
   post is cut to 1,000 characters, counting the link.
 

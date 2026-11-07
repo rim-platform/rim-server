@@ -211,8 +211,10 @@ array. A key holding a dot can't be reached.
 - A string that isn't blank, a number and a boolean are values. When a placeholder has none (missing,
   blank, `null`, an object or an array), the rule MUST post nothing and answer `202`, without trying
   later rules.
-- A value MUST be put on one line, with whitespace and control characters turned into single spaces, and
-  have its Markdown escaped. It MUST NOT be expanded again: a title of `{sender.login}` shows as that text.
+- A value MUST be put on one line, with whitespace and control characters turned into single spaces and
+  format characters removed, so a bidi override can't reorder the message, and have its Markdown escaped.
+  A joined emoji in a value can come apart. A value left blank by this has none. It MUST NOT be expanded
+  again: a title of `{sender.login}` shows as that text.
 - The literal text is what the Owner or Moderator wrote, so its Markdown and line breaks stay.
 - Every mention in the result, the literal text's own included, MUST be made plain text, as for any
   webhook. The result MUST then be cut to 1,000 characters, counting the link.
