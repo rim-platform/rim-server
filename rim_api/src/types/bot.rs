@@ -227,8 +227,11 @@ impl From<rim_services::bot::dto::IncomingWebhookDto> for IncomingWebhook {
 pub struct CreatedIncomingWebhook {
     pub webhook: IncomingWebhook,
     /// `rimhook_…`, shown this once. The URL is `/api/hooks/` and this on the server's address, and
-    /// it is a secret.
+    /// it is a secret. The empty string when `keptTestUrl` is true: the client already has the URL,
+    /// and the server held only its hash.
     pub token: String,
+    /// Whether the webhook kept the token of the test session named in `testSessionId`.
+    pub kept_test_url: bool,
 }
 
 impl From<rim_services::bot::dto::CreatedIncomingWebhookDto> for CreatedIncomingWebhook {
@@ -236,6 +239,90 @@ impl From<rim_services::bot::dto::CreatedIncomingWebhookDto> for CreatedIncoming
         Self {
             webhook: value.webhook.into(),
             token: value.token,
+            kept_test_url: value.kept_test_url,
+        }
+    }
+}
+
+/// A webhook test session just started.
+#[derive(SimpleObject, Clone)]
+pub struct WebhookTestSession {
+    pub id: ID,
+    /// `rimhook_…` for an unbound session's URL, shown this once; null for a bound session.
+    pub token: Option<String>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl From<rim_services::bot::dto::StartedTestSessionDto> for WebhookTestSession {
+    fn from(value: rim_services::bot::dto::StartedTestSessionDto) -> Self {
+        Self {
+            id: ID(value.id.to_string()),
+            token: value.token,
+            expires_at: value.expires_at,
+        }
+    }
+}
+
+/// What a test session holds of a delivery's body.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WebhookTestBodyState {
+    /// `body` is the body exactly as it came.
+    Text,
+    /// Over 256 KiB; its bytes are not held.
+    TooLarge,
+    /// Not UTF-8; its bytes are not held.
+    NotText,
+}
+
+/// A delivery a test session holds.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct WebhookTestDelivery {
+    /// Its place in the session, counted from 1; pass the last one read as `after`.
+    pub id: i32,
+    pub received_at: DateTime<Utc>,
+    pub content_type: Option<String>,
+    /// The `x-` headers a format may use.
+    pub headers: Vec<WebhookHeader>,
+    pub body_state: WebhookTestBodyState,
+    /// The body, for `TEXT` alone. A client shows it as plain text.
+    pub body: Option<String>,
+}
+
+/// The deliveries a read of a test session answers, and when it now expires.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct WebhookTestDeliveries {
+    pub deliveries: Vec<WebhookTestDelivery>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl From<rim_services::bot::dto::TestDeliveriesDto> for WebhookTestDeliveries {
+    fn from(value: rim_services::bot::dto::TestDeliveriesDto) -> Self {
+        use rim_services::bot::test_session::TestBody;
+        Self {
+            deliveries: value
+                .deliveries
+                .into_iter()
+                .map(|delivery| {
+                    let (body_state, body) = match delivery.body {
+                        TestBody::Text(text) => (WebhookTestBodyState::Text, Some(text)),
+                        TestBody::TooLarge => (WebhookTestBodyState::TooLarge, None),
+                        TestBody::NotText => (WebhookTestBodyState::NotText, None),
+                    };
+                    WebhookTestDelivery {
+                        id: i32::try_from(delivery.seq).unwrap_or(i32::MAX),
+                        received_at: delivery.received_at,
+                        content_type: delivery.content_type,
+                        headers: delivery
+                            .headers
+                            .into_iter()
+                            .map(|(name, value)| WebhookHeader { name, value })
+                            .collect(),
+                        body_state,
+                        body,
+                    }
+                })
+                .collect(),
+            expires_at: value.expires_at,
         }
     }
 }
@@ -250,6 +337,9 @@ pub struct CreateIncomingWebhookInput {
     /// The webhook's own format, with the preset `PLAIN`. Sent only to a server that lists the
     /// capability `webhook_formats`.
     pub template: Option<Json<serde_json::Value>>,
+    /// The caller's unbound test session whose URL the webhook keeps. Sent only to a server that
+    /// lists the capability `webhook_test_sessions`.
+    pub test_session_id: Option<ID>,
 }
 
 /// A header of a sample delivery.

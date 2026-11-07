@@ -3,7 +3,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use rim_core::bot::model::{
     Bot, BotFeedMessage, BotFeedPosition, BotToken, BotTokenId, IncomingWebhook, IncomingWebhookId,
-    WebhookPreset,
+    WebhookPreset, WebhookTestSessionId,
 };
 use rim_core::conversation::model::ConversationId;
 use rim_core::message::model::{Message, MessageId};
@@ -11,6 +11,7 @@ use rim_core::message_thread::model::MessageThreadId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 
+use crate::bot::test_session::TestDelivery;
 use crate::message::dto::MessageDto;
 
 /// A bot as a workspace's members see it.
@@ -299,15 +300,45 @@ pub enum WebhookPreviewDto {
 #[derive(Clone)]
 pub struct CreatedIncomingWebhookDto {
     pub webhook: IncomingWebhookDto,
+    /// The new token, or the empty string when the webhook kept a test session's, which only its
+    /// hash was held of.
     pub token: String,
+    /// Whether the webhook kept a test session's token, so the URL already handed out posts.
+    pub kept_test_url: bool,
 }
 
 impl fmt::Debug for CreatedIncomingWebhookDto {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CreatedIncomingWebhookDto")
             .field("webhook", &self.webhook)
+            .field("kept_test_url", &self.kept_test_url)
             .finish_non_exhaustive()
     }
+}
+
+/// A test session just started. `token` is shown this once, and only for an unbound session.
+/// `Debug` leaves the token out.
+#[derive(Clone)]
+pub struct StartedTestSessionDto {
+    pub id: WebhookTestSessionId,
+    pub token: Option<String>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl fmt::Debug for StartedTestSessionDto {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StartedTestSessionDto")
+            .field("id", &self.id)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a test session holds after a point, and when it now expires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestDeliveriesDto {
+    pub deliveries: Vec<TestDelivery>,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

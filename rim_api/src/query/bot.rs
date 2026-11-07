@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_graphql::*;
+use rim_core::bot::model::WebhookTestSessionId;
 use rim_core::server::model::ServerId;
 use rim_core::user::model::UserId;
 use rim_services::Actor;
@@ -11,6 +12,7 @@ use crate::errors::map_service_error;
 use crate::ids::parse_uuid_id;
 use crate::types::{
     Bot, BotToken, IncomingWebhook, WebhookFormatInfo, WebhookFormatPreview, WebhookHeader,
+    WebhookTestDeliveries,
 };
 
 #[derive(Default)]
@@ -101,5 +103,25 @@ impl BotQueries {
             .await
             .map_err(map_service_error)?;
         Ok(preview.into())
+    }
+
+    /// What a test session holds after `after`, oldest first, and its expiry, which this read
+    /// extends. Its starter alone; `NOT_FOUND` for anyone else, for one that ended and once the
+    /// starter lacks the standing to start it.
+    async fn webhook_test_deliveries(
+        &self,
+        ctx: &Context<'_>,
+        session_id: ID,
+        after: Option<i32>,
+    ) -> Result<WebhookTestDeliveries> {
+        let actor = require_actor(ctx)?;
+        let id = parse_uuid_id::<WebhookTestSessionId>(&session_id)?;
+        let after = after.map_or(0, |after| u64::try_from(after).unwrap_or(0));
+        let deliveries = ctx
+            .data::<Arc<dyn BotService>>()?
+            .test_deliveries(Actor::new(actor), id, after)
+            .await
+            .map_err(map_service_error)?;
+        Ok(deliveries.into())
     }
 }

@@ -30,6 +30,7 @@ pub const CAPABILITIES: &[&str] = &[
     "bot_events",
     "pipeline_post_as_bot",
     "webhook_formats",
+    "webhook_test_sessions",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.

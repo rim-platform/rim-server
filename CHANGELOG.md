@@ -23,6 +23,13 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Webhook test sessions: an Owner or Moderator can see what a service really sends, held in memory
+  for at most an hour and readable only by them (`startWebhookTestSession`, `webhookTestDeliveries`,
+  `endWebhookTestSession`, `specs/bots-v1.md`). A new webhook's test URL posts nothing, and saving the
+  webhook with `CreateIncomingWebhookInput.testSessionId` keeps that URL
+  (`CreatedIncomingWebhook.keptTestUrl`). A session on an existing webhook copies its deliveries. Only
+  the `x-` headers a format may use and the body are held. Listed in `serverInfo.capabilities` as
+  `webhook_test_sessions`.
 - Webhook formats: an Owner or Moderator can say how an incoming webhook turns a delivery into a
   message, with rules that test an `x-` header or a body field and a text with placeholders, and
   change it later without a new URL (`CreateIncomingWebhookInput.template`, `IncomingWebhook.template`,

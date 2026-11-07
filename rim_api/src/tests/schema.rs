@@ -243,6 +243,7 @@ async fn server_info_lists_its_capabilities() {
         "bot_events",
         "pipeline_post_as_bot",
         "webhook_formats",
+        "webhook_test_sessions",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
@@ -667,13 +668,15 @@ fn bot_sdl_matches_the_contract() {
         "bots(serverId: ID!): [Bot!]! botTokens(botUserId: ID!): [BotToken!]! \
          incomingWebhooks(serverId: ID!): [IncomingWebhook!]! webhookFormats: \
          [WebhookFormatInfo!]! previewWebhookFormat(serverId: ID!, template: JSON!, headers: \
-         [WebhookHeaderInput!]!, body: String!): WebhookFormatPreview! }",
+         [WebhookHeaderInput!]!, body: String!): WebhookFormatPreview! webhookTestDeliveries(sessionId: \
+         ID!, after: Int): WebhookTestDeliveries! }",
         "createBot(input: CreateBotInput!): CreatedBot! updateBot(input: UpdateBotInput!): Bot! \
          deactivateBot(botUserId: ID!): Bot! createBotToken(botUserId: ID!, label: String!): \
          CreatedBotToken! revokeBotToken(tokenId: ID!): BotToken! createIncomingWebhook(input: \
          CreateIncomingWebhookInput!): CreatedIncomingWebhook! revokeIncomingWebhook(id: ID!): \
          IncomingWebhook! updateIncomingWebhookFormat(id: ID!, preset: WebhookPreset!, template: \
-         JSON): IncomingWebhook! }",
+         JSON): IncomingWebhook! startWebhookTestSession(serverId: ID!, webhookId: ID): \
+         WebhookTestSession! endWebhookTestSession(sessionId: ID!): Boolean! }",
         "type BotInfo { runBy: String! readsGoTo: String! addedByName: String }",
         "type Bot { userId: ID! serverId: ID! name: String! runBy: String! readsGoTo: String! \
          addedByName: String createdAt: DateTime! deactivatedAt: DateTime seesMemberJoins: Boolean! }",
@@ -684,9 +687,15 @@ fn bot_sdl_matches_the_contract() {
         "enum WebhookPreset { PLAIN GITHUB }",
         "type IncomingWebhook { id: ID! conversationId: ID! botUserId: ID! preset: WebhookPreset! \
          template: JSON createdAt: DateTime! lastUsedAt: DateTime revokedAt: DateTime }",
-        "type CreatedIncomingWebhook { webhook: IncomingWebhook! token: String! }",
+        "type CreatedIncomingWebhook { webhook: IncomingWebhook! token: String! keptTestUrl: \
+         Boolean! }",
+        "type WebhookTestSession { id: ID! token: String expiresAt: DateTime! }",
+        "enum WebhookTestBodyState { TEXT TOO_LARGE NOT_TEXT }",
+        "type WebhookTestDelivery { id: Int! receivedAt: DateTime! contentType: String headers: \
+         [WebhookHeader!]! bodyState: WebhookTestBodyState! body: String }",
+        "type WebhookTestDeliveries { deliveries: [WebhookTestDelivery!]! expiresAt: DateTime! }",
         "input CreateIncomingWebhookInput { conversationId: ID! botUserId: ID! preset: \
-         WebhookPreset! template: JSON }",
+         WebhookPreset! template: JSON testSessionId: ID }",
         "type WebhookHeader { name: String! value: String! }",
         "input WebhookHeaderInput { name: String! value: String! }",
         "type WebhookFormatInfo { key: String! name: String! setupNote: String! format: JSON! \

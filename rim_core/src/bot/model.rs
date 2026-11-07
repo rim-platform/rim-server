@@ -14,6 +14,7 @@ use crate::user::model::UserId;
 
 model_id!(BotTokenId);
 model_id!(IncomingWebhookId);
+model_id!(WebhookTestSessionId);
 
 /// A bot as its workspace sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]

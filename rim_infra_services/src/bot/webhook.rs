@@ -6,7 +6,9 @@ use chrono::Utc;
 use tracing::{instrument, warn};
 
 use rim_auth::session_token::{generate_webhook_token, hash_token, is_webhook_token_shape};
-use rim_core::bot::model::{IncomingWebhookId, NewIncomingWebhook, WebhookPreset};
+use rim_core::bot::model::{
+    IncomingWebhookId, NewIncomingWebhook, WebhookPreset, WebhookTestSessionId,
+};
 use rim_core::conversation::model::{ConversationId, ConversationType};
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::server::model::ServerId;
@@ -131,6 +133,7 @@ impl DefaultBotService {
         bot_user_id: UserId,
         preset: WebhookPreset,
         template: Option<serde_json::Value>,
+        test_session: Option<WebhookTestSessionId>,
     ) -> ServiceResult<CreatedIncomingWebhookDto> {
         self.require_feature()?;
         let conversation = self
@@ -178,6 +181,7 @@ impl DefaultBotService {
             return Err(ServiceError::PermissionDenied);
         }
         checked_template(preset, template.as_ref())?;
+        let keep = self.session_to_keep(actor.user_id, server_id, test_session)?;
         if self
             .repos
             .bot_repo
@@ -203,7 +207,6 @@ impl DefaultBotService {
                 .await?;
         }
 
-        let token = generate_webhook_token();
         let (scope, repos) = self.transaction().await?;
         repos.bot_repo.lock_bot(bot_user_id).await?;
         // Read under the lock: a deactivation that committed first is seen here, and one that
@@ -216,6 +219,16 @@ impl DefaultBotService {
         if current.deactivated_at.is_some() {
             return Err(ServiceError::Validation(DEACTIVATED_BOT.to_string()));
         }
+        // A kept session's token is known here by its hash alone, so the answer's token is empty.
+        let kept = self.take_session(keep);
+        let (token, token_hash) = match &kept {
+            Some((_, hash)) => (String::new(), hash.clone()),
+            None => {
+                let token = generate_webhook_token();
+                let hash = hash_token(&token);
+                (token, hash)
+            }
+        };
         let created = repos
             .bot_repo
             .create_webhook(NewIncomingWebhook {
@@ -224,7 +237,7 @@ impl DefaultBotService {
                 bot_user_id,
                 preset,
                 template,
-                token_hash: hash_token(&token),
+                token_hash,
                 created_by: actor.user_id,
             })
             .await
@@ -246,9 +259,13 @@ impl DefaultBotService {
             TypedVerb::Write,
         )
         .await;
+        if let Some((session, _)) = &kept {
+            self.audit_kept_session(actor.user_id, session).await;
+        }
         Ok(CreatedIncomingWebhookDto {
             webhook: created.into(),
             token,
+            kept_test_url: kept.is_some(),
         })
     }
 
@@ -404,6 +421,7 @@ impl DefaultBotService {
             TypedVerb::Delete,
         )
         .await;
+        self.end_sessions_of(actor.user_id, id).await;
         Ok(revoked.into())
     }
 
@@ -478,6 +496,10 @@ mod tests {
     use rim_services::audit::dto::{AuditLogEntryDto, AuditLogPage, ListAuditLogQuery};
     use rim_services::audit::service::AuditLogService;
     use rim_services::bot::service::BotService;
+    use rim_services::bot::test_session::{
+        InMemoryTestSessionStore, MAX_TEST_BODY_BYTES, MAX_TEST_SESSIONS_PER_WORKSPACE,
+        NewTestSession, TestBody, WebhookTestSessionStore,
+    };
     use rim_services::conversation::service::MockConversationService;
     use rim_services::events::{Broadcaster, Observers, WorkspaceEvent};
     use rim_services::moderation::service::MockModerationService;
@@ -699,7 +721,16 @@ mod tests {
         channel: ConversationId,
         bot: UserId,
     ) -> ServiceResult<CreatedIncomingWebhookDto> {
-        BotService::create_webhook(svc, actor(), channel, bot, WebhookPreset::Github, None).await
+        BotService::create_webhook(
+            svc,
+            actor(),
+            channel,
+            bot,
+            WebhookPreset::Github,
+            None,
+            None,
+        )
+        .await
     }
 
     fn assert_validation<T: std::fmt::Debug>(result: ServiceResult<T>) {
@@ -1207,6 +1238,7 @@ mod tests {
             bot,
             WebhookPreset::Plain,
             Some(a_format()),
+            None,
         )
         .await
         .expect("created");
@@ -1229,8 +1261,16 @@ mod tests {
                 .with_channel_members(|_| true);
             let (svc, _) = fx.build();
             assert_validation(
-                BotService::create_webhook(&svc, actor(), channel, bot, preset, Some(template))
-                    .await,
+                BotService::create_webhook(
+                    &svc,
+                    actor(),
+                    channel,
+                    bot,
+                    preset,
+                    Some(template),
+                    None,
+                )
+                .await,
             );
         }
     }
@@ -1597,6 +1637,504 @@ mod tests {
             super::text_of(&webhook(unreadable), &[], body),
             Err(ServiceError::Internal(_))
         ));
+    }
+
+    // ── test sessions ────────────────────────────────────────────────────
+
+    /// A service of `fx` holding its sessions in a store the test can look into.
+    fn with_store(
+        fx: Fx,
+    ) -> (
+        DefaultBotService,
+        Arc<RecordingAudit>,
+        Arc<InMemoryTestSessionStore>,
+    ) {
+        let store = Arc::new(InMemoryTestSessionStore::new());
+        let (svc, audit) = fx.build();
+        let shared: Arc<dyn WebhookTestSessionStore> = store.clone();
+        (svc.with_test_sessions(shared), audit, store)
+    }
+
+    async fn start(
+        svc: &DefaultBotService,
+        who: Actor,
+        server_id: ServerId,
+        webhook_id: Option<IncomingWebhookId>,
+    ) -> ServiceResult<rim_services::bot::dto::StartedTestSessionDto> {
+        BotService::start_test_session(svc, who, server_id, webhook_id).await
+    }
+
+    #[tokio::test]
+    async fn an_unbound_session_answers_its_token_once_and_holds_only_its_hash() {
+        let fx = Fx::new().with_role(Some(ServerMemberRole::Moderator));
+        let server_id = fx.server_id;
+        let (svc, audit, store) = with_store(fx);
+        let started = start(&svc, actor(), server_id, None)
+            .await
+            .expect("started");
+        let token = started.token.clone().expect("a token");
+        assert!(is_webhook_token_shape(&token));
+        let held = format!("{store:?}");
+        assert!(!held.contains(&token), "the store holds the token itself");
+        assert!(held.contains(&hash_token(&token)));
+        assert!(!format!("{started:?}").contains(&token));
+        assert_eq!(
+            BotService::resolve_test_session(&svc, &token),
+            Some(started.id)
+        );
+        assert_eq!(BotService::resolve_test_session(&svc, "rimhook_nope"), None);
+        let entries = audit.0.lock().expect("lock");
+        let [entry] = entries.as_slice() else {
+            panic!("{entries:?}");
+        };
+        assert_eq!(
+            entry.command_id,
+            super::super::test_session::AUDIT_TEST_SESSION_START
+        );
+        assert_eq!(
+            entry.args_redacted,
+            serde_json::json!({ "session_id": started.id.to_string() })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_takes_a_moderator_and_a_workspace_holds_three() {
+        for role in [None, Some(ServerMemberRole::Member)] {
+            let fx = Fx::new().with_role(role);
+            let server_id = fx.server_id;
+            let (svc, _, _) = with_store(fx);
+            assert!(matches!(
+                start(&svc, actor(), server_id, None).await,
+                Err(ServiceError::PermissionDenied)
+            ));
+        }
+        let fx = Fx::new().with_role(Some(ServerMemberRole::Owner));
+        let server_id = fx.server_id;
+        let (svc, _, _) = with_store(fx);
+        for _ in 0..MAX_TEST_SESSIONS_PER_WORKSPACE {
+            start(&svc, actor(), server_id, None).await.expect("room");
+        }
+        assert!(matches!(
+            start(&svc, actor(), server_id, None).await,
+            Err(ServiceError::RateLimited { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_bound_session_takes_the_standing_of_changing_that_webhook() {
+        // A webhook of another workspace is not found.
+        let (fx, id) = updating(Some(ServerMemberRole::Moderator), a_webhook, |_| {});
+        let (svc, _, _) = with_store(fx);
+        assert!(matches!(
+            start(&svc, actor(), ServerId::new(), Some(id)).await,
+            Err(ServiceError::NotFound)
+        ));
+        // A private channel the moderator is not in.
+        let (fx, id) = updating(
+            Some(ServerMemberRole::Moderator),
+            a_webhook,
+            |conversation| conversation.is_private = true,
+        );
+        let server_id = fx.server_id;
+        let fx = fx.with_channel_members(|_| false);
+        let (svc, _, _) = with_store(fx);
+        assert!(matches!(
+            start(&svc, actor(), server_id, Some(id)).await,
+            Err(ServiceError::PermissionDenied)
+        ));
+        // A revoked webhook.
+        let revoked = |fx: &Fx| IncomingWebhook {
+            revoked_at: Some(Utc::now()),
+            ..a_webhook(fx)
+        };
+        let (fx, id) = updating(Some(ServerMemberRole::Moderator), revoked, |_| {});
+        let server_id = fx.server_id;
+        let (svc, _, _) = with_store(fx);
+        assert_validation(start(&svc, actor(), server_id, Some(id)).await);
+        // One that passes has no token of its own.
+        let (fx, id) = updating(Some(ServerMemberRole::Moderator), a_webhook, |_| {});
+        let server_id = fx.server_id;
+        let (svc, _, _) = with_store(fx);
+        let started = start(&svc, actor(), server_id, Some(id))
+            .await
+            .expect("started");
+        assert_eq!(started.token, None);
+    }
+
+    #[tokio::test]
+    async fn a_held_delivery_keeps_no_refused_header_and_its_body_as_it_came() {
+        let fx = Fx::new().with_role(Some(ServerMemberRole::Moderator));
+        let server_id = fx.server_id;
+        let (svc, _, store) = with_store(fx);
+        let me = actor();
+        let id = start(&svc, me, server_id, None).await.expect("started").id;
+        let headers: Vec<(String, String)> = [
+            ("x-github-event", "push"),
+            ("x-gitlab-token", "secret-gitlab"),
+            ("x-hub-signature-256", "sha256=secret-hub"),
+            ("x-api-key", "secret-key"),
+            ("x-authorization", "secret-auth"),
+            ("x-cookie", "secret-cookie"),
+            ("x-webhook-secret", "secret-secret"),
+        ]
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+        let body = "line\u{0}\u{1b}[31m\u{202e}end";
+        BotService::record_test_delivery(
+            &svc,
+            id,
+            Some("application/json".to_string()),
+            &headers,
+            body.as_bytes(),
+            false,
+        );
+        BotService::record_test_delivery(&svc, id, None, &[], &[0xff, 0xfe], false);
+        BotService::record_test_delivery(
+            &svc,
+            id,
+            None,
+            &[],
+            &vec![b'a'; MAX_TEST_BODY_BYTES + 1],
+            false,
+        );
+        BotService::record_test_delivery(&svc, id, None, &[], &[], true);
+        let read = BotService::test_deliveries(&svc, me, id, 0)
+            .await
+            .expect("read");
+        let [kept, not_text, large, unread] = read.deliveries.as_slice() else {
+            panic!("{:?}", read.deliveries);
+        };
+        assert_eq!(
+            kept.headers,
+            [("x-github-event".to_string(), "push".to_string())]
+        );
+        assert_eq!(kept.content_type.as_deref(), Some("application/json"));
+        assert_eq!(kept.body, TestBody::Text(body.to_string()));
+        assert_eq!(not_text.body, TestBody::NotText);
+        assert_eq!(large.body, TestBody::TooLarge);
+        assert_eq!(unread.body, TestBody::TooLarge);
+        assert!(
+            !format!("{store:?}").contains("secret-"),
+            "a refused header is held"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_starter_reads_or_ends_a_session_and_not_once_they_lose_the_standing() {
+        let role = Arc::new(Mutex::new(Some(ServerMemberRole::Moderator)));
+        let mut fx = Fx::new();
+        let current = Arc::clone(&role);
+        fx.members
+            .expect_get_member()
+            .returning(move |server_id, user_id| {
+                Ok(
+                    (*current.lock().expect("lock")).map(|member_role| ServerMember {
+                        id: ServerMemberId::new(),
+                        server_id,
+                        user_id,
+                        member_role,
+                        joined_at: Utc::now(),
+                    }),
+                )
+            });
+        let server_id = fx.server_id;
+        let (svc, audit, _) = with_store(fx);
+        let me = actor();
+        let id = start(&svc, me, server_id, None).await.expect("started").id;
+        assert!(BotService::test_deliveries(&svc, me, id, 0).await.is_ok());
+
+        // Another moderator of the same workspace.
+        let other = actor();
+        assert!(matches!(
+            BotService::test_deliveries(&svc, other, id, 0).await,
+            Err(ServiceError::NotFound)
+        ));
+        assert!(matches!(
+            BotService::end_test_session(&svc, other, id).await,
+            Err(ServiceError::NotFound)
+        ));
+
+        // The starter, no longer a moderator.
+        *role.lock().expect("lock") = Some(ServerMemberRole::Member);
+        assert!(matches!(
+            BotService::test_deliveries(&svc, me, id, 0).await,
+            Err(ServiceError::NotFound)
+        ));
+        *role.lock().expect("lock") = Some(ServerMemberRole::Moderator);
+
+        BotService::end_test_session(&svc, me, id)
+            .await
+            .expect("ended");
+        assert!(matches!(
+            BotService::test_deliveries(&svc, me, id, 0).await,
+            Err(ServiceError::NotFound)
+        ));
+        let commands: Vec<String> = audit
+            .0
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|entry| entry.command_id.clone())
+            .collect();
+        assert_eq!(
+            commands,
+            [
+                super::super::test_session::AUDIT_TEST_SESSION_START,
+                super::super::test_session::AUDIT_TEST_SESSION_END
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bound_session_gets_a_copy_and_ends_when_its_webhook_is_revoked() {
+        let (mut fx, id) = updating(Some(ServerMemberRole::Moderator), a_webhook, |_| {});
+        let server_id = fx.server_id;
+        fx.bots.expect_revoke_webhook().returning(move |id, at| {
+            ok(Some(IncomingWebhook {
+                id,
+                server_id,
+                conversation_id: ConversationId::new(),
+                bot_user_id: UserId::new(),
+                preset: WebhookPreset::Plain,
+                template: None,
+                created_at: at,
+                last_used_at: None,
+                revoked_at: Some(at),
+            }))
+        });
+        let (svc, _, store) = with_store(fx);
+        let me = actor();
+        let session = start(&svc, me, server_id, Some(id))
+            .await
+            .expect("started")
+            .id;
+        BotService::copy_to_test_sessions(&svc, id, None, &[], b"{}", false);
+        BotService::copy_to_test_sessions(&svc, IncomingWebhookId::new(), None, &[], b"no", false);
+        let read = BotService::test_deliveries(&svc, me, session, 0)
+            .await
+            .expect("read");
+        assert_eq!(read.deliveries.len(), 1);
+        assert_eq!(read.deliveries[0].body, TestBody::Text("{}".to_string()));
+        BotService::revoke_webhook(&svc, me, id)
+            .await
+            .expect("revoked");
+        assert!(store.get(session, Utc::now()).is_none());
+    }
+
+    #[tokio::test]
+    async fn the_sweep_drops_a_session_past_its_expiry() {
+        let fx = Fx::new();
+        let (svc, _, store) = with_store(fx);
+        let long_ago = Utc::now() - chrono::Duration::hours(2);
+        let old = store
+            .open(
+                NewTestSession {
+                    server_id: ServerId::new(),
+                    owner: UserId::new(),
+                    webhook_id: None,
+                    token_hash: Some("old".to_string()),
+                },
+                long_ago,
+            )
+            .expect("open");
+        assert_eq!(format!("{store:?}").matches("\"old\"").count(), 1);
+        BotService::sweep_test_sessions(&svc);
+        assert!(!format!("{store:?}").contains("\"old\""));
+        assert!(store.get(old.id, long_ago).is_none());
+    }
+
+    /// A create fixture whose insert records the token hash it was given.
+    fn creating(fx: Fx) -> (Fx, Arc<Mutex<Option<String>>>) {
+        let stored = Arc::new(Mutex::new(None));
+        let seen = Arc::clone(&stored);
+        let mut fx = fx
+            .with_role(Some(ServerMemberRole::Moderator))
+            .with_conversation(|_| {})
+            .with_bot()
+            .with_channel_members(|_| true)
+            .with_no_active_webhook();
+        fx.bots.expect_lock_bot().returning(|_| ok(true));
+        fx.bots.expect_create_webhook().returning(move |new| {
+            *seen.lock().expect("lock") = Some(new.token_hash.clone());
+            ok(IncomingWebhook {
+                id: IncomingWebhookId::new(),
+                server_id: new.server_id,
+                conversation_id: new.conversation_id,
+                bot_user_id: new.bot_user_id,
+                preset: new.preset,
+                template: new.template,
+                created_at: Utc::now(),
+                last_used_at: None,
+                revoked_at: None,
+            })
+        });
+        (fx, stored)
+    }
+
+    async fn create_keeping(
+        svc: &DefaultBotService,
+        who: Actor,
+        channel: ConversationId,
+        bot: UserId,
+        session: Option<WebhookTestSessionId>,
+    ) -> ServiceResult<CreatedIncomingWebhookDto> {
+        BotService::create_webhook(svc, who, channel, bot, WebhookPreset::Plain, None, session)
+            .await
+    }
+
+    #[tokio::test]
+    async fn saving_keeps_the_callers_open_session_url_and_answers_no_token() {
+        let (fx, stored) = creating(Fx::new());
+        let (server_id, channel, bot) = (fx.server_id, fx.channel, fx.bot);
+        let (svc, audit, store) = with_store(fx);
+        let me = actor();
+        let started = start(&svc, me, server_id, None).await.expect("started");
+        let token = started.token.expect("token");
+        let created = create_keeping(&svc, me, channel, bot, Some(started.id))
+            .await
+            .expect("created");
+        assert!(created.kept_test_url);
+        assert_eq!(created.token, "");
+        assert_eq!(
+            stored.lock().expect("lock").as_deref(),
+            Some(hash_token(&token).as_str())
+        );
+        assert!(
+            store.get(started.id, Utc::now()).is_none(),
+            "promoting ends it"
+        );
+        let commands: Vec<String> = audit
+            .0
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|entry| entry.command_id.clone())
+            .collect();
+        assert!(
+            commands.iter().any(|c| c == AUDIT_WEBHOOK_CREATE),
+            "{commands:?}"
+        );
+        assert_eq!(
+            commands.last().map(String::as_str),
+            Some(super::super::test_session::AUDIT_TEST_SESSION_END)
+        );
+
+        // Used again, it is gone: a new token, not kept.
+        let (fx, _) = creating(Fx::new());
+        let (channel, bot) = (fx.channel, fx.bot);
+        let (svc2, _, _) = with_store(fx);
+        let again = create_keeping(&svc2, me, channel, bot, Some(started.id))
+            .await
+            .expect("created");
+        assert!(!again.kept_test_url);
+        assert!(is_webhook_token_shape(&again.token));
+        let again = create_keeping(&svc, me, channel, bot, Some(started.id))
+            .await
+            .expect("created");
+        assert!(!again.kept_test_url, "a session is promoted once");
+        assert!(is_webhook_token_shape(&again.token));
+    }
+
+    #[tokio::test]
+    async fn saving_with_an_expired_session_gives_a_new_token() {
+        let (fx, stored) = creating(Fx::new());
+        let (server_id, channel, bot) = (fx.server_id, fx.channel, fx.bot);
+        let (svc, _, store) = with_store(fx);
+        let me = actor();
+        let expired = store
+            .open(
+                NewTestSession {
+                    server_id,
+                    owner: me.user_id,
+                    webhook_id: None,
+                    token_hash: Some("expired-hash".to_string()),
+                },
+                Utc::now() - chrono::Duration::hours(2),
+            )
+            .expect("open");
+        let created = create_keeping(&svc, me, channel, bot, Some(expired.id))
+            .await
+            .expect("created");
+        assert!(!created.kept_test_url);
+        assert_eq!(
+            stored.lock().expect("lock").as_deref(),
+            Some(hash_token(&created.token).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn saving_with_someone_elses_another_workspaces_or_a_bound_session_is_refused() {
+        let (fx, _) = creating(Fx::new());
+        let (server_id, channel, bot) = (fx.server_id, fx.channel, fx.bot);
+        let (svc, _, store) = with_store(fx);
+        let me = actor();
+        let theirs = start(&svc, actor(), server_id, None)
+            .await
+            .expect("started")
+            .id;
+        let elsewhere = store
+            .open(
+                NewTestSession {
+                    server_id: ServerId::new(),
+                    owner: me.user_id,
+                    webhook_id: None,
+                    token_hash: Some("elsewhere".to_string()),
+                },
+                Utc::now(),
+            )
+            .expect("open")
+            .id;
+        let bound = store
+            .open(
+                NewTestSession {
+                    server_id,
+                    owner: me.user_id,
+                    webhook_id: Some(IncomingWebhookId::new()),
+                    token_hash: None,
+                },
+                Utc::now(),
+            )
+            .expect("open")
+            .id;
+        for session in [theirs, elsewhere, bound] {
+            assert_validation(create_keeping(&svc, me, channel, bot, Some(session)).await);
+            assert!(
+                store.get(session, Utc::now()).is_some(),
+                "a refusal ends nothing"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_refuse_while_the_feature_is_off() {
+        let mut fx = Fx::new();
+        fx.disabled.push(ServerFeature::Bots);
+        let server_id = fx.server_id;
+        let (svc, _, store) = with_store(fx);
+        let off =
+            |e: &ServiceError| matches!(e, ServiceError::FeatureDisabled(ServerFeature::Bots));
+        assert!(off(&start(&svc, actor(), server_id, None)
+            .await
+            .expect_err("off")));
+        let open = store
+            .open(
+                NewTestSession {
+                    server_id,
+                    owner: UserId::new(),
+                    webhook_id: None,
+                    token_hash: Some(hash_token(GOOD_TOKEN)),
+                },
+                Utc::now(),
+            )
+            .expect("open");
+        assert_eq!(BotService::resolve_test_session(&svc, GOOD_TOKEN), None);
+        assert!(off(&BotService::test_deliveries(&svc, actor(), open.id, 0)
+            .await
+            .expect_err("off")));
+        assert!(off(&BotService::end_test_session(&svc, actor(), open.id)
+            .await
+            .expect_err("off")));
     }
 
     // ── text ─────────────────────────────────────────────────────────────

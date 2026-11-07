@@ -1235,3 +1235,226 @@ async fn the_ready_made_formats_are_listed_and_a_preview_is_for_moderators() {
     assert_eq!(code, "VALIDATION");
     s.stop().await;
 }
+
+const START_SESSION: &str = r#"mutation($s: ID!, $w: ID) {
+  startWebhookTestSession(serverId: $s, webhookId: $w) { id token expiresAt }
+}"#;
+const END_SESSION: &str = "mutation($id: ID!) { endWebhookTestSession(sessionId: $id) }";
+const DELIVERIES: &str = r#"query($id: ID!, $after: Int) {
+  webhookTestDeliveries(sessionId: $id, after: $after) {
+    expiresAt deliveries { id contentType headers { name value } bodyState body }
+  }
+}"#;
+const CREATE_KEEPING: &str = r#"mutation($input: CreateIncomingWebhookInput!) {
+  createIncomingWebhook(input: $input) { token keptTestUrl webhook { id } }
+}"#;
+
+impl Scene {
+    async fn start_session(&self, who: &Caller, webhook: Option<&str>) -> (String, Option<String>) {
+        let started = self
+            .gql(
+                who,
+                START_SESSION,
+                json!({ "s": self.roles.server_id, "w": webhook }),
+            )
+            .await;
+        let started = &started["startWebhookTestSession"];
+        (
+            started["id"].as_str().expect("id").to_string(),
+            started["token"].as_str().map(str::to_string),
+        )
+    }
+
+    async fn deliveries(&self, who: &Caller, session: &str) -> Value {
+        self.gql(who, DELIVERIES, json!({ "id": session }))
+            .await["webhookTestDeliveries"]["deliveries"]
+            .clone()
+    }
+
+    async fn create_keeping(&self, channel: &str, bot: &str, session: &str) -> Value {
+        self.gql(
+            &self.roles.alice,
+            CREATE_KEEPING,
+            json!({ "input": {
+                "conversationId": channel, "botUserId": bot, "preset": "PLAIN", "testSessionId": session,
+            }}),
+        )
+        .await["createIncomingWebhook"]
+            .clone()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_test_url_holds_what_arrives_posts_nothing_and_saving_keeps_it() {
+    let s = scene("session", |_| {}).await;
+    let r = &s.roles;
+    let (session, token) = s.start_session(&r.alice, None).await;
+    let token = token.expect("an unbound session's token");
+
+    let response = s
+        .http
+        .post(format!("{}/api/hooks/{token}", s.node.origin))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("x-github-event", "ping")
+        .header("x-gitlab-token", "secret-gitlab")
+        .header("authorization", "Bearer secret-bearer")
+        .body("payload=%7B%7D")
+        .send()
+        .await
+        .expect("a delivery");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.text().await.expect("body"),
+        r#"{"ok":true,"test":true}"#
+    );
+    let large = s.post_to(&token, None, vec![b' '; 256 * 1024 + 1]).await;
+    assert_eq!(large.status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    let held = s.deliveries(&r.alice, &session).await;
+    assert_eq!(
+        held,
+        json!([
+            { "id": 1, "contentType": "application/x-www-form-urlencoded",
+              "headers": [{ "name": "x-github-event", "value": "ping" }],
+              "bodyState": "TEXT", "body": "payload=%7B%7D" },
+            { "id": 2, "contentType": "application/json", "headers": [],
+              "bodyState": "TOO_LARGE", "body": null },
+        ])
+    );
+    for who in [&r.mona, &r.bob] {
+        let (code, _) = s.refused(who, DELIVERIES, json!({ "id": session })).await;
+        assert_eq!(code, "NOT_FOUND");
+    }
+
+    // Saving keeps the URL: the same token now posts, and the session is gone.
+    let bot = s.bot("Deploys").await;
+    let ops = s.channel("ops", false).await;
+    let kept = s.create_keeping(&ops, &bot, &session).await;
+    assert_eq!(kept["keptTestUrl"], true);
+    assert_eq!(kept["token"], "");
+    assert_eq!(s.post_text(&token, "hello").await.status, StatusCode::OK);
+    assert_eq!(s.bot_texts(&ops, &bot).await, ["hello"]);
+    let (code, _) = s
+        .refused(&r.alice, DELIVERIES, json!({ "id": session }))
+        .await;
+    assert_eq!(code, "NOT_FOUND");
+
+    // Used again, or once ended, it gives a new token.
+    let lobby = s.channel("lobby", false).await;
+    let again = s.create_keeping(&lobby, &bot, &session).await;
+    assert_eq!(again["keptTestUrl"], false);
+    assert!(
+        again["token"]
+            .as_str()
+            .expect("token")
+            .starts_with("rimhook_")
+    );
+    let (ended, ended_token) = s.start_session(&r.alice, None).await;
+    s.gql(&r.alice, END_SESSION, json!({ "id": ended })).await;
+    let answer = s.post_text(&ended_token.expect("token"), "late").await;
+    assert_eq!(
+        (answer.status, answer.bytes.as_str()),
+        (StatusCode::UNAUTHORIZED, BAD_TOKEN_BODY)
+    );
+    let docs = s.channel("docs", false).await;
+    let after_end = s.create_keeping(&docs, &bot, &ended).await;
+    assert_eq!(after_end["keptTestUrl"], false);
+
+    // Someone else's session is refused.
+    let (monas, _) = s.start_session(&r.mona, None).await;
+    let news = s.channel("news", false).await;
+    let (code, _) = s
+        .refused(
+            &r.alice,
+            CREATE_KEEPING,
+            json!({ "input": {
+                "conversationId": news, "botUserId": bot, "preset": "PLAIN", "testSessionId": monas,
+            }}),
+        )
+        .await;
+    assert_eq!(code, "VALIDATION");
+    assert_eq!(
+        s.count(
+            "SELECT count(*) AS n FROM command_audit_log WHERE server_id = $1 \
+             AND command_id LIKE 'bot.webhook.test_session.%' \
+             AND args_redacted::text NOT LIKE '%rimhook_%' AND args_redacted::text NOT LIKE '%secret-%'",
+            vec![uuid(&r.server_id)],
+        )
+        .await,
+        5,
+        "three starts, and the ends of a promotion and of an explicit end"
+    );
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workspace_holds_three_open_sessions() {
+    let s = scene("session-cap", |_| {}).await;
+    let r = &s.roles;
+    let mut open = Vec::new();
+    for _ in 0..3 {
+        open.push(s.start_session(&r.alice, None).await.0);
+    }
+    let (code, _) = s
+        .refused(
+            &r.mona,
+            START_SESSION,
+            json!({ "s": r.server_id, "w": null }),
+        )
+        .await;
+    assert_eq!(code, "RATE_LIMITED");
+    s.gql(&r.alice, END_SESSION, json!({ "id": open[0] })).await;
+    s.start_session(&r.mona, None).await;
+    let (code, _) = s
+        .refused(
+            &r.bob,
+            START_SESSION,
+            json!({ "s": r.server_id, "w": null }),
+        )
+        .await;
+    assert_eq!(code, "FORBIDDEN");
+    s.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bound_session_copies_what_reaches_the_webhook_which_still_posts() {
+    let s = scene("session-bound", |_| {}).await;
+    let r = &s.roles;
+    let bot = s.bot("Deploys").await;
+    let ops = s.channel("ops", false).await;
+    let hook = s.webhook(&ops, &bot, "PLAIN").await;
+    let (session, token) = s.start_session(&r.alice, Some(&hook.id)).await;
+    assert_eq!(token, None, "a bound session has no URL of its own");
+
+    assert_eq!(
+        s.post_text(&hook.token, "deployed").await.status,
+        StatusCode::OK
+    );
+    assert_eq!(s.bot_texts(&ops, &bot).await, ["deployed"]);
+    let held = s.deliveries(&r.alice, &session).await;
+    assert_eq!(held[0]["body"], json!({ "text": "deployed" }).to_string());
+    assert_eq!(held.as_array().expect("held").len(), 1);
+
+    // Mona isn't in the private channel's webhook, and nobody else reads Alice's session.
+    let secret = s.channel("secret", true).await;
+    let private = s.webhook(&secret, &bot, "PLAIN").await;
+    let (code, _) = s
+        .refused(
+            &r.mona,
+            START_SESSION,
+            json!({ "s": r.server_id, "w": private.id }),
+        )
+        .await;
+    assert_eq!(code, "FORBIDDEN");
+    let (code, _) = s
+        .refused(&r.mona, DELIVERIES, json!({ "id": session }))
+        .await;
+    assert_eq!(code, "NOT_FOUND");
+
+    s.gql(&r.alice, REVOKE, json!({ "id": hook.id })).await;
+    let (code, _) = s
+        .refused(&r.alice, DELIVERIES, json!({ "id": session }))
+        .await;
+    assert_eq!(code, "NOT_FOUND");
+    s.stop().await;
+}
