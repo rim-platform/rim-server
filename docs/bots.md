@@ -415,6 +415,53 @@ next upgrade brings its format back. Migrating down drops the formats (`operatio
 reaches an encrypted conversation. A format lives with its webhook on the server hosting the workspace, and runs
 there. An Owner or Moderator from another server changes it through the same GraphQL on that host.
 
+## Seeing what a service sends
+
+A format is easiest to write against a real delivery. A test session holds what arrives, in memory, for a short
+time, and only the person who started it can read it. The contract is `specs/bots-v1.md`, "Webhook test
+sessions".
+
+**For a new webhook.** `startWebhookTestSession(serverId)` answers an id, a token and an expiry. Paste
+`/api/hooks/<token>` on your server's address into the service. A delivery to it posts nothing and answers
+`{"ok":true,"test":true}`. When you save, pass the session's id as `testSessionId` to
+`createIncomingWebhook`, and the webhook keeps that token: the URL in the service starts posting, with nothing
+to change. The answer then has `keptTestUrl` true and an empty `token`, since RIM holds only the token's hash and
+you already have the URL. If the session ran out first, `keptTestUrl` is false and `token` is a new one, shown
+once: put that URL in the service instead.
+
+**For an existing webhook.** `startWebhookTestSession(serverId, webhookId)` has no URL of its own. The webhook
+keeps posting under its saved format, and the session gets a copy of each delivery while it is open.
+
+**Reading it.** `webhookTestDeliveries(sessionId, after)` answers what arrived after `after`, oldest first. Each
+delivery has when it arrived, its `Content-Type`, its `x-` headers and its body as text. A form-encoded
+`Content-Type` is the usual reason a body isn't JSON: choose `application/json` in the service's settings. To see
+what a delivery would post, give it to `previewWebhookFormat` with the format you're writing.
+
+**What isn't kept.** No address, `Authorization`, cookie or header but the `x-` ones, and none of those whose name
+a format refuses, such as `x-gitlab-token`. A body over 256 KiB is held as too large without its bytes, and one
+that isn't UTF-8 as not text. Nothing a session holds reaches the database, a log line, an audit entry or a
+metric. The audit log has `bot.webhook.test_session.start` and `bot.webhook.test_session.end`, with ids alone.
+
+**Limits.**
+
+| What | At most |
+|---|---|
+| Deliveries held | 20 a session, the oldest dropped |
+| What a session holds | 1 MiB, the oldest dropped |
+| Open sessions | 3 a workspace, 20 on the server. Past that, starting one is `RATE_LIMITED` |
+| Deliveries to a new webhook's test URL | 30 a minute, then `429` |
+| How long it lasts | 15 minutes from the start or the last read, never more than an hour |
+
+`endWebhookTestSession` ends one at once, saving ends an unbound one, and revoking a webhook ends its sessions. A
+restart of the server ends them all. A bound session takes nothing from the webhook's own limit.
+
+**Who.** Starting one takes what creating a webhook takes, and for an existing webhook what changing its format
+takes, including being in its private channel. Nobody else can read it, and its owner can't either once they lose
+that standing.
+
+**Encrypted conversations and other servers.** A test URL posts nowhere, and a webhook is only ever on a plaintext
+channel. A session lives on the server hosting the workspace, in its memory.
+
 ## Welcoming people from a pipeline
 
 A pipeline on the Member Joined trigger can post as a bot with no program behind it. An Owner or Moderator
@@ -460,8 +507,8 @@ adds a Post as bot action to `createPipeline` or `updatePipeline`, in `PipelineA
 ## Audit
 
 Each management call writes an entry to the workspace's audit log: `bot.create`, `bot.update`,
-`bot.deactivate`, `bot.token.create`, `bot.token.revoke`, `bot.webhook.create`, `bot.webhook.update` and
-`bot.webhook.revoke`. An entry holds the bot's id and, for a token, its id and label, and for a webhook,
+`bot.deactivate`, `bot.token.create`, `bot.token.revoke`, `bot.webhook.create`, `bot.webhook.update`,
+`bot.webhook.revoke`, `bot.webhook.test_session.start` and `bot.webhook.test_session.end`. An entry holds the bot's id and, for a token, its id and label, and for a webhook,
 its id and channel. It never holds a token or its hash, or the text of a format.
 
 Each call of the bot API writes one too, with the initiator `bot`: `bot.me`, `chat.list_channels`,
