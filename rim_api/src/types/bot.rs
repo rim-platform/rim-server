@@ -275,7 +275,7 @@ pub enum WebhookTestBodyState {
 }
 
 /// A delivery a test session holds.
-#[derive(SimpleObject, Clone, Debug)]
+#[derive(SimpleObject, Clone)]
 pub struct WebhookTestDelivery {
     /// Its place in the session, counted from 1; pass the last one read as `after`.
     pub id: i32,
@@ -289,7 +289,7 @@ pub struct WebhookTestDelivery {
 }
 
 /// The deliveries a read of a test session answers, and when it now expires.
-#[derive(SimpleObject, Clone, Debug)]
+#[derive(SimpleObject, Clone)]
 pub struct WebhookTestDeliveries {
     pub deliveries: Vec<WebhookTestDelivery>,
     pub expires_at: DateTime<Utc>,

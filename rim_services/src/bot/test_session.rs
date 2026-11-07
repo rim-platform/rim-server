@@ -2,6 +2,7 @@
 //! memory for a short time and read only by the person who started the session.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
@@ -37,8 +38,9 @@ pub struct TestSessionInfo {
     pub expires_at: DateTime<Utc>,
 }
 
-/// A session to open. An unbound one carries the SHA-256 of its token, never the token.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A session to open. An unbound one carries the SHA-256 of its token, never the token. `Debug`
+/// leaves the hash out.
+#[derive(Clone, PartialEq, Eq)]
 pub struct NewTestSession {
     pub server_id: ServerId,
     pub owner: UserId,
@@ -46,8 +48,19 @@ pub struct NewTestSession {
     pub token_hash: Option<String>,
 }
 
-/// A delivery's body as a session holds it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for NewTestSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NewTestSession")
+            .field("server_id", &self.server_id)
+            .field("owner", &self.owner)
+            .field("webhook_id", &self.webhook_id)
+            .field("unbound", &self.token_hash.is_some())
+            .finish()
+    }
+}
+
+/// A delivery's body as a session holds it. `Debug` names the variant and the size alone.
+#[derive(Clone, PartialEq, Eq)]
 pub enum TestBody {
     /// The body exactly as it came.
     Text(String),
@@ -57,8 +70,27 @@ pub enum TestBody {
     NotText,
 }
 
-/// One delivery a session holds. `seq` counts from 1 within its session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for TestBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text(text) => write!(f, "Text({} bytes)", text.len()),
+            Self::TooLarge => f.write_str("TooLarge"),
+            Self::NotText => f.write_str("NotText"),
+        }
+    }
+}
+
+/// The names of `headers` and the bytes of their values, for a `Debug` that shows no value.
+fn header_sizes(headers: &[(String, String)]) -> Vec<(&str, usize)> {
+    headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.len()))
+        .collect()
+}
+
+/// One delivery a session holds. `seq` counts from 1 within its session. `Debug` shows sizes and
+/// header names, never a value or the body.
+#[derive(Clone, PartialEq, Eq)]
 pub struct TestDelivery {
     pub seq: u64,
     pub received_at: DateTime<Utc>,
@@ -66,6 +98,21 @@ pub struct TestDelivery {
     /// The `x-` headers a format may use.
     pub headers: Vec<(String, String)>,
     pub body: TestBody,
+}
+
+impl fmt::Debug for TestDelivery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TestDelivery")
+            .field("seq", &self.seq)
+            .field("received_at", &self.received_at)
+            .field(
+                "content_type_bytes",
+                &self.content_type.as_ref().map(String::len),
+            )
+            .field("headers", &header_sizes(&self.headers))
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 impl TestDelivery {
@@ -84,12 +131,26 @@ impl TestDelivery {
     }
 }
 
-/// What reaches a session, before it is numbered and stamped.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What reaches a session, before it is numbered and stamped. `Debug` shows sizes and header
+/// names, never a value or the body.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ArrivedDelivery {
     pub content_type: Option<String>,
     pub headers: Vec<(String, String)>,
     pub body: TestBody,
+}
+
+impl fmt::Debug for ArrivedDelivery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ArrivedDelivery")
+            .field(
+                "content_type_bytes",
+                &self.content_type.as_ref().map(String::len),
+            )
+            .field("headers", &header_sizes(&self.headers))
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 /// Why a session could not be opened.
@@ -157,7 +218,6 @@ pub trait WebhookTestSessionStore: Send + Sync + std::fmt::Debug {
     fn sweep(&self, now: DateTime<Utc>) -> usize;
 }
 
-#[derive(Debug)]
 struct Held {
     info: TestSessionInfo,
     token_hash: Option<String>,
@@ -166,10 +226,34 @@ struct Held {
     next_seq: u64,
 }
 
-/// Sessions in the memory of this process. A restart drops them.
-#[derive(Debug, Default)]
+impl fmt::Debug for Held {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Held")
+            .field("info", &self.info)
+            .field("unbound", &self.token_hash.is_some())
+            .field("deliveries", &self.deliveries.len())
+            .field("bytes", &self.bytes)
+            .finish()
+    }
+}
+
+/// Sessions in the memory of this process. A restart drops them. `Debug` shows how many there are
+/// and nothing they hold.
+#[derive(Default)]
 pub struct InMemoryTestSessionStore {
     inner: Mutex<HashMap<WebhookTestSessionId, Held>>,
+}
+
+impl fmt::Debug for InMemoryTestSessionStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        f.debug_struct("InMemoryTestSessionStore")
+            .field("sessions", &guard.values().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl InMemoryTestSessionStore {
@@ -520,6 +604,34 @@ mod tests {
         assert_eq!(store.end_bound_to(webhook), std::slice::from_ref(&bound));
         assert!(store.bound_to(webhook, now).is_empty());
         assert!(store.end(bound.id).is_none());
+    }
+
+    #[test]
+    fn nothing_a_session_holds_is_formatted() {
+        let store = InMemoryTestSessionStore::new();
+        let now = Utc::now();
+        let new = unbound(ServerId::new(), "marker-token-hash");
+        assert!(!format!("{new:?}").contains("marker-"));
+        let id = store.open(new, now).expect("open").id;
+        let arrived = ArrivedDelivery {
+            content_type: Some("marker-content-type".to_string()),
+            headers: vec![("x-event".to_string(), "marker-header-value".to_string())],
+            body: TestBody::Text("marker-body".to_string()),
+        };
+        assert!(!format!("{arrived:?}").contains("marker-"));
+        store.record(id, arrived, now);
+        let (held, _) = store.read(id, 0, now).expect("read");
+        for shown in [
+            format!("{store:?}"),
+            format!("{store:#?}"),
+            format!("{held:?}"),
+            format!("{:?}", held[0].body),
+        ] {
+            assert!(!shown.contains("marker-"), "{shown}");
+        }
+        let shown = format!("{held:?}");
+        assert!(shown.contains("x-event"), "header names show: {shown}");
+        assert!(shown.contains("Text(11 bytes)"), "{shown}");
     }
 
     #[test]

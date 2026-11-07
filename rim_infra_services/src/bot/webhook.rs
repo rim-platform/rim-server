@@ -1675,8 +1675,18 @@ mod tests {
         let token = started.token.clone().expect("a token");
         assert!(is_webhook_token_shape(&token));
         let held = format!("{store:?}");
-        assert!(!held.contains(&token), "the store holds the token itself");
-        assert!(held.contains(&hash_token(&token)));
+        assert!(!held.contains(&token), "the store shows the token");
+        assert!(
+            !held.contains(&hash_token(&token)),
+            "the store shows the hash"
+        );
+        assert!(
+            store
+                .unbound_by_hash(&hash_token(&token), Utc::now())
+                .is_some(),
+            "the store finds the session by the hash"
+        );
+        assert!(store.unbound_by_hash(&token, Utc::now()).is_none());
         assert!(!format!("{started:?}").contains(&token));
         assert_eq!(
             BotService::resolve_test_session(&svc, &token),
@@ -1938,9 +1948,8 @@ mod tests {
                 long_ago,
             )
             .expect("open");
-        assert_eq!(format!("{store:?}").matches("\"old\"").count(), 1);
+        assert!(store.get(old.id, long_ago).is_some());
         BotService::sweep_test_sessions(&svc);
-        assert!(!format!("{store:?}").contains("\"old\""));
         assert!(store.get(old.id, long_ago).is_none());
     }
 
