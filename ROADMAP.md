@@ -78,12 +78,12 @@ In order:
    has to be running for this, so it gains a way to stay in the tray.
 4. **Bots and incoming webhooks.** A bot account a workspace Owner or Moderator creates, with
    tokens it can revoke; one incoming webhook URL per channel, bound to a bot, with its own rate
-   limit; a GitHub preset first, so releases post themselves. Bots never join encrypted
-   conversations. A bot's token gives an agent an identity the server verifies, with its own
-   grants. The agent behind a bot runs where its owner chooses, with its owner's model and key: on
-   a personal machine it answers while that machine is on, and a server's owner can run it next to
-   the server, as the content check runs. The channel shows who runs it and where what it reads
-   goes. The public relay runs no such agent.
+   limit; formats anyone can write, with ready-made ones such as GitHub, so releases post
+   themselves. Bots never join encrypted conversations. A bot's token gives an agent an identity
+   the server verifies, with its own grants. The agent behind a bot runs where its owner chooses,
+   with its owner's model and key: on a personal machine it answers while that machine is on, and
+   a server's owner can run it next to the server, as the content check runs. The channel shows
+   who runs it and where what it reads goes. The public relay runs no such agent.
 5. **A first-run path** in the clients that grows with the product: create a key and write down
    the phrase, choose a drive for the archive, pick a relay, install a first plugin.
 6. **Data export** per person and per workspace.

@@ -124,6 +124,15 @@ yet, so the new images are built from the release commits with `deploy/compose.d
       and the data is there.
 - [ ] Roll the binary back to the previous release with `dc up -d --no-deps rim imagecheck`.
       `/readyz` answers 200 and the web client still works.
+- [ ] A rollback past what a release stores keeps its costs, as `docs/operations/upgrade.md`,
+      "Rolling back", says. While the previous release predates either of these, the release pull
+      request says what the drill showed:
+      - **Post as bot.** Once a workspace stores a `PostAsBot` action, an older server can't read it,
+        and that workspace's pipelines stop listing and firing until the action is removed. The older
+        server can't remove it either, so it is removed before rolling back.
+      - **Webhook formats.** An older server ignores `template`, so a webhook with a format acts as
+        plain: a body with a string `text` posts that text, and any other body answers `400`. Its
+        format comes back with the next upgrade. `migrate down` drops the column and every format in it.
 - [ ] Upgrade again: `migrate` has nothing to run and the server starts.
 - [ ] `deploy/restore-drill.sh` on the latest nightly backup of the public relay
       `relay.rim-platform.org`, with the image built from the release commit: the new image
