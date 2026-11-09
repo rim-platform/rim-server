@@ -543,8 +543,10 @@ arguments it asks for when the macro runs (`ask`). The step's command is one of:
 - an app command (App Commands, above), except the agent-management ones:
   `agents.approve_request`, `agents.refuse_request`, `agents.approve_pairing`,
   `agents.refuse_pairing`, `agents.disconnect`, `agents.choose_reads`,
-  `agents.choose_plugin_commands`, `agents.open_runs`, `agents.open_record` and
-  `agents.clear_record`
+  `agents.choose_plugin_commands`, `agents.open_runs`, `agents.open_record`,
+  `agents.clear_record`, `agents.connect_agent`, `agents.start_session`, `agents.stop_session`,
+  `agents.ask_about_message`, `agents.ask_about_conversation` and
+  `workspace.open_agent_sessions`
 - a plugin command, `plugin.<pluginId>.<command>`: the plugin id has at least three segments
   of ASCII letters, digits and hyphens (`specs/plugin-protocol-v1.md`, section 2), the command's
   own id one or more segments of ASCII letters, digits, `_` and `-`, all joined by `.`. The

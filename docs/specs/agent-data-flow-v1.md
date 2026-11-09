@@ -152,9 +152,9 @@ The person can also start the connection inside the desktop app.
 - The agent runs as the person, in a folder they chose, with the agent's own tools and permission
   settings. RIM does not sandbox it, and the app MUST say so where sessions start.
 - **Only the person, through the app's own controls, may send an agent a prompt or answer its
-  permission requests.** Their own macros and keys count. The app MUST NOT turn messages from
-  other people or bots, plugin actions, pipelines, or anything the agent itself sends through
-  RIM's tools into prompts or answers.
+  permission requests.** The app MUST NOT turn messages from other people or bots, macros,
+  plugin actions, pipelines, or anything the agent itself sends through RIM's tools into prompts
+  or answers.
 - Each started program is a paired agent. RIM's tools in its sessions follow this contract
   unchanged: grants, the record, confirmations and the encrypted notice.
 - When RIM's tools refuse it for a missing grant, the app MAY offer the grant, through the same

@@ -578,8 +578,8 @@ impl AppCommand {
     }
 }
 
-/// The app commands that approve, refuse or manage an outside agent: no macro step and no
-/// plugin runs one.
+/// The app commands that approve, refuse, connect, start or manage an outside agent: no macro
+/// step and no plugin runs one.
 pub(crate) const AGENT_MANAGEMENT_COMMANDS: &[&str] = &[
     "agents.approve_request",
     "agents.refuse_request",
@@ -591,6 +591,12 @@ pub(crate) const AGENT_MANAGEMENT_COMMANDS: &[&str] = &[
     "agents.open_runs",
     "agents.open_record",
     "agents.clear_record",
+    "agents.connect_agent",
+    "agents.start_session",
+    "agents.stop_session",
+    "agents.ask_about_message",
+    "agents.ask_about_conversation",
+    "workspace.open_agent_sessions",
 ];
 
 /// Whether `command_id` is one of [`AGENT_MANAGEMENT_COMMANDS`].
@@ -695,7 +701,7 @@ mod tests {
     /// Every agent-management id is an app command in category Agents.
     #[test]
     fn agent_management_commands_are_app_commands() {
-        assert_eq!(AGENT_MANAGEMENT_COMMANDS.len(), 10);
+        assert_eq!(AGENT_MANAGEMENT_COMMANDS.len(), 16);
         for id in AGENT_MANAGEMENT_COMMANDS {
             let definition = app_command(id).unwrap_or_else(|| panic!("{id} is an app command"));
             assert_eq!(definition.category, category::AGENTS, "{id}");
