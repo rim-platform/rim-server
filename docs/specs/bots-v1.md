@@ -224,7 +224,9 @@ array. A key holding a dot can't be reached.
 an optional port and a single `/`, and nothing else. The finished value is added after the text only if
 it starts with the origin, has something after it, is at most 512 characters and is printable ASCII
 without `<`, `>`, `(`, `)`, `[`, `]`, `\`, a backtick, a quote, `*` or `|`. Otherwise, and when a
-placeholder in it has no value, the message MUST still post, without a link.
+placeholder in it has no value, the message MUST still post, without a link. Each `@` that begins
+`@channel` or `@here`, in any case, MUST be written `%40` in the link, and the 512 characters count
+after that.
 
 **When the body is read.** Header conditions are checked first, and the body MUST be parsed only when a
 rule that could still hold needs a field or a placeholder. So a `ping`, or an event no rule handles,

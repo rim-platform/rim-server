@@ -122,9 +122,10 @@ pub(super) fn raw_of(value: &Value) -> Option<String> {
     }
 }
 
-/// `url` when it can be a link: a plain address under `origin` of a sensible length, holding
-/// nothing Markdown or a mention could use.
-pub(super) fn link_of<'a>(url: &'a str, origin: &str) -> Option<&'a str> {
+/// `url` as the link a message ends with, when it can be one: a plain address under `origin`
+/// holding nothing Markdown or a `<@id>` token could use, with the `@` of a mention of everyone
+/// percent-encoded, and at most [`MAX_LINK_CHARS`] long after that.
+pub(super) fn link_of(url: &str, origin: &str) -> Option<String> {
     let rest = url.strip_prefix(origin)?;
     let plain = rest.bytes().all(|b| {
         b.is_ascii_graphic()
@@ -133,7 +134,29 @@ pub(super) fn link_of<'a>(url: &'a str, origin: &str) -> Option<&'a str> {
                 b'<' | b'>' | b'(' | b')' | b'[' | b']' | b'\\' | b'`' | b'"' | b'\'' | b'*' | b'|'
             )
     });
-    (plain && !rest.is_empty() && url.len() <= MAX_LINK_CHARS).then_some(url)
+    if !plain || rest.is_empty() {
+        return None;
+    }
+    let link = format!("{origin}{}", encode_mentions(rest));
+    (link.len() <= MAX_LINK_CHARS).then_some(link)
+}
+
+/// `text` with each `@` that begins a mention of everyone, in any case, written as `%40`: an
+/// address reads it as the same `@`, and a message shows no mention. Any other `@` stays.
+fn encode_mentions(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for (at, c) in text.char_indices() {
+        let begins_token = c == '@'
+            && CHANNEL_MENTION_TOKENS
+                .iter()
+                .any(|token| begins_with(&text[at..], token));
+        if begins_token {
+            encoded.push_str("%40");
+        } else {
+            encoded.push(c);
+        }
+    }
+    encoded
 }
 
 /// `text` neutralized and cut so that it and `link`, after a space, fit in [`MAX_LINE_CHARS`].
@@ -613,6 +636,39 @@ mod tests {
             let line = github("pull_request", &payload).expect("a line");
             assert!(line.ends_with(&format!(" {url}")), "{line}");
         }
+    }
+
+    #[test]
+    fn a_mention_of_everyone_in_a_github_link_is_percent_encoded() {
+        let mut payload = pull_request("opened", false);
+        payload["pull_request"]["html_url"] = json!("https://github.com/acme/@here/pull/@Channel");
+        let line = github("pull_request", &payload).expect("a line");
+        assert!(
+            line.ends_with(" https://github.com/acme/%40here/pull/%40Channel"),
+            "{line}"
+        );
+        assert!(!mentions_everyone(&line), "{line}");
+    }
+
+    #[test]
+    fn a_link_is_measured_after_its_mentions_are_encoded() {
+        let origin = "https://example.com/";
+        let fits = format!("{origin}{}", "a".repeat(MAX_LINK_CHARS - origin.len()));
+        assert_eq!(link_of(&fits, origin).as_deref(), Some(fits.as_str()));
+        let over = format!(
+            "{origin}@here{}",
+            "a".repeat(MAX_LINK_CHARS - origin.len() - 5)
+        );
+        assert_eq!(over.len(), MAX_LINK_CHARS);
+        assert_eq!(link_of(&over, origin), None);
+        assert_eq!(
+            link_of("https://example.com/@here", origin).as_deref(),
+            Some("https://example.com/%40here")
+        );
+        assert_eq!(
+            link_of(&format!("https://example.com/{MENTION}"), origin),
+            None
+        );
     }
 
     // ── GitHub: the limit ────────────────────────────────────────────────
