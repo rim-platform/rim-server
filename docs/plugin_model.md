@@ -21,6 +21,8 @@ extensions. It is a package with a manifest (`rim-plugin.json`) that contributes
 
 - commands, which appear in the palette, can be bound to keys and, when the plugin marks them
   `ai_callable`, can be run by the AI agent;
+- a list of other commands it wants to run, `runs_commands`: built-ins and app commands the
+  person grants at install, never dangerous commands or the commands that manage agents;
 - keybind suggestions, which the user approves;
 - context actions on messages;
 - panels, rendered in sandboxed iframes inside the shell;
@@ -55,9 +57,9 @@ Plugins run in the client. The server never runs plugin code.
 
 **The client's plugin host owns** installation (from a local folder, a git URL, a pasted bundle
 link or a workspace registry entry), manifest validation, the capability consent and its
-revocation, starting and stopping plugins, routing commands to them, enforcing the
-dangerous-command confirmation, hosting panels, and the settings form and the values the user
-saves in it.
+revocation, the grant of the commands a plugin may run and the limits on those runs, starting
+and stopping plugins, routing commands to them, enforcing the dangerous-command confirmation,
+hosting panels, and the settings form and the values the user saves in it.
 
 **The server owns** what a workspace shares about plugins: the per-workspace registry of
 recommended or required plugins, each entry carrying a manifest its publisher signed with their
@@ -82,6 +84,12 @@ Plugins join the shared systems instead of building parallel ones:
   dialog. The agent can never confirm one, and a panel cannot confirm one for its own plugin.
 - A command marked `ai_callable` is offered to the agent under the same confirmation gate as
   builtins, so the agent can operate whatever a workspace has plugged in.
+- A plugin runs other commands only when its manifest lists them in `runs_commands` and the
+  person granted them at install or update: a built-in that is neither dangerous nor
+  `Restricted`, a `Mutating` one only after the person confirms that call, and the app commands
+  marked as runnable by plugins. It never runs another plugin's commands or one that manages agents,
+  and it gets back the status and message, not the output. The full rule is in
+  `command_model.md`, Who Can Run Commands.
 - Plugins see a person only as `{ principalId, displayName }`, never a server-local id.
 
 ## Security model

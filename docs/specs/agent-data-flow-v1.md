@@ -165,6 +165,15 @@ the person's session, device keys, account vault, model keys or plugin secrets.
 - A command's title and description were written by the plugin's author. An agent receives them marked as
   untrusted, and the dialog marks them as the plugin's words.
 
+## RIM's own commands
+
+- An outside agent can also be offered built-in commands, under the same per-command approval as
+  plugin commands: only `ai_callable` built-ins the server executes and that change something,
+  never `chat.post_message` (the agent posts with its send tool) or the commands that manage
+  agents. Every call asks the person, and a dangerous command is only proposed. Its context comes
+  only from ids in the arguments, and each must be inside the agent's grants. `command_model.md`,
+  "Who Can Run Commands", is the full rule.
+
 ## Across servers
 
 - In this version, only workspaces on the server the app is signed in to can be granted. A workspace

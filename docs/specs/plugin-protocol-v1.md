@@ -55,6 +55,8 @@ Two later documents build on this one without changing it: `web-plugins-v1.md` (
 - You may write to the host log with **`rim.log`**.
 - You read the settings the user saved for your plugin with **`rim.settings.get`**, and the host
   sends **`rim.settings.changed`** when they change.
+- You may run commands that are not yours, when the user granted them, with your own
+  **`rim.command.execute`** request to the host (section 9).
 - When the host sends **`rim.shutdown`** or closes your stdin, you exit.
 
 That is all of frozen v1. Everything else a plugin can do today is listed, with its real status,
@@ -383,6 +385,64 @@ Rules:
 - Several commands can be in flight at once. A plugin MAY handle them one at a time; the host
   matches answers by `id`.
 
+### Request: `rim.command.execute` (plugin to host)
+
+A plugin may ask the host to run a command that is not its own: a built-in or app command whose
+id its manifest lists in `runs_commands` and the user granted (section 12). The request has the
+same name as the host's request above; which side sends it says which one it is. It was added
+within v1 (section 17), so a host before it answers `METHOD_NOT_FOUND`. It needs no capability:
+the `runs_commands` grant is the permission.
+
+| Param | Type | Meaning |
+|---|---|---|
+| `commandId` | string | The command's full id, such as `workspace.open_settings`. |
+| `args` | object | The command's arguments, keyed by argument name. `{}` when there are none. |
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 12,
+  "method": "rim.command.execute",
+  "params": { "commandId": "chat.set_topic", "args": { "server_id": "…", "conversation_id": "…", "topic": "Release day" } }
+}
+```
+
+The `result` is an object:
+
+| Result field | Type | Meaning |
+|---|---|---|
+| `status` | `"success"`, `"error"` or `"refused"` | `success`: the command ran. `error`: it was started and failed. `refused`: it did not run. |
+| `code` | string, optional | Why it failed or was refused. For `error`, the command's own error code, such as `VALIDATION`; for `refused`, one of the codes below. |
+| `message` | string, optional | One line a person can read. |
+
+```json
+{ "jsonrpc": "2.0", "id": 12, "result": { "status": "refused", "code": "NOT_GRANTED", "message": "The user has not granted chat.set_topic to this plugin." } }
+```
+
+The plugin never receives the command's output data. A refusal is a `result`, not a JSON-RPC
+error; params of the wrong shape get `INVALID_PARAMS`.
+
+| `code` with `refused` | Meaning |
+|---|---|
+| `NOT_GRANTED` | The id is not in `runs_commands`, or the user has not granted it. |
+| `NOT_ALLOWED` | No plugin may run it: it is dangerous, `Restricted`, an agent-management command, another plugin's command, or an app command not marked as runnable by plugins. |
+| `CONFIRMATION_DISMISSED` | The user dismissed the confirmation for this call. |
+| `COOLING_DOWN` | The user dismissed a confirmation for this plugin less than 60 seconds ago. |
+| `RATE_LIMITED` | The plugin made more than 20 command calls in the last minute. |
+| `BUSY` | Another confirmation is open. |
+| `UNAVAILABLE` | The command does not exist on this server or in this client. |
+
+Rules:
+
+- A built-in that changes something (`Mutating`) asks the user on every call, in a confirmation
+  that names the plugin; the answer arrives after the user decided. Other granted commands run at
+  once.
+- A plugin's own commands, `plugin.<pluginId>.*`, are run by the host's request above, not by
+  this one; another plugin's commands are always `NOT_ALLOWED`.
+- Every run is recorded in the plugin's audit.
+
+`command_model.md` in rim-server, "Who Can Run Commands", is the full rule.
+
 ## 10. The dangerous-command confirmation gate
 
 A command whose manifest entry has `"dangerous": true` (restarting a pod, deleting a branch,
@@ -597,6 +657,23 @@ with rim-ui #190, so each version is described; check
     never used again.
   - Before rim-ui #16: the running process was not stopped, and its own calls kept the
     start-time list until it stopped.
+
+### Commands a plugin runs: `runs_commands`
+
+The optional manifest field `runs_commands` lists the commands that are not the plugin's own and
+that it wants to run with its `rim.command.execute` request to the host (section 9). It is an
+array of at most **32** unique command ids. Each is a valid command id; none starts with
+`plugin.`; and none is an agent-management id: `agents.approve_request`,
+`agents.refuse_request`, `agents.approve_pairing`, `agents.refuse_pairing`, `agents.disconnect`,
+`agents.choose_reads`, `agents.choose_plugin_commands`, `agents.open_runs`,
+`agents.open_record` or `agents.clear_record`. A manifest that breaks these rules fails to
+install.
+
+An id the host does not know is allowed, since the server decides which commands exist; the
+install prompt shows it as not available, and a call to it is refused with `UNAVAILABLE`. The
+user grants the ids at install and can refuse them. When an update adds ids, the added ones stay
+ungranted until the user approves them. A dangerous or `Restricted` command is never run for a
+plugin, whatever the list says.
 
 ### Rules for v1
 
@@ -887,6 +964,7 @@ This is the complete list. If a method is not in this section, the host does not
 | `rim.log` | plugin → host | request or notification | 14 |
 | `rim.settings.get` | plugin → host | request | 15 |
 | `rim.settings.changed` | host → plugin | notification | 15 |
+| `rim.command.execute` | plugin → host | request | 9, 12; added within v1 (section 17), older hosts answer `METHOD_NOT_FOUND` |
 
 ### Routed by the host but not part of v1
 
