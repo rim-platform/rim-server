@@ -51,7 +51,7 @@ struct Composition {
     /// Every step, nested ones included, is a command the server runs, and none asks for an
     /// argument.
     server_runs: bool,
-    /// Every step is a builtin the server runs, with every argument fixed.
+    /// Every step is an AI-callable builtin the server runs, with every argument fixed.
     agent_runnable: bool,
 }
 
@@ -220,7 +220,8 @@ impl<'a> CommandResolver<'a> {
 
     /// Checks that `steps`, as the steps of the user command `command_key`, each resolve to a
     /// command without reaching `command_key` again. Returns whether the AI agent may run a
-    /// macro with these steps: each a builtin the server runs, with every argument fixed.
+    /// macro with these steps: each an AI-callable builtin the server runs, with every argument
+    /// fixed.
     ///
     /// # Errors
     ///
@@ -271,8 +272,9 @@ impl<'a> CommandResolver<'a> {
             let server_runs = definition.execution_target == CommandExecutionTargetDto::Backend
                 && step.ask.is_empty();
             composition.server_runs &= server_runs;
-            composition.agent_runnable &=
-                server_runs && definition.source_kind == CommandSourceKindDto::BuiltIn;
+            composition.agent_runnable &= server_runs
+                && definition.source_kind == CommandSourceKindDto::BuiltIn
+                && definition.ai_callable;
             composition.expanded_steps = composition
                 .expanded_steps
                 .saturating_add(resolved.expanded_steps);

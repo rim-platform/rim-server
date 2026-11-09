@@ -264,7 +264,7 @@ pub struct UserCommand {
     /// `false` while the command is disabled; a disabled command is not listed by `commands`.
     pub is_enabled: bool,
     /// Whether the owner lets the AI agent run the macro. The agent runs it only while every
-    /// step is a built-in the server runs, with every argument fixed.
+    /// step is an AI-callable built-in the server runs, with every argument fixed.
     pub ai_callable: bool,
     /// How the macro is described to the AI agent; empty when its description serves.
     pub nl_description: String,

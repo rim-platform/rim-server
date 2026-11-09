@@ -608,12 +608,16 @@ with `VALIDATION` "this macro has steps only the app runs; run it from the app",
 step runs.
 
 **The AI agent.** A macro runs for an agent only when its owner turned on "The AI agent can run
-this" (`aiCallable`). That takes a macro whose steps are all built-ins the server runs, with
-every argument fixed: no app step, no plugin step, no other macro and no `ask`.
+this" (`aiCallable`). That takes a macro whose steps are all built-ins the server runs and the
+agent may run itself (`ai_callable`), with every argument fixed: no app step, no plugin step, no
+other macro, no `ask`, and no built-in kept off the AI surface, such as `admin.invite_member`
+or `chat.delete_message`. A macro does not reach further than the agent alone.
 `createUserCommand` and `updateUserCommand` refuse `aiCallable: true` on any other macro with
-`VALIDATION` "only a macro whose steps all run on the server, with every argument fixed, can be
-run by the AI agent". `updateUserCommand` without `aiCallable` keeps the stored value, and turns
-it off when the new steps no longer allow it. The macro's `nlDescription` (its description when
+`VALIDATION` "only a macro whose steps are all commands the AI agent may run, run on the server
+with every argument fixed, can be run by the AI agent". `updateUserCommand` without `aiCallable`
+keeps the stored value, and turns it off when the new steps no longer allow it. A stored macro
+whose step stops qualifying, such as a built-in that is no longer `ai_callable`, is not offered
+to the agent and its `AGENT` calls are refused, while the stored option stays as it is. The macro's `nlDescription` (its description when
 empty) and `intentSamples` describe it to the agent; they are checked as a built-in's are, and a
 text that looks like an instruction to the model is refused with `VALIDATION`.
 
@@ -1145,7 +1149,8 @@ The command model does not define:
 - Macros and keybinds live with the account on its home server; command calls go to the server
   that hosts the workspace.
 - The AI agent runs a macro only when the person allowed it and every step is a built-in the
-  server runs with every argument fixed; it runs as one call on the home server.
+  server runs and the agent may run itself, with every argument fixed; it runs as one call on
+  the home server.
 - Workspace macros (`createMacro` and the rest) are deprecated; the client moves them into the
   person's macros once.
 - Commands use typed arguments.

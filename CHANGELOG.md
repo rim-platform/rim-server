@@ -101,7 +101,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   `account_macros`.
 - The AI agent may run a macro its owner allowed (`UserCommand.aiCallable`, `nlDescription` and
   `intentSamples`, and the same fields of `CreateUserCommandInput` and `UpdateUserCommandInput`)
-  when every step is a built-in the server runs, with every argument fixed. Such a macro is listed
+  when every step is a built-in the server runs and the agent may run itself, with every argument
+  fixed. Such a macro is listed
   on the `AI` surface and by `commandDiscover` as `user.<key>` and runs as one call, which the
   person confirms when a step changes something. `executeCommand` refuses the agent any other
   macro with `FORBIDDEN`.

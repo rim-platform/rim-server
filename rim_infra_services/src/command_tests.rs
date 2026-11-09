@@ -5118,7 +5118,8 @@ mod tests {
     }
 
     /// The agent runs a macro only when its owner allowed it and its steps still let the agent
-    /// run it; an allowed macro with a `Mutating` step waits for one confirmation.
+    /// run it, each an AI-callable builtin; an allowed macro with a `Mutating` step waits for one
+    /// confirmation.
     #[tokio::test]
     async fn the_agent_runs_only_agent_callable_macros() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
@@ -5131,9 +5132,15 @@ mod tests {
             vec![step("workspace.toggle_zen_mode", serde_json::Value::Null)],
         );
         drifted.ai_callable = true;
-        let svc = validating_service(repo_with(vec![callable, not_callable, drifted]));
+        let mut invite = stored_user_command(
+            actor.user_id,
+            "user.invite",
+            vec![step("admin.invite_member", serde_json::Value::Null)],
+        );
+        invite.ai_callable = true;
+        let svc = validating_service(repo_with(vec![callable, not_callable, drifted, invite]));
 
-        for id in ["user.private", "user.drifted"] {
+        for id in ["user.private", "user.drifted", "user.invite"] {
             let err = svc.execute_command(agent_cmd(actor, id)).await.unwrap_err();
             assert!(
                 matches!(err, ServiceError::PermissionDenied),
@@ -5148,7 +5155,8 @@ mod tests {
         assert!(result.confirmation_required.is_some());
     }
 
-    /// The `AI` surface lists a macro only while it is agent-callable.
+    /// The `AI` surface lists a macro only while it is agent-callable: a stored macro allowed
+    /// for the agent whose step is a builtin kept off the AI surface is not listed.
     #[tokio::test]
     async fn the_ai_surface_lists_agent_callable_macros() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
@@ -5160,6 +5168,20 @@ mod tests {
             vec![step("workspace.toggle_zen_mode", serde_json::Value::Null)],
         );
         drifted.ai_callable = true;
+        let mut read_all = stored_user_command(
+            actor.user_id,
+            "user.read_all",
+            vec![step("chat.mark_all_as_read", serde_json::Value::Null)],
+        );
+        read_all.ai_callable = true;
+        assert!(
+            registry::builtin_commands()
+                .iter()
+                .any(|c| c.id == "chat.mark_all_as_read"
+                    && !c.ai_callable
+                    && c.execution_target == CommandExecutionTargetDto::Backend),
+            "the step is a server builtin kept off the AI surface"
+        );
         let svc = listing_service(
             rim_services::server_member::service::MockServerMemberService::with_own_role(Some(
                 ServerMemberRole::Member,
@@ -5168,6 +5190,7 @@ mod tests {
             vec![
                 callable,
                 drifted,
+                read_all,
                 bump_command(actor.user_id, "user.private"),
             ],
         );
@@ -5214,8 +5237,8 @@ mod tests {
         }
     }
 
-    /// `aiCallable: true` is saved only for a macro whose steps are all builtins the server
-    /// runs with every argument fixed.
+    /// `aiCallable: true` is saved only for a macro whose steps are all AI-callable builtins the
+    /// server runs with every argument fixed.
     #[tokio::test]
     async fn the_agent_option_is_saved_only_for_server_built_ins_with_fixed_arguments() {
         let actor = Actor::new(rim_core::user::model::UserId::new());
@@ -5242,6 +5265,11 @@ mod tests {
                 vec![step_dto("plugin.dev.example.poll.poll", &[])],
             ),
             ("user.asks", vec![step_dto("chat.set_topic", &["topic"])]),
+            ("user.invite", vec![step_dto("admin.invite_member", &[])]),
+            (
+                "user.mixed_ai",
+                vec![step_dto("state.incr", &[]), step_dto("admin.kick", &[])],
+            ),
         ] {
             let err = svc
                 .create_user_command(create_macro(actor, key, steps.clone(), true))
@@ -5257,7 +5285,7 @@ mod tests {
         }
 
         let saves = saves.lock().unwrap();
-        assert_eq!(saves.created.len(), 5);
+        assert_eq!(saves.created.len(), 7);
         assert!(saves.created[0].ai_callable);
         assert!(saves.created[1..].iter().all(|c| !c.ai_callable));
         assert_eq!(

@@ -385,7 +385,7 @@ async fn a_macro_with_steps_only_the_app_runs_is_run_from_the_app() {
     assert_eq!(code, "VALIDATION");
     assert_eq!(
         message,
-        "only a macro whose steps all run on the server, with every argument fixed, can be run by the AI agent"
+        "only a macro whose steps are all commands the AI agent may run, run on the server with every argument fixed, can be run by the AI agent"
     );
     f.create_macro(
         bob,
@@ -478,4 +478,50 @@ async fn the_server_lists_account_macros() {
             .expect("capabilities")
             .contains(&json!("account_macros"))
     );
+}
+
+/// The agent option is refused on a macro wrapping a built-in the agent may not run itself, so
+/// a macro reaches no further than the agent alone; the person keeps the macro without it.
+#[tokio::test]
+async fn the_agent_option_is_refused_on_a_built_in_the_agent_may_not_run() {
+    let f = setup().await;
+    let alice = &f.ws.alice;
+    let steps = json!([{ "commandId": "admin.invite_member", "args": {
+        "server_id": f.ws.server_id,
+    } }]);
+    let input = json!({
+        "commandId": "user.invite", "title": "Invite", "description": "", "steps": steps,
+        "aiCallable": true,
+    });
+    let (code, message) = exec_err(
+        &f.schema,
+        alice.request(CREATE_USER_COMMAND, json!({ "input": input })),
+    )
+    .await;
+    assert_eq!(code, "VALIDATION");
+    assert_eq!(
+        message,
+        "only a macro whose steps are all commands the AI agent may run, run on the server with every argument fixed, can be run by the AI agent"
+    );
+
+    f.create_macro(alice, "user.invite", steps, json!({})).await;
+    let update = json!({
+        "commandId": "user.invite", "title": "Invite", "description": "",
+        "steps": [{ "commandId": "admin.invite_member" }], "isEnabled": true, "aiCallable": true,
+    });
+    let (code, _) = exec_err(
+        &f.schema,
+        alice.request(UPDATE_USER_COMMAND, json!({ "input": update })),
+    )
+    .await;
+    assert_eq!(code, "VALIDATION");
+    let (code, _) = exec_err(
+        &f.schema,
+        alice.request(
+            EXECUTE,
+            json!({ "input": f.execute_input("user.invite", "AGENT") }),
+        ),
+    )
+    .await;
+    assert_eq!(code, "FORBIDDEN");
 }

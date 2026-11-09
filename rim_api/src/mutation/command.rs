@@ -194,8 +194,8 @@ pub struct CreateUserCommandInput {
     pub title: String,
     pub description: String,
     pub steps: Vec<UserCommandStepInput>,
-    /// Lets the AI agent run the macro; refused unless every step is a built-in the server
-    /// runs, with every argument fixed.
+    /// Lets the AI agent run the macro; refused unless every step is an AI-callable built-in
+    /// the server runs, with every argument fixed.
     #[graphql(default = false)]
     pub ai_callable: bool,
     /// How the macro is described to the AI agent, at most 1,000 characters.

@@ -119,7 +119,7 @@ impl DefaultCommandService {
     /// Intent samples one macro may keep.
     pub(super) const MAX_USER_COMMAND_INTENT_SAMPLES: usize = 10;
     /// The refusal of `aiCallable` on a macro the AI agent may not run.
-    pub(super) const AGENT_RUNNABLE_RULE: &'static str = "only a macro whose steps all run on the server, with every argument fixed, can be run by the AI agent";
+    pub(super) const AGENT_RUNNABLE_RULE: &'static str = "only a macro whose steps are all commands the AI agent may run, run on the server with every argument fixed, can be run by the AI agent";
 
     pub fn new(repos: CommandRepos, services: CommandServices) -> Self {
         Self::with_confirmation_store(repos, services, shared_in_memory_store())

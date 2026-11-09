@@ -277,8 +277,8 @@ pub struct UserCommandCompositionDto {
     /// Whether any step is dangerous.
     pub dangerous: bool,
     pub step_sensitivities: Vec<CommandSensitivityDto>,
-    /// Whether the AI agent may run a macro with these steps: each a builtin the server runs,
-    /// with every argument fixed.
+    /// Whether the AI agent may run a macro with these steps: each an AI-callable builtin the
+    /// server runs, with every argument fixed.
     pub agent_runnable: bool,
 }
 
