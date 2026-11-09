@@ -99,6 +99,8 @@ pub enum CommandInitiator {
     Plugin,
     /// Out-of-process CLI client (rim-cli).
     Cli,
+    /// A button or other control in the app.
+    Ui,
 }
 
 impl From<CommandInitiator> for rim_services::command::initiator::CommandInitiator {
@@ -112,6 +114,7 @@ impl From<CommandInitiator> for rim_services::command::initiator::CommandInitiat
             CommandInitiator::ContextMenu => D::ContextMenu,
             CommandInitiator::Plugin => D::Plugin,
             CommandInitiator::Cli => D::Cli,
+            CommandInitiator::Ui => D::Ui,
         }
     }
 }

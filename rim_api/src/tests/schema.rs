@@ -247,6 +247,7 @@ async fn server_info_lists_its_capabilities() {
         "home_layout",
         "app_command_keybinds",
         "account_macros",
+        "command_initiator_ui",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),

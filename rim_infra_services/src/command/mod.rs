@@ -2,6 +2,7 @@ mod discover;
 mod dispatch;
 mod executor;
 mod gates;
+pub(crate) mod own_state;
 mod pipe_parser;
 mod rate_limiter;
 pub(crate) mod registry;
@@ -395,6 +396,11 @@ impl CommandService for DefaultCommandService {
             Ok(Dispatch::Single(Some(resolved))) => Some(resolved.definition.typed_verb),
             _ => None,
         };
+        let writes_audit_row = !matches!(
+            &dispatch,
+            Ok(Dispatch::Single(Some(resolved)))
+                if own_state::changes_only_callers_view(&resolved.definition.id)
+        );
         let confirmation_kind = match &cmd.confirmation {
             None => "none",
             Some(ConfirmationProof::InBandToken { .. }) => "in_band_token",
@@ -450,7 +456,12 @@ impl CommandService for DefaultCommandService {
             }
         }
 
-        if let Some(audit_svc) = &self.services.audit_log_service {
+        if let Some(audit_svc) = self
+            .services
+            .audit_log_service
+            .as_ref()
+            .filter(|_| writes_audit_row)
+        {
             let entry = AuditLogEntryDto {
                 id: uuid::Uuid::now_v7(),
                 actor_user_id: actor_id.into(),

@@ -5482,4 +5482,210 @@ mod tests {
         );
         assert!(ids.iter().all(|id| !id.starts_with("user.")));
     }
+
+    // ── Commands that change only the caller's own state ──
+
+    type WrittenEntries = Arc<std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>>;
+
+    /// An audit log that keeps every entry written to it.
+    fn recording_audit() -> (
+        Arc<dyn rim_services::audit::service::AuditLogService>,
+        WrittenEntries,
+    ) {
+        let written: WrittenEntries = Arc::new(std::sync::Mutex::new(vec![]));
+        let written_clone = written.clone();
+        let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+        audit_svc.expect_write_entry().returning(move |entry| {
+            written_clone.lock().unwrap().push(entry);
+            Box::pin(async { Ok(()) })
+        });
+        (Arc::new(audit_svc), written)
+    }
+
+    /// A command service over `repo` whose caller is timed out until `until` when it is set,
+    /// with `read_state` and `workspace_state` behind the commands and `audit` as its audit log.
+    fn own_state_service(
+        repo: MockUserCommandRepository,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+        read_state: rim_services::read_state::service::MockReadStateService,
+        workspace_state: MockWorkspaceStateService,
+        audit: Arc<dyn rim_services::audit::service::AuditLogService>,
+    ) -> DefaultCommandService {
+        let moderation = match until {
+            Some(until) => timed_out_moderation(until),
+            None => rim_services::moderation::service::MockModerationService::no_timeouts(),
+        };
+        let base = service_with_workspace_state(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+            allow_all_caps(),
+            moderation,
+            workspace_state,
+        );
+        DefaultCommandService::new(
+            base.repos,
+            CommandServices {
+                read_state_service: Arc::new(read_state),
+                audit_log_service: Some(audit),
+                ..base.services
+            },
+        )
+    }
+
+    /// A read state service that expects `times` calls of `mark_as_read`.
+    fn marking_read_state(times: usize) -> rim_services::read_state::service::MockReadStateService {
+        let mut read_state = rim_services::read_state::service::MockReadStateService::new();
+        read_state
+            .expect_mark_as_read()
+            .times(times)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        read_state
+    }
+
+    /// A call of `command_id` by `actor`, focused on the conversation `chat.mark_as_read` needs.
+    fn mark_read_call(actor: Actor, command_id: &str) -> ExecuteCommandCmd {
+        ExecuteCommandCmd {
+            context: Some(CommandContextDto {
+                conversation_id: Some(rim_core::conversation::model::ConversationId::new()),
+                ..workspace_context(rim_core::server::model::ServerId::new())
+            }),
+            ..palette_cmd(actor, command_id)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_actor_marks_a_conversation_read() {
+        let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+        let (audit, _) = recording_audit();
+        let svc = own_state_service(
+            MockUserCommandRepository::new(),
+            Some(until),
+            marking_read_state(1),
+            MockWorkspaceStateService::new(),
+            audit,
+        );
+
+        let result = svc
+            .execute_command(mark_read_call(new_actor(), "chat.mark_as_read"))
+            .await
+            .expect("runs");
+
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_actor_runs_a_macro_of_own_state_steps() {
+        let actor = new_actor();
+        let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+        let (audit, _) = recording_audit();
+        let svc = own_state_service(
+            repo_with(vec![calling_command(
+                actor.user_id,
+                "user.read",
+                "chat.mark_as_read",
+            )]),
+            Some(until),
+            marking_read_state(1),
+            MockWorkspaceStateService::new(),
+            audit,
+        );
+
+        let result = svc
+            .execute_command(mark_read_call(actor, "user.read"))
+            .await
+            .expect("runs");
+
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_actor_is_refused_a_macro_with_a_step_others_see() {
+        let actor = new_actor();
+        let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+        let mut workspace_state = MockWorkspaceStateService::new();
+        workspace_state.expect_increment().never();
+        let (audit, _) = recording_audit();
+        let svc = own_state_service(
+            repo_with(vec![stored_user_command(
+                actor.user_id,
+                "user.read_and_bump",
+                vec![
+                    step("chat.mark_as_read", serde_json::Value::Null),
+                    step("state.incr", serde_json::json!({ "key": "k" })),
+                ],
+            )]),
+            Some(until),
+            marking_read_state(0),
+            workspace_state,
+            audit,
+        );
+
+        let err = svc
+            .execute_command(mark_read_call(actor, "user.read_and_bump"))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ServiceError::TimedOut { until: u } if u == until),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn marking_a_conversation_read_writes_no_audit_row() {
+        let (audit, written) = recording_audit();
+        let svc = own_state_service(
+            MockUserCommandRepository::new(),
+            None,
+            marking_read_state(1),
+            MockWorkspaceStateService::new(),
+            audit,
+        );
+
+        svc.execute_command(mark_read_call(new_actor(), "chat.mark_as_read"))
+            .await
+            .expect("runs");
+
+        assert!(written.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_macro_of_own_view_steps_keeps_its_audit_row() {
+        let actor = new_actor();
+        let (audit, written) = recording_audit();
+        let svc = own_state_service(
+            repo_with(vec![calling_command(
+                actor.user_id,
+                "user.read",
+                "chat.mark_as_read",
+            )]),
+            None,
+            marking_read_state(1),
+            MockWorkspaceStateService::new(),
+            audit,
+        );
+
+        svc.execute_command(mark_read_call(actor, "user.read"))
+            .await
+            .expect("runs");
+
+        let entries = written.lock().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command_id, "user.read");
+    }
+
+    #[tokio::test]
+    async fn a_call_from_an_app_control_is_audited_as_ui() {
+        let (audit, written) = recording_audit();
+        let svc = service_with_builtins(vec![rate_limited_cmd_def("test.ui", 100)], Some(audit));
+        let cmd = ExecuteCommandCmd {
+            initiator: CommandInitiator::Ui,
+            ..palette_cmd(new_actor(), "test.ui")
+        };
+
+        svc.execute_command(cmd).await.expect("runs");
+
+        assert_eq!(written.lock().unwrap()[0].initiator, "ui");
+    }
 }

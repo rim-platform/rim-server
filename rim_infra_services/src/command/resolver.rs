@@ -13,6 +13,7 @@ use rim_services::command::verb::TypedVerb;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
+use super::own_state;
 use super::registry::app_command;
 use super::user_commands::is_plugin_command_shape;
 
@@ -37,6 +38,9 @@ pub(super) struct Resolved {
     /// User commands on the longest chain of nested user commands it starts: zero for a
     /// builtin, one for a user command whose steps are all builtins.
     pub depth: usize,
+    /// The command changes only the caller's own state: a builtin
+    /// [`own_state::changes_only_callers_state`] names, or a user command whose every step does.
+    pub changes_only_callers_state: bool,
 }
 
 /// What the steps of one user command add up to.
@@ -53,6 +57,8 @@ struct Composition {
     server_runs: bool,
     /// Every step is an AI-callable builtin the server runs, with every argument fixed.
     agent_runnable: bool,
+    /// Every step changes only the caller's own state.
+    changes_only_callers_state: bool,
 }
 
 /// The definition a macro step naming the plugin command `command_id` counts with: run by the
@@ -152,6 +158,7 @@ impl<'a> CommandResolver<'a> {
         }
         if let Some(definition) = self.service.builtin_or_test_definition(command_id) {
             let resolved = Resolved {
+                changes_only_callers_state: own_state::changes_only_callers_state(&definition.id),
                 definition,
                 expanded_steps: 1,
                 depth: 0,
@@ -205,6 +212,7 @@ impl<'a> CommandResolver<'a> {
                 ),
                 expanded_steps: composition.expanded_steps,
                 depth: composition.depth + 1,
+                changes_only_callers_state: composition.changes_only_callers_state,
             });
         match &result {
             Ok(resolved) => {
@@ -263,6 +271,7 @@ impl<'a> CommandResolver<'a> {
             depth: 0,
             server_runs: true,
             agent_runnable: true,
+            changes_only_callers_state: true,
         };
         for step in steps {
             let resolved = self.resolve_step(&step.command_id).await?.ok_or_else(|| {
@@ -275,6 +284,7 @@ impl<'a> CommandResolver<'a> {
             composition.agent_runnable &= server_runs
                 && definition.source_kind == CommandSourceKindDto::BuiltIn
                 && definition.ai_callable;
+            composition.changes_only_callers_state &= resolved.changes_only_callers_state;
             composition.expanded_steps = composition
                 .expanded_steps
                 .saturating_add(resolved.expanded_steps);
@@ -312,6 +322,7 @@ impl<'a> CommandResolver<'a> {
             definition,
             expanded_steps: 1,
             depth: 0,
+            changes_only_callers_state: false,
         }))
     }
 
