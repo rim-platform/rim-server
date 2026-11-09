@@ -50,7 +50,9 @@ These are the rules every agent feature is held to; `ROADMAP.md` says which exis
 - **Whoever runs an agent decides where.** They also choose its model or key. The RIM project runs
   no model service for agents, and no agent's prompts go through one. Every agent reaches RIM as a
   client, with the same limits and checks as anyone else.
-- **Your own agent runs on your machine.** It talks directly to the provider you chose.
+- **Your own agent runs on your machine.** It talks directly to the provider you chose. The
+  desktop app can start an agent you chose and let you direct it, with any agent that speaks the
+  Agent Client Protocol.
 - **A server's owner may run an agent on that server.** It is their choice, and it is off until
   they turn it on. It can read only what the server can already read, never an encrypted
   conversation, and people on that server can see that it runs, who runs it and where what it
