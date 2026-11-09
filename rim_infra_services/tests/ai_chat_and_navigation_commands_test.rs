@@ -95,6 +95,9 @@ fn build_service_with_store(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),

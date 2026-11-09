@@ -129,6 +129,9 @@ mod tests {
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(workspace_state_service),
                 audit_log_service: None,
+                notification_preference_service: std::sync::Arc::new(
+                    rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+                ),
                 moderation_service: Arc::new(moderation_service),
                 notification_service: Arc::new(
                     rim_services::notification::service::MockNotificationService::new(),
@@ -623,7 +626,7 @@ mod tests {
     #[tokio::test]
     // Every AI-callable builtin whose capabilities the mock grants (`chat.read`, `chat.write`,
     // `admin.manage_members`) or that needs none.
-    async fn list_commands_ai_surface_returns_forty_two_commands_with_caps() {
+    async fn list_commands_ai_surface_returns_forty_seven_commands_with_caps() {
         use std::collections::HashMap;
         let actor = Actor::new(rim_core::user::model::UserId::new());
         let mut repo = MockUserCommandRepository::new();
@@ -675,6 +678,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
+                "admin.clear_timeout",
                 "admin.timeout",
                 "chat.archive_channel",
                 "chat.create_channel",
@@ -695,11 +699,15 @@ mod tests {
                 "chat.search_messages",
                 "chat.set_channel_posting",
                 "chat.set_slow_mode",
+                "chat.set_topic",
                 "chat.toggle_reaction",
                 "chat.unarchive_channel",
+                "chat.unpin_message",
                 "notifications.dnd",
                 "notifications.mark_all_read",
+                "notifications.mute_conversation",
                 "notifications.set_level",
+                "notifications.unmute_conversation",
                 "state.delete",
                 "state.get",
                 "state.incr",
@@ -1276,6 +1284,9 @@ mod tests {
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: audit_svc,
+                notification_preference_service: std::sync::Arc::new(
+                    rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+                ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
@@ -1425,6 +1436,9 @@ mod tests {
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
+                notification_preference_service: std::sync::Arc::new(
+                    rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+                ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
@@ -1865,6 +1879,9 @@ mod tests {
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
+                notification_preference_service: std::sync::Arc::new(
+                    rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+                ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),

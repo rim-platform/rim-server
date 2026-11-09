@@ -1901,6 +1901,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_topic_is_trimmed_cleared_when_empty_and_at_most_512_characters() {
+        let [alice] = users();
+        let fx = Fx::new(ConversationType::Group, false, &[alice])
+            .with_workspace_member(alice, ServerMemberRole::Member);
+        let service = fx.service();
+        let set = |topic: &str| {
+            service.update_topic(UpdateConversationTopicCmd {
+                actor: Actor::new(alice),
+                server_id: fx.server_id,
+                conversation_id: fx.conversation.id,
+                topic: Some(topic.to_string()),
+            })
+        };
+
+        let longest = "é".repeat(512);
+        let dto = set(&format!("  {longest}\n"))
+            .await
+            .expect("512 characters");
+        assert_eq!(dto.topic.as_deref(), Some(longest.as_str()));
+
+        let dto = set(" \n\t ").await.expect("a blank topic clears it");
+        assert_eq!(dto.topic, None);
+
+        let err = set(&"a".repeat(513)).await.unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("512")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn topic_update_on_archived_channel_is_rejected() {
         let [alice] = users();
         let fx = Fx::new(ConversationType::Channel, false, &[alice])

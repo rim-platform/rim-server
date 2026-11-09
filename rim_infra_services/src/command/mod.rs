@@ -71,6 +71,10 @@ pub struct CommandServices {
     /// `notifications.mark_all_read` dispatch to it.
     pub notification_service:
         std::sync::Arc<dyn rim_services::notification::service::NotificationService>,
+    /// `notifications.mute_conversation` and `notifications.unmute_conversation` dispatch to it.
+    pub notification_preference_service: std::sync::Arc<
+        dyn rim_services::notification_preference::service::NotificationPreferenceService,
+    >,
     /// Database audit sink. `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
     /// writes a structured row alongside the `tracing::info!(target: "audit")`

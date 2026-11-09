@@ -670,6 +670,55 @@ async fn timed_out_member_cannot_send_or_run_mutating_commands() {
     assert_eq!(f.audit_rows("admin.clear_timeout").await.len(), 1);
 }
 
+/// `admin.clear_timeout` through `executeCommand`: a member's call is refused by role, a
+/// moderator's ends the timeout in force once (audited once by the moderation service) and then
+/// reports that nothing was cleared.
+#[tokio::test]
+async fn the_clear_timeout_command_ends_a_timeout_like_the_mutation() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+    exec_ok(
+        &f.schema,
+        f.mona.request(
+            TIMEOUT,
+            json!({
+                "serverId": f.server_id,
+                "userId": f.carol.user_id.to_string(),
+                "until": until.to_rfc3339(),
+            }),
+        ),
+    )
+    .await;
+    let clear = json!({
+        "serverId": f.server_id,
+        "commandId": "admin.clear_timeout",
+        "args": { "user_id": f.carol.user_id.to_string() },
+    });
+
+    let code = exec_err_code(&f.schema, f.bob.request(EXECUTE, clear.clone())).await;
+    assert_eq!(code, "FORBIDDEN", "members cannot clear timeouts");
+    assert!(f.member_entry(&f.alice, &f.carol).await["timeoutUntil"].is_string());
+
+    for message in ["timeout cleared", "member was not timed out"] {
+        let data = exec_ok(&f.schema, f.mona.request(EXECUTE, clear.clone())).await;
+        assert_eq!(data["executeCommand"]["status"], json!("SUCCESS"));
+        assert_eq!(data["executeCommand"]["message"], json!(message));
+    }
+    assert_eq!(
+        f.member_entry(&f.alice, &f.carol).await["timeoutUntil"],
+        Value::Null
+    );
+    f.send(&f.carol, &f.channel_id, "back").await;
+    let moderation_rows = f
+        .audit_rows("admin.clear_timeout")
+        .await
+        .into_iter()
+        .filter(|row| row.initiator == "moderation")
+        .count();
+    assert_eq!(moderation_rows, 1);
+}
+
 impl Fixture {
     /// `who`'s view of `user`'s `serverMembers` entry.
     async fn member_entry(&self, who: &Caller, user: &Caller) -> Value {
@@ -2783,6 +2832,7 @@ async fn command_listings_follow_membership_and_role() {
     ];
     let moderator = [
         "admin.ban",
+        "admin.clear_timeout",
         "admin.kick",
         "admin.set_role",
         "admin.timeout",

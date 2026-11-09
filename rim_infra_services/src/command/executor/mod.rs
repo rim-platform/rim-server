@@ -67,12 +67,15 @@ pub(super) async fn execute_builtin_command(
         }
         "chat.list_members" => member::list_members(services, actor, args, context).await,
         "chat.pin_message" => pin::pin_message(services, actor, args, context).await,
+        "chat.unpin_message" => pin::unpin_message(services, actor, args, context).await,
+        "chat.set_topic" => conversation::set_topic(services, actor, args, context).await,
         "chat.toggle_reaction" => reaction::toggle_reaction(services, actor, args, context).await,
         "admin.invite_member" => admin::invite_member(services, actor, args, context).await,
         "admin.kick" => moderation::kick(services, actor, args, context).await,
         "admin.ban" => moderation::ban(services, actor, args, context).await,
         "admin.unban" => moderation::unban(services, actor, args, context).await,
         "admin.timeout" => moderation::timeout(services, actor, args, context).await,
+        "admin.clear_timeout" => moderation::clear_timeout(services, actor, args, context).await,
         "admin.set_role" => moderation::set_role(services, actor, args, context).await,
         "admin.delete_member_messages" => {
             moderation::delete_member_messages(services, actor, args, context).await
@@ -84,6 +87,12 @@ pub(super) async fn execute_builtin_command(
         "chat.report_message" => moderation::report_message(services, actor, args, context).await,
         "notifications.set_level" => notification::set_level(services, actor, args, context).await,
         "notifications.dnd" => notification::dnd(services, actor, args, context).await,
+        "notifications.mute_conversation" => {
+            notification::mute_conversation(services, actor, args, context).await
+        }
+        "notifications.unmute_conversation" => {
+            notification::unmute_conversation(services, actor, args, context).await
+        }
         "notifications.mark_all_read" => {
             notification::mark_all_read(services, actor, args, context).await
         }

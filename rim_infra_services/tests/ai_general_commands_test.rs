@@ -112,6 +112,9 @@ fn build_service_with_conversations(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(workspace_state_service),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),

@@ -156,6 +156,367 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     app("workspace.go_back", "Go Back", category::NAVIGATION),
     app("workspace.go_forward", "Go Forward", category::NAVIGATION),
     app("app.quit", "Quit RIM", category::APP),
+    app(
+        "plugins.open_settings",
+        "Open Plugin Settings",
+        category::PLUGINS,
+    ),
+    app(
+        "workspace.open_direct_messages",
+        "Open Direct Messages",
+        category::NAVIGATION,
+    ),
+    app("workspace.add", "Add a Workspace…", category::WORKSPACE),
+    app(
+        "workspace.open_workspace_settings",
+        "Open Workspace Settings",
+        category::WORKSPACE,
+    ),
+    app(
+        "workspace.open_join_requests",
+        "Open Join Requests",
+        category::WORKSPACE,
+    ),
+    app("people.set_status", "Set Status…", category::PEOPLE),
+    app("people.view_profile", "View Profile…", category::PEOPLE),
+    app("people.message", "Message Someone…", category::PEOPLE),
+    app("app.sign_out", "Sign Out…", category::APP),
+    app("app.check_for_updates", "Check for Updates", category::APP),
+    app("app.restart_to_update", "Restart to Update", category::APP),
+    app("app.open_log_folder", "Open Log Folder", category::APP),
+    app("app.minimize_window", "Minimize Window", category::APP),
+    app(
+        "app.toggle_maximize_window",
+        "Maximize or Restore Window",
+        category::APP,
+    ),
+    app("app.close_window", "Close Window", category::APP),
+    app("settings.open.profile", "Settings: Profile", category::APP),
+    app("settings.open.account", "Settings: Account", category::APP),
+    app(
+        "settings.open.security",
+        "Settings: Security",
+        category::APP,
+    ),
+    app("settings.open.desktop", "Settings: Desktop", category::APP),
+    app(
+        "settings.open.contacts",
+        "Settings: Contacts",
+        category::APP,
+    ),
+    app(
+        "settings.open.messages",
+        "Settings: Messages",
+        category::APP,
+    ),
+    app(
+        "settings.open.direct_messages",
+        "Settings: Direct messages",
+        category::APP,
+    ),
+    app(
+        "settings.open.notifications",
+        "Settings: Notifications",
+        category::APP,
+    ),
+    app("settings.open.history", "Settings: History", category::APP),
+    app(
+        "settings.open.keybinds",
+        "Settings: Keybinds",
+        category::APP,
+    ),
+    app(
+        "settings.open.keyboard",
+        "Settings: Keyboard",
+        category::APP,
+    ),
+    app(
+        "settings.open.commands",
+        "Settings: Commands",
+        category::APP,
+    ),
+    app("settings.open.macros", "Settings: Macros", category::APP),
+    app(
+        "settings.open.pipelines",
+        "Settings: Pipelines",
+        category::APP,
+    ),
+    app("settings.open.plugins", "Settings: Plugins", category::APP),
+    app(
+        "settings.open.plugin_ai",
+        "Settings: Plugin AI",
+        category::APP,
+    ),
+    app("settings.open.state", "Settings: State", category::APP),
+    app("settings.open.emoji", "Settings: Emoji", category::APP),
+    app("settings.open.agents", "Settings: Agents", category::APP),
+    app("settings.open.agent", "Settings: AI Agent", category::APP),
+    app(
+        "settings.open.workspace",
+        "Settings: Workspace",
+        category::WORKSPACE,
+    ),
+    app(
+        "settings.open.workspace_moderation",
+        "Settings: Moderation",
+        category::WORKSPACE,
+    ),
+    app("settings.open.bots", "Settings: Bots", category::WORKSPACE),
+    app(
+        "settings.open.moderation",
+        "Settings: Instance moderation",
+        category::APP,
+    ),
+    app("settings.open.about", "Settings: About", category::APP),
+    app("settings.assign_keybind", "Assign Keybind…", category::APP),
+    app(
+        "settings.back_up_history",
+        "Back Up History Now",
+        category::APP,
+    ),
+    app("app.run_macro", "Run Macro…", category::APP),
+    app(
+        "app.toggle_pipeline",
+        "Turn Pipeline On or Off…",
+        category::APP,
+    ),
+    app("chat.start_reply", "Reply", category::MESSAGES),
+    app("chat.start_edit", "Edit Message", category::MESSAGES),
+    app(
+        "chat.forward_message",
+        "Forward Message…",
+        category::MESSAGES,
+    ),
+    app(
+        "chat.delete_attachment",
+        "Delete Attachment…",
+        category::MESSAGES,
+    ),
+    app("chat.attach_file", "Attach File…", category::MESSAGES),
+    app("chat.insert_emoji", "Insert Emoji…", category::MESSAGES),
+    app(
+        "chat.select_next_message",
+        "Select Next Message",
+        category::MESSAGES,
+    ),
+    app(
+        "chat.select_previous_message",
+        "Select Previous Message",
+        category::MESSAGES,
+    ),
+    app(
+        "chat.select_first_message",
+        "Select First Message",
+        category::MESSAGES,
+    ),
+    app(
+        "chat.select_last_message",
+        "Select Last Message",
+        category::MESSAGES,
+    ),
+    app(
+        "chat.toggle_fold",
+        "Fold or Unfold Message",
+        category::MESSAGES,
+    ),
+    app(
+        "chat.open_invite",
+        "Invite People…",
+        category::CONVERSATIONS,
+    ),
+    app(
+        "chat.browse_channels",
+        "Browse Channels…",
+        category::CONVERSATIONS,
+    ),
+    app(
+        "chat.accept_invitation",
+        "Accept Invitation",
+        category::CONVERSATIONS,
+    ),
+    app(
+        "chat.decline_invitation",
+        "Decline Invitation",
+        category::CONVERSATIONS,
+    ),
+    app(
+        "chat.mark_conversation_unread",
+        "Mark Conversation Unread",
+        category::CONVERSATIONS,
+    ),
+    app("chat.apply_lens", "Apply Lens…", category::CONVERSATIONS),
+    app("chat.clear_lens", "Clear Lens", category::CONVERSATIONS),
+    app(
+        "notifications.mark_read",
+        "Mark Notification Read",
+        category::NOTIFICATIONS,
+    ),
+    app(
+        "unreads.mark_all_shown",
+        "Unreads: Mark All Shown as Read",
+        category::UNREADS,
+    ),
+    app(
+        "unreads.toggle_muted",
+        "Unreads: Show or Hide Muted",
+        category::UNREADS,
+    ),
+    app(
+        "agents.allow_in_encrypted_conversation",
+        "Let the AI Agent Read This Conversation…",
+        category::AGENTS,
+    ),
+    app(
+        "moderation.open_reports",
+        "Open Reports",
+        category::MODERATION,
+    ),
+    app(
+        "moderation.resolve_report",
+        "Resolve Report…",
+        category::MODERATION,
+    ),
+    app(
+        "moderation.dismiss_report",
+        "Dismiss Report…",
+        category::MODERATION,
+    ),
+    app("moderation.clear_flag", "Clear Flag", category::MODERATION),
+    app(
+        "moderation.block_principal",
+        "Block Principal…",
+        category::MODERATION,
+    ),
+    app(
+        "moderation.unblock_principal",
+        "Unblock Principal…",
+        category::MODERATION,
+    ),
+    app(
+        "moderation.unblock_ip",
+        "Unblock Address…",
+        category::MODERATION,
+    ),
+    app(
+        "moderation.clear_profile",
+        "Clear Profile…",
+        category::MODERATION,
+    ),
+    app(
+        "workspace.revoke_invite",
+        "Revoke Invite…",
+        category::WORKSPACE,
+    ),
+    app(
+        "workspace.accept_join_request",
+        "Accept Join Request…",
+        category::WORKSPACE,
+    ),
+    app(
+        "workspace.decline_join_request",
+        "Decline Join Request…",
+        category::WORKSPACE,
+    ),
+    app("bots.new", "New Bot…", category::BOTS_AND_WEBHOOKS),
+    app("bots.edit", "Edit Bot…", category::BOTS_AND_WEBHOOKS),
+    app(
+        "bots.deactivate",
+        "Deactivate Bot…",
+        category::BOTS_AND_WEBHOOKS,
+    ),
+    app(
+        "bots.new_webhook",
+        "New Webhook…",
+        category::BOTS_AND_WEBHOOKS,
+    ),
+    app(
+        "bots.revoke_webhook",
+        "Revoke Webhook…",
+        category::BOTS_AND_WEBHOOKS,
+    ),
+    app("plugins.install", "Install Plugin…", category::PLUGINS),
+    app(
+        "plugins.toggle",
+        "Turn Plugin On or Off…",
+        category::PLUGINS,
+    ),
+    app("plugins.update", "Update Plugin…", category::PLUGINS),
+    app("plugins.uninstall", "Uninstall Plugin…", category::PLUGINS),
+    app(
+        "plugins.revoke_ai_access",
+        "Revoke a Plugin's AI Access…",
+        category::PLUGINS,
+    ),
+    app("people.add_contact", "Add to Contacts", category::PEOPLE),
+    app(
+        "people.remove_contact",
+        "Remove from Contacts",
+        category::PEOPLE,
+    ),
+    app("people.block", "Block…", category::PEOPLE),
+    app("people.unblock", "Unblock…", category::PEOPLE),
+    app(
+        "people.accept_request",
+        "Accept Message Request",
+        category::PEOPLE,
+    ),
+    app(
+        "people.ignore_request",
+        "Ignore Message Request",
+        category::PEOPLE,
+    ),
+    app(
+        "people.report_request",
+        "Report Message Request…",
+        category::PEOPLE,
+    ),
+    app(
+        "people.read_request_first",
+        "Read Message Request First",
+        category::PEOPLE,
+    ),
+    app(
+        "agents.approve_request",
+        "Approve the Agent's Request…",
+        category::AGENTS,
+    ),
+    app(
+        "agents.refuse_request",
+        "Refuse the Agent's Request",
+        category::AGENTS,
+    ),
+    app(
+        "agents.approve_pairing",
+        "Connect the Waiting Agent…",
+        category::AGENTS,
+    ),
+    app(
+        "agents.refuse_pairing",
+        "Don't Connect the Waiting Agent",
+        category::AGENTS,
+    ),
+    app("agents.disconnect", "Disconnect Agent…", category::AGENTS),
+    app(
+        "agents.choose_reads",
+        "Choose What an Agent Can Read…",
+        category::AGENTS,
+    ),
+    app(
+        "agents.choose_plugin_commands",
+        "Choose an Agent's Plugin Commands…",
+        category::AGENTS,
+    ),
+    app("agents.open_runs", "Open Agent Runs", category::AGENTS),
+    app(
+        "agents.open_record",
+        "What Agents Were Given",
+        category::AGENTS,
+    ),
+    app(
+        "agents.clear_record",
+        "Clear the Agents Record…",
+        category::AGENTS,
+    ),
 ];
 
 impl AppCommand {
@@ -250,6 +611,39 @@ mod tests {
         assert!(app_command("chat.post_message").is_none());
     }
 
+    /// Each settings tab command's id is `settings.open.` and a key of lowercase letters, digits
+    /// and single underscores, and its title starts with `Settings: `.
+    #[test]
+    fn settings_tab_commands_follow_the_naming_rule() {
+        let tabs: Vec<&AppCommand> = APP_COMMANDS
+            .iter()
+            .filter(|command| command.id.starts_with("settings.open."))
+            .collect();
+        assert_eq!(tabs.len(), 25);
+        for command in tabs {
+            let key = &command.id["settings.open.".len()..];
+            assert!(
+                !key.is_empty()
+                    && !key.starts_with('_')
+                    && !key.ends_with('_')
+                    && !key.contains("__")
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "{}",
+                command.id
+            );
+            assert!(command.title.starts_with("Settings: "), "{}", command.id);
+            assert!(
+                [category::APP, category::WORKSPACE].contains(&command.category),
+                "{}",
+                command.id
+            );
+        }
+    }
+
+    /// The approval ids are app commands in category Agents: never a builtin the server lists,
+    /// never AI-callable, and run only by the client.
     #[test]
     fn agent_approval_commands_are_offered_to_no_agent() {
         let builtins = builtin_commands();
@@ -257,10 +651,15 @@ mod tests {
         for id in AGENT_APPROVAL_IDS {
             assert!(!ai_callable.contains(&id), "{id}");
             assert!(builtins.iter().all(|builtin| builtin.id != id), "{id}");
-            assert!(
-                app_command(id).is_none_or(|definition| !definition.ai_callable),
+            let definition = app_command(id).unwrap_or_else(|| panic!("{id} is an app command"));
+            assert!(!definition.ai_callable, "{id}");
+            assert!(!definition.visible_in_palette, "{id}");
+            assert_eq!(
+                definition.execution_target,
+                CommandExecutionTargetDto::DesktopLocal,
                 "{id}"
             );
+            assert_eq!(definition.category, category::AGENTS, "{id}");
         }
     }
 }

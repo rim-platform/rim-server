@@ -2,10 +2,10 @@ use serde_json::Value;
 
 use rim_services::conversation::command::{
     AddConversationMembersCmd, ArchiveConversationCmd, CreateConversationCmd, JoinChannelCmd,
-    LeaveConversationCmd, RemoveConversationMemberCmd,
+    LeaveConversationCmd, RemoveConversationMemberCmd, UpdateConversationTopicCmd,
 };
 use rim_services::conversation::types::ConversationParticipants;
-use rim_services::{Actor, ServiceResult};
+use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
@@ -201,6 +201,42 @@ pub(super) async fn create_group(
     })
 }
 
+/// `chat.set_topic`: the `topic` arg must be present as a string; the service trims it, clears
+/// the topic when nothing is left and refuses one longer than 512 characters.
+pub(super) async fn set_topic(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, conversation_id) = resolve_target(&args, context.as_ref())?;
+    let topic = optional_string_arg(&args, "topic").ok_or_else(|| {
+        ServiceError::Validation(
+            "missing string arg `topic`; an empty `topic` clears it".to_string(),
+        )
+    })?;
+    let conversation = services
+        .conversation_service
+        .update_topic(UpdateConversationTopicCmd {
+            actor,
+            server_id,
+            conversation_id,
+            topic: Some(topic),
+        })
+        .await?;
+    Ok(success(
+        if conversation.topic.is_some() {
+            "topic set"
+        } else {
+            "topic cleared"
+        },
+        serde_json::json!({
+            "conversation_id": conversation.id.to_string(),
+            "topic": conversation.topic,
+        }),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -255,6 +291,9 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -548,5 +587,175 @@ mod tests {
         )
         .await
         .expect("remove");
+    }
+    /// A conversation the mock service updates the way the real one does: trimmed, `None` when
+    /// blank, `Validation` past 512 characters.
+    fn topic_service(ws: ServerId, conv_id: ConversationId) -> MockConversationService {
+        let mut conv = MockConversationService::new();
+        conv.expect_update_topic()
+            .withf(move |cmd| cmd.server_id == ws && cmd.conversation_id == conv_id)
+            .returning(move |cmd| {
+                Box::pin(async move {
+                    let topic = cmd.topic.map(|t| t.trim().to_string());
+                    if topic.as_ref().is_some_and(|t| t.chars().count() > 512) {
+                        return Err(rim_services::ServiceError::Validation(
+                            "topic must be at most 512 characters".to_string(),
+                        ));
+                    }
+                    Ok(ConversationDto {
+                        id: conv_id,
+                        topic: topic.filter(|t| !t.is_empty()),
+                        ..fake_group(ws)
+                    })
+                })
+            });
+        conv
+    }
+
+    fn topic_args(topic: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
+        let mut args = serde_json::Map::new();
+        if let Some(topic) = topic {
+            args.insert(
+                "topic".to_string(),
+                serde_json::Value::String(topic.to_string()),
+            );
+        }
+        args
+    }
+
+    /// The focused conversation's topic is set from the `topic` arg.
+    #[tokio::test]
+    async fn set_topic_uses_the_focused_conversation() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let svc = make_services(topic_service(ws, conv));
+        let context = CommandContextDto {
+            conversation_id: Some(conv),
+            ..ctx_with(ws)
+        };
+        let result = super::set_topic(
+            &svc,
+            actor(),
+            topic_args(Some(" Release week ")),
+            Some(context),
+        )
+        .await
+        .expect("topic set");
+        assert_eq!(result.message, "topic set");
+        let payload = result.payload.expect("payload");
+        assert_eq!(payload["topic"], "Release week");
+        assert_eq!(payload["conversation_id"], conv.to_string());
+    }
+
+    /// An empty `topic` reaches the service, which clears the topic.
+    #[tokio::test]
+    async fn set_topic_with_an_empty_topic_clears_it() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let svc = make_services(topic_service(ws, conv));
+        let mut args = topic_args(Some(""));
+        args.insert(
+            "conversation_id".to_string(),
+            serde_json::Value::String(conv.to_string()),
+        );
+        let result = super::set_topic(&svc, actor(), args, Some(ctx_with(ws)))
+            .await
+            .expect("topic cleared");
+        assert_eq!(result.message, "topic cleared");
+        assert_eq!(
+            result.payload.expect("payload")["topic"],
+            serde_json::Value::Null
+        );
+    }
+
+    /// A topic past the service's limit is refused with its `Validation`.
+    #[tokio::test]
+    async fn set_topic_refuses_a_topic_that_is_too_long() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let svc = make_services(topic_service(ws, conv));
+        let context = CommandContextDto {
+            conversation_id: Some(conv),
+            ..ctx_with(ws)
+        };
+        let err = super::set_topic(
+            &svc,
+            actor(),
+            topic_args(Some(&"a".repeat(513))),
+            Some(context),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, rim_services::ServiceError::Validation(m) if m.contains("512")),
+            "{err:?}"
+        );
+    }
+
+    /// Without a `topic` arg nothing is changed: clearing takes an explicit empty topic.
+    #[tokio::test]
+    async fn set_topic_without_a_topic_is_validation() {
+        let mut conv = MockConversationService::new();
+        conv.expect_update_topic().never();
+        let svc = make_services(conv);
+        let ws = ServerId::new();
+        let context = CommandContextDto {
+            conversation_id: Some(ConversationId::new()),
+            ..ctx_with(ws)
+        };
+        let err = super::set_topic(&svc, actor(), topic_args(None), Some(context))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, rim_services::ServiceError::Validation(m) if m.contains("topic")),
+            "{err:?}"
+        );
+    }
+
+    /// The service's refusal of a member who may not change a channel's topic reaches the
+    /// caller unchanged.
+    #[tokio::test]
+    async fn set_topic_passes_the_services_refusal_through() {
+        let mut conv = MockConversationService::new();
+        conv.expect_update_topic().times(1).returning(|_| {
+            Box::pin(async {
+                Err(rim_services::ServiceError::Forbidden(
+                    "only the owner and moderators change a channel's topic".to_string(),
+                ))
+            })
+        });
+        let svc = make_services(conv);
+        let ws = ServerId::new();
+        let context = CommandContextDto {
+            conversation_id: Some(ConversationId::new()),
+            ..ctx_with(ws)
+        };
+        let err = super::set_topic(&svc, actor(), topic_args(Some("news")), Some(context))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, rim_services::ServiceError::Forbidden(_)),
+            "{err:?}"
+        );
+    }
+
+    /// Without a conversation arg or a focused conversation the command is refused.
+    #[tokio::test]
+    async fn set_topic_without_a_conversation_is_validation() {
+        let mut conv = MockConversationService::new();
+        conv.expect_update_topic().never();
+        let svc = make_services(conv);
+        let err = super::set_topic(
+            &svc,
+            actor(),
+            topic_args(Some("news")),
+            Some(ctx_with(ServerId::new())),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, rim_services::ServiceError::Validation(m) if m.contains("context.conversation_id")),
+            "{err:?}"
+        );
     }
 }
