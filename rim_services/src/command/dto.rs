@@ -177,12 +177,37 @@ pub struct CommandResultDto {
     pub confirmation_required: Option<ConfirmationChallengeDto>,
 }
 
+/// One step of a macro: the command it runs, the arguments fixed for it and the names of the
+/// arguments the client asks for when the macro runs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserCommandStepDto {
     pub command_id: String,
     pub args: Option<serde_json::Value>,
+    /// Argument names the client asks the person for before the macro's first step runs.
+    pub ask: Vec<String>,
 }
 
+/// One step of a macro as an update gives it: an omitted `ask` keeps what the stored step at the
+/// same position asked for when that step names the same command.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdateUserCommandStepDto {
+    pub command_id: String,
+    pub args: Option<serde_json::Value>,
+    pub ask: Option<Vec<String>>,
+}
+
+impl From<UserCommandStepDto> for UpdateUserCommandStepDto {
+    /// The step with its `ask` given, so an update asks for exactly those arguments.
+    fn from(step: UserCommandStepDto) -> Self {
+        Self {
+            command_id: step.command_id,
+            args: step.args,
+            ask: Some(step.ask),
+        }
+    }
+}
+
+/// A macro, a person's own command, as its owner saved it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserCommandDto {
     pub id: UserCommandId,
@@ -191,6 +216,12 @@ pub struct UserCommandDto {
     pub description: String,
     pub steps: Vec<UserCommandStepDto>,
     pub is_enabled: bool,
+    /// Whether the owner lets the AI agent run the macro.
+    pub ai_callable: bool,
+    /// How the macro is described to the AI agent; empty for none.
+    pub nl_description: String,
+    /// Example phrases for the AI agent.
+    pub intent_samples: Vec<String>,
 }
 
 impl CommandDefinitionDto {
@@ -234,53 +265,73 @@ impl CommandDefinitionDto {
     }
 }
 
+/// What the steps of a macro add up to, as the resolver derives them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserCommandCompositionDto {
+    /// `Backend` when the server runs every step and no step asks for an argument.
+    pub execution_target: CommandExecutionTargetDto,
+    pub required_context: Vec<String>,
+    pub required_capabilities: Vec<String>,
+    /// Whether every step's command may be named by a keybind.
+    pub keybind_capable: bool,
+    /// Whether any step is dangerous.
+    pub dangerous: bool,
+    pub step_sensitivities: Vec<CommandSensitivityDto>,
+    /// Whether the AI agent may run a macro with these steps: each a builtin the server runs,
+    /// with every argument fixed.
+    pub agent_runnable: bool,
+}
+
 impl UserCommandDto {
+    /// The macro's definition with nothing known of its steps: run by the server, keybind-capable,
+    /// `Safe`, and not callable by the AI agent.
     pub fn as_command_definition(&self) -> CommandDefinitionDto {
-        self.as_command_definition_with_metadata(
-            CommandExecutionTargetDto::Backend,
-            vec![],
-            vec![],
-            true,
-            false,
-            &[],
-        )
+        self.as_command_definition_with_metadata(UserCommandCompositionDto {
+            execution_target: CommandExecutionTargetDto::Backend,
+            required_context: vec![],
+            required_capabilities: vec![],
+            keybind_capable: true,
+            dangerous: false,
+            step_sensitivities: vec![],
+            agent_runnable: false,
+        })
     }
 
-    /// The command's definition given what its steps resolve to; its sensitivity is the
-    /// highest of its steps'.
+    /// The macro's definition given what its steps add up to: in category `Macro`, its
+    /// sensitivity the highest of its steps', callable by the AI agent when its owner allows it
+    /// and its steps still let the agent run it, and described to the agent by its
+    /// natural-language description, or its description when that is empty.
     pub fn as_command_definition_with_metadata(
         &self,
-        execution_target: CommandExecutionTargetDto,
-        required_context: Vec<String>,
-        required_capabilities: Vec<String>,
-        keybind_capable: bool,
-        dangerous: bool,
-        step_sensitivities: &[CommandSensitivityDto],
+        composition: UserCommandCompositionDto,
     ) -> CommandDefinitionDto {
         let sensitivity = CommandSensitivityDto::effective(
-            CommandSensitivityDto::from_dangerous_flag(dangerous),
-            step_sensitivities,
+            CommandSensitivityDto::from_dangerous_flag(composition.dangerous),
+            &composition.step_sensitivities,
         );
+        let nl_description = if self.nl_description.trim().is_empty() {
+            self.description.clone()
+        } else {
+            self.nl_description.clone()
+        };
         CommandDefinitionDto {
             id: self.command_key.clone(),
             title: self.title.clone(),
             description: self.description.clone(),
-            category: "User".to_string(),
+            category: "Macro".to_string(),
             source_kind: CommandSourceKindDto::User,
-            execution_target,
+            execution_target: composition.execution_target,
             arguments: vec![],
-            required_context,
-            required_capabilities,
+            required_context: composition.required_context,
+            required_capabilities: composition.required_capabilities,
             visible_in_palette: true,
             visible_in_context_menus: false,
-            keybind_capable,
-            dangerous,
+            keybind_capable: composition.keybind_capable,
+            dangerous: composition.dangerous,
             user_command_id: Some(self.id),
-            // User-defined commands are never AI-callable; macros reach the
-            // agent through their own synthesized definitions.
-            nl_description: None,
-            intent_samples: vec![],
-            ai_callable: false,
+            nl_description: Some(nl_description).filter(|text| !text.is_empty()),
+            intent_samples: self.intent_samples.clone(),
+            ai_callable: self.ai_callable && composition.agent_runnable,
             sensitivity,
             typed_verb: TypedVerb::Other,
             rate_limit_per_minute: None,

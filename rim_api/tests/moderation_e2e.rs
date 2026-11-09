@@ -2753,8 +2753,8 @@ async fn every_command_root_refuses_an_anonymous_caller() {
 }
 
 /// User commands are per account: another member and the workspace owner see no command of
-/// bob's (`NOT_FOUND`) and may name their own command the same, and a step may name only the
-/// caller's own user commands.
+/// bob's (`NOT_FOUND`) and may name their own command the same, and a new one may not name
+/// bob's as a step.
 #[tokio::test]
 async fn a_user_command_belongs_to_its_creator_alone() {
     let f = setup().await;
@@ -2775,7 +2775,7 @@ async fn a_user_command_belongs_to_its_creator_alone() {
     .await;
     assert_eq!(
         (code.as_str(), message.as_str()),
-        ("VALIDATION", "unknown command step `user.greet`")
+        ("VALIDATION", "macro steps must not reference other macros")
     );
 
     let theirs = exec_ok(

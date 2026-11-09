@@ -23,6 +23,9 @@ pub(crate) struct MacroMutations;
 impl MacroMutations {
     // ── Macros ──────────────────────────────────────────────────────────
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn create_macro(&self, ctx: &Context<'_>, input: CreateMacroInput) -> Result<MacroDef> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
@@ -52,6 +55,9 @@ impl MacroMutations {
         Ok(result.into())
     }
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn update_macro(&self, ctx: &Context<'_>, input: UpdateMacroInput) -> Result<MacroDef> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
@@ -81,6 +87,9 @@ impl MacroMutations {
         Ok(result.into())
     }
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn delete_macro(&self, ctx: &Context<'_>, macro_id: ID) -> Result<bool> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
@@ -95,6 +104,9 @@ impl MacroMutations {
         Ok(true)
     }
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn execute_macro(
         &self,
         ctx: &Context<'_>,

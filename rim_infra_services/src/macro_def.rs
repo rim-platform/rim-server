@@ -16,21 +16,17 @@ use rim_services::command::bounds::{
 use rim_services::command::confirmation::{
     ConfirmationProof, ConfirmationStore, issue_in_band, verify_in_band,
 };
-use rim_services::command::dto::{
-    CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto, CommandResultStatusDto,
-    CommandSourceKindDto,
-};
+use rim_services::command::dto::{CommandDefinitionDto, CommandResultDto, CommandResultStatusDto};
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{ExecuteCommandCmd, GetCommandQuery};
 use rim_services::command::sanitize::{MAX_INTENT_SAMPLE_LEN, MAX_NL_DESCRIPTION_LEN};
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::service::CommandService;
-use rim_services::command::verb::TypedVerb;
 use rim_services::limits::{InstanceLimits, ensure_below, member_share};
 use rim_services::macro_def::dto::{MacroDto, MacroStepDto};
 use rim_services::macro_def::request::{
     CreateMacroCmd, DeleteMacroCmd, ExecuteMacroCmd, GetMacroByNameQuery, ListUserMacrosQuery,
-    SynthesizeMacroCommandsQuery, UpdateMacroCmd,
+    UpdateMacroCmd,
 };
 use rim_services::macro_def::service::MacroService;
 use rim_services::{ServiceError, ServiceResult};
@@ -802,55 +798,6 @@ impl MacroService for DefaultMacroService {
             confirmation_required: None,
         })
     }
-
-    async fn synthesize_command_definitions(
-        &self,
-        query: SynthesizeMacroCommandsQuery,
-    ) -> ServiceResult<Vec<CommandDefinitionDto>> {
-        let macros = self
-            .repos
-            .macro_repo
-            .list_for_user(query.server_id, query.actor.user_id)
-            .await?;
-
-        let defs = macros
-            .into_iter()
-            .filter(|m| m.ai_callable)
-            .map(|m| {
-                let sensitivity = CommandSensitivityDto::from(m.sensitivity.as_str());
-                let nl_desc = if m.nl_description.is_empty() {
-                    m.description.clone().unwrap_or_default()
-                } else {
-                    m.nl_description.clone()
-                };
-                let intent_samples: Vec<String> = m.intent_samples.clone();
-                CommandDefinitionDto {
-                    id: format!("macro.{}", m.id),
-                    title: m.name.clone(),
-                    description: m.description.clone().unwrap_or_default(),
-                    category: "Macro".to_string(),
-                    source_kind: CommandSourceKindDto::User,
-                    execution_target: CommandExecutionTargetDto::Backend,
-                    arguments: vec![],
-                    required_context: vec![],
-                    required_capabilities: vec![],
-                    visible_in_palette: false,
-                    visible_in_context_menus: false,
-                    keybind_capable: false,
-                    dangerous: false,
-                    user_command_id: None,
-                    nl_description: Some(nl_desc),
-                    intent_samples,
-                    ai_callable: true,
-                    sensitivity,
-                    typed_verb: TypedVerb::Other,
-                    rate_limit_per_minute: None,
-                }
-            })
-            .collect();
-
-        Ok(defs)
-    }
 }
 
 /// The reason a failed step gives in the macro's answer: the message a caller of the
@@ -872,8 +819,10 @@ mod tests {
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
     use rim_services::Actor;
+    use rim_services::command::dto::{CommandExecutionTargetDto, CommandSourceKindDto};
     use rim_services::command::sensitivity::CommandSensitivityDto;
     use rim_services::command::service::MockCommandService;
+    use rim_services::command::verb::TypedVerb;
 
     use async_trait::async_trait;
     use rim_core::macro_def::repository::MacroRepository;

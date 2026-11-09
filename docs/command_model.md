@@ -624,7 +624,7 @@ judges the macro as a whole, so a `Mutating` or dangerous step makes the call ne
 confirmation once, and the run counts as one call against the agent's limits. A macro on
 another server, or in a workspace hosted elsewhere, is not offered to the agent. `executeCommand`
 with initiator `AGENT` refuses a macro that is not agent-callable, or no longer meets the rule,
-with `PERMISSION_DENIED` (refusal `DENIED`).
+with `FORBIDDEN` (refusal `DENIED`).
 
 ### Workspace macros, deprecated
 

@@ -9,7 +9,7 @@ use super::dispatch::Dispatch;
 impl Dispatch {
     /// Every command the dispatch reaches: the single command, or each pipe stage that names
     /// one.
-    fn definitions(&self) -> Vec<&CommandDefinitionDto> {
+    pub(super) fn definitions(&self) -> Vec<&CommandDefinitionDto> {
         match self {
             Self::Single(resolved) => resolved.iter().map(|r| &r.definition).collect(),
             Self::Pipe(stages) => stages

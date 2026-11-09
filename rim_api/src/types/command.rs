@@ -238,14 +238,21 @@ impl From<rim_services::command::dto::CommandDefinitionDto> for Command {
     }
 }
 
-/// One step of a user command: the command it runs and the arguments it passes.
+/// One step of a macro: the command it runs, the arguments fixed for it and the arguments the
+/// client asks for when the macro runs.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct UserCommandStep {
+    /// A built-in, app or plugin command id, or on a macro saved before steps could name app
+    /// and plugin commands, another macro.
     pub command_id: String,
     pub args: Option<async_graphql::Json<serde_json::Value>>,
+    /// Names of the arguments the client asks the person for before the first step runs;
+    /// empty when the step asks for none.
+    pub ask: Vec<String>,
 }
 
-/// A user command as its owner saved it, in the shape `updateUserCommand` takes.
+/// A macro, the person's own command, as its owner saved it, in the shape `updateUserCommand`
+/// takes.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct UserCommand {
     /// The command id, `user.<key>`, the same as the listed `Command.id`.
@@ -256,6 +263,13 @@ pub struct UserCommand {
     pub steps: Vec<UserCommandStep>,
     /// `false` while the command is disabled; a disabled command is not listed by `commands`.
     pub is_enabled: bool,
+    /// Whether the owner lets the AI agent run the macro. The agent runs it only while every
+    /// step is a built-in the server runs, with every argument fixed.
+    pub ai_callable: bool,
+    /// How the macro is described to the AI agent; empty when its description serves.
+    pub nl_description: String,
+    /// Example phrases for the AI agent.
+    pub intent_samples: Vec<String>,
 }
 
 impl From<rim_services::command::dto::UserCommandDto> for UserCommand {
@@ -270,9 +284,13 @@ impl From<rim_services::command::dto::UserCommandDto> for UserCommand {
                 .map(|step| UserCommandStep {
                     command_id: step.command_id,
                     args: step.args.map(async_graphql::Json),
+                    ask: step.ask,
                 })
                 .collect(),
             is_enabled: value.is_enabled,
+            ai_callable: value.ai_callable,
+            nl_description: value.nl_description,
+            intent_samples: value.intent_samples,
         }
     }
 }

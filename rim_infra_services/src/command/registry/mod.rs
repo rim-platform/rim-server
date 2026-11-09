@@ -16,7 +16,9 @@ use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::CommandDefinitionDto;
 use rim_services::command::sanitize::sanitize_command_ai_fields;
 
-pub(crate) use app_commands::{APP_COMMANDS, app_command};
+#[cfg(test)]
+pub(crate) use app_commands::AGENT_MANAGEMENT_COMMANDS;
+pub(crate) use app_commands::{APP_COMMANDS, AppCommand, app_command, is_agent_management_command};
 
 pub(crate) fn builtin_commands() -> Vec<CommandDefinitionDto> {
     let mut defs = builtin_commands_raw();

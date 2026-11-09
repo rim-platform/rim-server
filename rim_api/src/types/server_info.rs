@@ -33,6 +33,7 @@ pub const CAPABILITIES: &[&str] = &[
     "webhook_test_sessions",
     "home_layout",
     "app_command_keybinds",
+    "account_macros",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.

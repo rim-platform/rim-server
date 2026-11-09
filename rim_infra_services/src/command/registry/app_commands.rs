@@ -548,6 +548,26 @@ impl AppCommand {
     }
 }
 
+/// The app commands that approve, refuse or manage an outside agent: no macro step and no
+/// plugin runs one.
+pub(crate) const AGENT_MANAGEMENT_COMMANDS: &[&str] = &[
+    "agents.approve_request",
+    "agents.refuse_request",
+    "agents.approve_pairing",
+    "agents.refuse_pairing",
+    "agents.disconnect",
+    "agents.choose_reads",
+    "agents.choose_plugin_commands",
+    "agents.open_runs",
+    "agents.open_record",
+    "agents.clear_record",
+];
+
+/// Whether `command_id` is one of [`AGENT_MANAGEMENT_COMMANDS`].
+pub(crate) fn is_agent_management_command(command_id: &str) -> bool {
+    AGENT_MANAGEMENT_COMMANDS.contains(&command_id)
+}
+
 /// The definition of the app command `command_id`, or `None` when it names none.
 pub(crate) fn app_command(command_id: &str) -> Option<CommandDefinitionDto> {
     APP_COMMANDS
@@ -640,6 +660,22 @@ mod tests {
                 command.id
             );
         }
+    }
+
+    /// Every agent-management id is an app command in category Agents.
+    #[test]
+    fn agent_management_commands_are_app_commands() {
+        assert_eq!(AGENT_MANAGEMENT_COMMANDS.len(), 10);
+        for id in AGENT_MANAGEMENT_COMMANDS {
+            let definition = app_command(id).unwrap_or_else(|| panic!("{id} is an app command"));
+            assert_eq!(definition.category, category::AGENTS, "{id}");
+        }
+        for id in AGENT_APPROVAL_IDS {
+            assert!(is_agent_management_command(id), "{id}");
+        }
+        assert!(!is_agent_management_command(
+            "agents.allow_in_encrypted_conversation"
+        ));
     }
 
     /// The approval ids are app commands in category Agents: never a builtin the server lists,
