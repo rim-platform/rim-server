@@ -503,7 +503,7 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     ),
     app(
         "agents.choose_plugin_commands",
-        "Choose an Agent's Plugin Commands…",
+        "Choose an Agent's Commands…",
         category::AGENTS,
     ),
     app("agents.open_runs", "Open Agent Runs", category::AGENTS),

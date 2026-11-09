@@ -102,6 +102,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   `workspace.navigate_to_dm` declares its required `conversation_id`, and `chat.report_message`
   takes an optional `message_id` that falls back to the selected message, so the agent can name
   the message it reports.
+- `workspace.open_marketplace` is titled Browse Plugins in place of Open Marketplace, and says it
+  opens Settings > Plugins; its id and keybind stay (`docs/command_model.md`).
 - **Upgrade:** a migration adds the column `command_audit_log.run_id` and the index
   `idx_command_audit_log_actor_run_id`; on a large `command_audit_log` table, writes to it wait while
   the index is built.
