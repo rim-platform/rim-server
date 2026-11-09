@@ -12,8 +12,8 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 use crate::command::CommandServices;
 
 use super::{
-    optional_integer_arg, optional_string_arg, require_string_arg, resolve_conversation_id,
-    resolve_workspace_id,
+    optional_integer_arg, optional_string_arg, relative_minutes_arg, require_string_arg,
+    resolve_conversation_id, resolve_workspace_id,
 };
 
 /// Longest `notifications.dnd` pause given in minutes (7 days).
@@ -149,12 +149,19 @@ enum MuteEnd {
     Never,
 }
 
-/// `duration` = `1h` | `8h` | `until_tomorrow` | `forever` | `until` (with `until` RFC 3339, in
-/// the future). `until` is refused with any other duration.
+/// Longest mute `notifications.mute_conversation` accepts as `minutes`: one year.
+const MAX_MUTE_MINUTES: i64 = 365 * 24 * 60;
+
+/// `minutes` from now when given, whatever `duration` and `until` say; otherwise `duration` =
+/// `1h` | `8h` | `until_tomorrow` | `forever` | `until` (with `until` RFC 3339, in the future).
+/// `until` is refused with any other duration.
 fn parse_mute_end(
     args: &serde_json::Map<String, Value>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> ServiceResult<MuteEnd> {
+    if let Some(minutes) = relative_minutes_arg(args, MAX_MUTE_MINUTES)? {
+        return Ok(MuteEnd::At(now + chrono::Duration::minutes(minutes)));
+    }
     let duration = require_string_arg(args, "duration")?
         .trim()
         .to_ascii_lowercase();
@@ -598,7 +605,18 @@ mod tests {
                 .ok(),
             Some(MuteEnd::At(at("2030-01-02T07:00:00Z")))
         );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": 45 })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T12:45:00Z")))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": "45", "duration": "forever", "until": "x" })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T12:45:00Z")))
+        );
         for bad in [
+            serde_json::json!({ "minutes": 0 }),
+            serde_json::json!({ "minutes": 525_601 }),
+            serde_json::json!({ "minutes": "soon" }),
             serde_json::json!({}),
             serde_json::json!({ "duration": "2h" }),
             serde_json::json!({ "duration": "until" }),

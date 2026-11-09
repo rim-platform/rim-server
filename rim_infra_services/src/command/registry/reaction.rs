@@ -55,7 +55,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "emoji".to_string(),
                     title: "Emoji".to_string(),
-                    description: "Unicode emoji or shortcode for the reaction.".to_string(),
+                    description: "An emoji, or a custom emoji as :name:.".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: true,
                     default_value: None,

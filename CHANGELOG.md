@@ -115,9 +115,18 @@ tag `v<version>`, the version every crate in the workspace carries.
   confirmation only for dangerous and `Restricted` commands, and the audit log shows it as `ui`
   (`docs/command_model.md`, Invocation Sources). Listed in `serverInfo.capabilities` as
   `command_initiator_ui`.
+- `admin.ban` and `notifications.mute_conversation` take an optional `minutes`, so macros and
+  agents can ban or mute for a number of minutes from now; `notifications.mute_conversation` no
+  longer needs `duration` when `minutes` is given. Listed in `serverInfo.capabilities` as
+  `command_relative_minutes` (`docs/command_model.md`).
 
 ### Changed
 
+- `state.set` `ttl`, `state.incr` `delta` and `state.list` `limit` are numbers, and numeric
+  strings still work; so do the `limit` of `chat.search_messages` and `chat.get_recent_messages`.
+  `admin.invite_member` no longer asks for a person it never used (a `user_id` is ignored), and
+  command titles and descriptions say "Workspace" and use plainer words (`Pause Notifications`
+  for do not disturb).
 - The timeout gate of `executeCommand` lets a timed-out member run the commands that change only
   their own state, as the GraphQL mutations do: `chat.mark_as_read`, `chat.mark_as_unread`,
   `chat.leave_conversation` and every `notifications.*` command, and a macro whose steps are all

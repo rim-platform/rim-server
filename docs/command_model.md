@@ -179,7 +179,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | Id | Args | AI-callable | Dangerous | Notes |
 |---|---|---|---|---|
 | `admin.kick` | `server_id`, `user_id`, `reason?` | no | yes | Owner/Moderator; confirmation required |
-| `admin.ban` | `server_id`, `user_id`, `reason?`, `expires_at?` (RFC 3339) | no | yes | Owner/Moderator; confirmation required |
+| `admin.ban` | `server_id`, `user_id`, `reason?`, `expires_at?` (RFC 3339), `minutes?` (integer, 1 to 5256000) | no | yes | Owner/Moderator; confirmation required. `minutes` ends the ban that many minutes from now and wins over `expires_at`; a value outside 1 to 5256000 (ten years) is `VALIDATION`. With neither, the ban lasts until it is lifted |
 | `admin.unban` | `server_id`, `user_id` | no | no | Owner/Moderator |
 | `admin.timeout` | `server_id`, `user_id`, `minutes` (1..=43200), `reason?` | yes | no | Owner/Moderator |
 | `admin.clear_timeout` | `server_id`, `user_id` | yes | no | Mirrors `clearTimeout`: Owner/Moderator, with the targeting rules of `admin.timeout`. Category Moderation; palette, offered to Owners and Moderators, and keybind. Clearing a timeout in force is audited and emits `MemberTimeoutChanged`; clearing none succeeds and changes nothing. Payload `{user_id, cleared}` |
@@ -201,9 +201,9 @@ the GraphQL mutations allow (Timeout gate), and they write no command audit row 
 | Id | Args | AI-callable | Dangerous | Notes |
 |---|---|---|---|---|
 | `notifications.set_level` | `server_id`, `conversation_id`, `level` (`all`/`mentions`/`none`/`default`) | yes | no | `default` clears the override; `conversation_id` falls back to the focused conversation. Payload `{conversation_id, level, effective_level}` |
-| `notifications.dnd` | `server_id`, `mode` (`on`/`off`/`until`), `until?` (RFC 3339), `minutes?` (1..=10080) | yes | no | The manual do-not-disturb pause (separate from the daily window); `until` mode needs `until` or `minutes`. Payload `{paused, until}` |
+| `notifications.dnd` | `server_id`, `mode` (`on`/`off`/`until`), `until?` (RFC 3339), `minutes?` (1..=10080) | yes | no | Title Pause Notifications. The manual do-not-disturb pause (separate from the daily window); `until` mode needs `until` or `minutes`. Payload `{paused, until}` |
 | `notifications.mark_all_read` | `server_id` | yes | no | Marks every notification of the workspace read (not the conversations' unread counts). Payload `{marked}` |
-| `notifications.mute_conversation` | `server_id`, `conversation_id`, `duration` (`1h`/`8h`/`until_tomorrow`/`forever`/`until`), `until?` (RFC 3339) | yes | no | Title Mute Conversation…. Mirrors `muteConversation`; `conversation_id` falls back to the focused conversation. `1h` and `8h` count from now. `until_tomorrow` ends at 09:00 tomorrow in the timezone of the caller's daily do-not-disturb window in this workspace, or in UTC when they have none: the server knows no other timezone of theirs. `until` ends at the `until` time, which must be in the future, and `until` with another duration is `VALIDATION`; a client that knows the person's timezone sends it to end the mute at 09:00 their time. `forever` is `muteConversation` without `mutedUntil`: level `none` with no end. Payload `{conversation_id, muted_until}` (`muted_until` null for `forever`) |
+| `notifications.mute_conversation` | `server_id`, `conversation_id`, `duration?` (`1h`/`8h`/`until_tomorrow`/`forever`/`until`), `until?` (RFC 3339), `minutes?` (integer, 1 to 525600) | yes | no | Title Mute Conversation…. Mirrors `muteConversation`; `conversation_id` falls back to the focused conversation. `minutes` ends the mute that many minutes from now whatever `duration` and `until` say, and a value outside 1 to 525600 is `VALIDATION`; without `minutes`, `duration` is required. `1h` and `8h` count from now. `until_tomorrow` ends at 09:00 tomorrow in the timezone of the caller's daily do-not-disturb window in this workspace, or in UTC when they have none: the server knows no other timezone of theirs. `until` ends at the `until` time, which must be in the future, and `until` with another duration is `VALIDATION`; a client that knows the person's timezone sends it to end the mute at 09:00 their time. `forever` is `muteConversation` without `mutedUntil`: level `none` with no end. Payload `{conversation_id, muted_until}` (`muted_until` null for `forever`) |
 | `notifications.unmute_conversation` | `server_id`, `conversation_id` | yes | no | Mirrors `unmuteConversation`: ends a timed mute and clears a `none` level; `conversation_id` falls back to the focused conversation. Unmuting a conversation that is not muted succeeds. Payload `{conversation_id}` |
 
 General builtins the agent may call. None declares a new capability. The navigation
@@ -221,9 +221,9 @@ per-turn mutating-call cap. Palette and keybind still run them in one step.
 |---|---|---|---|---|
 | `workspace.open_search`, `workspace.search_in_channel`, `workspace.open_marketplace`, `workspace.toggle_sidebar`, `workspace.previous_channel`, `workspace.next_channel`, `workspace.next_unread_channel`, `workspace.close_panel`, `workspace.reopen_last_thread`, `chat.scroll_to_bottom`, `chat.scroll_to_top` | none | `Safe` | no | `DesktopLocal`, run by the client |
 | `state.get` | `server_id`, `key`, `scope?` | `Safe` | no | Read |
-| `state.list` | `server_id`, `prefix?`, `scope?`, `limit?` | `Safe` | no | Read |
-| `state.set` | `server_id`, `key`, `value`, `scope?`, `ttl?` | `Mutating` | yes | |
-| `state.incr` | `server_id`, `key`, `delta?`, `scope?` | `Mutating` | yes | |
+| `state.list` | `server_id`, `prefix?`, `scope?`, `limit?` (integer) | `Safe` | no | Read |
+| `state.set` | `server_id`, `key`, `value`, `scope?`, `ttl?` (integer seconds) | `Mutating` | yes | |
+| `state.incr` | `server_id`, `key`, `delta?` (integer), `scope?` | `Mutating` | yes | The numbers `ttl`, `delta` and `limit` may also arrive as numeric strings |
 | `state.delete` | `server_id`, `key`, `scope?` | `Mutating` | yes | |
 | `chat.mark_as_read` | `server_id`, `conversation_id` | `Mutating` | yes | `conversation_id` falls back to the focused conversation |
 | `chat.create_group` | `server_id`, `member_ids`, `title?` | `Mutating` | yes | `member_ids` is a JSON array or one comma-separated string |
@@ -944,6 +944,12 @@ A client sends `UI` only to a server whose `serverInfo.capabilities` lists `comm
 to an older server it omits the initiator, which that server records as `palette`. The initiator
 is the client's word: the server does not check where a call came from. Only the bot API sets
 `BOT`, which GraphQL has no value for.
+
+`admin.ban` and `notifications.mute_conversation` take a `minutes` argument that ends the ban or
+mute that many minutes from now. A server that lacks it ignores the argument, so a client offers
+a duration only to a server whose `serverInfo.capabilities` lists `command_relative_minutes`.
+`admin.invite_member` takes only the workspace: it creates a one-use invite link, and a `user_id`
+sent by an older caller is ignored.
 
 ## Who Can Run Commands
 
