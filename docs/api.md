@@ -768,7 +768,10 @@ each list.
   `webhookTestDeliveries`, `CreateIncomingWebhookInput.testSessionId` and
   `CreatedIncomingWebhook.keptTestUrl`; `home_layout`: `HomeLayout`, `HomeLayoutSaved`,
   `homeLayout`, `saveHomeLayout` and `resetHomeLayout`; `app_command_keybinds`: `createKeybind`
-  and `updateKeybind` accept app command ids, `command_model.md` App Commands). A client asks
+  and `updateKeybind` accept app command ids, `command_model.md` App Commands; `account_macros`:
+  macro steps naming app and plugin commands, `UserCommandStep.ask`, `UserCommand.aiCallable`,
+  `UserCommand.nlDescription`, `UserCommand.intentSamples`, the same fields of the user command
+  inputs, and `macroStepCommands`, Macros below). A client asks
   for such a field, or sends such a value, only when its name is listed, so it keeps working
   against older servers; it ignores names it does not know.
 
@@ -1036,3 +1039,25 @@ need the CSRF header.
 A person from another server gets `FORBIDDEN` from all three. The mutations count against
 `RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` like any other and write no audit entry. Present when
 `serverInfo.capabilities` lists `home_layout`.
+
+### Macros
+
+A person's macros are their own commands, kept with their account on their home server
+(`command_model.md`, Commands And Macros, has the rules). The API keeps the name user command.
+Each root needs a session; the mutations need the CSRF header. Present when
+`serverInfo.capabilities` lists `account_macros`; an older server has the roots below without
+the new fields and accepts only steps naming built-ins the server runs.
+
+| Root | Does |
+|---|---|
+| `userCommands: [UserCommand!]!`, `userCommand(id: String!): UserCommand` | The caller's macros, enabled or not, with `aiCallable`, `nlDescription`, `intentSamples` and steps `{ commandId, args, ask }`. |
+| `createUserCommand(input: CreateUserCommandInput!): Command!` | Creates a macro. `aiCallable` defaults to false; `nlDescription` and `intentSamples` default to empty; a step's `ask` defaults to none. |
+| `updateUserCommand(input: UpdateUserCommandInput!): Command!` | Replaces a macro's title, description, steps and `isEnabled`. An omitted `aiCallable`, `nlDescription` or `intentSamples` keeps the stored value, and an omitted step `ask` keeps what the stored step at the same position asked for when it names the same command. |
+| `deleteUserCommand(input: DeleteUserCommandInput!): Boolean!` | Deletes a macro. |
+| `macroStepCommands: [Command!]!` | Every built-in and app command a macro step may name, sorted by id, whatever the caller's role and workspace: the built-ins the server lists, the ones the client runs included, and the app commands, without the agent-management ones. Plugin commands are not in it. |
+
+`createMacro`, `updateMacro`, `deleteMacro`, `executeMacro`, `myMacros` and `macroByName`, the
+workspace macros, are deprecated in the schema and keep working; a client moves their macros
+into the person's macros once (`command_model.md`, Workspace macros, deprecated). `commands` on
+the `AI` surface and `commandDiscover` no longer list workspace macros as `macro.<id>`; they
+list the caller's agent-callable macros as `user.<key>`.
