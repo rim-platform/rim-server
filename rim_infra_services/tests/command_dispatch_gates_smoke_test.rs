@@ -148,6 +148,9 @@ fn build_service(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -188,6 +191,9 @@ fn build_service_with_audit(
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: Some(
                 Arc::new(audit_service) as Arc<dyn rim_services::audit::service::AuditLogService>
+            ),
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
             ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),

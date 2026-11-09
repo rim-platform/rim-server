@@ -126,6 +126,7 @@ pub(crate) fn required_role(command_id: &str) -> RequiredRole {
         | "admin.ban"
         | "admin.unban"
         | "admin.timeout"
+        | "admin.clear_timeout"
         | "admin.set_role"
         | "admin.delete_member_messages"
         | "chat.set_slow_mode"
@@ -247,8 +248,10 @@ mod tests {
     fn collect_ai_callable_inventory_matches_reviewed_set() {
         // The builtins the agent may call. Every one is authorized by the service behind it, so
         // the agent gains no access the user does not already have. Membership, moderation and
-        // notification commands are gated by `ConversationService`, `ModerationService` and
-        // `NotificationService`; the desktop-local navigation commands run on the client; every
+        // notification commands are gated by `ConversationService`, `ModerationService`,
+        // `NotificationService` and `NotificationPreferenceService`; pins and topics by
+        // `PinService` and `ConversationService`; the desktop-local navigation commands run on
+        // the client; every
         // agent write is Mutating and therefore confirmation-gated. Left out on purpose:
         // `chat.remove_conversation_member`, `admin.kick`, `admin.ban`, `admin.unban` and
         // `admin.set_role` (dangerous); the commands that act on the user's selected message
@@ -277,6 +280,8 @@ mod tests {
             "chat.search_messages",
             "chat.get_recent_messages",
             "chat.pin_message",
+            "chat.unpin_message",
+            "chat.set_topic",
             "chat.toggle_reaction",
             "chat.join_channel",
             "chat.leave_conversation",
@@ -286,10 +291,13 @@ mod tests {
             "chat.set_slow_mode",
             "chat.set_channel_posting",
             "admin.timeout",
+            "admin.clear_timeout",
             "chat.report_message",
             "notifications.set_level",
             "notifications.dnd",
             "notifications.mark_all_read",
+            "notifications.mute_conversation",
+            "notifications.unmute_conversation",
             "workspace.open_search",
             "workspace.search_in_channel",
             "workspace.open_marketplace",

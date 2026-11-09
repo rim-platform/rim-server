@@ -432,6 +432,7 @@ impl DefaultAppServiceProvider {
             user_service: Arc::clone(&user_service),
             workspace_state_service: Arc::clone(&workspace_state_service),
             audit_log_service: Some(Arc::clone(&audit_log_service)),
+            notification_preference_service: Arc::clone(&notification_preference_service),
             moderation_service: Arc::clone(&moderation_service),
             notification_service: Arc::clone(&notification_service),
         };

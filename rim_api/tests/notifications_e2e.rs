@@ -1763,3 +1763,230 @@ async fn the_mark_as_unread_command_rewinds_the_marker() {
         Some(2)
     );
 }
+
+/// The caller's mute of #general as `mutedConversations` reports it: `None` when not muted,
+/// else its `mutedUntil` (null for a mute without an end).
+async fn general_mute(f: &Fixture, who: &Caller) -> Option<Value> {
+    let data = exec_ok(&f.schema, who.request(MUTED, json!({ "s": f.server_id }))).await;
+    data["muted"]
+        .as_array()
+        .expect("muted")
+        .iter()
+        .find(|m| m["conversationId"] == json!(f.general))
+        .map(|m| m["mutedUntil"].clone())
+}
+
+/// `notifications.mute_conversation` and `notifications.unmute_conversation` act on the focused
+/// conversation as `muteConversation` and `unmuteConversation` do, with no capability grant.
+#[tokio::test]
+async fn mute_commands_mute_and_unmute_the_focused_conversation() {
+    let f = setup().await;
+    let before = Utc::now();
+
+    let result = f
+        .execute(
+            &f.bob,
+            "notifications.mute_conversation",
+            json!({ "duration": "8h" }),
+            Some(&f.general),
+        )
+        .await;
+    assert_eq!(result["status"], "SUCCESS", "{result}");
+    let until = timestamp(&general_mute(&f, &f.bob).await.expect("muted"));
+    assert!((until - before - TimeDelta::hours(8)).num_minutes().abs() <= 1);
+    assert_eq!(
+        f.conversation_level(&f.bob, &f.general).await["isMuted"],
+        true
+    );
+    assert_eq!(general_mute(&f, &f.carol).await, None, "only bob's");
+
+    let result = f
+        .execute(
+            &f.bob,
+            "notifications.unmute_conversation",
+            json!({}),
+            Some(&f.general),
+        )
+        .await;
+    assert_eq!(result["status"], "SUCCESS", "{result}");
+    assert_eq!(general_mute(&f, &f.bob).await, None);
+
+    let result = f
+        .execute(
+            &f.bob,
+            "notifications.mute_conversation",
+            json!({ "duration": "forever", "conversation_id": f.general }),
+            None,
+        )
+        .await;
+    assert_eq!(result["payload"]["muted_until"], Value::Null, "{result}");
+    assert_eq!(general_mute(&f, &f.bob).await, Some(Value::Null));
+    let conv = f.conversation_level(&f.bob, &f.general).await;
+    assert_eq!(conv["notificationLevel"], "NONE");
+
+    let at = "2099-06-01T09:00:00+02:00";
+    f.execute(
+        &f.bob,
+        "notifications.mute_conversation",
+        json!({ "duration": "until", "until": at }),
+        Some(&f.general),
+    )
+    .await;
+    let until = timestamp(&general_mute(&f, &f.bob).await.expect("muted"));
+    assert_eq!(until, timestamp(&json!(at)));
+    let conv = f.conversation_level(&f.bob, &f.general).await;
+    assert_eq!(
+        conv["notificationLevel"],
+        Value::Null,
+        "a timed mute clears NONE"
+    );
+}
+
+/// `until_tomorrow` ends at 09:00 tomorrow in the timezone of the caller's daily
+/// do-not-disturb window, and in UTC without one.
+#[tokio::test]
+async fn mute_until_tomorrow_follows_the_do_not_disturb_timezone() {
+    let f = setup().await;
+    f.update_settings(
+        &f.carol,
+        json!({
+            "defaultLevel": "ALL", "keywords": [], "digest": "OFF",
+            "dnd": { "start": "22:00", "end": "07:00", "timezone": "Asia/Tokyo" },
+        }),
+    )
+    .await;
+    // Tokyo keeps UTC+9 all year.
+    let tokyo = chrono::FixedOffset::east_opt(9 * 3600).expect("offset");
+    let utc = chrono::FixedOffset::east_opt(0).expect("offset");
+    for (who, zone) in [(&f.carol, tokyo), (&f.bob, utc)] {
+        let before = Utc::now();
+        let result = f
+            .execute(
+                who,
+                "notifications.mute_conversation",
+                json!({ "duration": "until_tomorrow" }),
+                Some(&f.general),
+            )
+            .await;
+        assert_eq!(result["status"], "SUCCESS", "{result}");
+        let until = timestamp(&general_mute(&f, who).await.expect("muted"));
+        let local = until.with_timezone(&zone);
+        assert_eq!(local.format("%H:%M").to_string(), "09:00", "{zone}");
+        assert_eq!(
+            local.date_naive(),
+            before.with_timezone(&zone).date_naive() + chrono::Days::new(1),
+            "{zone}"
+        );
+    }
+}
+
+/// A bad duration, an `until` in the past and a conversation the caller cannot read are
+/// refused, and nothing is muted.
+#[tokio::test]
+async fn mute_commands_refuse_bad_input_and_unreadable_conversations() {
+    let f = setup().await;
+    let execute = |who: &Caller, args: Value, conversation: &str| {
+        who.request(
+            EXECUTE,
+            json!({
+                "commandId": "notifications.mute_conversation",
+                "args": args,
+                "context": { "workspaceId": f.server_id, "conversationId": conversation },
+            }),
+        )
+    };
+    for args in [
+        json!({ "duration": "2h" }),
+        json!({ "duration": "until", "until": "2001-01-01T00:00:00Z" }),
+        json!({ "duration": "1h", "until": "2099-01-01T00:00:00Z" }),
+    ] {
+        let code = exec_err_code(&f.schema, execute(&f.bob, args.clone(), &f.general)).await;
+        assert_eq!(code, "VALIDATION", "{args}");
+    }
+    assert_eq!(general_mute(&f, &f.bob).await, None);
+
+    let secret = create_channel(&f.schema, &f.alice, &f.server_id, "secret", true).await;
+    let code = exec_err_code(
+        &f.schema,
+        execute(&f.bob, json!({ "duration": "1h" }), &secret),
+    )
+    .await;
+    assert_eq!(code, "NOT_FOUND");
+}
+
+const TOPIC: &str = r#"
+query Topic($serverId: ID!, $conversationId: ID!) {
+  conversation(serverId: $serverId, conversationId: $conversationId) { topic }
+}
+"#;
+
+const PINNED: &str = r#"
+query Pinned($serverId: ID!, $conversationId: ID!) {
+  pinnedMessages(serverId: $serverId, conversationId: $conversationId) { id }
+}
+"#;
+
+/// `chat.set_topic` and `chat.unpin_message` keep the rules of `updateConversationTopic` and
+/// `unpinMessage`: a member changes neither a channel's topic nor someone else's pin, the owner
+/// does both, an empty topic clears it and a topic past 512 characters is refused.
+#[tokio::test]
+async fn topic_and_unpin_commands_keep_the_mutations_rules() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let topic = |who: &Caller, topic: &str| {
+        who.request(
+            EXECUTE,
+            json!({
+                "commandId": "chat.set_topic",
+                "args": { "topic": topic },
+                "context": { "workspaceId": f.server_id, "conversationId": f.general },
+            }),
+        )
+    };
+    let read_topic = || async {
+        exec_ok(&f.schema, f.bob.request(TOPIC, f.ids(&f.general))).await["conversation"]["topic"]
+            .clone()
+    };
+
+    let code = exec_err_code(&f.schema, topic(&f.bob, "mine now")).await;
+    assert_eq!(code, "FORBIDDEN");
+    let data = exec_ok(&f.schema, topic(&f.alice, "  Release week ")).await;
+    assert_eq!(data["result"]["payload"]["topic"], "Release week");
+    assert_eq!(read_topic().await, "Release week");
+    let code = exec_err_code(&f.schema, topic(&f.alice, &"a".repeat(513))).await;
+    assert_eq!(code, "VALIDATION");
+    assert_eq!(read_topic().await, "Release week");
+    let data = exec_ok(&f.schema, topic(&f.alice, "")).await;
+    assert_eq!(data["result"]["payload"]["topic"], Value::Null);
+    assert_eq!(read_topic().await, Value::Null);
+
+    let message = f.send(&f.carol, &f.general, "pin me").await;
+    let pinned = || async {
+        exec_ok(&f.schema, f.bob.request(PINNED, f.ids(&f.general))).await["pinnedMessages"]
+            .as_array()
+            .expect("pinned")
+            .len()
+    };
+    let pin_command = |who: &Caller, command: &str| {
+        who.request(
+            EXECUTE,
+            json!({
+                "commandId": command,
+                "args": {},
+                "context": {
+                    "workspaceId": f.server_id,
+                    "conversationId": f.general,
+                    "selectedMessageId": message,
+                },
+            }),
+        )
+    };
+    exec_ok(&f.schema, pin_command(&f.carol, "chat.pin_message")).await;
+    assert_eq!(pinned().await, 1);
+    let code = exec_err_code(&f.schema, pin_command(&f.bob, "chat.unpin_message")).await;
+    assert_eq!(code, "FORBIDDEN", "someone else's pin");
+    assert_eq!(pinned().await, 1);
+    let data = exec_ok(&f.schema, pin_command(&f.alice, "chat.unpin_message")).await;
+    assert_eq!(data["result"]["payload"]["unpinned"], json!(message));
+    assert_eq!(pinned().await, 0);
+}

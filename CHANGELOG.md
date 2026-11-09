@@ -28,6 +28,18 @@ tag `v<version>`, the version every crate in the workspace carries.
   workspace keybinds, so those bindings sync across devices and a workspace can share them. The
   server never lists, runs or offers them to an agent (`docs/command_model.md`, App Commands).
   Listed in `serverInfo.capabilities` as `app_command_keybinds`.
+- Five built-in commands for what the GraphQL mutations already do: `chat.unpin_message`,
+  `chat.set_topic`, `admin.clear_timeout`, `notifications.mute_conversation` and
+  `notifications.unmute_conversation`. Each keeps its mutation's rules and falls back to the
+  focused conversation (and, for unpinning, the selected message). The mute takes `1h`, `8h`,
+  `until_tomorrow` (09:00 tomorrow in the timezone of the caller's do-not-disturb window, else
+  UTC), `forever` or an `until` time. The agent may call all five, each after the person
+  confirms; the AI-callable set grows from 42 to 47 (`docs/command_model.md`).
+- Keybinds can name the next app commands the client adds: opening each settings tab
+  (`settings.open.*`), window, update and sign-out commands, message selection and editing,
+  invitations, lenses, Unreads, moderation, bots and webhooks, plugins, people actions, and the
+  agent commands, including approving or refusing an agent's request or pairing
+  (`docs/command_model.md`, App Commands).
 - Home layout: a signed-in person's Home is saved on their own server, one layout per account, so
   every device shows the same boxes in the same order (`homeLayout`, `saveHomeLayout`,
   `resetHomeLayout`, `docs/home-layout.md`). The edit made last wins: a save carries `editedAt`, and

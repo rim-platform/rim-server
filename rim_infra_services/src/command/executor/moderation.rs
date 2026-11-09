@@ -5,8 +5,8 @@ use rim_core::conversation::model::PostingPolicy;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 use rim_services::moderation::command::{
-    BanMemberCmd, DeleteMemberMessagesCmd, KickMemberCmd, ReportMessageCmd, SetChannelPostingCmd,
-    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    BanMemberCmd, ClearTimeoutCmd, DeleteMemberMessagesCmd, KickMemberCmd, ReportMessageCmd,
+    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -160,6 +160,34 @@ pub(super) async fn timeout(
         serde_json::json!({
             "user_id": user_id.to_string(),
             "until": timeout.until.to_rfc3339(),
+        }),
+    ))
+}
+
+pub(super) async fn clear_timeout(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, user_id) = target(&args, context.as_ref())?;
+    let cleared = services
+        .moderation_service
+        .clear_timeout(ClearTimeoutCmd {
+            actor,
+            server_id,
+            user_id,
+        })
+        .await?;
+    Ok(success(
+        if cleared {
+            "timeout cleared"
+        } else {
+            "member was not timed out"
+        },
+        serde_json::json!({
+            "user_id": user_id.to_string(),
+            "cleared": cleared,
         }),
     ))
 }
@@ -398,6 +426,9 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: Arc::new(moderation),
             notification_service: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
@@ -473,6 +504,92 @@ mod tests {
             .await
             .unwrap_err();
             assert!(matches!(err, ServiceError::Validation(_)), "{minutes}");
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_timeout_reports_whether_one_was_in_force() {
+        let workspace = ServerId::new();
+        let target = UserId::new();
+        let mut moderation = MockModerationService::new();
+        let mut in_force = [true, false].into_iter();
+        moderation
+            .expect_clear_timeout()
+            .withf(move |cmd| cmd.server_id == workspace && cmd.user_id == target)
+            .times(2)
+            .returning(move |_| {
+                let cleared = in_force.next().unwrap_or(false);
+                Box::pin(async move { Ok(cleared) })
+            });
+        let services = make_services(moderation);
+        let args = object(serde_json::json!({ "user_id": target.to_string() }));
+
+        let first = super::clear_timeout(
+            &services,
+            Actor::new(UserId::new()),
+            args.clone(),
+            Some(context(workspace, None, None)),
+        )
+        .await
+        .expect("clear timeout");
+        assert_eq!(first.message, "timeout cleared");
+        let payload = first.payload.expect("payload");
+        assert_eq!(payload["cleared"], true);
+        assert_eq!(payload["user_id"], target.to_string());
+
+        let second = super::clear_timeout(
+            &services,
+            Actor::new(UserId::new()),
+            args,
+            Some(context(workspace, None, None)),
+        )
+        .await
+        .expect("clearing no timeout succeeds");
+        assert_eq!(second.payload.expect("payload")["cleared"], false);
+    }
+
+    #[tokio::test]
+    async fn clear_timeout_passes_the_services_refusal_through() {
+        let mut moderation = MockModerationService::new();
+        moderation.expect_clear_timeout().times(1).returning(|_| {
+            Box::pin(async {
+                Err(ServiceError::Forbidden(
+                    "moderators cannot act on other moderators".to_string(),
+                ))
+            })
+        });
+        let services = make_services(moderation);
+        let err = super::clear_timeout(
+            &services,
+            Actor::new(UserId::new()),
+            object(serde_json::json!({ "user_id": UserId::new().to_string() })),
+            Some(context(ServerId::new(), None, None)),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn clear_timeout_needs_a_member_and_a_workspace() {
+        let mut moderation = MockModerationService::new();
+        moderation.expect_clear_timeout().never();
+        let services = make_services(moderation);
+        for (args, context) in [
+            (
+                serde_json::json!({}),
+                Some(context(ServerId::new(), None, None)),
+            ),
+            (
+                serde_json::json!({ "user_id": UserId::new().to_string() }),
+                None,
+            ),
+        ] {
+            let err =
+                super::clear_timeout(&services, Actor::new(UserId::new()), object(args), context)
+                    .await
+                    .unwrap_err();
+            assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
         }
     }
 

@@ -197,6 +197,26 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "give alex a one day timeout for spamming",
             ],
         ),
+        agent_callable(
+            admin_command(
+                "admin.clear_timeout",
+                "Clear Timeout",
+                "End a member's timeout early (Owner/Moderator).",
+                vec![
+                    workspace_arg(),
+                    member_arg("User id of the timed-out member."),
+                ],
+                TypedVerb::Write,
+            ),
+            "End a workspace member's timeout early so they can send messages and act again. \
+             Only owners and moderators may do this, with the same rules as timing someone out. \
+             Use when the user asks to lift, end or clear someone's timeout.",
+            &[
+                "clear sam's timeout",
+                "lift the timeout on alex",
+                "let this user post again",
+            ],
+        ),
         CommandDefinitionDto {
             dangerous: true,
             ..admin_command(

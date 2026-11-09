@@ -244,6 +244,39 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
                 "restore this channel",
             ],
         ),
+        agent_callable(
+            membership_command(
+                "chat.set_topic",
+                "Edit Topic…",
+                "Set or clear a conversation's topic. A channel's topic is changed by an owner, a \
+                 moderator or the private channel's creator.",
+                vec![
+                    workspace_arg(),
+                    conversation_arg(
+                        "Conversation whose topic to change; defaults to the focused conversation.",
+                    ),
+                    CommandArgumentDto {
+                        name: "topic".to_string(),
+                        title: "Topic".to_string(),
+                        description: "The new topic, at most 512 characters; empty clears it."
+                            .to_string(),
+                        argument_type: CommandArgumentTypeDto::String,
+                        required: true,
+                        default_value: None,
+                        allowed_values: None,
+                    },
+                ],
+            ),
+            "Set the topic shown at the top of a conversation, or clear it with an empty topic. \
+                 In a channel only owners, moderators and a private channel's creator may change \
+                 it; in a group or direct message any member may. Use when the user asks to set, \
+                 change or clear a conversation's topic.",
+            &[
+                "set the topic to release week",
+                "change this channel's topic",
+                "clear the topic",
+            ],
+        ),
         // Removing someone else is a moderation action: confirmation required, never agent-run.
         CommandDefinitionDto {
             dangerous: true,
