@@ -771,7 +771,8 @@ each list.
   and `updateKeybind` accept app command ids, `command_model.md` App Commands; `account_macros`:
   macro steps naming app and plugin commands, `UserCommandStep.ask`, `UserCommand.aiCallable`,
   `UserCommand.nlDescription`, `UserCommand.intentSamples`, the same fields of the user command
-  inputs, and `macroStepCommands`, Macros below). A client asks
+  inputs, and `macroStepCommands`, Macros below; `command_initiator_ui`: the `UI` value of
+  `CommandInitiator`, which app controls send, `command_model.md` Invocation Sources). A client asks
   for such a field, or sends such a value, only when its name is listed, so it keeps working
   against older servers; it ignores names it does not know.
 

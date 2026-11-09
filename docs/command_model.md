@@ -195,8 +195,8 @@ Notification builtins (`docs/messaging.md`, Notification Rules). All are
 and need **no capability**: like `chat.mark_as_read` they change only the caller's own state.
 They call `NotificationService`, or for the mutes `NotificationPreferenceService` (the service
 of `muteConversation` and `unmuteConversation`), which require workspace membership (and, for
-the level and the mutes, read access to the conversation). Being `Mutating`, they are refused
-while the caller is timed out (T1); the GraphQL mutations are not.
+the level and the mutes, read access to the conversation). A timed-out caller runs them too, as
+the GraphQL mutations allow (Timeout gate), and they write no command audit row (Audit row).
 
 | Id | Args | AI-callable | Dangerous | Notes |
 |---|---|---|---|---|
@@ -211,10 +211,11 @@ commands are `DesktopLocal`: the server refuses to execute them, so the desktop 
 through the client's local handlers, and only when they are `Safe` and not dangerous (anything
 stricter goes to `executeCommand`, which refuses it). The five writes were raised from `Safe` to
 `Mutating`, which has three effects beyond the agent's confirmation
-gate: a timed-out member can no longer run them through the command path (T1; the GraphQL
-`markAsRead` mutation is not affected), server-side pipelines (initiator `Plugin`) can no longer
-run them because nobody is there to confirm, and they count towards the agent's per-turn
-mutating-call cap. Palette and keybind still run them in one step.
+gate: a timed-out member can no longer run the `state.*` writes and `chat.create_group` through
+the command path (T1; `chat.mark_as_read` changes only the caller's own state and is let
+through, as the GraphQL `markAsRead` mutation is), server-side pipelines (initiator `Plugin`)
+can no longer run them because nobody is there to confirm, and they count towards the agent's
+per-turn mutating-call cap. Palette and keybind still run them in one step.
 
 | Id | Args | Sensitivity | Agent confirmation | Notes |
 |---|---|---|---|---|
@@ -756,7 +757,9 @@ Each command should expose the following metadata.
 ### Confirmation gate (H1)
 
 A call needs a confirmation when the command is dangerous or `Restricted`, or when it is
-`Mutating` and the agent or a plugin started it. Without a proof, `executeCommand` answers with
+`Mutating` and the agent or a plugin started it. The human initiators, `PALETTE`, `UI`,
+`CONTEXT_MENU`, `KEYBIND`, `MACRO` and `CLI`, run a `Mutating` command that is neither dangerous
+nor `Restricted` without one. Without a proof, `executeCommand` answers with
 status `CONFIRMATION_REQUIRED` and the challenge `confirmationRequired { token, argsHash,
 expiresAt }`. The client asks the person to confirm and calls again with
 `confirmation: { inBandToken: { token, argsHash } }` before `expiresAt`, which is 60 seconds
@@ -775,10 +778,24 @@ it runs need none.
 After the capability and confirmation gates, `execute_command` refuses any command whose `sensitivity` is `Mutating` or
 `Restricted` with `ServiceError::TimedOut { until }` (GraphQL `TIMED_OUT`, extension `until`)
 when the actor is timed out in the context's workspace (`ModerationService::active_timeout`).
-`Safe` and `Sensitive` commands still run. The gate also runs on nested dispatch (macro
-steps, pipe stages), before the rate limiter, inside the audit wrapper. Without a workspace
-context it has nothing to check; the services behind the command apply their own write gates
-anyway. Gate order: C1 capability → H1 confirmation → T1 timeout → R1 rate limit.
+`Safe` and `Sensitive` commands still run, and so do the commands that change only the caller's
+own state: `chat.mark_as_read`, `chat.mark_as_unread`, `chat.leave_conversation` and every
+`notifications.*` command. A timeout is about speaking, and the GraphQL mutations behind these
+allow them to a timed-out member as well. A macro the server runs is let through only when every
+step is one of these. The gate also runs on nested dispatch (macro steps, pipe stages), before
+the rate limiter, inside the audit wrapper. Without a workspace context it has nothing to check;
+the services behind the command apply their own write gates anyway. Gate order: C1 capability → H1 confirmation → T1 timeout → R1 rate limit.
+
+### Audit row
+
+Every `executeCommand` call writes one row to the command audit log, which the workspace's
+Owners and Moderators read (`security/audit-access-matrix.md`). A call of `chat.mark_as_read`,
+`chat.mark_as_unread` or a `notifications.*` command writes none: these change only the caller's
+own view, and a row for every conversation read or notification setting changed would show the
+Owners and Moderators a person's reading habits. The same holds for such a step of a workspace
+macro (`executeMacro`), whose macro row stays. A macro (`user.*`) or a pipe that reaches them
+writes its own row as before, under its own id or expression. `chat.leave_conversation`, which
+the other members see, keeps its row.
 
 ### Refusals
 
@@ -885,6 +902,12 @@ Commands should be invokable from multiple surfaces.
 - Text selection, message menus, thread actions, channel actions, etc.
 - A context action should usually map to a command invocation.
 
+### App Controls
+
+- Buttons, toggles, dialog actions and Home quick boxes run the command they stand for through
+  `executeCommand`, as the palette does, so a click and the same command from the palette pass
+  the same gates and give the same result.
+
 ### Plugin UI
 
 - Buttons, panels, modals, or toolbars can invoke commands: the plugin's own commands and the
@@ -893,6 +916,26 @@ Commands should be invokable from multiple surfaces.
 ### Automations
 
 - Event-driven or scheduled workflows may invoke commands later.
+
+### The initiator of a call
+
+Each surface names itself in `ExecuteCommandInput.initiator`, which the audit row keeps:
+
+| Surface | Initiator |
+|---|---|
+| The command palette | `PALETTE` |
+| App controls: buttons, toggles, dialog actions, Home quick boxes | `UI` |
+| Menus: context menus and the menus of messages, channels, people and rows | `CONTEXT_MENU` |
+| Keybinds and list keys | `KEYBIND` |
+| A step of a macro the client runs | `MACRO` |
+| The AI agent and outside agents | `AGENT` |
+| A plugin | `PLUGIN` |
+| The command-line client | `CLI` |
+
+A client sends `UI` only to a server whose `serverInfo.capabilities` lists `command_initiator_ui`;
+to an older server it omits the initiator, which that server records as `palette`. The initiator
+is the client's word: the server does not check where a call came from. Only the bot API sets
+`BOT`, which GraphQL has no value for.
 
 ## Who Can Run Commands
 
