@@ -445,9 +445,7 @@ impl DefaultAppServiceProvider {
         if let Some(direct_space_id) = federation.direct_space_id {
             command_service_concrete = command_service_concrete.with_direct_space(direct_space_id);
         }
-        let command_service_concrete = Arc::new(command_service_concrete);
-        let command_service: Arc<dyn CommandService> =
-            Arc::clone(&command_service_concrete) as Arc<dyn CommandService>;
+        let command_service: Arc<dyn CommandService> = Arc::new(command_service_concrete);
         let keybind_service: Arc<dyn KeybindService> = Arc::new(
             crate::keybind::DefaultKeybindService::new(
                 repos.for_keybind(),
@@ -501,13 +499,6 @@ impl DefaultAppServiceProvider {
             .with_limits(limits)
             .with_default_workspace(default_workspace_rules.clone()),
         );
-
-        // Break the command↔macro init cycle: the command service is constructed
-        // first (macro cell empty), then the macro service is built from it, then
-        // the macro service is set back into the single command-service instance.
-        // keybind/pipeline hold the same Arc, so they observe macros too — no
-        // comment-only invariant.
-        let _ = command_service_concrete.set_macro_service(Arc::clone(&macro_service));
 
         let channel_lens_service: Arc<dyn ChannelLensService> = Arc::new(
             crate::channel_lens::DefaultChannelLensService::new(repos.for_channel_lens()),

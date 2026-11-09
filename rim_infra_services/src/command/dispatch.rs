@@ -8,8 +8,9 @@ use serde_json::Value;
 use rim_services::command::confirmation::{issue_in_band, verify_in_band};
 use rim_services::command::dto::{
     CommandContextDto, CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto,
-    CommandResultStatusDto, UserCommandDto, UserCommandStepDto,
+    CommandResultStatusDto, CommandSourceKindDto, UserCommandDto, UserCommandStepDto,
 };
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -96,6 +97,29 @@ impl Dispatch {
         Ok(())
     }
 
+    /// Refuses a dispatch that reaches a macro the server does not run for `initiator`: for the
+    /// AI agent, one its owner did not let the agent run or whose steps no longer allow it; for
+    /// anyone, one with a step only the client runs.
+    ///
+    /// # Errors
+    ///
+    /// `PermissionDenied` for the agent; `Validation` for a macro with a client-run step.
+    fn ensure_macros_run_here(&self, initiator: CommandInitiator) -> ServiceResult<()> {
+        for definition in self
+            .definitions()
+            .into_iter()
+            .filter(|d| d.source_kind == CommandSourceKindDto::User)
+        {
+            if initiator == CommandInitiator::Agent && !definition.ai_callable {
+                return Err(ServiceError::PermissionDenied);
+            }
+            if definition.execution_target != CommandExecutionTargetDto::Backend {
+                return Err(ServiceError::Validation(MACRO_RUNS_IN_THE_APP.to_string()));
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves what `cmd` dispatches for its actor: each stage of a pipe, or its one command.
     ///
     /// # Errors
@@ -122,6 +146,9 @@ impl Dispatch {
 }
 
 const RECURSION_DEPTH_EXCEEDED: &str = "user command recursion depth exceeded";
+
+/// The refusal of a macro with a step only the client runs.
+const MACRO_RUNS_IN_THE_APP: &str = "this macro has steps only the app runs; run it from the app";
 
 impl DefaultCommandService {
     pub(super) fn builtin_definition(command_id: &str) -> Option<CommandDefinitionDto> {
@@ -163,9 +190,10 @@ impl DefaultCommandService {
     /// Refuses `steps` for the actor's user command `command_key` unless, with the actor's
     /// stored user commands, no chain of user commands through it is deeper than the executor
     /// runs, neither it nor a stored command calling it expands to more than
-    /// [`Self::MAX_EXPANDED_STEPS`] builtin steps, and each step resolves to a backend command
-    /// without a cycle. A new command (`creating`) is also refused once the actor has
-    /// [`Self::MAX_USER_COMMANDS_PER_USER`] user commands.
+    /// [`Self::MAX_EXPANDED_STEPS`] builtin steps, and each step resolves to a command without a
+    /// cycle. A new command (`creating`) is also refused once the actor has
+    /// [`Self::MAX_USER_COMMANDS_PER_USER`] user commands. Returns whether the AI agent may run
+    /// a macro with these steps.
     ///
     /// # Errors
     ///
@@ -176,7 +204,7 @@ impl DefaultCommandService {
         command_key: &str,
         steps: &[UserCommandStepDto],
         creating: bool,
-    ) -> ServiceResult<()> {
+    ) -> ServiceResult<bool> {
         let stored = self
             .repos
             .user_command_repo
@@ -459,6 +487,7 @@ impl DefaultCommandService {
 
         let dispatch = dispatch?;
         dispatch.ensure_within_limits()?;
+        dispatch.ensure_macros_run_here(cmd.initiator)?;
         let run = Arc::new(RunScope::new(resolver.into_user_commands()));
 
         // ── Capability gate ─────────────────────────────────────────────

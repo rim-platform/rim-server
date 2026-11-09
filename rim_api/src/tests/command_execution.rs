@@ -125,6 +125,9 @@ fn quick_group(title: &str, is_enabled: bool) -> rim_services::command::dto::Use
         description: "desc".to_string(),
         steps: vec![],
         is_enabled,
+        ai_callable: false,
+        nl_description: String::new(),
+        intent_samples: vec![],
     }
 }
 
@@ -134,12 +137,17 @@ async fn create_user_command_mutation_returns_the_resolved_command() {
     let actor = UserId::new();
     let stored = quick_group("Quick Group", true);
     let resolved = stored.as_command_definition_with_metadata(
-        rim_services::command::dto::CommandExecutionTargetDto::Backend,
-        vec![],
-        vec![],
-        true,
-        false,
-        &[rim_services::command::sensitivity::CommandSensitivityDto::Mutating],
+        rim_services::command::dto::UserCommandCompositionDto {
+            execution_target: rim_services::command::dto::CommandExecutionTargetDto::Backend,
+            required_context: vec![],
+            required_capabilities: vec![],
+            keybind_capable: true,
+            dangerous: false,
+            step_sensitivities: vec![
+                rim_services::command::sensitivity::CommandSensitivityDto::Mutating,
+            ],
+            agent_runnable: true,
+        },
     );
     let mut command = MockCommandService::new();
     command.expect_create_user_command().returning(move |_cmd| {

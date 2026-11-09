@@ -18,11 +18,9 @@
 //!    errors, the service emits one child row plus one parent row.
 //! 8. **Failed-at-step index recorded** — `error_kind` on the parent row
 //!    encodes `step_error_at_0` (or whichever index failed).
-//! 9. **AI surface includes synthesized macro definitions** — `list_commands`
-//!    with `surface=Ai` delegates to `MacroService::synthesize_command_definitions`.
-//! 10. **Dangerous step confirmed once** — a macro with a dangerous `Mutating` step asks
-//!     for one confirmation up front and, confirmed, runs that step with a proof the step
-//!     gate accepts; a macro without such a step runs unconfirmed.
+//! 9. **Dangerous step confirmed once** — a macro with a dangerous `Mutating` step asks
+//!    for one confirmation up front and, confirmed, runs that step with a proof the step
+//!    gate accepts; a macro without such a step runs unconfirmed.
 //!
 //! All tests use in-process mocks — no running Postgres required.
 
@@ -633,87 +631,6 @@ async fn failed_at_step_index_recorded_in_audit() {
     assert!(
         error_kind_recorded.load(Ordering::SeqCst),
         "parent audit row must carry error_kind = \"step_error_at_0\""
-    );
-}
-
-// ── Test 8: list_commands AI surface includes synthesized macro definitions ───
-
-/// `DefaultMacroService::synthesize_command_definitions` must return a
-/// `CommandDefinitionDto` for each `ai_callable = true` macro in the repo.
-/// This test drives the macro service directly (not via command service) to
-/// verify the single source of truth mapping.
-#[tokio::test]
-async fn list_commands_ai_surface_includes_synthesized_macro_definitions() {
-    use rim_services::macro_def::request::SynthesizeMacroCommandsQuery;
-
-    let user_id = UserId::new();
-    let server_id = ServerId::new();
-    let macro_id = MacroId::new();
-
-    let mut macro_repo = MockTestMacroRepository::new();
-    macro_repo.expect_list_for_user().return_once(move |_, _| {
-        Ok(vec![
-            MacroDef {
-                id: macro_id,
-                server_id,
-                user_id,
-                name: "my-macro".to_string(),
-                description: Some("does stuff".to_string()),
-                steps_json: single_step_json(),
-                ai_callable: true,
-                nl_description: "Post a greeting".to_string(),
-                intent_samples: vec!["say hello".to_string()],
-                sensitivity: "safe".to_string(),
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            },
-            // Non-AI-callable macro — must NOT appear in synthesized list.
-            MacroDef {
-                id: MacroId::new(),
-                server_id,
-                user_id,
-                name: "private-macro".to_string(),
-                description: None,
-                steps_json: single_step_json(),
-                ai_callable: false,
-                nl_description: String::new(),
-                intent_samples: vec![],
-                sensitivity: "safe".to_string(),
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-            },
-        ])
-    });
-
-    let svc = build_service(macro_repo, MockCommandService::new(), None);
-
-    let definitions = svc
-        .synthesize_command_definitions(SynthesizeMacroCommandsQuery {
-            actor: Actor::new(user_id),
-            server_id,
-        })
-        .await
-        .expect("synthesize_command_definitions must succeed");
-
-    assert_eq!(
-        definitions.len(),
-        1,
-        "only the ai_callable macro must be synthesized; got {definitions:?}"
-    );
-    let def = &definitions[0];
-    assert!(
-        def.id.contains(&macro_id.to_string()),
-        "synthesized definition id must embed macro_id; got {}",
-        def.id
-    );
-    assert!(
-        def.ai_callable,
-        "synthesized definition must have ai_callable = true"
-    );
-    assert_eq!(
-        def.nl_description.as_deref(),
-        Some("Post a greeting"),
-        "nl_description must round-trip from macro"
     );
 }
 

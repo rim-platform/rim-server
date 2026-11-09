@@ -56,6 +56,9 @@ impl UserCommandRepository for SeaOrmUserCommandRepository {
             description: Set(new_command.description),
             steps_json: Set(new_command.steps_json),
             is_enabled: Set(new_command.is_enabled),
+            ai_callable: Set(new_command.ai_callable),
+            nl_description: Set(new_command.nl_description),
+            intent_samples: Set(serde_json::Value::from(new_command.intent_samples)),
             ..Default::default()
         };
 
@@ -82,6 +85,9 @@ impl UserCommandRepository for SeaOrmUserCommandRepository {
         active.description = Set(update.description);
         active.steps_json = Set(update.steps_json);
         active.is_enabled = Set(update.is_enabled);
+        active.ai_callable = Set(update.ai_callable);
+        active.nl_description = Set(update.nl_description);
+        active.intent_samples = Set(serde_json::Value::from(update.intent_samples));
         active.updated_at = Set(chrono::Utc::now().into());
 
         let updated = active.update(&self.db).await.map_err(map_db_err)?;

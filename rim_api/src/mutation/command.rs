@@ -1,5 +1,5 @@
 use async_graphql::*;
-use rim_services::command::dto::{UserCommandDto, UserCommandStepDto};
+use rim_services::command::dto::{UpdateUserCommandStepDto, UserCommandDto, UserCommandStepDto};
 use rim_services::command::initiator::CommandInitiator as CommandInitiatorDto;
 use rim_services::command::request::{
     CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
@@ -72,8 +72,12 @@ impl CommandMutations {
                     .map(|step| UserCommandStepDto {
                         command_id: step.command_id,
                         args: step.args.map(|json| json.0),
+                        ask: step.ask.unwrap_or_default(),
                     })
                     .collect(),
+                ai_callable: input.ai_callable,
+                nl_description: input.nl_description.unwrap_or_default(),
+                intent_samples: input.intent_samples.unwrap_or_default(),
             })
             .await
             .map_err(map_service_error)?;
@@ -98,12 +102,16 @@ impl CommandMutations {
                 steps: input
                     .steps
                     .into_iter()
-                    .map(|step| UserCommandStepDto {
+                    .map(|step| UpdateUserCommandStepDto {
                         command_id: step.command_id,
                         args: step.args.map(|json| json.0),
+                        ask: step.ask,
                     })
                     .collect(),
                 is_enabled: input.is_enabled,
+                ai_callable: input.ai_callable,
+                nl_description: input.nl_description,
+                intent_samples: input.intent_samples,
             })
             .await
             .map_err(map_service_error)?;
@@ -168,10 +176,16 @@ fn validate_run_id(run_id: &str) -> Result<(), ServiceError> {
     Ok(())
 }
 
+/// One step of a macro.
 #[derive(InputObject)]
 pub struct UserCommandStepInput {
+    /// A built-in, app or plugin command id.
     pub command_id: String,
     pub args: Option<async_graphql::Json<serde_json::Value>>,
+    /// Names of the arguments the client asks for when the macro runs: at most 32, each 1 to
+    /// 64 bytes, none twice and none a key of `args`. Omitted, none on create, and on update
+    /// what the stored step at the same position asked for when it names the same command.
+    pub ask: Option<Vec<String>>,
 }
 
 #[derive(InputObject)]
@@ -180,6 +194,14 @@ pub struct CreateUserCommandInput {
     pub title: String,
     pub description: String,
     pub steps: Vec<UserCommandStepInput>,
+    /// Lets the AI agent run the macro; refused unless every step is an AI-callable built-in
+    /// the server runs, with every argument fixed.
+    #[graphql(default = false)]
+    pub ai_callable: bool,
+    /// How the macro is described to the AI agent, at most 1,000 characters.
+    pub nl_description: Option<String>,
+    /// Up to 10 example phrases for the AI agent, each at most 200 characters.
+    pub intent_samples: Option<Vec<String>>,
 }
 
 #[derive(InputObject)]
@@ -189,6 +211,13 @@ pub struct UpdateUserCommandInput {
     pub description: String,
     pub steps: Vec<UserCommandStepInput>,
     pub is_enabled: bool,
+    /// Omitted, keeps the stored value, which turns off when the new steps no longer let the
+    /// agent run the macro.
+    pub ai_callable: Option<bool>,
+    /// Omitted, keeps the stored value.
+    pub nl_description: Option<String>,
+    /// Omitted, keeps the stored value.
+    pub intent_samples: Option<Vec<String>>,
 }
 
 #[derive(InputObject)]

@@ -9,7 +9,8 @@ use crate::ServiceResult;
 use crate::command::dto::{CommandDefinitionDto, CommandResultDto, UserCommandDto};
 use crate::command::request::{
     CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
-    GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery, UpdateUserCommandCmd,
+    GetUserCommandQuery, ListCommandsQuery, ListMacroStepCommandsQuery, ListUserCommandsQuery,
+    UpdateUserCommandCmd,
 };
 
 #[async_trait]
@@ -56,19 +57,31 @@ pub trait CommandService: Send + Sync {
         query: ListUserCommandsQuery,
     ) -> ServiceResult<Vec<UserCommandDto>>;
 
+    /// Every built-in and app command a macro step may name, sorted by id, whatever the
+    /// actor's role and workspace: the builtins the server runs and those the client runs, and
+    /// the app commands other than the agent-management ones.
+    ///
+    /// # Errors
+    ///
+    /// None today; the result type leaves room for a lookup that can fail.
+    async fn list_macro_step_commands(
+        &self,
+        query: ListMacroStepCommandsQuery,
+    ) -> ServiceResult<Vec<CommandDefinitionDto>>;
+
     /// The AI agent's command-discovery meta-tool.
     ///
     /// Returns the actor's accessible AI-callable command surface, optionally
     /// ranked by relevance to an `intent_phrase`, truncated to `limit`, and
-    /// scoped to a workspace for macro synthesis.
+    /// scoped to a workspace.
     ///
     /// **Filtering pipeline (in order):**
     ///   1. `ai_callable: true` — non-AI commands are excluded.
     ///   2. Actor capability gate — commands whose `required_capabilities` the
     ///      actor does not hold are silently dropped (same gate as `Surface::Ai`
     ///      in `list_commands`).
-    ///   3. Macro inclusion — when `workspace_id` is `Some`, synthesized macro
-    ///      definitions are merged before the capability gate runs.
+    ///   3. Macros — the actor's agent-callable macros (`user.<key>`) pass the
+    ///      same gates as builtins, with the role every step needs.
     ///
     /// **Intent ranking** (literal substring + token overlap):
     ///   - When `intent_phrase` is `Some`, commands are ranked descending by a

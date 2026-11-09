@@ -91,6 +91,21 @@ tag `v<version>`, the version every crate in the workspace carries.
   lacks and `retrySafe` saying whether repeating a failed call is safe (`docs/command_model.md`).
 - `ExecuteCommandInput.runId` and `AuditLogEntry.runId`, with a `runId` filter on `listAuditLog`, link
   an agent's calls in one stretch. `CommandInitiator::Agent` only. Audit exports gain `runId`.
+- Macros are the person's own commands, kept with their account on their home server as user
+  commands (`user.<key>`, category `Macro`). A step may now name an app command or a plugin
+  command, not only a built-in the server runs, and may ask for arguments when the macro runs
+  (`UserCommandStep.ask`, `UserCommandStepInput.ask`). The client runs such a macro step by step;
+  `executeCommand` refuses it with `VALIDATION` "this macro has steps only the app runs; run it
+  from the app". `macroStepCommands` lists the built-in and app commands a step may name
+  (`docs/command_model.md`, Commands And Macros). Listed in `serverInfo.capabilities` as
+  `account_macros`.
+- The AI agent may run a macro its owner allowed (`UserCommand.aiCallable`, `nlDescription` and
+  `intentSamples`, and the same fields of `CreateUserCommandInput` and `UpdateUserCommandInput`)
+  when every step is a built-in the server runs and the agent may run itself, with every argument
+  fixed. Such a macro is listed
+  on the `AI` surface and by `commandDiscover` as `user.<key>` and runs as one call, which the
+  person confirms when a step changes something. `executeCommand` refuses the agent any other
+  macro with `FORBIDDEN`.
 
 ### Changed
 
@@ -117,6 +132,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   log. Refused calls over a token's limit count as `bot_api` in the rate limit metric. A bot gets no
   notifications, digests or pushes.
 
+- A user command is in category `Macro` in place of `User`. A new one may no longer name another
+  user command as a step; one saved with such a step keeps it when updated
+  (`docs/command_model.md`, Commands And Macros).
+
 ### Changed
 
 - The command audit log no longer keeps message text, search words, moderation reasons, channel
@@ -133,6 +152,18 @@ tag `v<version>`, the version every crate in the workspace carries.
 - **Upgrade:** rolling back the binary after bots exist: calls naming a bot's id fail with an
   internal error, because the older binary can't read the new `kind`. Deactivate bots before rolling
   back.
+
+### Deprecated
+
+- Workspace macros: `createMacro`, `updateMacro`, `deleteMacro`, `executeMacro`, `myMacros` and
+  `macroByName` are deprecated in the schema and keep working. A client that finds
+  `account_macros` moves the person's workspace macros into their macros once.
+
+### Removed
+
+- `commands` on the `AI` surface and `commandDiscover` no longer offer an `ai_callable` workspace
+  macro as `macro.<id>`, an id `executeCommand` never ran; they offer agent-callable macros as
+  `user.<key>`.
 
 ### Security
 

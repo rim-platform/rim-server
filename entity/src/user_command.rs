@@ -11,6 +11,9 @@ pub struct Model {
     pub description: String,
     pub steps_json: Json,
     pub is_enabled: bool,
+    pub ai_callable: bool,
+    pub nl_description: String,
+    pub intent_samples: Json,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

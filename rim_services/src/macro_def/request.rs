@@ -53,12 +53,6 @@ pub struct GetMacroByNameQuery {
 }
 
 #[derive(Debug, Clone)]
-pub struct SynthesizeMacroCommandsQuery {
-    pub actor: Actor,
-    pub server_id: ServerId,
-}
-
-#[derive(Debug, Clone)]
 pub struct ExecuteMacroCmd {
     pub actor: Actor,
     pub macro_id: MacroId,
