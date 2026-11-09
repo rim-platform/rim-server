@@ -916,7 +916,9 @@ client:
   not `Safe`. It is never offered a `DesktopLocal` built-in, an agent-management command (the
   `agents.*` app commands) or `chat.post_message`: it posts with its send tool, which handles
   encrypted conversations. It reads only through its read tools, which keep to the conversations
-  the person chose.
+  the person chose. It is also offered the person's agent-callable macros (Running a macro,
+  above) whose sensitivity is not `Safe`, under the same rules: each approved per agent and
+  asked for on every call.
 - It runs a command only after the person approved that command for that agent, in the same
   dialog as plugin commands. An approval is per agent and per command id.
 - Every call shows the outside-agent card and runs only if the person approves it. A `dangerous`
