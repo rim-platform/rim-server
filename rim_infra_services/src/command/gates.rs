@@ -79,16 +79,22 @@ impl Dispatch {
 
 impl DefaultCommandService {
     /// Timeout gate: `Err(TimedOut { until })` when `definition` is Mutating (or
-    /// stricter) and the actor is timed out in the context's workspace. Without a workspace
-    /// context there is nothing to check here; the services behind the command still apply
-    /// their own write gates.
+    /// stricter), does not change only the caller's own state, and the actor is timed out in the
+    /// context's workspace. `changes_only_callers_state` says whether it changes only the
+    /// caller's own state. Without a workspace context there is nothing to check here; the
+    /// services behind the command still apply their own write gates.
+    ///
+    /// # Errors
+    ///
+    /// `TimedOut` as above; an error of the moderation service.
     pub(super) async fn ensure_command_not_timed_out(
         &self,
         definition: &CommandDefinitionDto,
+        changes_only_callers_state: bool,
         actor: &Actor,
         context: Option<&CommandContextDto>,
     ) -> ServiceResult<()> {
-        if definition.sensitivity < CommandSensitivityDto::Mutating {
+        if definition.sensitivity < CommandSensitivityDto::Mutating || changes_only_callers_state {
             return Ok(());
         }
         let Some(server_id) = context.and_then(|c| c.workspace_id) else {

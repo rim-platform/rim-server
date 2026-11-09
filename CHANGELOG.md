@@ -106,9 +106,22 @@ tag `v<version>`, the version every crate in the workspace carries.
   on the `AI` surface and by `commandDiscover` as `user.<key>` and runs as one call, which the
   person confirms when a step changes something. `executeCommand` refuses the agent any other
   macro with `FORBIDDEN`.
+- The `UI` value of `CommandInitiator`, for buttons, toggles, dialog actions and Home quick boxes
+  that run their command through `executeCommand`. It is a human initiator: it needs a
+  confirmation only for dangerous and `Restricted` commands, and the audit log shows it as `ui`
+  (`docs/command_model.md`, Invocation Sources). Listed in `serverInfo.capabilities` as
+  `command_initiator_ui`.
 
 ### Changed
 
+- The timeout gate of `executeCommand` lets a timed-out member run the commands that change only
+  their own state, as the GraphQL mutations do: `chat.mark_as_read`, `chat.mark_as_unread`,
+  `chat.leave_conversation` and every `notifications.*` command, and a macro whose steps are all
+  of these (`docs/command_model.md`, Timeout gate).
+- `chat.mark_as_read`, `chat.mark_as_unread` and the `notifications.*` commands write no command
+  audit row, nor a row as a step of a workspace macro, since the workspace's Owners and Moderators
+  read the audit log and the rows would show a person's reading habits. The audit tracing line is
+  still logged (`docs/command_model.md`, Audit row).
 - Built-in commands are in sixteen fixed categories (Navigation, Messages, Conversations, Search,
   People, Home, Unreads, Notifications, Moderation, Workspace, Agents, Bots & Webhooks, Plugins,
   View, App, State) in place of Admin, Chat and Workspace (`docs/command_model.md`, Categories).

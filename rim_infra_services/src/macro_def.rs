@@ -31,6 +31,8 @@ use rim_services::macro_def::request::{
 use rim_services::macro_def::service::MacroService;
 use rim_services::{ServiceError, ServiceResult};
 
+use crate::command::own_state::changes_only_callers_view;
+
 const MAX_STEPS: usize = 20;
 const MAX_MACROS_PER_USER: u64 = 50;
 /// Intent samples one macro may carry.
@@ -676,8 +678,14 @@ impl MacroService for DefaultMacroService {
                 Err(e) => Some(step_error_reason(e)),
             };
 
-            // ── Emit a per-step child audit row carrying parent_audit_id.
-            if let Some(audit_svc) = &self.services.audit_log_service {
+            // A per-step child audit row carrying parent_audit_id, except for a step that
+            // changes only the caller's own view, which writes no row of its own either.
+            if let Some(audit_svc) = self
+                .services
+                .audit_log_service
+                .as_ref()
+                .filter(|_| !changes_only_callers_view(&step.command_id))
+            {
                 let child_entry = AuditLogEntryDto {
                     id: uuid::Uuid::now_v7(),
                     actor_user_id: cmd.actor.user_id.into(),
@@ -1797,6 +1805,93 @@ mod tests {
             result.status,
             CommandResultStatusDto::Success,
             "valid outer proof must let all steps execute: {result:?}"
+        );
+    }
+
+    /// A step that changes only the caller's own view writes no child audit row; the other
+    /// step's child row and the macro's row stay.
+    #[tokio::test]
+    async fn execute_macro_writes_no_child_row_for_an_own_view_step() {
+        use rim_services::audit::dto::AuditLogEntryDto;
+        use rim_services::audit::service::MockAuditLogService;
+
+        let owner = UserId::new();
+        let macro_id = MacroId::new();
+        let mut repo = MockMacroRepository::new();
+        repo.expect_get_by_id().returning(move |_| {
+            Ok(Some(MacroDef {
+                id: macro_id,
+                server_id: ServerId::new(),
+                user_id: owner,
+                name: "read and post".to_string(),
+                description: None,
+                steps_json: serde_json::json!([
+                    { "commandId": "chat.mark_as_read", "args": null },
+                    { "commandId": "chat.post_message", "args": { "text": "hi" } }
+                ]),
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
+                sensitivity: "safe".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }))
+        });
+        let mut cmd_svc = MockCommandService::new();
+        cmd_svc
+            .expect_get_command()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        cmd_svc.expect_execute_command().times(2).returning(|_| {
+            Box::pin(async {
+                Ok(CommandResultDto {
+                    status: CommandResultStatusDto::Success,
+                    message: "ok".to_string(),
+                    payload: None,
+                    follow_up_commands: vec![],
+                    pipeline_stages: None,
+                    confirmation_required: None,
+                })
+            })
+        });
+        let written: Arc<std::sync::Mutex<Vec<AuditLogEntryDto>>> =
+            Arc::new(std::sync::Mutex::new(vec![]));
+        let written_clone = written.clone();
+        let mut audit_svc = MockAuditLogService::new();
+        audit_svc.expect_write_entry().returning(move |entry| {
+            written_clone.lock().unwrap().push(entry);
+            Box::pin(async { Ok(()) })
+        });
+        let svc = DefaultMacroService::new(
+            MacroRepos {
+                macro_repo: Arc::new(repo),
+                server_member_repo: Arc::new(make_member_repo()),
+            },
+            MacroServices {
+                command_service: Arc::new(cmd_svc),
+                audit_log_service: Some(Arc::new(audit_svc)),
+                confirmation_store: None,
+            },
+        );
+
+        svc.execute_macro(ExecuteMacroCmd {
+            actor: Actor::new(owner),
+            macro_id,
+            command_context: None,
+            confirmation: None,
+            initiator: rim_services::command::initiator::CommandInitiator::Ui,
+        })
+        .await
+        .unwrap();
+
+        let ids: Vec<String> = written
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.command_id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            ["chat.post_message".to_string(), format!("macro.{macro_id}")]
         );
     }
 

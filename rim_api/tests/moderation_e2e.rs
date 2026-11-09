@@ -267,6 +267,17 @@ mutation Exec($serverId: ID!, $args: JSON!, $commandId: String! = "chat.post_mes
 }
 "#;
 
+const EXECUTE_AS: &str = r#"
+mutation Exec($serverId: ID!, $args: JSON!, $commandId: String!, $initiator: CommandInitiator) {
+  executeCommand(input: {
+    commandId: $commandId
+    args: $args
+    commandContext: { workspaceId: $serverId }
+    initiator: $initiator
+  }) { status message }
+}
+"#;
+
 const EXECUTE_IN_RUN: &str = r#"
 mutation Exec($serverId: ID!, $initiator: CommandInitiator, $runId: String) {
   executeCommand(input: {
@@ -668,6 +679,113 @@ async fn timed_out_member_cannot_send_or_run_mutating_commands() {
     assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
     assert_eq!(f.audit_rows("admin.timeout").await.len(), 1);
     assert_eq!(f.audit_rows("admin.clear_timeout").await.len(), 1);
+}
+
+impl Fixture {
+    /// The variables of an `EXECUTE_AS` call of `command_id` in the fixture's channel, with
+    /// `extra` added to the arguments and `initiator` as the initiator.
+    fn channel_command(&self, command_id: &str, extra: Value, initiator: &str) -> Value {
+        let mut args = json!({ "server_id": self.server_id, "conversation_id": self.channel_id });
+        if let (Some(args), Some(extra)) = (args.as_object_mut(), extra.as_object()) {
+            args.extend(extra.clone());
+        }
+        json!({
+            "serverId": self.server_id,
+            "commandId": command_id,
+            "args": args,
+            "initiator": initiator,
+        })
+    }
+}
+
+/// A timed-out member still changes their own state through `executeCommand`, as the GraphQL
+/// mutations allow: muting, marking read and leaving. Pinning, which others see, is refused.
+#[tokio::test]
+async fn a_timed_out_member_runs_commands_that_change_only_their_own_state() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let in_channel = json!({ "serverId": f.server_id, "conversationId": f.channel_id });
+    exec_ok(&f.schema, f.carol.request(JOIN_CHANNEL, in_channel)).await;
+    let message_id = f.send(&f.alice, &f.channel_id, "pin me").await;
+    let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+    let vars = json!({
+        "serverId": f.server_id,
+        "userId": f.carol.user_id.to_string(),
+        "until": until.to_rfc3339(),
+    });
+    exec_ok(&f.schema, f.mona.request(TIMEOUT, vars)).await;
+    let run = |command_id: &str, extra: Value| {
+        f.carol
+            .request(EXECUTE_AS, f.channel_command(command_id, extra, "UI"))
+    };
+
+    for (command_id, extra) in [
+        (
+            "notifications.mute_conversation",
+            json!({ "duration": "1h" }),
+        ),
+        ("chat.mark_as_read", json!({})),
+    ] {
+        let ok = exec_ok(&f.schema, run(command_id, extra)).await;
+        assert_eq!(
+            ok["executeCommand"]["status"],
+            json!("SUCCESS"),
+            "{command_id}"
+        );
+    }
+    let code = exec_err_code(
+        &f.schema,
+        run("chat.pin_message", json!({ "message_id": message_id })),
+    )
+    .await;
+    assert_eq!(code, "TIMED_OUT");
+    let ok = exec_ok(&f.schema, run("chat.leave_conversation", json!({}))).await;
+    assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
+}
+
+/// Marking read and changing notifications write no command audit row, since the workspace's
+/// Owners and Moderators read that log; pinning keeps its row, with the `UI` initiator as `ui`.
+#[tokio::test]
+async fn own_view_commands_write_no_audit_row_and_a_pin_keeps_its_row() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let in_channel = json!({ "serverId": f.server_id, "conversationId": f.channel_id });
+    exec_ok(&f.schema, f.bob.request(JOIN_CHANNEL, in_channel)).await;
+    let message_id = f.send(&f.alice, &f.channel_id, "pin me").await;
+
+    for (command_id, extra) in [
+        ("chat.mark_as_read", json!({})),
+        (
+            "notifications.mute_conversation",
+            json!({ "duration": "1h" }),
+        ),
+        ("notifications.unmute_conversation", json!({})),
+        ("chat.pin_message", json!({ "message_id": message_id })),
+    ] {
+        let ok = exec_ok(
+            &f.schema,
+            f.bob
+                .request(EXECUTE_AS, f.channel_command(command_id, extra, "UI")),
+        )
+        .await;
+        assert_eq!(
+            ok["executeCommand"]["status"],
+            json!("SUCCESS"),
+            "{command_id}"
+        );
+    }
+
+    for command_id in [
+        "chat.mark_as_read",
+        "notifications.mute_conversation",
+        "notifications.unmute_conversation",
+    ] {
+        assert!(f.audit_rows(command_id).await.is_empty(), "{command_id}");
+    }
+    let pins = f.audit_rows("chat.pin_message").await;
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].initiator, "ui");
+    assert_eq!(pins[0].actor_user_id, uuid::Uuid::from(f.bob.user_id));
 }
 
 /// `admin.clear_timeout` through `executeCommand`: a member's call is refused by role, a

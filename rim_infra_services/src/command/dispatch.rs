@@ -16,6 +16,7 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
 use super::executor;
+use super::own_state;
 use super::pipe_parser::{self, PipeSegment};
 use super::resolver::{CommandResolver, Resolved, expanded_steps_exceeded};
 use super::user_commands;
@@ -453,8 +454,13 @@ impl DefaultCommandService {
             // reach builtins here without passing the top-level gates in `execute_command_inner`.
             self.ensure_role_admits(&ctx.actor, command_id, args.as_ref(), ctx.context.as_ref())
                 .await?;
-            self.ensure_command_not_timed_out(&definition, &ctx.actor, ctx.context.as_ref())
-                .await?;
+            self.ensure_command_not_timed_out(
+                &definition,
+                own_state::changes_only_callers_state(command_id),
+                &ctx.actor,
+                ctx.context.as_ref(),
+            )
+            .await?;
             return self
                 .execute_builtin(ctx.actor, command_id, args, ctx.context)
                 .await;
@@ -559,16 +565,22 @@ impl DefaultCommandService {
             }
         }
 
-        let top_level_def = match &dispatch {
-            Dispatch::Single(resolved) => resolved.as_ref().map(|r| &r.definition),
+        let top_level = match &dispatch {
+            Dispatch::Single(resolved) => resolved.as_deref(),
             Dispatch::Pipe(_) => None,
         };
+        let top_level_def = top_level.map(|r| &r.definition);
         // ── Timeout gate ────────────────────────────────────────────────
         // A timed-out member cannot run Mutating commands in that workspace; reads still work.
         // Also before the rate limiter, so a refused command consumes no slot.
-        if let Some(def) = top_level_def {
-            self.ensure_command_not_timed_out(def, &cmd.actor, cmd.context.as_ref())
-                .await?;
+        if let Some(resolved) = top_level {
+            self.ensure_command_not_timed_out(
+                &resolved.definition,
+                resolved.changes_only_callers_state,
+                &cmd.actor,
+                cmd.context.as_ref(),
+            )
+            .await?;
         }
 
         // ── Rate-limit gate (runs after capability + confirmation) ──────
