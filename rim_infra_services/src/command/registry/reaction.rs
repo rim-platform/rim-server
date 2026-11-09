@@ -5,6 +5,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![
         // The backend mutation is bidirectional, so the agent tool is
@@ -16,7 +18,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.toggle_reaction".to_string(),
             title: "Toggle Reaction".to_string(),
             description: "Add or remove an emoji reaction on a message.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![

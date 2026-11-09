@@ -14,7 +14,7 @@ use crate::command::CommandServices;
 
 use super::{
     optional_bool_arg, optional_integer_arg, optional_string_arg, parse_uuid_arg,
-    require_string_arg, resolve_conversation_id, resolve_workspace_id,
+    require_string_arg, resolve_conversation_id, resolve_message_id, resolve_workspace_id,
 };
 
 /// Longest timeout the `admin.timeout` command accepts, in minutes (30 days); the service
@@ -335,9 +335,7 @@ pub(super) async fn report_message(
     let conversation_id = context.conversation_id.ok_or_else(|| {
         ServiceError::Validation("command requires conversation context".to_string())
     })?;
-    let message_id = context.selected_message_id.ok_or_else(|| {
-        ServiceError::Validation("command requires selected message context".to_string())
-    })?;
+    let message_id = resolve_message_id(&args, Some(&context), "message_id")?;
     let reason = require_string_arg(&args, "reason")?;
     let report = services
         .moderation_service
@@ -596,7 +594,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn report_message_needs_a_selected_message() {
+    async fn report_message_takes_the_message_id_or_the_selected_message() {
         let workspace = ServerId::new();
         let conversation = ConversationId::new();
         let message = MessageId::new();
@@ -604,7 +602,7 @@ mod tests {
         moderation
             .expect_report_message()
             .withf(move |cmd| cmd.message_id == message && cmd.reason == "spam")
-            .times(1)
+            .times(2)
             .returning(|cmd| {
                 Box::pin(async move {
                     Ok(MessageReportDto {
@@ -651,5 +649,17 @@ mod tests {
         )
         .await
         .expect("report");
+        super::report_message(
+            &services,
+            actor,
+            object(serde_json::json!({ "message_id": message.to_string(), "reason": "spam" })),
+            Some(context(
+                workspace,
+                Some(conversation),
+                Some(MessageId::new()),
+            )),
+        )
+        .await
+        .expect("report by message_id");
     }
 }

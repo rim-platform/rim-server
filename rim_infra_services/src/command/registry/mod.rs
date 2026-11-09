@@ -1,4 +1,6 @@
 mod admin;
+mod app_commands;
+mod category;
 mod chat;
 mod chat_messages;
 mod conversation;
@@ -13,6 +15,8 @@ mod workspace;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::CommandDefinitionDto;
 use rim_services::command::sanitize::sanitize_command_ai_fields;
+
+pub(crate) use app_commands::{APP_COMMANDS, app_command};
 
 pub(crate) fn builtin_commands() -> Vec<CommandDefinitionDto> {
     let mut defs = builtin_commands_raw();
@@ -175,6 +179,18 @@ mod tests {
         assert!(is_builtin_command("workspace.toggle_sidebar"));
         for id in ["chat.nope", "user.x", "macro.x", "plugin.a.b", ""] {
             assert!(!is_builtin_command(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn every_builtin_is_in_a_fixed_category() {
+        for command in builtin_commands() {
+            assert!(
+                category::ALL.contains(&command.category.as_str()),
+                "{}: {}",
+                command.id,
+                command.category
+            );
         }
     }
 

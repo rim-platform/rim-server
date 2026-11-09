@@ -23,6 +23,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- Keybinds to app commands, the commands the client runs itself such as Open Home, Open Unreads
+  and Toggle Notifications: `createKeybind` and `updateKeybind` accept their ids for personal and
+  workspace keybinds, so those bindings sync across devices and a workspace can share them. The
+  server never lists, runs or offers them to an agent (`docs/command_model.md`, App Commands).
+  Listed in `serverInfo.capabilities` as `app_command_keybinds`.
 - Home layout: a signed-in person's Home is saved on their own server, one layout per account, so
   every device shows the same boxes in the same order (`homeLayout`, `saveHomeLayout`,
   `resetHomeLayout`, `docs/home-layout.md`). The edit made last wins: a save carries `editedAt`, and
@@ -77,6 +82,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
+- Built-in commands are in sixteen fixed categories (Navigation, Messages, Conversations, Search,
+  People, Home, Unreads, Notifications, Moderation, Workspace, Agents, Bots & Webhooks, Plugins,
+  View, App, State) in place of Admin, Chat and Workspace (`docs/command_model.md`, Categories).
+  `workspace.previous_channel`, `workspace.next_channel` and `workspace.next_unread_channel` are
+  titled Previous Conversation, Next Conversation and Next Unread Conversation.
+  `workspace.navigate_to_dm` declares its required `conversation_id`, and `chat.report_message`
+  takes an optional `message_id` that falls back to the selected message, so the agent can name
+  the message it reports.
 - **Upgrade:** a migration adds the column `command_audit_log.run_id` and the index
   `idx_command_audit_log_actor_run_id`; on a large `command_audit_log` table, writes to it wait while
   the index is built.

@@ -5,6 +5,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![
         // `ai_callable: true` puts it on the surface filtered by
@@ -14,7 +16,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.list_channels".to_string(),
             title: "List Channels".to_string(),
             description: "List the channels you can see in the current workspace.".to_string(),
-            category: "Chat".to_string(),
+            category: category::CONVERSATIONS.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![CommandArgumentDto {
@@ -56,7 +58,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.create_channel".to_string(),
             title: "Create Channel".to_string(),
             description: "Create a new channel.".to_string(),
-            category: "Chat".to_string(),
+            category: category::CONVERSATIONS.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -137,7 +139,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.mark_as_read".to_string(),
             title: "Mark as Read".to_string(),
             description: "Mark the current conversation as read.".to_string(),
-            category: "Chat".to_string(),
+            category: category::CONVERSATIONS.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -187,7 +189,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.mark_as_unread".to_string(),
             title: "Mark Unread From Here".to_string(),
             description: "Mark the conversation unread from the selected message on.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -245,7 +247,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.mark_all_as_read".to_string(),
             title: "Mark All as Read".to_string(),
             description: "Mark all conversations as read.".to_string(),
-            category: "Chat".to_string(),
+            category: category::CONVERSATIONS.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![CommandArgumentDto {
@@ -275,7 +277,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.search_messages".to_string(),
             title: "Search Messages".to_string(),
             description: "Search workspace messages by text content.".to_string(),
-            category: "Chat".to_string(),
+            category: category::SEARCH.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -344,7 +346,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.get_recent_messages".to_string(),
             title: "Get Recent Messages".to_string(),
             description: "Read the most recent messages in a channel.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![

@@ -5,12 +5,14 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![CommandDefinitionDto {
         id: "admin.invite_member".to_string(),
         title: "Invite Member".to_string(),
         description: "Invite a new member to the workspace.".to_string(),
-        category: "Admin".to_string(),
+        category: category::WORKSPACE.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments: vec![

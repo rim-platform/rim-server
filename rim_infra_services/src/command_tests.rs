@@ -1484,6 +1484,61 @@ mod tests {
         );
     }
 
+    /// The app commands the client runs itself are in no list the server serves, the agent's
+    /// included.
+    #[tokio::test]
+    async fn app_commands_are_on_no_surface() {
+        let actor = Actor::new(rim_core::user::model::UserId::new());
+        let mut repo = MockUserCommandRepository::new();
+        repo.expect_list_for_user().returning(|_| Ok(vec![]));
+        let svc = service_with_capability(
+            repo,
+            MockConversationService::new(),
+            MockMessageService::new(),
+            full_caps(),
+        );
+        let app_ids: Vec<&str> = registry::APP_COMMANDS.iter().map(|c| c.id).collect();
+        assert!(app_ids.contains(&"workspace.open_home"));
+
+        for surface in [
+            CommandSurfaceDto::Palette,
+            CommandSurfaceDto::ContextMenu,
+            CommandSurfaceDto::KeybindPicker,
+            CommandSurfaceDto::Ai,
+        ] {
+            let listed = svc
+                .list_commands(ListCommandsQuery {
+                    actor,
+                    context: Some(workspace_context(rim_core::server::model::ServerId::new())),
+                    surface,
+                })
+                .await
+                .unwrap();
+            assert!(!listed.is_empty() || matches!(surface, CommandSurfaceDto::ContextMenu));
+            for command in &listed {
+                assert!(
+                    !app_ids.contains(&command.id.as_str()),
+                    "{surface:?}: {}",
+                    command.id
+                );
+            }
+        }
+
+        let discovered = service_with_macro(full_caps(), None)
+            .command_discover(
+                &actor,
+                None,
+                None,
+                Some(rim_core::server::model::ServerId::new()),
+            )
+            .await
+            .unwrap();
+        assert!(!discovered.is_empty());
+        for command in &discovered {
+            assert!(!app_ids.contains(&command.id.as_str()), "{}", command.id);
+        }
+    }
+
     #[tokio::test]
     async fn command_discover_actor_with_no_caps_gets_only_no_cap_commands() {
         use std::collections::HashMap;
@@ -2641,7 +2696,7 @@ mod tests {
     }
 
     /// An id that is neither builtin nor one of the caller's user commands is NotFound,
-    /// including a user command another user owns.
+    /// including a user command another user owns and an app command, which the client runs.
     #[tokio::test]
     async fn command_that_is_not_the_callers_user_command_is_not_found() {
         let actor = new_actor();
@@ -2655,7 +2710,12 @@ mod tests {
             workspace_state,
         );
 
-        for command_id in ["user.theirs", "user.missing", "nope.missing"] {
+        for command_id in [
+            "user.theirs",
+            "user.missing",
+            "nope.missing",
+            "workspace.open_home",
+        ] {
             let err = svc
                 .execute_command(palette_cmd(actor, command_id))
                 .await
