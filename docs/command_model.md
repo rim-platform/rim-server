@@ -203,7 +203,7 @@ the GraphQL mutations allow (Timeout gate), and they write no command audit row 
 | `notifications.set_level` | `server_id`, `conversation_id`, `level` (`all`/`mentions`/`none`/`default`) | yes | no | `default` clears the override; `conversation_id` falls back to the focused conversation. Payload `{conversation_id, level, effective_level}` |
 | `notifications.dnd` | `server_id`, `mode` (`on`/`off`/`until`), `until?` (RFC 3339), `minutes?` (1..=10080) | yes | no | Title Pause Notifications. The manual do-not-disturb pause (separate from the daily window); `until` mode needs `until` or `minutes`. Payload `{paused, until}` |
 | `notifications.mark_all_read` | `server_id` | yes | no | Marks every notification of the workspace read (not the conversations' unread counts). Payload `{marked}` |
-| `notifications.mute_conversation` | `server_id`, `conversation_id`, `duration?` (`1h`/`8h`/`until_tomorrow`/`forever`/`until`), `until?` (RFC 3339), `minutes?` (integer, 1 to 525600) | yes | no | Title Mute Conversation…. Mirrors `muteConversation`; `conversation_id` falls back to the focused conversation. `minutes` ends the mute that many minutes from now whatever `duration` and `until` say, and a value outside 1 to 525600 is `VALIDATION`; without `minutes`, `duration` is required. `1h` and `8h` count from now. `until_tomorrow` ends at 09:00 tomorrow in the timezone of the caller's daily do-not-disturb window in this workspace, or in UTC when they have none: the server knows no other timezone of theirs. `until` ends at the `until` time, which must be in the future, and `until` with another duration is `VALIDATION`; a client that knows the person's timezone sends it to end the mute at 09:00 their time. `forever` is `muteConversation` without `mutedUntil`: level `none` with no end. Payload `{conversation_id, muted_until}` (`muted_until` null for `forever`) |
+| `notifications.mute_conversation` | `server_id`, `conversation_id`, `duration` (`1h`/`8h`/`until_tomorrow`/`forever`/`until`/`minutes`), `until?` (RFC 3339), `minutes?` (integer, 1 to 525600) | yes | no | Title Mute Conversation…. Mirrors `muteConversation`; `conversation_id` falls back to the focused conversation. `minutes` ends the mute that many minutes from now and needs `minutes`; a count outside 1 to 525600, or `minutes` with another duration, is `VALIDATION`. `1h` and `8h` count from now. `until_tomorrow` ends at 09:00 tomorrow in the timezone of the caller's daily do-not-disturb window in this workspace, or in UTC when they have none: the server knows no other timezone of theirs. `until` ends at the `until` time, which must be in the future, and `until` with another duration is `VALIDATION`; a client that knows the person's timezone sends it to end the mute at 09:00 their time. `forever` is `muteConversation` without `mutedUntil`: level `none` with no end. Payload `{conversation_id, muted_until}` (`muted_until` null for `forever`) |
 | `notifications.unmute_conversation` | `server_id`, `conversation_id` | yes | no | Mirrors `unmuteConversation`: ends a timed mute and clears a `none` level; `conversation_id` falls back to the focused conversation. Unmuting a conversation that is not muted succeeds. Payload `{conversation_id}` |
 
 General builtins the agent may call. None declares a new capability. The navigation
@@ -945,9 +945,10 @@ to an older server it omits the initiator, which that server records as `palette
 is the client's word: the server does not check where a call came from. Only the bot API sets
 `BOT`, which GraphQL has no value for.
 
-`admin.ban` and `notifications.mute_conversation` take a `minutes` argument that ends the ban or
-mute that many minutes from now. A server that lacks it ignores the argument, so a client offers
-a duration only to a server whose `serverInfo.capabilities` lists `command_relative_minutes`.
+`admin.ban` takes a `minutes` argument that ends the ban that many minutes from now, and
+`notifications.mute_conversation` the duration `minutes` with a `minutes` count. A server that
+lacks them ignores `minutes` on a ban, which would then never end, so a client offers a duration
+only to a server whose `serverInfo.capabilities` lists `command_relative_minutes`.
 `admin.invite_member` takes only the workspace: it creates a one-use invite link, and a `user_id`
 sent by an older caller is ignored.
 

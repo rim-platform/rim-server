@@ -12,7 +12,7 @@ use rim_services::command::verb::TypedVerb;
 use super::category;
 
 /// The `duration` values of `notifications.mute_conversation`.
-const MUTE_DURATIONS: [&str; 5] = ["1h", "8h", "until_tomorrow", "forever", "until"];
+const MUTE_DURATIONS: [&str; 6] = ["1h", "8h", "until_tomorrow", "forever", "until", "minutes"];
 
 fn arg(
     name: &str,
@@ -177,28 +177,25 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                     CommandArgumentTypeDto::ConversationId,
                     true,
                 ),
-                CommandArgumentDto {
-                    required: false,
-                    ..enum_arg(
-                        "duration",
-                        "Duration",
-                        "1h, 8h, until_tomorrow (09:00 tomorrow), forever (until unmuted), or \
-                         until (needs `until`). Not needed when `minutes` is given.",
-                        &MUTE_DURATIONS,
-                    )
-                },
+                enum_arg(
+                    "duration",
+                    "Duration",
+                    "1h, 8h, until_tomorrow (09:00 tomorrow), forever (until unmuted), until \
+                     (needs `until`), or minutes (needs `minutes`).",
+                    &MUTE_DURATIONS,
+                ),
                 arg(
                     "until",
                     "Until",
                     "When the mute ends, as a date and time (duration `until`); leave empty for \
-                     the other durations. Ignored when `minutes` is given.",
+                     the other durations.",
                     CommandArgumentTypeDto::String,
                     false,
                 ),
                 arg(
                     "minutes",
                     "Minutes",
-                    "Mute for this many minutes from now (1 to 525600).",
+                    "How many minutes from now the mute ends (duration `minutes`, 1 to 525600).",
                     CommandArgumentTypeDto::Integer,
                     false,
                 ),

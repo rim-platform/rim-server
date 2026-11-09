@@ -115,10 +115,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   confirmation only for dangerous and `Restricted` commands, and the audit log shows it as `ui`
   (`docs/command_model.md`, Invocation Sources). Listed in `serverInfo.capabilities` as
   `command_initiator_ui`.
-- `admin.ban` and `notifications.mute_conversation` take an optional `minutes`, so macros and
-  agents can ban or mute for a number of minutes from now; `notifications.mute_conversation` no
-  longer needs `duration` when `minutes` is given. Listed in `serverInfo.capabilities` as
-  `command_relative_minutes` (`docs/command_model.md`).
+- `admin.ban` takes an optional `minutes`, and `notifications.mute_conversation` a duration
+  `minutes` with a `minutes` count, so macros and agents can ban or mute for a number of minutes
+  from now. Listed in `serverInfo.capabilities` as `command_relative_minutes`
+  (`docs/command_model.md`).
 
 ### Changed
 
