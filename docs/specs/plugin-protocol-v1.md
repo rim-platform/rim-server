@@ -396,7 +396,7 @@ the `runs_commands` grant is the permission.
 | Param | Type | Meaning |
 |---|---|---|
 | `commandId` | string | The command's full id, such as `workspace.open_settings`. |
-| `args` | object | The command's arguments, keyed by argument name. `{}` when there are none. |
+| `args` | object, optional | The command's arguments, keyed by argument name. Missing means `{}`. |
 
 ```json
 {
@@ -439,6 +439,11 @@ Rules:
   once.
 - A plugin's own commands, `plugin.<pluginId>.*`, are run by the host's request above, not by
   this one; another plugin's commands are always `NOT_ALLOWED`.
+- A built-in the server executes goes to the server with initiator `PLUGIN`. Its context is the
+  user's current workspace, conversation and thread only, never a selected message;
+  `server_id`, `conversation_id` and `thread_id` in `args` take precedence over it.
+- A built-in is available to plugins only when the server lists it for the palette or the keybind
+  picker; any other is `UNAVAILABLE`.
 - Every run is recorded in the plugin's audit.
 
 `command_model.md` in rim-server, "Who Can Run Commands", is the full rule.
@@ -662,7 +667,8 @@ with rim-ui #190, so each version is described; check
 
 The optional manifest field `runs_commands` lists the commands that are not the plugin's own and
 that it wants to run with its `rim.command.execute` request to the host (section 9). It is an
-array of at most **32** unique command ids. Each is a valid command id; none starts with
+array of at most **32** unique command ids. Each is 1 to 128 bytes of two or more segments
+joined by `.`, each segment one or more of `a-z`, `0-9`, `_` and `-`; none starts with
 `plugin.`; and none is an agent-management id: `agents.approve_request`,
 `agents.refuse_request`, `agents.approve_pairing`, `agents.refuse_pairing`, `agents.disconnect`,
 `agents.choose_reads`, `agents.choose_plugin_commands`, `agents.open_runs`,

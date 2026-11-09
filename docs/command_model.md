@@ -839,6 +839,9 @@ manifest lists in `runs_commands` that the person granted at install or update:
   start a form the person finishes are marked.
 - A plugin never runs another plugin's commands, an agent-management command, or a `dangerous`
   or `Restricted` command, whatever its manifest lists.
+- A built-in's context is the person's current workspace, conversation and thread, never a
+  selected message; `server_id`, `conversation_id` and `thread_id` in the arguments take
+  precedence over it.
 - The plugin receives the status, an error code and the message, never the command's output
   data.
 - A plugin makes at most 20 command calls a minute. After the person dismisses a confirmation,
