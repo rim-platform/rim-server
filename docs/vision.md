@@ -69,6 +69,8 @@ These are the rules every agent feature is held to; `ROADMAP.md` says which exis
 - **Plugin commands are approved one by one.** An agent gets only the commands a plugin offers to
   agents and you approve for that agent. An outside agent still asks before an approved command
   that changes something. A dangerous command is only proposed for you to run.
+  An outside agent can also be given RIM's own commands, approved one by one in the same way;
+  it asks you every time, and a dangerous one is only proposed.
 - **A bot has its own identity.** It has a token an Owner or Moderator can revoke, and whoever runs
   it chooses where, with their own model and key. It acts within its grants without a confirmation,
   and the people in a channel can see who runs it and where what it reads goes. Bots never join

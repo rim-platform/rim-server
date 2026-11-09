@@ -138,8 +138,8 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         },
         CommandDefinitionDto {
             id: "workspace.open_marketplace".to_string(),
-            title: "Open Marketplace".to_string(),
-            description: "Open the plugin marketplace.".to_string(),
+            title: "Browse Plugins".to_string(),
+            description: "Open Settings > Plugins to find, install and manage plugins.".to_string(),
             category: category::PLUGINS.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,
@@ -152,12 +152,12 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             dangerous: false,
             user_command_id: None,
             nl_description: Some(
-                "Open the plugin marketplace. \
-                 Use when the user wants to browse or install plugins."
+                "Open Settings > Plugins, where plugins are found, installed and managed. \
+                 Use when the user wants to browse, install or manage plugins."
                     .to_string(),
             ),
             intent_samples: vec![
-                "open the marketplace".to_string(),
+                "browse plugins".to_string(),
                 "show me plugins I can install".to_string(),
             ],
             ai_callable: true,

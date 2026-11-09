@@ -453,7 +453,7 @@ there.
 | `agents.refuse_pairing` | Don't Connect the Waiting Agent | Agents | Desktop only; runs at once |
 | `agents.disconnect` | Disconnect Agent… | Agents | Desktop only |
 | `agents.choose_reads` | Choose What an Agent Can Read… | Agents | Desktop only |
-| `agents.choose_plugin_commands` | Choose an Agent's Plugin Commands… | Agents | Desktop only |
+| `agents.choose_plugin_commands` | Choose an Agent's Commands… | Agents | Desktop only |
 | `agents.open_runs` | Open Agent Runs | Agents | Desktop only |
 | `agents.open_record` | What Agents Were Given | Agents | Desktop only |
 | `agents.clear_record` | Clear the Agents Record… | Agents | Desktop only |
@@ -787,11 +787,71 @@ Commands should be invokable from multiple surfaces.
 
 ### Plugin UI
 
-- Buttons, panels, modals, or toolbars can invoke commands.
+- Buttons, panels, modals, or toolbars can invoke commands: the plugin's own commands and the
+  ids it was granted in `runs_commands` (Who Can Run Commands).
 
 ### Automations
 
 - Event-driven or scheduled workflows may invoke commands later.
+
+## Who Can Run Commands
+
+Every caller runs the same commands. What differs is which commands each one is offered and who
+confirms a call. The client enforces the rules for agents and plugins; the server sees an
+ordinary call with its initiator and applies its gates (Confirmation gate, Timeout gate, below)
+as for any other.
+
+**The person** runs every command, from every surface: the palette, keybinds, Home quick boxes,
+the message box and menus.
+
+**User commands and macros** run server built-ins (User Commands And Macros, above). Steps that
+name an app command or a plugin command are planned, not built.
+
+**The in-app agent** runs `ai_callable` built-ins under the confirmation gate. App commands are
+never offered to an agent: a command only a person runs is an app command.
+
+**An outside agent** is one connected through the desktop app's agent bridge, such as an MCP
+client:
+
+- It is offered the `ai_callable` built-ins that the server executes and whose sensitivity is
+  not `Safe`. It is never offered a `DesktopLocal` built-in, an agent-management command (the
+  `agents.*` app commands) or `chat.post_message`: it posts with its send tool, which handles
+  encrypted conversations. It reads only through its read tools, which keep to the conversations
+  the person chose.
+- It runs a command only after the person approved that command for that agent, in the same
+  dialog as plugin commands. An approval is per agent and per command id.
+- Every call shows the outside-agent card and runs only if the person approves it. A `dangerous`
+  command is only proposed, never run.
+- Its context comes only from ids in the arguments, never from what the person has open, and
+  each id must be inside the agent's grants.
+- The call runs with initiator `AGENT`. The card is the person's confirmation: a command the
+  confirmation gate stops is confirmed with the person's answer to the card, and they are not
+  asked twice.
+
+**A plugin** runs its own commands (Plugin-Provided Commands, above), and the command ids its
+manifest lists in `runs_commands` that the person granted at install or update:
+
+- A built-in that is neither `dangerous` nor `Restricted` runs with initiator `PLUGIN`. A
+  `Mutating` one asks the person on every call, in a confirmation that names the plugin: the
+  server answers `CONFIRMATION_REQUIRED`, and the client confirms only when the person does.
+- A `Safe` `DesktopLocal` built-in, and an app command the client marks as runnable by plugins,
+  runs at once. Only app commands that open or show something, move focus or the selection, or
+  start a form the person finishes are marked.
+- A plugin never runs another plugin's commands, an agent-management command, or a `dangerous`
+  or `Restricted` command, whatever its manifest lists.
+- A built-in's context is the person's current workspace, conversation and thread, never a
+  selected message; `server_id`, `conversation_id` and `thread_id` in the arguments take
+  precedence over it.
+- The plugin receives the status, an error code and the message, never the command's output
+  data.
+- A plugin makes at most 20 command calls a minute. After the person dismisses a confirmation,
+  that plugin's command calls are refused for 60 seconds. Every run is recorded in the plugin's
+  audit.
+- When an update adds ids to `runs_commands`, the added ones are not granted until the person
+  approves them.
+
+The manifest field and the plugin's call are in `specs/plugin-protocol-v1.md`, sections 12
+and 9, and work the same for web plugins (`specs/web-plugins-v1.md`).
 
 ## Execution Targets
 
@@ -973,6 +1033,9 @@ The command model does not define:
 - App commands run in the client only; the server knows their ids for keybinds and nothing else.
 - Approving or refusing an outside agent is an app command no agent, plugin or pipe can run, and
   it always asks the person with a warning.
+- The person runs every command. An outside agent runs only the built-ins the person approved
+  for it, asking each time; a plugin runs only its own commands and the ids the person granted
+  in its `runs_commands` (Who Can Run Commands).
 - User-defined commands may compose other commands.
 - User commands are composed commands; macros are lists of steps with arguments, not commands.
 - Commands use typed arguments.
