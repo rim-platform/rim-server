@@ -74,10 +74,61 @@ Examples:
 
 Namespacing rules:
 
-- built-in commands should use product namespaces like `chat.*`, `workspace.*`, `call.*`
+- built-in commands use product namespaces like `chat.*`, `workspace.*`, `state.*`
 - integration commands should use `integration.<name>.*`
 - plugin commands should use `plugin.<plugin_id>.*`
 - user-defined commands should use `user.*`
+
+A built-in id never changes once it is released: keybinds, Home quick boxes, user commands,
+macros and pipelines store it. What a command means to a person comes from its title and its
+category, not from its id, so a released id whose namespace no longer fits stays as it is:
+`workspace.next_channel` moves through every conversation and is titled Next Conversation.
+
+A new built-in, whether the server lists it or it is an app command (below), takes the
+namespace of its feature:
+
+| Namespace | Feature |
+|---|---|
+| `chat.` | Messages and conversations |
+| `workspace.` | The workspace itself |
+| `home.` | Home |
+| `unreads.` | The Unreads page |
+| `notifications.` | The notification inbox, do not disturb, levels and mutes |
+| `people.` | Contacts, blocking, profiles, status and direct message requests |
+| `moderation.` | Owner and moderator actions |
+| `agents.` | Outside agents and the in-app AI agent |
+| `bots.` | Bots and webhooks |
+| `plugins.` | Managing plugins |
+| `settings.` | The settings pages |
+| `app.` | The app: its window, updates, signing out and quitting |
+
+## Categories
+
+Every command has a category, which groups it in the palette, the keybind picker and every
+other list a client shows. A built-in command, listed by the server or an app command, is in one
+of these and no other:
+
+| Category | What goes in it |
+|---|---|
+| Navigation | Moving between places: back and forward, next and previous conversation, jumping to a conversation, switching workspace, pane focus |
+| Messages | Acting on one message: post, reply, edit, delete, pin, react, copy, thread, mark unread from here, scroll |
+| Conversations | Channels, groups and direct messages as a whole: create, join, leave, invite, members, the pinned panel, topic, mark read, browse |
+| Search | The search box, search in a conversation, message search |
+| People | Contacts, blocking, profiles, status, direct message requests |
+| Home | Home and its edit mode |
+| Unreads | The Unreads page |
+| Notifications | The inbox, do not disturb, levels, mutes |
+| Moderation | Owner and moderator actions: kick, ban, roles, timeouts, slow mode, who can post, archive, reports |
+| Workspace | The workspace itself: settings, rename, leave, invites, the member directory, the audit log, adding a workspace |
+| Agents | Outside agents and the in-app AI agent |
+| Bots & Webhooks | Bots, webhooks, the channel's bots panel |
+| Plugins | Managing plugins |
+| View | Layout and appearance: sidebar, zen mode, density, layout preset, vim mode, the shortcuts list, the palette, closing a panel |
+| App | The app: settings, quitting, updates, signing out, reloading commands, the window |
+| State | The `state.*` commands |
+
+A plugin's own commands are in a category named after the plugin's display name. A user command
+is in `User`, and a macro the agent is offered as `macro.<id>` is in `Macro`.
 
 ## Command Kinds
 
@@ -125,7 +176,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | `admin.delete_member_messages` | `server_id`, `user_id`, `window` (`1h`/`24h`/`7d`/`all`), `include_unjoined_private?` (default false) | no | yes | Owner/Moderator; target need not be a member; at most 1000 per run; confirmation required |
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
 | `chat.set_channel_posting` | `server_id`, `conversation_id`, `policy` (`everyone`/`moderators`), `allows_threads?` (default true) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
-| `chat.report_message` | `reason` | yes | no | Context menu; requires `workspace`, `conversation` and `selected_message` context |
+| `chat.report_message` | `message_id?`, `reason` | yes | no | Needs `workspace` and `conversation` context; `message_id` falls back to the selected message. Offered in a context menu with a selected message |
 | `chat.mark_as_unread` | `server_id`, `conversation_id`, `message_id` | no | no | `Mutating`, needs no capability: it changes only the caller's own read state. Palette, context menu and keybind. `conversation_id` falls back to the focused conversation and `message_id` to the selected message. The message and later ones count as unread (`docs/messaging.md`) |
 
 Notification builtins (`docs/messaging.md`, Notification Rules). All are
@@ -182,9 +233,10 @@ stored values, including the caller's own `scope: user` entries, and nothing red
 in workspace state. Kept off the AI surface on purpose: `chat.edit_message`,
 `chat.delete_message`, `chat.reply_to_selected_message` and `chat.copy_message_text` (they act on
 the user's selected message, which the agent cannot supply), `admin.invite_member` (its result is
-an invite token that would pass through the model provider), `chat.mark_all_as_read`
-(duplicates `notifications.mark_all_read`), and `chat.mark_as_unread` (an agent does not decide
-what someone has read).
+an invite token that would pass through the model provider), `chat.mark_all_as_read` (it marks
+every conversation of the workspace read at once, which is the person's call; it is not
+`notifications.mark_all_read`, which marks notifications and which the agent may call), and
+`chat.mark_as_unread` (an agent does not decide what someone has read).
 
 List arguments such as `user_ids` and `member_ids` accept a JSON array of ids or one
 comma-separated string, because the agent's tool schema types every argument as a scalar.
@@ -203,10 +255,92 @@ the notification and general builtins declare none.
 
 `chat.post_message`, `chat.get_recent_messages`, `chat.pin_message` and
 `chat.toggle_reaction` take `conversation_id` from the focused conversation
-(`context.conversation_id`) when it is not given, and `chat.pin_message` and
-`chat.toggle_reaction` take `message_id` from the selected message
-(`context.selected_message_id`); an argument that is given wins. `chat.search_messages` has
-no such fallback: without `conversation_id` it searches the workspace.
+(`context.conversation_id`) when it is not given, and `chat.pin_message`,
+`chat.toggle_reaction` and `chat.report_message` take `message_id` from the selected message
+(`context.selected_message_id`); an argument that is given wins. The agent never sends a
+selected message, so it names the message by `message_id`. `chat.search_messages` has no such
+fallback: without `conversation_id` it searches the workspace.
+
+`workspace.navigate_to_dm` (`DesktopLocal`, not AI-callable) takes a required
+`conversation_id`, the direct message or group to open. The three navigation builtins that move
+through the sidebar move through every conversation, not only channels, and are titled Previous
+Conversation (`workspace.previous_channel`), Next Conversation (`workspace.next_channel`) and
+Next Unread Conversation (`workspace.next_unread_channel`).
+
+### App Commands
+
+An app command is a built-in command the client runs itself and the server does not list:
+opening a page, toggling a panel, moving focus, changing the view, quitting the app. The client
+holds their definitions. The server knows their ids, so that a person's keybinds and a
+workspace's keybinds can name them:
+
+- `createKeybind` and `updateKeybind` accept an app command id as they accept the id of a
+  built-in the server lists, for `user` and `workspace` keybinds alike, and `resolvedKeybinds`
+  returns those keybinds, so they reach every device the person signs in on, the web app
+  included. An app command changes nothing on the server, so the rule for workspace keybinds
+  (`keybind_model.md`, Workspace Keybinds) admits it; a preset `server_id` must still name the
+  keybind's own workspace. One the table marks as not bindable is refused like a built-in that
+  is not keybind-capable.
+- `commands` never lists an app command, on any surface. `executeCommand` refuses one as it
+  refuses an id that names no command, and the AI surface and `commandDiscover` never offer one
+  to an agent. A user command step, a macro step or a pipeline action cannot name one.
+
+A server that accepts these keybinds lists `app_command_keybinds` in `serverInfo.capabilities`.
+An older server refuses them with `VALIDATION`, and a client keeps such a binding on the device
+there.
+
+| Id | Title | Category | Notes |
+|---|---|---|---|
+| `workspace.show_shortcuts` | Show Keyboard Shortcuts | View | |
+| `workspace.toggle_vim_mode` | Toggle Vim Mode | View | |
+| `workspace.previous_unread_channel` | Previous Unread Conversation | Navigation | |
+| `workspace.navigate_panel_left` | Focus the Pane to the Left | Navigation | |
+| `workspace.navigate_panel_right` | Focus the Pane to the Right | Navigation | |
+| `workspace.cycle_layout_preset` | Cycle Layout Preset | View | |
+| `workspace.toggle_zen_mode` | Toggle Zen Mode | View | |
+| `workspace.back_to_workspace` | Back to Workspace | Navigation | |
+| `workspace.cycle_display_density` | Cycle Display Density | View | |
+| `workspace.rename` | Rename Workspace… | Workspace | Opens the rename dialog |
+| `workspace.open_bots` | Open Bots | Bots & Webhooks | |
+| `workspace.leave` | Leave Workspace… | Workspace | Opens the confirmation dialog |
+| `workspace.open_agents` | Open Agents | Agents | Desktop only |
+| `workspace.open_unreads` | Open Unreads | Unreads | |
+| `workspace.unreads_next` | Unreads: Next Message | Unreads | |
+| `workspace.unreads_previous` | Unreads: Previous Message | Unreads | |
+| `workspace.unreads_mark_group` | Unreads: Mark Conversation as Read | Unreads | |
+| `workspace.unreads_open` | Unreads: Open Message | Unreads | |
+| `workspace.unreads_undo` | Unreads: Undo | Unreads | |
+| `workspace.open_home` | Open Home | Home | |
+| `workspace.edit_home` | Edit Home | Home | Not bindable: changing Home is the person's act from the palette or Home |
+| `workspace.open_audit_log` | Open Audit Log | Workspace | |
+| `workspace.open_message_requests` | Open Message Requests | People | |
+| `workspace.toggle_pinned_messages` | Toggle Pinned Messages | Conversations | |
+| `workspace.toggle_channel_bots` | Toggle Bots in This Channel | Bots & Webhooks | |
+| `workspace.toggle_notifications` | Toggle Notifications | Notifications | |
+| `workspace.toggle_conversation_members` | Toggle Conversation Members | Conversations | |
+| `workspace.toggle_member_directory` | Toggle Workspace Members | Workspace | |
+| `workspace.toggle_lens_picker` | Toggle Channel Lenses | Conversations | |
+| `workspace.go_back` | Go Back | Navigation | |
+| `workspace.go_forward` | Go Forward | Navigation | |
+| `app.quit` | Quit RIM | App | Desktop only; asks to confirm |
+
+A new app command is added to this table, and to the server's list of app command ids, in the
+same release that ships it in the client. Until a server knows an id it refuses keybinds to it,
+and the client keeps them on the device.
+
+#### Agent approval commands
+
+The commands that approve or refuse an outside agent's request, or its pairing, are app commands
+with reserved ids: `agents.approve_request`, `agents.refuse_request`, `agents.approve_pairing`
+and `agents.refuse_pairing`. Approving an agent is the person's own act:
+
+- none of them is ever `ai_callable`, and no plugin, pipe, macro, pipeline or user command runs
+  one
+- each one always shows a loud warning and asks the person to confirm, naming the agent and what
+  it asked for, whichever surface started it, a keybind or a Home quick box included
+- a test pins them as offered on no agent surface from the release that adds them
+
+They join the table above in the release that ships them in the client.
 
 ### Plugin-Provided Commands
 
@@ -693,7 +827,12 @@ The command model does not define:
 
 - Commands are the common execution unit across palette, keybinds, context actions, plugins, and
   automations.
-- Command ids are namespaced.
+- Command ids are namespaced, and a released built-in id never changes; new built-ins use the
+  namespace of their feature.
+- Every built-in is in one of sixteen fixed categories.
+- App commands run in the client only; the server knows their ids for keybinds and nothing else.
+- Approving or refusing an outside agent is an app command no agent, plugin or pipe can run, and
+  it always asks the person with a warning.
 - User-defined commands may compose other commands.
 - User commands are composed commands; macros are lists of steps with arguments, not commands.
 - Commands use typed arguments.

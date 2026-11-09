@@ -36,10 +36,16 @@ A keybind may target any command marked `keybind-capable`.
 
 That includes:
 
-- built-in commands
+- built-in commands, those the server lists and the app commands the client runs itself
+  (`command_model.md`, App Commands)
 - plugin commands
 - integration commands
 - user-defined commands (`user.<key>`), including ones that compose other commands
+
+The server stores a `user` or `workspace` keybind to a built-in it lists or to an app command
+it knows. A keybind to a plugin command, or to an app command a server does not know yet (one
+that lacks `app_command_keybinds` in `serverInfo.capabilities` knows none), is refused there
+with `VALIDATION`, and the client keeps it on the device.
 
 A macro (`macro.<id>`) is not in the command registry, so no keybind targets it; a user command
 with the same steps can be bound instead.
@@ -201,7 +207,9 @@ press. So a workspace keybind is limited to commands that change nothing:
 
 - `createKeybind` and `updateKeybind` refuse a workspace keybind whose command is `Mutating` or
   `Restricted`, as the Owner resolves it, with a `VALIDATION` error naming the command. A
-  read-only or navigation command (`Safe` or `Sensitive`) can be bound.
+  read-only or navigation command (`Safe` or `Sensitive`) can be bound, and so can an app
+  command, which changes nothing on the server and asks the person itself before any act that
+  does.
 - They refuse a workspace keybind whose `presetArgs` hold a `server_id` other than the
   keybind's own workspace.
 - `resolvedKeybinds` leaves out a stored workspace keybind that breaks either rule, judged with
@@ -233,7 +241,8 @@ Recommended persistence strategy:
 
 In the current backend shape:
 
-- the backend stores `user` and `workspace` keybinds
+- the backend stores `user` and `workspace` keybinds, to app commands as well, so a person's
+  bindings follow them across devices and a workspace can share them
 - the backend exposes `default` keybind suggestions as a separate layer, not as persisted keybind
   records
 - the client/runtime is expected to own `device_local` keybinds and final runtime keypress handling

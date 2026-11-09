@@ -767,9 +767,10 @@ each list.
   `previewWebhookFormat`; `webhook_test_sessions`: `startWebhookTestSession`, `endWebhookTestSession`,
   `webhookTestDeliveries`, `CreateIncomingWebhookInput.testSessionId` and
   `CreatedIncomingWebhook.keptTestUrl`; `home_layout`: `HomeLayout`, `HomeLayoutSaved`,
-  `homeLayout`, `saveHomeLayout` and `resetHomeLayout`). A client asks
-  for such a field only when its name is listed, so it keeps working against older servers; it
-  ignores names it does not know.
+  `homeLayout`, `saveHomeLayout` and `resetHomeLayout`; `app_command_keybinds`: `createKeybind`
+  and `updateKeybind` accept app command ids, `command_model.md` App Commands). A client asks
+  for such a field, or sends such a value, only when its name is listed, so it keeps working
+  against older servers; it ignores names it does not know.
 
 The discovery document carries the same `features`, and `registrationFull` as
 `registration.full`, for a client that has not connected yet.
