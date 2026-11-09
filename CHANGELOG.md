@@ -122,7 +122,6 @@ tag `v<version>`, the version every crate in the workspace carries.
   audit row, nor a row as a step of a workspace macro, since the workspace's Owners and Moderators
   read the audit log and the rows would show a person's reading habits. The audit tracing line is
   still logged (`docs/command_model.md`, Audit row).
-
 - Built-in commands are in sixteen fixed categories (Navigation, Messages, Conversations, Search,
   People, Home, Unreads, Notifications, Moderation, Workspace, Agents, Bots & Webhooks, Plugins,
   View, App, State) in place of Admin, Chat and Workspace (`docs/command_model.md`, Categories).
