@@ -31,7 +31,7 @@ This means:
 - context actions invoke commands
 - plugins register commands
 - automations may invoke commands
-- user commands are commands too; a macro runs commands but is not one
+- macros, a person's own actions made of commands, are commands too
 
 ## Current Backend State
 
@@ -40,14 +40,13 @@ The current backend/contracts implementation already provides:
 - built-in command definitions
 - command listing and single-command lookup
 - backend command execution
-- persisted user commands and macros
-- user-defined command create/update/delete flows
+- persisted macros, kept with the person's account on their home server
+- macro create/update/delete flows
 - command context-aware filtering for palette/context-menu/keybind use cases
 
-Current v1 constraint:
-
-- persisted user-defined commands may only compose backend-executable commands
-- desktop-local command composition belongs to a later client/runtime slice
+A macro's steps may name any command: a built-in the server lists, an app command or a plugin
+command. The client runs a macro step by step; the server runs one itself only when every step
+is a built-in it executes, with every argument fixed (Commands And Macros, below).
 
 ## Product Requirements
 
@@ -77,10 +76,10 @@ Namespacing rules:
 - built-in commands use product namespaces like `chat.*`, `workspace.*`, `state.*`
 - integration commands should use `integration.<name>.*`
 - plugin commands should use `plugin.<plugin_id>.*`
-- user-defined commands should use `user.*`
+- macros, the person's own commands, use `user.*`
 
-A built-in id never changes once it is released: keybinds, Home quick boxes, user commands,
-macros and pipelines store it. What a command means to a person comes from its title and its
+A built-in id never changes once it is released: keybinds, Home quick boxes, macros and
+pipelines store it. What a command means to a person comes from its title and its
 category, not from its id, so a released id whose namespace no longer fits stays as it is:
 `workspace.next_channel` moves through every conversation and is titled Next Conversation.
 
@@ -127,8 +126,8 @@ of these and no other:
 | App | The app: settings, quitting, updates, signing out, reloading commands, the window |
 | State | The `state.*` commands |
 
-A plugin's own commands are in a category named after the plugin's display name. A user command
-is in `User`, and a macro the agent is offered as `macro.<id>` is in `Macro`.
+A plugin's own commands are in a category named after the plugin's display name. A macro is in
+`Macro`.
 
 ## Command Kinds
 
@@ -312,7 +311,8 @@ workspace's keybinds can name them:
   is not keybind-capable.
 - `commands` never lists an app command, on any surface. `executeCommand` refuses one as it
   refuses an id that names no command, and the AI surface and `commandDiscover` never offer one
-  to an agent. A user command step, a macro step or a pipeline action cannot name one.
+  to an agent. A pipeline action cannot name one. A macro step can, and the client runs it
+  (Commands And Macros, below).
 
 A server that accepts these keybinds lists `app_command_keybinds` in `serverInfo.capabilities`.
 An older server refuses them with `VALIDATION`, and a client keeps such a binding on the device
@@ -473,8 +473,7 @@ The commands that approve or refuse an outside agent's request, or its pairing, 
 with reserved ids: `agents.approve_request`, `agents.refuse_request`, `agents.approve_pairing`
 and `agents.refuse_pairing`. Approving an agent is the person's own act:
 
-- none of them is ever `ai_callable`, and no plugin, pipe, macro, pipeline or user command runs
-  one
+- none of them is ever `ai_callable`, and no plugin, pipe, macro or pipeline runs one
 - the two that approve, `agents.approve_request` and `agents.approve_pairing`, always show a loud
   warning and ask the person to confirm, naming the agent and what it asked for, whichever
   surface started them, a keybind or a Home quick box included
@@ -493,90 +492,186 @@ and `agents.refuse_pairing`. Approving an agent is the person's own act:
 - Registered by integrations such as bots, webhooks, or external tool connectors.
 - Usually remote or backend-oriented.
 
-### User-Defined Commands
+### Macros
 
-- Created by the user.
-- May wrap built-in, plugin, or integration commands.
-- May compose multiple commands into a single workflow.
+- Created by the person: a macro is their own action, made of commands.
+- Its steps name built-in, app and plugin commands, each with its arguments.
+- Every macro is a command, in category `Macro`.
 
-Current v1 backend constraint:
+## Commands And Macros
 
-- persisted user-defined commands may only compose backend-executable commands
-- desktop-local command composition belongs to a later client/runtime slice
+A **command** is one action that RIM or a plugin gives you: a built-in the server lists, an app
+command the client runs, or a plugin's command. Nobody creates a command. A **macro** is a
+person's own action, made of commands that run in order. Every macro is a command too: it is
+in category `Macro`, it shows in the palette, the keybind picker, Home quick boxes and the
+message box's `/` list, and a keybind names it.
 
-A user command belongs to the user who created it and nobody else sees it. `commands` lists it
-as a `Command` while it is enabled, without its steps. `userCommand(id)` returns one of the
-caller's user commands as a `UserCommand`, enabled or not, with its title, description, steps
-in the order they run (each a `commandId` and its `args`) and `isEnabled`: the fields
-`updateUserCommand` takes, so an edit form loads the saved steps instead of asking for them
-again. It answers null for an id that is not one of the caller's user commands: a built-in id,
-another user's command and an unknown one alike. `userCommands` lists the caller's user
-commands in the same shape, enabled or not, sorted by id.
+Macros are stored as user commands, and the API keeps that name: `createUserCommand`,
+`updateUserCommand`, `deleteUserCommand`, `userCommand` and `userCommands`. A macro's id is
+`user.<key>`. `<key>` is one or more lowercase letters, numbers, dots, dashes or underscores;
+`createUserCommand` refuses any other id with `VALIDATION` ("a user command id may use only
+lowercase letters, numbers, dots, dashes or underscores after `user.`"), and macros saved before
+this rule keep their ids. A client makes the key from the title.
 
-## User Commands And Macros
+A macro belongs to the account that created it, on that account's home server, and nobody else
+sees it. Like the person's keybinds, it follows them into every workspace, on this server or
+another: the client reads macros and keybinds from the home server. The commands a person runs
+in a workspace, a macro's steps included, go to the server that hosts the workspace; the client
+routes each call there.
 
-Two things compose commands, and only one of them is a command:
+`commands` lists a macro as a `Command` while it is enabled, without its steps. `userCommand(id)`
+returns one of the caller's macros as a `UserCommand`, enabled or not, with its title,
+description, steps in the order they run, `isEnabled`, `aiCallable`, `nlDescription` and
+`intentSamples`: the fields `updateUserCommand` takes, so an edit form loads the saved macro
+instead of asking for it again. It answers null for an id that is not one of the caller's
+macros: a built-in id, another user's macro and an unknown one alike. `userCommands` lists the
+caller's macros in the same shape, enabled or not, sorted by id.
 
-- a **user command** (`createUserCommand`, id `user.<key>`) is a command: it is listed with the
-  others, so it shows in the palette and a keybind can name it; its steps run in order, each
-  with its own arguments, in the context the user command runs in. `<key>` is one or more
-  lowercase letters, numbers, dots, dashes or underscores; `createUserCommand` refuses any other
-  id with `VALIDATION` ("a user command id may use only lowercase letters, numbers, dots, dashes
-  or underscores after `user.`"), and user commands saved before this rule keep their ids
-- a **macro** (`createMacro`, `MacroDef`) is a list of up to 20 steps, each a builtin command id
-  with its own arguments; a step may not name another macro or a user command, so one run
-  performs at most 20 builtin steps. It is not in the command registry, so the palette does not
-  list it and no keybind names it. It runs through `executeMacro` (from Settings or `/macro` in the client),
-  its steps in order, each with its own arguments, in the context of the run. `commands` on the
-  `AI` surface and `commandDiscover` offer an `ai_callable` macro to the agent as `macro.<id>`
+### Steps
 
-A user holds at most 50 macros (and 50 pipelines) in a workspace, and one who is neither Owner
-nor Moderator at most a fifth of `RIM_LIMIT_MACROS_PER_WORKSPACE` (`RIM_LIMIT_PIPELINES_PER_WORKSPACE`)
-when it is set. In the server's default workspace, which every account joins, that share is the
-only bound: the per-workspace caps do not apply there, since macros and pipelines belong to
-their author and no account may fill a cap for everyone, and an account in probation creates
-none (`VALIDATION` saying when it can).
+A macro lists 1 to 20 steps. Each step is a `commandId`, its fixed `args` and the names of the
+arguments it asks for when the macro runs (`ask`). The step's command is one of:
 
-Neither pipes: each step's payload is collected under its command id in the result, and no step
-receives another step's result. Only `executeCommand` with `isPipe` (the palette's `|`) passes
-one command's result to the next stage.
+- a built-in the server lists, one the server runs or one the client runs (`DesktopLocal`)
+- an app command (App Commands, above), except the agent-management ones:
+  `agents.approve_request`, `agents.refuse_request`, `agents.approve_pairing`,
+  `agents.refuse_pairing`, `agents.disconnect`, `agents.choose_reads`,
+  `agents.choose_plugin_commands`, `agents.open_runs`, `agents.open_record` and
+  `agents.clear_record`
+- a plugin command, `plugin.<pluginId>.<command>`: the plugin id has at least three segments
+  of ASCII letters, digits and hyphens (`specs/plugin-protocol-v1.md`, section 2), the command's
+  own id one or more segments of ASCII letters, digits, `_` and `-`, all joined by `.`. The
+  server does not know which plugins a person installs, so it checks only the id's shape; the
+  client says a step's plugin is not installed when the macro runs
 
-A user command has limits that keep one run, and one lookup of its definition, bounded:
+`macroStepCommands` lists every built-in and app command a step may name, whatever the caller's
+role and workspace, sorted by id; the client adds the plugins' commands it knows. Every argument
+of a step's command is either fixed in `args`, filled from the context the macro runs in, or
+asked for: `ask` names at most 32 arguments, each 1 to 64 bytes, none twice and none also a key
+of `args`.
 
-- it lists at most 20 steps, and a user keeps at most 100 user commands
-- a chain of user commands naming user commands holds at most eight
-- one run performs at most 100 built-in steps: a nested user command counts its own steps each
-  time a step names it, and the stages of a pipe count together
+`createUserCommand` and `updateUserCommand` refuse a step they cannot accept with `VALIDATION`:
+"unknown command step `<id>`" for an id that names none of the above, "macro steps must not
+manage agents (`<id>`)" for an agent-management command, and "a step may ask for at most 32
+arguments", "an asked argument name may be 1 to 64 bytes", "a step asks for `<name>` twice" or
+"a step both fixes and asks for `<name>`" for its `ask`. A step omitting `ask` asks for nothing,
+except on `updateUserCommand`, where it keeps what the stored step at the same position asked
+for when that step names the same command.
 
-`createUserCommand` and `updateUserCommand` refuse a command over a limit with a `VALIDATION`
+A step names another macro only where it did before macros took app and plugin steps:
+`createUserCommand` refuses a `user.*` step with "macro steps must not reference other macros",
+and `updateUserCommand` accepts one only when the stored macro already has a step naming that
+macro. Such nested macros keep working, within these limits:
+
+- a person keeps at most 100 macros
+- a chain of macros naming macros holds at most eight
+- one run performs at most 100 built-in steps: a nested macro counts its own steps each time a
+  step names it, and the stages of a pipe count together
+
+`createUserCommand` and `updateUserCommand` refuse a macro over a limit with a `VALIDATION`
 error that names it: "a user command may have at most 20 steps", "a user may have at most 100
 user commands", "user command recursion depth exceeded" or "a user command expands to more
-than 100 steps". An update is refused the same way when it would take a stored command that
-names the updated one past 100 steps. A stored user command that nests deeper than eight or
-expands past 100 steps, saved before these limits, is refused when it runs, before any of its
-steps runs; a pipe over 100 steps is refused with "a pipe expands to more than 100 steps".
-`commands` leaves out a user command whose definition cannot be resolved (one past 100 steps,
-or with a step naming an unknown or disabled command, or a cycle) and lists the rest. A
-disabled user command does not run: `executeCommand` answers `NOT_FOUND` for it, as for an id
-that names no command.
+than 100 steps". An update is refused the same way when it would take a stored macro that
+names the updated one past 100 steps. A stored macro that nests deeper than eight or expands
+past 100 steps, saved before these limits, is refused when it runs, before any of its steps
+runs; a pipe over 100 steps is refused with "a pipe expands to more than 100 steps". `commands`
+leaves out a macro whose definition cannot be resolved (one past 100 steps, or with a step
+naming an unknown or disabled command, or a cycle) and lists the rest. A disabled macro does
+not run: `executeCommand` answers `NOT_FOUND` for it, as for an id that names no command.
+
+A macro's definition adds up its steps: its required context and capabilities are those of
+every step, it is dangerous when a step is, its sensitivity is the strictest of its steps', and
+a keybind may name it when every step's command is keybind-capable. A plugin step counts as
+keybind-capable and `Safe`; the client applies the plugin's own rules when it runs it.
+
+### Running a macro
+
+**The person.** The client runs the steps one by one, in order, in the context the macro runs
+in. Before the first step it asks, in one form, for every argument the steps `ask` for;
+cancelling the form runs nothing. A server step is its own `executeCommand` call with initiator
+`MACRO`, sent to the server that hosts the workspace, with its own gates, confirmation and audit
+row. An app step and a plugin step run in the client. The first step that fails or is cancelled
+stops the rest, and the client says which step it was and why. A step that opens a form or a
+picker does not wait for the person to finish it, so such a step goes last. Neither the client
+nor the server pipes: no step receives another step's result. Only `executeCommand` with
+`isPipe` (the palette's `|`) passes one command's result to the next stage.
+
+**The server.** `executeCommand` naming `user.<key>` runs the macro on the server when its
+execution target is `Backend`: every step, nested macros' steps included, is a built-in the
+server runs, and no step asks for an argument. The capability and confirmation gates judge the
+call once for the whole macro, each step still passes the role and timeout gates, and the call
+writes one audit row. The steps run in order with their own arguments, and each step's payload
+is collected under its command id. The first step that fails stops the run and its
+error is the call's. A macro with an app step, a plugin step or an asked argument has the
+execution target `DesktopLocal`, as has a macro naming one, and `executeCommand` refuses it
+with `VALIDATION` "this macro has steps only the app runs; run it from the app", before any
+step runs.
+
+**The AI agent.** A macro runs for an agent only when its owner turned on "The AI agent can run
+this" (`aiCallable`). That takes a macro whose steps are all built-ins the server runs, with
+every argument fixed: no app step, no plugin step, no other macro and no `ask`.
+`createUserCommand` and `updateUserCommand` refuse `aiCallable: true` on any other macro with
+`VALIDATION` "only a macro whose steps all run on the server, with every argument fixed, can be
+run by the AI agent". `updateUserCommand` without `aiCallable` keeps the stored value, and turns
+it off when the new steps no longer allow it. The macro's `nlDescription` (its description when
+empty) and `intentSamples` describe it to the agent; they are checked as a built-in's are, and a
+text that looks like an instruction to the model is refused with `VALIDATION`.
+
+The `AI` surface of `commands` and `commandDiscover` list such a macro for a workspace on its
+home server where the owner may run every step. The agent runs it as one call,
+`executeCommand("user.<key>")` with initiator `AGENT` on the home server: the confirmation gate
+judges the macro as a whole, so a `Mutating` or dangerous step makes the call need the person's
+confirmation once, and the run counts as one call against the agent's limits. A macro on
+another server, or in a workspace hosted elsewhere, is not offered to the agent. `executeCommand`
+with initiator `AGENT` refuses a macro that is not agent-callable, or no longer meets the rule,
+with `PERMISSION_DENIED` (refusal `DENIED`).
+
+### Workspace macros, deprecated
+
+Before macros were commands, a macro (`MacroDef`) was kept per workspace on the server hosting
+it: `createMacro`, `updateMacro`, `deleteMacro`, `executeMacro`, `myMacros` and `macroByName`.
+They are deprecated and keep working as described here until a later release removes them. The
+`AI` surface and `commandDiscover` no longer offer an `ai_callable` workspace macro as
+`macro.<id>`.
+
+A client that finds `account_macros` in the home server's `serverInfo.capabilities` moves the
+person's workspace macros once: for each workspace macro it creates a macro with the same title,
+description and steps on the home server, and then deletes the workspace macro on the server
+hosting it. A workspace macro with the same title and steps as an existing macro is only
+deleted. A moved macro's own `sensitivity` is dropped: each step keeps its own gates, and the
+macro's sensitivity is the strictest of its steps'. When the person reaches 100 macros the rest
+stay in their workspaces. The server moves nothing itself.
+
+A workspace macro is a list of up to 20 steps, each a builtin command id with its own
+arguments; a step may not name a workspace macro or a user command. It is not a command. It runs
+through `executeMacro`, its steps in order, each with its own arguments, in the context of the
+run.
+
+A user holds at most 50 workspace macros (and 50 pipelines) in a workspace, and one who is
+neither Owner nor Moderator at most a fifth of `RIM_LIMIT_MACROS_PER_WORKSPACE`
+(`RIM_LIMIT_PIPELINES_PER_WORKSPACE`) when it is set. In the server's default workspace, which
+every account joins, that share is the only bound: the per-workspace caps do not apply there,
+since macros and pipelines belong to their author and no account may fill a cap for everyone,
+and an account in probation creates none (`VALIDATION` saying when it can).
 
 `createMacro` and `updateMacro` refuse a step naming a user command with a `VALIDATION` error,
-"macro steps must not reference user commands"; `executeMacro` refuses a stored macro with such
-a step the same way, before any of its steps runs. A step must name a builtin command:
-`createMacro` and `updateMacro` refuse any other id, a plugin command included, since plugin
-commands run only in the client, with `VALIDATION` "Unknown command: <id>". A step that fails
-stops the run: later steps do not run, and `executeMacro` answers `ERROR` with the message
-`Step <n> (<title>) failed: <reason>`, where `n` counts from 1, the title is the command's
-registry title (its id when the registry has none) and the reason is the step's own error. A
-macro saved before the check with an unknown step fails at that step the same way.
+"macro steps must not reference user commands"; `executeMacro` refuses a stored workspace macro
+with such a step the same way, before any of its steps runs. A step must name a builtin
+command: `createMacro` and `updateMacro` refuse any other id, a plugin command included, with
+`VALIDATION` "Unknown command: <id>". A step that fails stops the run: later steps do not run,
+and `executeMacro` answers `ERROR` with the message `Step <n> (<title>) failed: <reason>`, where
+`n` counts from 1, the title is the command's registry title (its id when the registry has none)
+and the reason is the step's own error. A workspace macro saved before the check with an
+unknown step fails at that step the same way.
 
-A macro run asks for one confirmation up front when the macro's own `sensitivity` is
+A workspace macro run asks for one confirmation up front when the macro's own `sensitivity` is
 `Restricted` or when any step needs one under the confirmation gate below, judged with the
 run's initiator: a dangerous step, a `Restricted` one, or a `Mutating` one the agent or a plugin
 started. Without a proof `executeMacro` runs no step and answers `CONFIRMATION_REQUIRED` with a
 challenge for the macro, and its `message` names the reason: the sensitivity tier, the steps,
 or both. The call made again with that proof runs the steps, and the one confirmation covers
-every step of the run that needs one. A macro with no such step runs without a confirmation.
+every step of the run that needs one. A workspace macro with no such step runs without a
+confirmation.
 
 ## Size Limits
 
@@ -588,8 +683,8 @@ names it, such as "command arguments may be at most 65536 bytes".
 |---|---|
 | `executeCommand` `args`, serialized as JSON | 65,536 bytes, room for the longest message `chat.post_message` takes |
 | `executeCommand` `commandId` | 256 bytes; a pipe expression (`isPipe`) 4,096 bytes |
-| User command (`createUserCommand`, `updateUserCommand`) | id 256 bytes, title 128 characters, description 1,000 characters, each step's id 256 bytes and `args` 4,096 bytes |
-| Macro (`createMacro`, `updateMacro`) | description and `nlDescription` 1,000 characters each, up to 10 `intentSamples` of 200 characters, each step's id 256 bytes and `args` 4,096 bytes |
+| Macro (`createUserCommand`, `updateUserCommand`) | id 256 bytes, title 128 characters, description and `nlDescription` 1,000 characters each, up to 10 `intentSamples` of 200 characters, up to 20 steps, each step's id 256 bytes, `args` 4,096 bytes and up to 32 `ask` names of 64 bytes |
+| Workspace macro (`createMacro`, `updateMacro`, deprecated) | description and `nlDescription` 1,000 characters each, up to 10 `intentSamples` of 200 characters, each step's id 256 bytes and `args` 4,096 bytes |
 | Pipeline (`createPipeline`, `updatePipeline`) | description 1,000 characters, up to 5 filter conditions, a `MessageContains` pattern of 256 characters, up to 10 actions, each action's id 256 bytes and `args` 4,096 bytes |
 
 Too large calls are refused before they run, so they write no audit row. The audit log keeps a
@@ -613,15 +708,16 @@ An `AGENT` call may carry a `runId`, an identifier the desktop app gives one str
 agent's calls. The audit entry keeps it, so `listAuditLog` can list that stretch; on a call with
 any other initiator it is ignored. It is the client's word, like the initiator. It must be 1 to
 64 ASCII letters, digits, `_` or `-`, or the call is refused with `VALIDATION` whatever the
-initiator. A macro's steps do not carry it.
+initiator. A macro the agent runs is one call and carries it there; the steps of a macro the
+client runs are `MACRO` calls and do not.
 
-A pipeline action may not name a user command or a macro: each action runs as its own command
-call with its own budget of 100 builtin steps, and a pipeline fires on events other people cause.
-`createPipeline` and `updatePipeline` refuse such an action with "pipeline actions must not
+A pipeline action may not name a macro or a workspace macro: each action runs as its own
+command call with its own budget of 100 builtin steps, and a pipeline fires on events other
+people cause. `createPipeline` and `updatePipeline` refuse such an action with "pipeline actions must not
 reference user commands or macros". An action must name a builtin command: `createPipeline` and
 `updatePipeline` refuse any other id, a plugin command included, with `VALIDATION` "Unknown
 command: <id>". A pipeline saved before these limits runs at most its first 10 actions and skips
-an action naming a user command or a macro. A Post as bot action is the one that runs without a
+an action naming a macro or a workspace macro. A Post as bot action is the one that runs without a
 confirmation, as a bot rather than as the pipeline's creator (`bots.md`).
 
 The server keeps at most 32 unanswered confirmation challenges per user; issuing one more drops
@@ -675,7 +771,7 @@ it runs need none.
 After the capability and confirmation gates, `execute_command` refuses any command whose `sensitivity` is `Mutating` or
 `Restricted` with `ServiceError::TimedOut { until }` (GraphQL `TIMED_OUT`, extension `until`)
 when the actor is timed out in the context's workspace (`ModerationService::active_timeout`).
-`Safe` and `Sensitive` commands still run. The gate also runs on nested dispatch (user-command
+`Safe` and `Sensitive` commands still run. The gate also runs on nested dispatch (macro
 steps, pipe stages), before the rate limiter, inside the audit wrapper. Without a workspace
 context it has nothing to check; the services behind the command apply their own write gates
 anyway. Gate order: C1 capability → H1 confirmation → T1 timeout → R1 rate limit.
@@ -740,7 +836,7 @@ Arguments should be usable by:
 
 - command palette forms
 - plugin-provided UIs
-- the steps of user commands and macros
+- the steps of macros, fixed or asked for when the macro runs
 - API surfaces later
 
 ## Context Model For Commands
@@ -802,13 +898,16 @@ ordinary call with its initiator and applies its gates (Confirmation gate, Timeo
 as for any other.
 
 **The person** runs every command, from every surface: the palette, keybinds, Home quick boxes,
-the message box and menus.
+the message box and menus. The client sends each call to the server that hosts the workspace it
+runs in.
 
-**User commands and macros** run server built-ins (User Commands And Macros, above). Steps that
-name an app command or a plugin command are planned, not built.
+**A macro** runs any command as a step: built-in, app and plugin commands, each in turn,
+started by the person (Commands And Macros, above). The person's own macros are the only ones
+anyone runs.
 
-**The in-app agent** runs `ai_callable` built-ins under the confirmation gate. App commands are
-never offered to an agent: a command only a person runs is an app command.
+**The in-app agent** runs `ai_callable` built-ins under the confirmation gate, and the person's
+agent-callable macros on their home server (Running a macro, above). App commands are never
+offered to an agent: a command only a person runs is an app command.
 
 **An outside agent** is one connected through the desktop app's agent bridge, such as an MCP
 client:
@@ -817,7 +916,9 @@ client:
   not `Safe`. It is never offered a `DesktopLocal` built-in, an agent-management command (the
   `agents.*` app commands) or `chat.post_message`: it posts with its send tool, which handles
   encrypted conversations. It reads only through its read tools, which keep to the conversations
-  the person chose.
+  the person chose. It is also offered the person's agent-callable macros (Running a macro,
+  above) whose sensitivity is not `Safe`, under the same rules: each approved per agent and
+  asked for on every call.
 - It runs a command only after the person approved that command for that agent, in the same
   dialog as plugin commands. An approval is per agent and per command id.
 - Every call shows the outside-agent card and runs only if the person approves it. A `dangerous`
@@ -837,8 +938,9 @@ manifest lists in `runs_commands` that the person granted at install or update:
 - A `Safe` `DesktopLocal` built-in, and an app command the client marks as runnable by plugins,
   runs at once. Only app commands that open or show something, move focus or the selection, or
   start a form the person finishes are marked.
-- A plugin never runs another plugin's commands, an agent-management command, or a `dangerous`
-  or `Restricted` command, whatever its manifest lists.
+- A plugin never runs another plugin's commands, an agent-management command, a macro
+  (`user.*`: a macro is the person's own), or a `dangerous` or `Restricted` command, whatever
+  its manifest lists.
 - A built-in's context is the person's current workspace, conversation and thread, never a
   selected message; `server_id`, `conversation_id` and `thread_id` in the arguments take
   precedence over it.
@@ -957,7 +1059,7 @@ Visibility: the `commands` and `commandDiscover` queries list only the commands 
 run in the given context, so the palette and the AI agent never offer one that `executeCommand`
 refuses for who the caller is. A command the server runs (`backend`) is listed only when the
 context names a workspace the caller is a member of, their role there may run it, and each of its
-required capabilities passes the capability gate; a user command needs the role every step
+required capabilities passes the capability gate; a macro needs the role every step
 needs. The role a builtin needs is the one the service behind it enforces: the Owner for
 `admin.invite_member`; an Owner or Moderator for `admin.kick`, `admin.ban`, `admin.unban`,
 `admin.timeout`, `admin.set_role`, `admin.delete_member_messages`, `chat.set_slow_mode`,
@@ -1016,8 +1118,8 @@ Examples:
 
 The command model does not define:
 
-- a scripting language: a pipe passes one command's result to the next stage, macros and user
-  commands run fixed steps, and anything beyond that belongs in a plugin
+- a scripting language: a pipe passes one command's result to the next stage, a macro runs its
+  steps in order with arguments fixed or asked for, and anything beyond that belongs in a plugin
 - dataflow beyond a linear pipe
 - distributed workflow execution
 - a typed payload schema per command result: results share one envelope
@@ -1036,8 +1138,16 @@ The command model does not define:
 - The person runs every command. An outside agent runs only the built-ins the person approved
   for it, asking each time; a plugin runs only its own commands and the ids the person granted
   in its `runs_commands` (Who Can Run Commands).
-- User-defined commands may compose other commands.
-- User commands are composed commands; macros are lists of steps with arguments, not commands.
+- A command is one action RIM or a plugin gives you; a macro is the person's own action made of
+  commands, and every macro is a command, in category `Macro`, with an id `user.<key>`.
+- A macro's steps may be built-in, app or plugin commands, each argument fixed or asked for when
+  it runs. The client runs a macro step by step and the first failing step stops the rest.
+- Macros and keybinds live with the account on its home server; command calls go to the server
+  that hosts the workspace.
+- The AI agent runs a macro only when the person allowed it and every step is a built-in the
+  server runs with every argument fixed; it runs as one call on the home server.
+- Workspace macros (`createMacro` and the rest) are deprecated; the client moves them into the
+  person's macros once.
 - Commands use typed arguments.
 - Commands declare required context.
 - Commands declare execution target.

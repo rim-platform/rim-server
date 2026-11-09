@@ -425,7 +425,7 @@ error; params of the wrong shape get `INVALID_PARAMS`.
 | `code` with `refused` | Meaning |
 |---|---|
 | `NOT_GRANTED` | The id is not in `runs_commands`, or the user has not granted it. |
-| `NOT_ALLOWED` | No plugin may run it: it is dangerous, `Restricted`, an agent-management command, another plugin's command, or an app command not marked as runnable by plugins. |
+| `NOT_ALLOWED` | No plugin may run it: it is dangerous, `Restricted`, an agent-management command, another plugin's command, one of the user's macros (`user.*`), or an app command not marked as runnable by plugins. |
 | `CONFIRMATION_DISMISSED` | The user dismissed the confirmation for this call. |
 | `COOLING_DOWN` | The user dismissed a confirmation for this plugin less than 60 seconds ago. |
 | `RATE_LIMITED` | The plugin made more than 20 command calls in the last minute. |
@@ -439,6 +439,7 @@ Rules:
   once.
 - A plugin's own commands, `plugin.<pluginId>.*`, are run by the host's request above, not by
   this one; another plugin's commands are always `NOT_ALLOWED`.
+- A macro, `user.<key>`, is the user's own action and is always `NOT_ALLOWED`, granted or not.
 - A built-in the server executes goes to the server with initiator `PLUGIN`. Its context is the
   user's current workspace, conversation and thread only, never a selected message;
   `server_id`, `conversation_id` and `thread_id` in `args` take precedence over it.
@@ -678,8 +679,9 @@ install.
 An id the host does not know is allowed, since the server decides which commands exist; the
 install prompt shows it as not available, and a call to it is refused with `UNAVAILABLE`. The
 user grants the ids at install and can refuse them. When an update adds ids, the added ones stay
-ungranted until the user approves them. A dangerous or `Restricted` command is never run for a
-plugin, whatever the list says.
+ungranted until the user approves them. A dangerous or `Restricted` command, and a `user.*` id,
+which names one of the user's macros, are never run for a plugin, whatever the list says: a call
+to one is refused with `NOT_ALLOWED`.
 
 ### Rules for v1
 
