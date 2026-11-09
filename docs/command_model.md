@@ -158,6 +158,17 @@ never do more than the user it acts for.
 | `chat.unarchive_channel` | `server_id`, `conversation_id` | yes | no | Owner/Moderator |
 | `chat.remove_conversation_member` | `server_id`, `conversation_id`, `user_id` | no | yes | Owner/Moderator, or yourself; confirmation required |
 
+Pin and topic builtins. Both are `Backend`, `Mutating`, not dangerous, need `chat.write` and,
+like every `Mutating` command, the agent's confirmation. `conversation_id` falls back to the
+focused conversation. They call the service methods of the GraphQL mutations they mirror, which
+hold the rules (`docs/messaging.md`, Channel Visibility And Membership), so the command allows
+exactly what the mutation allows.
+
+| Id | Args | AI-callable | Category | Notes |
+|---|---|---|---|---|
+| `chat.unpin_message` | `server_id`, `conversation_id`, `message_id` | yes | Messages | Mirrors `unpinMessage` (`PinService`). Anyone who may write unpins what they pinned; a message someone else pinned in a channel is unpinned by an Owner, a Moderator or a private channel's creator (`FORBIDDEN` otherwise). `message_id` falls back to the selected message. Palette, not keybind, like `chat.pin_message`. Payload `{success, unpinned}` |
+| `chat.set_topic` | `server_id`, `conversation_id`, `topic` | yes | Conversations | Title Edit Topic…. Mirrors `updateConversationTopic` (`ConversationService`): a channel's topic is changed by an Owner, a Moderator or a private channel's creator, a DM's or group's by any member (`FORBIDDEN` otherwise); archived conversations refuse it. `topic` is trimmed, control characters other than newlines are dropped, and an empty `topic` clears it; more than 512 characters is `VALIDATION`. Palette and keybind. Payload `{conversation_id, topic}` (`topic` null when cleared) |
+
 Moderation builtins. All are
 `Backend` and `Mutating`; the `admin.*` ones require `admin.manage_members`, the `chat.*` ones
 `chat.write`. They call `ModerationService`, which enforces the roles (Owner/Moderator, who may
@@ -172,6 +183,7 @@ which now lets an Owner/Moderator delete other people's messages.
 | `admin.ban` | `server_id`, `user_id`, `reason?`, `expires_at?` (RFC 3339) | no | yes | Owner/Moderator; confirmation required |
 | `admin.unban` | `server_id`, `user_id` | no | no | Owner/Moderator |
 | `admin.timeout` | `server_id`, `user_id`, `minutes` (1..=43200), `reason?` | yes | no | Owner/Moderator |
+| `admin.clear_timeout` | `server_id`, `user_id` | yes | no | Mirrors `clearTimeout`: Owner/Moderator, with the targeting rules of `admin.timeout`. Category Moderation; palette, offered to Owners and Moderators, and keybind. Clearing a timeout in force is audited and emits `MemberTimeoutChanged`; clearing none succeeds and changes nothing. Payload `{user_id, cleared}` |
 | `admin.set_role` | `server_id`, `user_id`, `role` (`moderator`/`member`/`guest`) | no | yes | Owner: any but owner; Moderator: member/guest; confirmation required |
 | `admin.delete_member_messages` | `server_id`, `user_id`, `window` (`1h`/`24h`/`7d`/`all`), `include_unjoined_private?` (default false) | no | yes | Owner/Moderator; target need not be a member; at most 1000 per run; confirmation required |
 | `chat.set_slow_mode` | `server_id`, `conversation_id`, `seconds` (0..=21600) | yes | no | Owner/Moderator; channels only; `conversation_id` falls back to the focused conversation |
@@ -182,15 +194,18 @@ which now lets an Owner/Moderator delete other people's messages.
 Notification builtins (`docs/messaging.md`, Notification Rules). All are
 `Backend`, `Mutating`, palette- and keybind-visible, AI-callable, in category `Notifications`,
 and need **no capability**: like `chat.mark_as_read` they change only the caller's own state.
-They call `NotificationService`, which requires workspace membership (and, for the level, read
-access to the conversation). Being `Mutating`, they are refused while the caller is timed out
-(T1); the GraphQL mutations are not.
+They call `NotificationService`, or for the mutes `NotificationPreferenceService` (the service
+of `muteConversation` and `unmuteConversation`), which require workspace membership (and, for
+the level and the mutes, read access to the conversation). Being `Mutating`, they are refused
+while the caller is timed out (T1); the GraphQL mutations are not.
 
 | Id | Args | AI-callable | Dangerous | Notes |
 |---|---|---|---|---|
 | `notifications.set_level` | `server_id`, `conversation_id`, `level` (`all`/`mentions`/`none`/`default`) | yes | no | `default` clears the override; `conversation_id` falls back to the focused conversation. Payload `{conversation_id, level, effective_level}` |
 | `notifications.dnd` | `server_id`, `mode` (`on`/`off`/`until`), `until?` (RFC 3339), `minutes?` (1..=10080) | yes | no | The manual do-not-disturb pause (separate from the daily window); `until` mode needs `until` or `minutes`. Payload `{paused, until}` |
 | `notifications.mark_all_read` | `server_id` | yes | no | Marks every notification of the workspace read (not the conversations' unread counts). Payload `{marked}` |
+| `notifications.mute_conversation` | `server_id`, `conversation_id`, `duration` (`1h`/`8h`/`until_tomorrow`/`forever`/`until`), `until?` (RFC 3339) | yes | no | Title Mute Conversation…. Mirrors `muteConversation`; `conversation_id` falls back to the focused conversation. `1h` and `8h` count from now. `until_tomorrow` ends at 09:00 tomorrow in the timezone of the caller's daily do-not-disturb window in this workspace, or in UTC when they have none: the server knows no other timezone of theirs. `until` ends at the `until` time, which must be in the future, and `until` with another duration is `VALIDATION`; a client that knows the person's timezone sends it to end the mute at 09:00 their time. `forever` is `muteConversation` without `mutedUntil`: level `none` with no end. Payload `{conversation_id, muted_until}` (`muted_until` null for `forever`) |
+| `notifications.unmute_conversation` | `server_id`, `conversation_id` | yes | no | Mirrors `unmuteConversation`: ends a timed mute and clears a `none` level; `conversation_id` falls back to the focused conversation. Unmuting a conversation that is not muted succeeds. Payload `{conversation_id}` |
 
 General builtins the agent may call. None declares a new capability. The navigation
 commands are `DesktopLocal`: the server refuses to execute them, so the desktop agent runs them
@@ -241,25 +256,39 @@ every conversation of the workspace read at once, which is the person's call; it
 List arguments such as `user_ids` and `member_ids` accept a JSON array of ids or one
 comma-separated string, because the agent's tool schema types every argument as a scalar.
 
-AI-callable builtins: 42. They are seventeen chat, channel and navigation builtins
+AI-callable builtins: 47. They are nineteen chat, channel and navigation builtins
 (`chat.post_message`, `chat.open_thread`, `workspace.open_settings`,
 `workspace.navigate_to_channel`, `workspace.switch_workspace`, `chat.list_channels`,
 `chat.create_channel`, `chat.list_members`, `chat.search_messages`, `chat.get_recent_messages`,
-`chat.pin_message`, `chat.toggle_reaction` and the five channel membership builtins above),
-`admin.timeout`, `chat.set_slow_mode`, `chat.set_channel_posting` and `chat.report_message`,
-the three `notifications.*` builtins, and the eighteen general builtins above. The set is
-pinned by `collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
-`list_commands_ai_surface_returns_forty_two_commands_with_caps` (`command_tests.rs`). The
+`chat.pin_message`, `chat.unpin_message`, `chat.set_topic`, `chat.toggle_reaction` and the five
+channel membership builtins above), `admin.timeout`, `admin.clear_timeout`,
+`chat.set_slow_mode`, `chat.set_channel_posting` and `chat.report_message`, the five
+`notifications.*` builtins, and the eighteen general builtins above. The set is pinned by
+`collect_ai_callable_inventory_matches_reviewed_set` (`registry/mod.rs`) and
+`list_commands_ai_surface_returns_forty_seven_commands_with_caps` (`command_tests.rs`). The
 capability union the AI surface checks is `admin.manage_members`, `chat.read` and `chat.write`;
 the notification and general builtins declare none.
 
-`chat.post_message`, `chat.get_recent_messages`, `chat.pin_message` and
-`chat.toggle_reaction` take `conversation_id` from the focused conversation
+Each of the five that joined the set last mirrors a command the agent could already call, is
+checked by the same service, and is `Mutating`, so it waits for the person's confirmation:
+
+- `chat.unpin_message` undoes `chat.pin_message`, and unpinning someone else's pin takes the
+  role the person already has.
+- `chat.set_topic` changes text members see, as `chat.post_message` does, and only for those
+  who may change the topic.
+- `admin.clear_timeout` lifts what `admin.timeout` sets, with the same targeting rules.
+- `notifications.mute_conversation` and `notifications.unmute_conversation` change only the
+  person's own notifications, as `notifications.set_level` does.
+
+`chat.post_message`, `chat.get_recent_messages`, `chat.pin_message`, `chat.unpin_message`,
+`chat.set_topic`, `chat.toggle_reaction`, `notifications.mute_conversation` and
+`notifications.unmute_conversation` take `conversation_id` from the focused conversation
 (`context.conversation_id`) when it is not given, and `chat.pin_message`,
-`chat.toggle_reaction` and `chat.report_message` take `message_id` from the selected message
-(`context.selected_message_id`); an argument that is given wins. The agent never sends a
-selected message, so it names the message by `message_id`. `chat.search_messages` has no such
-fallback: without `conversation_id` it searches the workspace.
+`chat.unpin_message`, `chat.toggle_reaction` and `chat.report_message` take `message_id` from
+the selected message (`context.selected_message_id`); an argument that is given wins. The agent
+never sends a selected message, so it names the message by `message_id`.
+`chat.search_messages` has no such fallback: without `conversation_id` it searches the
+workspace.
 
 `workspace.navigate_to_dm` (`DesktopLocal`, not AI-callable) takes a required
 `conversation_id`, the direct message or group to open. The three navigation builtins that move
@@ -323,6 +352,116 @@ there.
 | `workspace.go_back` | Go Back | Navigation | |
 | `workspace.go_forward` | Go Forward | Navigation | |
 | `app.quit` | Quit RIM | App | Desktop only; asks to confirm |
+| `plugins.open_settings` | Open Plugin Settings | Plugins | Settings, Plugins tab |
+| `workspace.open_direct_messages` | Open Direct Messages | Navigation | |
+| `workspace.add` | Add a Workspace… | Workspace | Opens the add dialog |
+| `workspace.open_workspace_settings` | Open Workspace Settings | Workspace | Owners and moderators |
+| `workspace.open_join_requests` | Open Join Requests | Workspace | Owners and moderators |
+| `people.set_status` | Set Status… | People | Opens the status picker |
+| `people.view_profile` | View Profile… | People | Opens a member picker |
+| `people.message` | Message Someone… | People | Opens a member picker |
+| `app.sign_out` | Sign Out… | App | Asks to confirm |
+| `app.check_for_updates` | Check for Updates | App | Desktop only |
+| `app.restart_to_update` | Restart to Update | App | Desktop only; offered while an update is ready |
+| `app.open_log_folder` | Open Log Folder | App | Desktop only |
+| `app.minimize_window` | Minimize Window | App | Desktop only |
+| `app.toggle_maximize_window` | Maximize or Restore Window | App | Desktop only |
+| `app.close_window` | Close Window | App | Desktop only; as the window's close button |
+| `settings.open.profile` | Settings: Profile | App | |
+| `settings.open.account` | Settings: Account | App | |
+| `settings.open.security` | Settings: Security | App | |
+| `settings.open.desktop` | Settings: Desktop | App | Desktop only |
+| `settings.open.contacts` | Settings: Contacts | App | |
+| `settings.open.messages` | Settings: Messages | App | |
+| `settings.open.direct_messages` | Settings: Direct messages | App | |
+| `settings.open.notifications` | Settings: Notifications | App | |
+| `settings.open.history` | Settings: History | App | |
+| `settings.open.keybinds` | Settings: Keybinds | App | |
+| `settings.open.keyboard` | Settings: Keyboard | App | |
+| `settings.open.commands` | Settings: Commands | App | |
+| `settings.open.macros` | Settings: Macros | App | |
+| `settings.open.pipelines` | Settings: Pipelines | App | Not in the direct space |
+| `settings.open.plugins` | Settings: Plugins | App | |
+| `settings.open.plugin_ai` | Settings: Plugin AI | App | Desktop only |
+| `settings.open.state` | Settings: State | App | Not in the direct space |
+| `settings.open.emoji` | Settings: Emoji | App | Where the server has custom emoji; not in the direct space |
+| `settings.open.agents` | Settings: Agents | App | Desktop only |
+| `settings.open.agent` | Settings: AI Agent | App | Desktop only |
+| `settings.open.workspace` | Settings: Workspace | Workspace | Owners and moderators; not in the direct space |
+| `settings.open.workspace_moderation` | Settings: Moderation | Workspace | Owners and moderators; not in the direct space |
+| `settings.open.bots` | Settings: Bots | Workspace | Those who manage the workspace's bots; not in the direct space |
+| `settings.open.moderation` | Settings: Instance moderation | App | Instance operators |
+| `settings.open.about` | Settings: About | App | |
+| `settings.assign_keybind` | Assign Keybind… | App | Opens the keybind assigner for the focused conversation, else the open workspace |
+| `settings.back_up_history` | Back Up History Now | App | Desktop only |
+| `app.run_macro` | Run Macro… | App | Opens a macro picker |
+| `app.toggle_pipeline` | Turn Pipeline On or Off… | App | Opens a pipeline picker |
+| `chat.start_reply` | Reply | Messages | The selected message |
+| `chat.start_edit` | Edit Message | Messages | Your own selected message |
+| `chat.forward_message` | Forward Message… | Messages | Opens the forward dialog |
+| `chat.delete_attachment` | Delete Attachment… | Messages | Asks to confirm |
+| `chat.attach_file` | Attach File… | Messages | Opens the file picker |
+| `chat.insert_emoji` | Insert Emoji… | Messages | Opens the emoji picker |
+| `chat.select_next_message` | Select Next Message | Messages | |
+| `chat.select_previous_message` | Select Previous Message | Messages | |
+| `chat.select_first_message` | Select First Message | Messages | |
+| `chat.select_last_message` | Select Last Message | Messages | |
+| `chat.toggle_fold` | Fold or Unfold Message | Messages | |
+| `chat.open_invite` | Invite People… | Conversations | Opens the invite dialog |
+| `chat.browse_channels` | Browse Channels… | Conversations | Opens the browse dialog |
+| `chat.accept_invitation` | Accept Invitation | Conversations | |
+| `chat.decline_invitation` | Decline Invitation | Conversations | |
+| `chat.mark_conversation_unread` | Mark Conversation Unread | Conversations | |
+| `chat.apply_lens` | Apply Lens… | Conversations | Channels; opens the lens picker |
+| `chat.clear_lens` | Clear Lens | Conversations | |
+| `notifications.mark_read` | Mark Notification Read | Notifications | The inbox's selected notification |
+| `unreads.mark_all_shown` | Unreads: Mark All Shown as Read | Unreads | Can be undone |
+| `unreads.toggle_muted` | Unreads: Show or Hide Muted | Unreads | |
+| `agents.allow_in_encrypted_conversation` | Let the AI Agent Read This Conversation… | Agents | Desktop only; always shows the warning and asks to confirm |
+| `moderation.open_reports` | Open Reports | Moderation | Owners and moderators |
+| `moderation.resolve_report` | Resolve Report… | Moderation | Owners and moderators; opens a report picker |
+| `moderation.dismiss_report` | Dismiss Report… | Moderation | Owners and moderators; opens a report picker |
+| `moderation.clear_flag` | Clear Flag | Moderation | Owners and moderators; the selected flagged message |
+| `moderation.block_principal` | Block Principal… | Moderation | Instance operators; asks to confirm |
+| `moderation.unblock_principal` | Unblock Principal… | Moderation | Instance operators; opens a picker |
+| `moderation.unblock_ip` | Unblock Address… | Moderation | Instance operators; opens a picker |
+| `moderation.clear_profile` | Clear Profile… | Moderation | Instance operators; asks to confirm |
+| `workspace.revoke_invite` | Revoke Invite… | Workspace | Opens an invite picker; asks to confirm |
+| `workspace.accept_join_request` | Accept Join Request… | Workspace | Owners and moderators; opens a request picker |
+| `workspace.decline_join_request` | Decline Join Request… | Workspace | Owners and moderators; opens a request picker |
+| `bots.new` | New Bot… | Bots & Webhooks | Opens the form |
+| `bots.edit` | Edit Bot… | Bots & Webhooks | Opens a bot picker |
+| `bots.deactivate` | Deactivate Bot… | Bots & Webhooks | Opens a bot picker; asks to confirm |
+| `bots.new_webhook` | New Webhook… | Bots & Webhooks | The focused channel; opens the dialog |
+| `bots.revoke_webhook` | Revoke Webhook… | Bots & Webhooks | Opens a webhook picker; asks to confirm |
+| `plugins.install` | Install Plugin… | Plugins | Asks for consent as installing does |
+| `plugins.toggle` | Turn Plugin On or Off… | Plugins | Opens a plugin picker |
+| `plugins.update` | Update Plugin… | Plugins | Opens a picker of plugins with an update |
+| `plugins.uninstall` | Uninstall Plugin… | Plugins | Opens a plugin picker; asks to confirm |
+| `plugins.revoke_ai_access` | Revoke a Plugin's AI Access… | Plugins | Desktop only; opens a plugin picker |
+| `people.add_contact` | Add to Contacts | People | The person in context, else a picker |
+| `people.remove_contact` | Remove from Contacts | People | The person in context, else a picker |
+| `people.block` | Block… | People | Opens the block dialog |
+| `people.unblock` | Unblock… | People | Opens a picker of blocked people |
+| `people.accept_request` | Accept Message Request | People | The open request |
+| `people.ignore_request` | Ignore Message Request | People | The open request |
+| `people.report_request` | Report Message Request… | People | The open request; opens the report dialog |
+| `people.read_request_first` | Read Message Request First | People | The open request |
+| `agents.approve_request` | Approve the Agent's Request… | Agents | Desktop only; always shows a loud warning and asks to confirm |
+| `agents.refuse_request` | Refuse the Agent's Request | Agents | Desktop only; runs at once |
+| `agents.approve_pairing` | Connect the Waiting Agent… | Agents | Desktop only; always shows a loud warning and asks to confirm |
+| `agents.refuse_pairing` | Don't Connect the Waiting Agent | Agents | Desktop only; runs at once |
+| `agents.disconnect` | Disconnect Agent… | Agents | Desktop only |
+| `agents.choose_reads` | Choose What an Agent Can Read… | Agents | Desktop only |
+| `agents.choose_plugin_commands` | Choose an Agent's Plugin Commands… | Agents | Desktop only |
+| `agents.open_runs` | Open Agent Runs | Agents | Desktop only |
+| `agents.open_record` | What Agents Were Given | Agents | Desktop only |
+| `agents.clear_record` | Clear the Agents Record… | Agents | Desktop only |
+
+The `settings.open.*` commands open one settings tab each. The id is `settings.open.` and the
+tab's key with every run of characters other than `a`-`z` and `0`-`9` turned into `_`, and the
+title is `Settings: ` and the tab's label. They are offered where the tab is shown. The tabs of
+the Workspace section are in category Workspace, the others in App.
 
 A new app command is added to this table, and to the server's list of app command ids, in the
 same release that ships it in the client. Until a server knows an id it refuses keybinds to it,
@@ -336,11 +475,12 @@ and `agents.refuse_pairing`. Approving an agent is the person's own act:
 
 - none of them is ever `ai_callable`, and no plugin, pipe, macro, pipeline or user command runs
   one
-- each one always shows a loud warning and asks the person to confirm, naming the agent and what
-  it asked for, whichever surface started it, a keybind or a Home quick box included
-- a test pins them as offered on no agent surface from the release that adds them
-
-They join the table above in the release that ships them in the client.
+- the two that approve, `agents.approve_request` and `agents.approve_pairing`, always show a loud
+  warning and ask the person to confirm, naming the agent and what it asked for, whichever
+  surface started them, a keybind or a Home quick box included
+- the two that refuse, `agents.refuse_request` and `agents.refuse_pairing`, run at once with no
+  warning: refusing grants nothing
+- a test pins all four as app commands offered on no agent surface
 
 ### Plugin-Provided Commands
 
