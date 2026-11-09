@@ -86,6 +86,11 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     ),
     app("workspace.leave", "Leave Workspace…", category::WORKSPACE),
     app("workspace.open_agents", "Open Agents", category::AGENTS),
+    app(
+        "workspace.open_agent_sessions",
+        "Open Agent Sessions",
+        category::AGENTS,
+    ),
     app("workspace.open_unreads", "Open Unreads", category::UNREADS),
     app(
         "workspace.unreads_next",
@@ -507,6 +512,31 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
         category::AGENTS,
     ),
     app("agents.open_runs", "Open Agent Runs", category::AGENTS),
+    app(
+        "agents.connect_agent",
+        "Connect an Agent…",
+        category::AGENTS,
+    ),
+    app(
+        "agents.start_session",
+        "Start Agent Session…",
+        category::AGENTS,
+    ),
+    app(
+        "agents.stop_session",
+        "Stop Agent Session",
+        category::AGENTS,
+    ),
+    app(
+        "agents.ask_about_message",
+        "Ask Agent About Message…",
+        category::AGENTS,
+    ),
+    app(
+        "agents.ask_about_conversation",
+        "Ask Agent About Conversation…",
+        category::AGENTS,
+    ),
     app(
         "agents.open_record",
         "What Agents Were Given",

@@ -31,6 +31,19 @@ has a local identity and a name the person sees. It holds a credential that lets
 desktop app, which can be revoked and which never lets it reach a server directly. It never receives
 the person's session, device keys, account vault, model keys or plugin secrets.
 
+### Connecting from the app
+
+The person can also start the connection inside the desktop app.
+
+- They name the agent, and the app creates it with no grants.
+- The app shows its address and credential once, so the person can put them in that agent's own
+  settings.
+- There is no code to compare, because the person started the connection in the app.
+- The credential MUST NOT be shown again. Losing it means disconnecting the agent and connecting
+  it again.
+- The app MUST say that the credential sits in that agent's settings file, which other programs
+  running as the person can read.
+
 ## Read grants
 
 - Everything starts off. A paired agent with no grants can read nothing.
@@ -130,6 +143,27 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   outside RIM, and the view MUST say so.
 - A change to what the agent may do starts a new run, so a run keeps the permissions it started with.
 
+## Agents RIM starts
+
+- The desktop app MAY start an agent program the person chose, on this computer, and talk to it
+  over the Agent Client Protocol (ACP).
+- The person adds each program. The app MUST show the exact command line and ask before saving
+  it. The app MUST NOT download or install agent programs.
+- The agent runs as the person, in a folder they chose, with the agent's own tools and permission
+  settings. RIM does not sandbox it, and the app MUST say so where sessions start.
+- **Only the person, through the app's own controls, may send an agent a prompt or answer its
+  permission requests.** Their own macros and keys count. The app MUST NOT turn messages from
+  other people or bots, plugin actions, pipelines, or anything the agent itself sends through
+  RIM's tools into prompts or answers.
+- Each started program is a paired agent. RIM's tools in its sessions follow this contract
+  unchanged: grants, the record, confirmations and the encrypted notice.
+- When RIM's tools refuse it for a missing grant, the app MAY offer the grant, through the same
+  confirmation as anywhere else.
+- Session transcripts stay on this device, sealed with the account vault, and reach no server.
+- What the agent does outside RIM's tools (files, commands, its own tools, its model provider) is
+  outside what RIM controls. See "What RIM controls".
+- The web app cannot start agents.
+
 ## Encrypted conversations
 
 - They are closed by default, and "all channels you can see" never includes one.
@@ -192,3 +226,4 @@ the person's session, device keys, account vault, model keys or plugin secrets.
   under their own contract, `docs/specs/bots-v1.md`.
 - Agents acting for another person, and approvals by another person.
 - A shared view of agent work. The record stays private to the person.
+- Following or directing an agent session from another device.

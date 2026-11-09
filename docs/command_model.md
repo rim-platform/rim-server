@@ -334,6 +334,7 @@ there.
 | `workspace.open_bots` | Open Bots | Bots & Webhooks | |
 | `workspace.leave` | Leave Workspace… | Workspace | Opens the confirmation dialog |
 | `workspace.open_agents` | Open Agents | Agents | Desktop only |
+| `workspace.open_agent_sessions` | Open Agent Sessions | Agents | Desktop only |
 | `workspace.open_unreads` | Open Unreads | Unreads | |
 | `workspace.unreads_next` | Unreads: Next Message | Unreads | |
 | `workspace.unreads_previous` | Unreads: Previous Message | Unreads | |
@@ -456,6 +457,11 @@ there.
 | `agents.choose_reads` | Choose What an Agent Can Read… | Agents | Desktop only |
 | `agents.choose_plugin_commands` | Choose an Agent's Commands… | Agents | Desktop only |
 | `agents.open_runs` | Open Agent Runs | Agents | Desktop only |
+| `agents.connect_agent` | Connect an Agent… | Agents | Desktop only; shows a credential once |
+| `agents.start_session` | Start Agent Session… | Agents | Desktop only |
+| `agents.stop_session` | Stop Agent Session | Agents | Desktop only |
+| `agents.ask_about_message` | Ask Agent About Message… | Agents | Desktop only |
+| `agents.ask_about_conversation` | Ask Agent About Conversation… | Agents | Desktop only |
 | `agents.open_record` | What Agents Were Given | Agents | Desktop only |
 | `agents.clear_record` | Clear the Agents Record… | Agents | Desktop only |
 
