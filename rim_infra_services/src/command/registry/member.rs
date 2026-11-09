@@ -5,6 +5,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     // AI-callable member listing, a Safe read that requires `chat.read`.
     // The executor is in `executor/member.rs`.
@@ -12,7 +14,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         id: "chat.list_members".to_string(),
         title: "List Members".to_string(),
         description: "List all members of a workspace.".to_string(),
-        category: "Chat".to_string(),
+        category: category::WORKSPACE.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments: vec![CommandArgumentDto {

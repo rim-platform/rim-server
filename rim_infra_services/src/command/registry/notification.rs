@@ -9,6 +9,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 fn arg(
     name: &str,
     title: &str,
@@ -58,7 +60,7 @@ fn notification_command(
         id: id.to_string(),
         title: title.to_string(),
         description: description.to_string(),
-        category: "Notifications".to_string(),
+        category: category::NOTIFICATIONS.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments,

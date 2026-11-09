@@ -5,13 +5,15 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![
         CommandDefinitionDto {
             id: "state.get".to_string(),
             title: "Get State".to_string(),
             description: "Get a workspace state entry by key.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -68,7 +70,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.set".to_string(),
             title: "Set State".to_string(),
             description: "Set a workspace state entry.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -142,7 +144,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.delete".to_string(),
             title: "Delete State".to_string(),
             description: "Delete a workspace state entry.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -198,7 +200,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.list".to_string(),
             title: "List State".to_string(),
             description: "List workspace state entries by prefix.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
@@ -263,7 +265,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.incr".to_string(),
             title: "Increment State".to_string(),
             description: "Increment a numeric workspace state entry.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![

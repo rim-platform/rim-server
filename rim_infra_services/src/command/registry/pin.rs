@@ -5,12 +5,14 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![CommandDefinitionDto {
         id: "chat.pin_message".to_string(),
         title: "Pin Message".to_string(),
         description: "Pin a message in a channel.".to_string(),
-        category: "Chat".to_string(),
+        category: category::MESSAGES.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments: vec![

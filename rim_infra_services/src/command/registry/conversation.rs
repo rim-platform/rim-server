@@ -5,6 +5,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 fn workspace_arg() -> CommandArgumentDto {
     CommandArgumentDto {
         name: "server_id".to_string(),
@@ -43,7 +45,7 @@ fn membership_command(
         id: id.to_string(),
         title: title.to_string(),
         description: description.to_string(),
-        category: "Chat".to_string(),
+        category: category::CONVERSATIONS.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments,
@@ -82,7 +84,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         id: "chat.create_group".to_string(),
         title: "Create Group".to_string(),
         description: "Create a new group conversation.".to_string(),
-        category: "Chat".to_string(),
+        category: category::CONVERSATIONS.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments: vec![
@@ -205,12 +207,15 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
             ],
         ),
         agent_callable(
-            membership_command(
-                "chat.archive_channel",
-                "Archive Channel",
-                "Archive a channel (Owner/Moderator). Archived channels are read-only.",
-                vec![workspace_arg(), conversation_arg("Channel to archive.")],
-            ),
+            CommandDefinitionDto {
+                category: category::MODERATION.to_string(),
+                ..membership_command(
+                    "chat.archive_channel",
+                    "Archive Channel",
+                    "Archive a channel (Owner/Moderator). Archived channels are read-only.",
+                    vec![workspace_arg(), conversation_arg("Channel to archive.")],
+                )
+            },
             "Archive a channel: it becomes read-only and is hidden from the default channel \
                  list, but its history stays readable and searchable. Only workspace owners and \
                  moderators may do this. Use when the user asks to archive or close a channel.",
@@ -221,12 +226,15 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
             ],
         ),
         agent_callable(
-            membership_command(
-                "chat.unarchive_channel",
-                "Unarchive Channel",
-                "Unarchive a channel (Owner/Moderator).",
-                vec![workspace_arg(), conversation_arg("Channel to unarchive.")],
-            ),
+            CommandDefinitionDto {
+                category: category::MODERATION.to_string(),
+                ..membership_command(
+                    "chat.unarchive_channel",
+                    "Unarchive Channel",
+                    "Unarchive a channel (Owner/Moderator).",
+                    vec![workspace_arg(), conversation_arg("Channel to unarchive.")],
+                )
+            },
             "Unarchive a channel so people can post in it again. Only workspace owners and \
                  moderators may do this. Use when the user asks to reopen or restore an \
                  archived channel.",

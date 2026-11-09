@@ -245,6 +245,7 @@ async fn server_info_lists_its_capabilities() {
         "webhook_formats",
         "webhook_test_sessions",
         "home_layout",
+        "app_command_keybinds",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),

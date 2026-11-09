@@ -8,6 +8,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 fn arg(
     name: &str,
     title: &str,
@@ -61,7 +63,6 @@ fn moderation_command(
     id: &str,
     title: &str,
     description: &str,
-    category: &str,
     capability: &str,
     arguments: Vec<CommandArgumentDto>,
     typed_verb: TypedVerb,
@@ -70,7 +71,7 @@ fn moderation_command(
         id: id.to_string(),
         title: title.to_string(),
         description: description.to_string(),
-        category: category.to_string(),
+        category: category::MODERATION.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments,
@@ -101,7 +102,6 @@ fn admin_command(
         id,
         title,
         description,
-        "Admin",
         "admin.manage_members",
         arguments,
         typed_verb,
@@ -270,7 +270,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Set Slow Mode",
                 "Limit how often members may post in a channel (Owner/Moderator; 0 turns it \
                  off).",
-                "Chat",
                 "chat.write",
                 vec![
                     workspace_arg(),
@@ -307,7 +306,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Set Who Can Post",
                 "Let everyone or only the owner and moderators post in a channel \
                  (Owner/Moderator).",
-                "Chat",
                 "chat.write",
                 vec![
                     workspace_arg(),
@@ -368,22 +366,31 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 ..moderation_command(
                     "chat.report_message",
                     "Report Message",
-                    "Report the selected message to the workspace moderators.",
-                    "Chat",
+                    "Report a message to the workspace moderators.",
                     "chat.write",
-                    vec![arg(
-                        "reason",
-                        "Reason",
-                        "Why the message should be reviewed.",
-                        CommandArgumentTypeDto::String,
-                        true,
-                    )],
+                    vec![
+                        arg(
+                            "message_id",
+                            "Message",
+                            "Identifier of the message to report; defaults to the selected \
+                             message.",
+                            CommandArgumentTypeDto::MessageId,
+                            false,
+                        ),
+                        arg(
+                            "reason",
+                            "Reason",
+                            "Why the message should be reviewed.",
+                            CommandArgumentTypeDto::String,
+                            true,
+                        ),
+                    ],
                     TypedVerb::Write,
                 )
             },
-            "Report the selected message to the workspace moderators with a short reason. \
-             Each member can report a message once. Use when the user asks to report or flag \
-             a message for review.",
+            "Report a message, named by message_id, to the workspace moderators with a short \
+             reason. Each member can report a message once. Use when the user asks to report or \
+             flag a message for review.",
             &[
                 "report this message as spam",
                 "flag this for the moderators, it is harassment",
