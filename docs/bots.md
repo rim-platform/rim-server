@@ -255,7 +255,7 @@ it points at `https://github.com/`. Any other event or action, or a handled one 
 needs, answers `202` and posts nothing.
 
 **A webhook mentions nobody.** `<@id>`, `@channel` and `@here` in what it receives are made plain text
-under every format. People whose notification level is `ALL` hear of the post as of any other message.
+under every format, in the text and in the link. People whose notification level is `ALL` hear of the post as of any other message.
 
 **Answers.**
 
@@ -364,7 +364,8 @@ Each part is letters, digits, `_` and `-`. A key with a dot in it can't be reach
 **The link.** `link` is optional: a `value` written like `post` and an `origin` such as
 `https://github.com/`. It's added after the text only when it starts with the origin and holds nothing odd
 (`<`, `>`, brackets, quotes, a backtick, a backslash, `*`, `|`), up to 512 characters. Otherwise the message
-posts without it.
+posts without it. The `@` of an `@channel` or `@here` in it, in any case, becomes `%40`, so the link goes to
+the same address and mentions nobody; any other `@` stays.
 
 **What it answers.**
 

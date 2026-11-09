@@ -479,7 +479,7 @@ pub(crate) fn render(
         };
         let link = rule.link.as_ref().and_then(|link| {
             let value = link.value.fill(payload, raw_of).ok()?;
-            link_of(&value, &link.origin).map(str::to_string)
+            link_of(&value, &link.origin)
         });
         return Ok(Rendered::Post {
             rule: number,
@@ -941,6 +941,59 @@ mod tests {
             posted(&deliver(&format, &[], r#"{"id":42}"#)),
             "done https://ci.example/runs/42"
         );
+    }
+
+    #[test]
+    fn a_mention_of_everyone_from_the_delivery_in_a_link_is_percent_encoded() {
+        let format = format(json!({ "version": 1, "rules": [{
+            "when": [],
+            "post": format!("x {MENTION} @channel **b** {{{{ }}}} "),
+            "link": { "value": "https://example.com/{c}", "origin": "https://example.com/" },
+        }]}));
+        let message = posted(&deliver(&format, &[], r#"{"c":"@here"}"#));
+        assert_eq!(
+            message,
+            "x <\u{200b}@0190b5a0-0000-7000-8000-000000000001> @\u{200b}channel **b** { }  \
+             https://example.com/%40here"
+        );
+        assert!(!mentions_everyone(&message), "{message}");
+        assert!(parse_mention_ids(&message).is_empty(), "{message}");
+    }
+
+    #[test]
+    fn a_link_never_mentions_anyone_whatever_its_value_holds() {
+        let format = linked("https://example.com/{c}", "https://example.com/");
+        for (value, link) in [
+            ("@here", Some("https://example.com/%40here")),
+            ("@channel", Some("https://example.com/%40channel")),
+            (
+                "a/@CHANNEL/b?x=@HeRe",
+                Some("https://example.com/a/%40CHANNEL/b?x=%40HeRe"),
+            ),
+            ("@@here", Some("https://example.com/@%40here")),
+            ("pkg@1.0.0", Some("https://example.com/pkg@1.0.0")),
+            ("@everyone", Some("https://example.com/@everyone")),
+            (MENTION, None),
+            ("@0190b5a0-0000-7000-8000-000000000001>", None),
+        ] {
+            let body = json!({ "c": value }).to_string();
+            let rendered = deliver(&format, &[], &body);
+            let Rendered::Post { link: got, .. } = &rendered else {
+                panic!("a post for {value}");
+            };
+            assert_eq!(got.as_deref(), link, "{value}");
+            let message = posted(&rendered);
+            assert!(!mentions_everyone(&message), "{message}");
+            assert!(parse_mention_ids(&message).is_empty(), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_mention_of_everyone_in_a_links_literal_text_is_percent_encoded() {
+        let format = linked("https://example.com/@here/{id}", "https://example.com/");
+        let message = posted(&deliver(&format, &[], r#"{"id":"@Channel"}"#));
+        assert_eq!(message, "done https://example.com/%40here/%40Channel");
+        assert!(!mentions_everyone(&message), "{message}");
     }
 
     #[test]
