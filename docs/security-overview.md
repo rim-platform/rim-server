@@ -244,7 +244,10 @@ whose log forks is refused until an operator checks it out of band.
   out and delete, and review reports of plaintext messages, franked reports of encrypted ones,
   and reported DM requests.
 - **The audit log** records every command run, with secret-looking arguments redacted, and
-  every moderation action with ids and flags only, never reasons or message text. Owners and
+  every moderation action with ids and flags only, never reasons or message text. Marking a
+  conversation read or unread and changing notification settings write no row: they change only
+  the person's own view, and rows of them would show Owners and Moderators a person's reading
+  habits. Owners and
   Moderators of a workspace read all of its rows; members, guests and everyone else read only
   their own. A request for another user's rows needs a workspace and returns the whole workspace
   log, so it cannot reveal whether that user ever acted there

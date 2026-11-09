@@ -82,7 +82,9 @@ step 3: workspace_id = None (self-scoped only) → allowed
 
 **Write path.** `write_entry` has no capability check. Only server-internal code calls it: the
 command executor, the macro executor, the moderation audit helper and the remote-workspace host.
-It is never exposed to clients.
+It is never exposed to clients. The command executor writes no row for `chat.mark_as_read`,
+`chat.mark_as_unread` and the `notifications.*` commands, nor the macro executor for such a
+step: they change only the caller's own view (`docs/command_model.md`, Audit row).
 
 ---
 
