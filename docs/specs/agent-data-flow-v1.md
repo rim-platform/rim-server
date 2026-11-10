@@ -148,7 +148,19 @@ The person can also start the connection inside the desktop app.
 - The desktop app MAY start an agent program the person chose, on this computer, and talk to it
   over the Agent Client Protocol (ACP).
 - The person adds each program. The app MUST show the exact command line and ask before saving
-  it. The app MUST NOT download or install agent programs.
+  it.
+- The app MAY download and install the agent programs it names, and no others, each only when the
+  person asks for that one. For each it MUST:
+  - fix the source in its own code (an archive address or a package name) and refuse a listing
+    that points anywhere else;
+  - check the download against its published checksum before using it;
+  - ask first, naming the agent, its version, its source and its licence, plus any runtime it also
+    downloads (such as Node.js);
+  - install into the app's own folder, never system-wide, and add only the program it installed to
+    the programs the person allowed.
+- Signing in to an agent is the agent's own flow. The app MAY start it, by opening a terminal that
+  runs the allowed program, or by asking the agent to open the browser. The app never reads or
+  keeps the agent's credentials.
 - The agent runs as the person, in a folder they chose, with the agent's own tools and permission
   settings. RIM does not sandbox it, and the app MUST say so where sessions start.
 - **Only the person, through the app's own controls, may send an agent a prompt or answer its

@@ -24,8 +24,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 ### Added
 
 - The agent contract (`docs/specs/agent-data-flow-v1.md`) now covers agents the desktop app starts
-  and connecting an agent from the app, and keybinds can name the new agent session commands
-  (`agents.connect_agent`, `agents.start_session`, `agents.stop_session`,
+  and installs and connecting an agent from the app, and keybinds can name the new agent session
+  commands (`agents.connect_agent`, `agents.start_session`, `agents.stop_session`,
   `workspace.open_agent_sessions`, `agents.ask_about_message`, `agents.ask_about_conversation`).
 - Keybinds to app commands, the commands the client runs itself such as Open Home, Open Unreads
   and Toggle Notifications: `createKeybind` and `updateKeybind` accept their ids for personal and
