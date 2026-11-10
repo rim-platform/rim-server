@@ -733,6 +733,12 @@ command: <id>". A pipeline saved before these limits runs at most its first 10 a
 an action naming a macro or a workspace macro. A Post as bot action is the one that runs without a
 confirmation, as a bot rather than as the pipeline's creator (`bots.md`).
 
+Each action runs in the pipeline's workspace. For New Message, Message Updated, Message Deleted
+and Reactions Updated, its context also holds the event's conversation, so an action's
+`conversation_id` may be left out; for Member Joined and Workspace State Changed it holds none.
+An action's context never holds a thread, a selected message or selected text, so an argument
+that needs one must be given in `args`.
+
 The server keeps at most 32 unanswered confirmation challenges per user; issuing one more drops
 that user's challenge closest to expiry, which then answers `CONFIRMATION_STALE`. A pipeline's
 action that needs a confirmation issues a challenge nobody answers, and this keeps such
