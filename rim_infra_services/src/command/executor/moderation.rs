@@ -14,7 +14,8 @@ use crate::command::CommandServices;
 
 use super::{
     optional_bool_arg, optional_integer_arg, optional_string_arg, parse_uuid_arg,
-    require_string_arg, resolve_conversation_id, resolve_message_id, resolve_workspace_id,
+    relative_minutes_arg, require_string_arg, resolve_conversation_id, resolve_message_id,
+    resolve_workspace_id,
 };
 
 /// Longest timeout the `admin.timeout` command accepts, in minutes (30 days); the service
@@ -67,6 +68,28 @@ pub(super) async fn kick(
     ))
 }
 
+/// Longest ban `admin.ban` accepts as `minutes`: ten years.
+const MAX_BAN_MINUTES: i64 = 10 * 365 * 24 * 60;
+
+/// When a ban ends: `minutes` from now when given (then `expires_at` is ignored), else the RFC
+/// 3339 `expires_at`, else never.
+fn parse_ban_end(
+    args: &serde_json::Map<String, Value>,
+    now: DateTime<Utc>,
+) -> ServiceResult<Option<DateTime<Utc>>> {
+    if let Some(minutes) = relative_minutes_arg(args, MAX_BAN_MINUTES)? {
+        return Ok(Some(now + Duration::minutes(minutes)));
+    }
+    match optional_string_arg(args, "expires_at").filter(|s| !s.trim().is_empty()) {
+        Some(raw) => chrono::DateTime::parse_from_rfc3339(raw.trim())
+            .map(|dt| Some(dt.with_timezone(&Utc)))
+            .map_err(|_| {
+                ServiceError::Validation("invalid RFC 3339 timestamp arg `expires_at`".to_string())
+            }),
+        None => Ok(None),
+    }
+}
+
 pub(super) async fn ban(
     services: &CommandServices,
     actor: Actor,
@@ -74,19 +97,7 @@ pub(super) async fn ban(
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
     let (server_id, user_id) = target(&args, context.as_ref())?;
-    let expires_at = match optional_string_arg(&args, "expires_at").filter(|s| !s.trim().is_empty())
-    {
-        Some(raw) => Some(
-            chrono::DateTime::parse_from_rfc3339(raw.trim())
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .map_err(|_| {
-                    ServiceError::Validation(
-                        "invalid RFC 3339 timestamp arg `expires_at`".to_string(),
-                    )
-                })?,
-        ),
-        None => None,
-    };
+    let expires_at = parse_ban_end(&args, Utc::now())?;
     let ban = services
         .moderation_service
         .ban(BanMemberCmd {
@@ -455,6 +466,53 @@ mod tests {
 
     fn object(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
         value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn ban_end_reads_minutes_before_expires_at() {
+        let now = chrono::DateTime::parse_from_rfc3339("2030-01-01T12:00:00Z")
+            .expect("ts")
+            .with_timezone(&chrono::Utc);
+        let end = |value: serde_json::Value| super::parse_ban_end(&object(value), now);
+        let plus = |minutes: i64| Some(now + chrono::Duration::minutes(minutes));
+
+        assert_eq!(end(serde_json::json!({})).ok(), Some(None));
+        assert_eq!(
+            end(serde_json::json!({ "minutes": 90 })).ok(),
+            Some(plus(90))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": "90" })).ok(),
+            Some(plus(90))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": 5_256_000 })).ok(),
+            Some(plus(5_256_000))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": 30, "expires_at": "2031-01-01T00:00:00Z" })).ok(),
+            Some(plus(30))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": "", "expires_at": "2031-01-01T00:00:00Z" })).ok(),
+            Some(Some(
+                chrono::DateTime::parse_from_rfc3339("2031-01-01T00:00:00Z")
+                    .expect("ts")
+                    .with_timezone(&chrono::Utc)
+            ))
+        );
+        for bad in [
+            serde_json::json!({ "minutes": 0 }),
+            serde_json::json!({ "minutes": -5 }),
+            serde_json::json!({ "minutes": 5_256_001 }),
+            serde_json::json!({ "minutes": "soon" }),
+            serde_json::json!({ "expires_at": "tomorrow" }),
+        ] {
+            assert!(
+                matches!(end(bad.clone()), Err(ServiceError::Validation(_))),
+                "{bad}"
+            );
+        }
     }
 
     #[tokio::test]

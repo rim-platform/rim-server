@@ -90,7 +90,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         arguments: vec![
             CommandArgumentDto {
                 name: "server_id".to_string(),
-                title: "Server".to_string(),
+                title: "Workspace".to_string(),
                 description: "Workspace/server identifier.".to_string(),
                 argument_type: CommandArgumentTypeDto::WorkspaceId,
                 required: true,
@@ -100,7 +100,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             CommandArgumentDto {
                 name: "member_ids".to_string(),
                 title: "Members".to_string(),
-                description: "Member ids to include in the group.".to_string(),
+                description: "Members to include.".to_string(),
                 argument_type: CommandArgumentTypeDto::String,
                 required: true,
                 default_value: None,
@@ -189,7 +189,7 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
                     CommandArgumentDto {
                         name: "user_ids".to_string(),
                         title: "Members".to_string(),
-                        description: "User ids of the workspace members to add.".to_string(),
+                        description: "Workspace members to add.".to_string(),
                         argument_type: CommandArgumentTypeDto::String,
                         required: true,
                         default_value: None,
@@ -290,7 +290,7 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
                     CommandArgumentDto {
                         name: "user_id".to_string(),
                         title: "Member".to_string(),
-                        description: "User id of the member to remove.".to_string(),
+                        description: "Member to remove.".to_string(),
                         argument_type: CommandArgumentTypeDto::UserId,
                         required: true,
                         default_value: None,

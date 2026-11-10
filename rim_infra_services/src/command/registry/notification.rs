@@ -12,7 +12,7 @@ use rim_services::command::verb::TypedVerb;
 use super::category;
 
 /// The `duration` values of `notifications.mute_conversation`.
-const MUTE_DURATIONS: [&str; 5] = ["1h", "8h", "until_tomorrow", "forever", "until"];
+const MUTE_DURATIONS: [&str; 6] = ["1h", "8h", "until_tomorrow", "forever", "until", "minutes"];
 
 fn arg(
     name: &str,
@@ -123,7 +123,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         ),
         notification_command(
             "notifications.dnd",
-            "Do Not Disturb",
+            "Pause Notifications",
             "Pause notification toasts and sounds (on, off, or until a time). Notifications are \
              still recorded in your inbox.",
             vec![
@@ -137,7 +137,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 arg(
                     "until",
                     "Until",
-                    "RFC 3339 time when do-not-disturb ends (mode `until`).",
+                    "When the pause ends, as a date and time (mode `until`); leave empty to use `minutes`.",
                     CommandArgumentTypeDto::String,
                     false,
                 ),
@@ -180,15 +180,23 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 enum_arg(
                     "duration",
                     "Duration",
-                    "1h, 8h, until_tomorrow (09:00 tomorrow), forever (until unmuted), or until \
-                     (needs `until`).",
+                    "1h, 8h, until_tomorrow (09:00 tomorrow), forever (until unmuted), until \
+                     (needs `until`), or minutes (needs `minutes`).",
                     &MUTE_DURATIONS,
                 ),
                 arg(
                     "until",
                     "Until",
-                    "RFC 3339 time when the mute ends (duration `until`).",
+                    "When the mute ends, as a date and time (duration `until`); leave empty for \
+                     the other durations.",
                     CommandArgumentTypeDto::String,
+                    false,
+                ),
+                arg(
+                    "minutes",
+                    "Minutes",
+                    "How many minutes from now the mute ends (duration `minutes`, 1 to 525600).",
+                    CommandArgumentTypeDto::Integer,
                     false,
                 ),
             ],

@@ -132,11 +132,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Kick Member",
                 "Remove a member from the workspace (Owner/Moderator). They can re-join with a \
                  new invite.",
-                vec![
-                    workspace_arg(),
-                    member_arg("User id of the member to kick."),
-                    reason_arg(),
-                ],
+                vec![workspace_arg(), member_arg("Member to kick."), reason_arg()],
                 TypedVerb::Delete,
             )
         },
@@ -148,13 +144,22 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Remove a member and block them from re-joining (Owner/Moderator).",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the member to ban."),
+                    member_arg("Member to ban."),
                     reason_arg(),
                     arg(
                         "expires_at",
                         "Expires",
-                        "Optional RFC 3339 time when the ban ends; omit to ban until unbanned.",
+                        "When the ban ends, as a date and time; leave empty to ban until unbanned. \
+                         Ignored when `minutes` is given.",
                         CommandArgumentTypeDto::String,
+                        false,
+                    ),
+                    arg(
+                        "minutes",
+                        "Minutes",
+                        "Ban for this many minutes from now; leave empty to ban until unbanned or \
+                         until `expires_at`. 1 to 5256000 (ten years).",
+                        CommandArgumentTypeDto::Integer,
                         false,
                     ),
                 ],
@@ -165,7 +170,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             "admin.unban",
             "Unban User",
             "Lift a workspace ban (Owner/Moderator).",
-            vec![workspace_arg(), member_arg("User id of the banned user.")],
+            vec![workspace_arg(), member_arg("Banned member to unban.")],
             TypedVerb::Write,
         ),
         agent_callable(
@@ -175,7 +180,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Mute a member for a number of minutes (Owner/Moderator, at most 30 days).",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the member to time out."),
+                    member_arg("Member to time out."),
                     arg(
                         "minutes",
                         "Minutes",
@@ -202,10 +207,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "admin.clear_timeout",
                 "Clear Timeout",
                 "End a member's timeout early (Owner/Moderator).",
-                vec![
-                    workspace_arg(),
-                    member_arg("User id of the timed-out member."),
-                ],
+                vec![workspace_arg(), member_arg("Timed-out member.")],
                 TypedVerb::Write,
             ),
             "End a workspace member's timeout early so they can send messages and act again. \
@@ -225,7 +227,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Change a member's role (Owner: any role but owner; Moderator: member or guest).",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the member."),
+                    member_arg("Member."),
                     CommandArgumentDto {
                         allowed_values: Some(vec![
                             "moderator".to_string(),
@@ -253,7 +255,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                  or week, or all of them (Owner/Moderator); at most 1000 per run.",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the person whose messages to delete."),
+                    member_arg("Member whose messages to delete."),
                     CommandArgumentDto {
                         allowed_values: Some(vec![
                             "1h".to_string(),

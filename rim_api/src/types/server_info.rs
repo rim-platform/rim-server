@@ -35,6 +35,7 @@ pub const CAPABILITIES: &[&str] = &[
     "app_command_keybinds",
     "account_macros",
     "command_initiator_ui",
+    "command_relative_minutes",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.

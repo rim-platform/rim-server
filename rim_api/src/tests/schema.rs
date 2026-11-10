@@ -248,6 +248,7 @@ async fn server_info_lists_its_capabilities() {
         "app_command_keybinds",
         "account_macros",
         "command_initiator_ui",
+        "command_relative_minutes",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),

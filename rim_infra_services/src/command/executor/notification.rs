@@ -12,8 +12,8 @@ use rim_services::{Actor, ServiceError, ServiceResult};
 use crate::command::CommandServices;
 
 use super::{
-    optional_integer_arg, optional_string_arg, require_string_arg, resolve_conversation_id,
-    resolve_workspace_id,
+    optional_integer_arg, optional_string_arg, relative_minutes_arg, require_string_arg,
+    resolve_conversation_id, resolve_workspace_id,
 };
 
 /// Longest `notifications.dnd` pause given in minutes (7 days).
@@ -149,8 +149,12 @@ enum MuteEnd {
     Never,
 }
 
+/// Longest mute `notifications.mute_conversation` accepts as `minutes`: one year.
+const MAX_MUTE_MINUTES: i64 = 365 * 24 * 60;
+
 /// `duration` = `1h` | `8h` | `until_tomorrow` | `forever` | `until` (with `until` RFC 3339, in
-/// the future). `until` is refused with any other duration.
+/// the future) | `minutes` (with `minutes` from now). `until` and `minutes` are refused with any
+/// other duration.
 fn parse_mute_end(
     args: &serde_json::Map<String, Value>,
     now: chrono::DateTime<chrono::Utc>,
@@ -158,6 +162,18 @@ fn parse_mute_end(
     let duration = require_string_arg(args, "duration")?
         .trim()
         .to_ascii_lowercase();
+    let minutes = relative_minutes_arg(args, MAX_MUTE_MINUTES)?;
+    if duration == "minutes" {
+        let minutes = minutes.ok_or_else(|| {
+            ServiceError::Validation("duration `minutes` needs a `minutes` count".to_string())
+        })?;
+        return Ok(MuteEnd::At(now + chrono::Duration::minutes(minutes)));
+    }
+    if minutes.is_some() {
+        return Err(ServiceError::Validation(
+            "`minutes` is only read with duration `minutes`".to_string(),
+        ));
+    }
     let until = optional_string_arg(args, "until").filter(|s| !s.trim().is_empty());
     if until.is_some() && duration != "until" {
         return Err(ServiceError::Validation(
@@ -186,7 +202,7 @@ fn parse_mute_end(
             Ok(MuteEnd::At(until))
         }
         _ => Err(ServiceError::Validation(
-            "`duration` must be one of 1h, 8h, until_tomorrow, forever, until".to_string(),
+            "`duration` must be one of 1h, 8h, until_tomorrow, forever, until, minutes".to_string(),
         )),
     }
 }
@@ -598,7 +614,21 @@ mod tests {
                 .ok(),
             Some(MuteEnd::At(at("2030-01-02T07:00:00Z")))
         );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "minutes", "minutes": 45 })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T12:45:00Z")))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "minutes", "minutes": "45" })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T12:45:00Z")))
+        );
         for bad in [
+            serde_json::json!({ "minutes": 45 }),
+            serde_json::json!({ "duration": "minutes" }),
+            serde_json::json!({ "duration": "forever", "minutes": 45 }),
+            serde_json::json!({ "duration": "minutes", "minutes": 0 }),
+            serde_json::json!({ "duration": "minutes", "minutes": 525_601 }),
+            serde_json::json!({ "duration": "minutes", "minutes": "soon" }),
             serde_json::json!({}),
             serde_json::json!({ "duration": "2h" }),
             serde_json::json!({ "duration": "until" }),

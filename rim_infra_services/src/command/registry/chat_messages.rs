@@ -19,7 +19,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,

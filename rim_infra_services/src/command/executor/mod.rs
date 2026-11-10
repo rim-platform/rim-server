@@ -152,6 +152,26 @@ pub(super) fn optional_integer_arg(map: &serde_json::Map<String, Value>, key: &s
     }
 }
 
+/// The `minutes` arg of a command whose end can be given as minutes from now: `None` when it is
+/// absent, null or blank, the number of minutes when it is an integer (or numeric string) from 1
+/// to `max`, and a validation error for anything else.
+pub(super) fn relative_minutes_arg(
+    map: &serde_json::Map<String, Value>,
+    max: i64,
+) -> ServiceResult<Option<i64>> {
+    match map.get("minutes") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => return Ok(None),
+        Some(_) => {}
+    }
+    optional_integer_arg(map, "minutes")
+        .filter(|m| (1..=max).contains(m))
+        .map(Some)
+        .ok_or_else(|| {
+            ServiceError::Validation(format!("arg `minutes` must be an integer from 1 to {max}"))
+        })
+}
+
 /// Parse an optional boolean arg that may arrive as a JSON bool (preferred) or the strings
 /// `"true"`/`"false"` (agent providers that stringify tool arguments). Anything else is `None`.
 pub(super) fn optional_bool_arg(map: &serde_json::Map<String, Value>, key: &str) -> Option<bool> {

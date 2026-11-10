@@ -64,7 +64,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -82,8 +82,8 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 },
                 CommandArgumentDto {
                     name: "description".to_string(),
-                    title: "Description".to_string(),
-                    description: "Optional channel topic / description.".to_string(),
+                    title: "Topic".to_string(),
+                    description: "Optional channel topic.".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: false,
                     default_value: None,
@@ -103,8 +103,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "member_ids".to_string(),
                     title: "Members".to_string(),
-                    description: "Optional user ids to add as members right after creation."
-                        .to_string(),
+                    description: "Members to add right after creation.".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: false,
                     default_value: None,
@@ -145,7 +144,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -195,7 +194,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -252,7 +251,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![CommandArgumentDto {
                 name: "server_id".to_string(),
-                title: "Server".to_string(),
+                title: "Workspace".to_string(),
                 description: "Workspace/server identifier.".to_string(),
                 argument_type: CommandArgumentTypeDto::WorkspaceId,
                 required: true,
@@ -313,7 +312,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                     name: "limit".to_string(),
                     title: "Limit".to_string(),
                     description: "Max results to return (default 10, max 50).".to_string(),
-                    argument_type: CommandArgumentTypeDto::String,
+                    argument_type: CommandArgumentTypeDto::Integer,
                     required: false,
                     default_value: None,
                     allowed_values: None,
@@ -374,7 +373,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                     name: "limit".to_string(),
                     title: "Limit".to_string(),
                     description: "Max messages to return (default 30, max 100).".to_string(),
-                    argument_type: CommandArgumentTypeDto::String,
+                    argument_type: CommandArgumentTypeDto::Integer,
                     required: false,
                     default_value: None,
                     allowed_values: None,
