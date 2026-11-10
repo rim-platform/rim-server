@@ -159,7 +159,9 @@ The person can also start the connection inside the desktop app.
   unchanged: grants, the record, confirmations and the encrypted notice.
 - When RIM's tools refuse it for a missing grant, the app MAY offer the grant, through the same
   confirmation as anywhere else.
-- Session transcripts stay on this device, sealed with the account vault, and reach no server.
+- RIM keeps no session transcripts. The list of recent sessions (the agent, the folder, the
+  agent's session id, a title and times) stays on this device, sealed with the account vault, and
+  reaches no server. Reopening a session asks the agent to replay it.
 - What the agent does outside RIM's tools (files, commands, its own tools, its model provider) is
   outside what RIM controls. See "What RIM controls".
 - The web app cannot start agents.
