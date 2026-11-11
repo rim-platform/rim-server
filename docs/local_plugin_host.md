@@ -153,7 +153,8 @@ Host → panel messages:
 | `theme.changed` | Sent on mount and on every theme change. |
 | `panel.state_update` | Sent on mount with the panel state the plugin last stored, then on every change the plugin makes, and with `state: null` when the plugin stops. |
 | `rim.command.result` | The answer to a panel's `rim.command.execute` that carried a `requestId`: `requestId`, `ok`, `message`, `payload`, and `cancelled: true` when the user declined a confirmation. For a command that is not the plugin's own, `payload` is always `null`: the plugin never receives its output. |
-| `panel.state_patch`, `panel.visibility`, `panel.focus`, `panel.blur`, `conversation.changed` | Declared in the bridge's types, never sent. |
+| `conversation.changed` | Sent only when the plugin holds `chat.read`: on mount and whenever the conversation shown changes, with its `conversationId`, or `null` while no conversation is the page shown. |
+| `panel.state_patch`, `panel.visibility`, `panel.focus`, `panel.blur` | Declared in the bridge's types, never sent. |
 
 ### Focus Management
 
