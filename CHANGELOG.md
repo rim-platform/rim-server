@@ -27,6 +27,14 @@ tag `v<version>`, the version every crate in the workspace carries.
   server, on one subscription and with no other events. Listed in `serverInfo.capabilities` as
   `notification_events`.
 
+### Security
+
+- `actix-http` 3.20.3 and `actix-web` 4.18.2 fix RUSTSEC-2026-0446 (request smuggling through
+  malformed chunked trailers), RUSTSEC-2026-0447 and RUSTSEC-2026-0448 (compressed request
+  bodies exhausting memory and CPU) and RUSTSEC-2026-0455 (large-window Brotli bodies getting
+  past the decompression limit). A server stays affected until it runs a release with this
+  line.
+
 ## [0.0.8] - 2026-11-03
 
 ### Added
