@@ -70,6 +70,13 @@
 # nothing to reveal. The fix, `crypto-bigint` 0.7, needs `elliptic-curve` 0.14, which no
 # `openmls_rust_crypto` release uses yet. Drop this once one does.
 #
+# RUSTSEC-2026-0459: a memory-safety bug in the C SQLite bundled by `libsqlite3-sys` 0.30
+# (fixed in 0.39). `libsqlite3-sys` is in Cargo.lock only through `sqlx-sqlite`, the SQLite
+# driver that `sqlx` and `sqlx-macros-core` declare and nothing here enables: every crate uses
+# PostgreSQL only, and `cargo tree -i libsqlite3-sys --workspace --all-features --target all`
+# prints nothing, so it is never compiled. Revisit if SQLite support is ever enabled, or drop
+# this once `sqlx` moves to a fixed `libsqlite3-sys`.
+#
 # The two unmaintained entries are listed so that `--deny unmaintained` can be switched on
 # without failing on them; CI runs `cargo audit --deny unsound` today.
 [advisories]
@@ -83,4 +90,5 @@ ignore = [
     "RUSTSEC-2025-0057",
     "RUSTSEC-2026-0173",
     "RUSTSEC-2026-0387",
+    "RUSTSEC-2026-0459",
 ]
