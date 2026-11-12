@@ -21,6 +21,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-11-12
+
 ### Added
 
 - The agent contract (`docs/specs/agent-data-flow-v1.md`) now covers agents the desktop app starts
@@ -119,6 +121,13 @@ tag `v<version>`, the version every crate in the workspace carries.
   `minutes` with a `minutes` count, so macros and agents can ban or mute for a number of minutes
   from now. Listed in `serverInfo.capabilities` as `command_relative_minutes`
   (`docs/command_model.md`).
+- Bot accounts: an Owner or Moderator creates a bot with revocable tokens and a required statement
+  of who runs it and where what it reads goes (`Bot`, `BotToken`, `createBot`,
+  `docs/specs/bots-v1.md`). Switched off with the `bots` feature.
+- A bot API under `/api/bot/v1` for reading, searching, posting and polling for mentions, in the
+  channels a bot was added to (`docs/specs/bots-v1.md`). `CommandInitiator::Bot` appears in the audit
+  log. Refused calls over a token's limit count as `bot_api` in the rate limit metric. A bot gets no
+  notifications, digests or pushes.
 
 ### Changed
 
@@ -150,20 +159,9 @@ tag `v<version>`, the version every crate in the workspace carries.
   the index is built.
 - **Upgrade:** a migration adds the index `idx_message_mention_user_created`; on a large
   `message_mention` table, writes to it wait while the index is built.
-- Bot accounts: an Owner or Moderator creates a bot with revocable tokens and a required statement
-  of who runs it and where what it reads goes (`Bot`, `BotToken`, `createBot`,
-  `docs/specs/bots-v1.md`). Switched off with the `bots` feature.
-- A bot API under `/api/bot/v1` for reading, searching, posting and polling for mentions, in the
-  channels a bot was added to (`docs/specs/bots-v1.md`). `CommandInitiator::Bot` appears in the audit
-  log. Refused calls over a token's limit count as `bot_api` in the rate limit metric. A bot gets no
-  notifications, digests or pushes.
-
 - A user command is in category `Macro` in place of `User`. A new one may no longer name another
   user command as a step; one saved with such a step keeps it when updated
   (`docs/command_model.md`, Commands And Macros).
-
-### Changed
-
 - The command audit log no longer keeps message text, search words, moderation reasons, channel
   descriptions, group titles or stored state values, only their length. This applies to new rows:
   existing rows age out with the audit retention. `AuditLogEntry.argsRedacted` holds
@@ -1286,7 +1284,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
   `docs/self-hosting.md` shows how to pass a file in instead.
 
-[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.9...HEAD
+[0.0.9]: https://github.com/rim-platform/rim-server/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/rim-platform/rim-server/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/rim-platform/rim-server/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/rim-platform/rim-server/compare/v0.0.5...v0.0.6
