@@ -82,7 +82,9 @@ step 3: workspace_id = None (self-scoped only) → allowed
 
 **Write path.** `write_entry` has no capability check. Only server-internal code calls it: the
 command executor, the macro executor, the moderation audit helper and the remote-workspace host.
-It is never exposed to clients.
+It is never exposed to clients. The command executor writes no row for `chat.mark_as_read`,
+`chat.mark_as_unread` and the `notifications.*` commands, nor the macro executor for such a
+step: they change only the caller's own view (`docs/command_model.md`, Audit row).
 
 ---
 
@@ -144,8 +146,17 @@ CHECK constraint from migration `m20260427_000001_audit_outcome_widen_check`.
 `parent_audit_id` links a child row to the top-level macro row; `None` marks a top-level row.
 
 A pipe (`executeCommand` with `isPipe`) writes one top-level row: its `command_id` is the pipe
-expression, its `sensitivity` the strictest of its stages', `dangerous` true when any stage is
-dangerous, and `typed_verb` null. Its stages write no rows of their own.
+expression with its values masked under the argument redaction rules (`docs/command_model.md`), its
+`sensitivity` the strictest of its stages', `dangerous` true when any stage is dangerous, and
+`typed_verb` null. Its stages write no rows of their own. An expression that does not parse has the
+`command_id` `unparsed | pipe` and the `error_kind` `InvalidPipeExpression`, and keeps none of its
+text.
+
+`run_id` is the identifier a client gave one stretch of an agent's calls, kept only when the
+initiator is `agent` and null on every other row. It is a field of the row like any other: whoever
+may read a row reads its `run_id`, so the Owners and Moderators of a workspace see it on that
+workspace's rows. The `runId` filter of `listAuditLog` only narrows a scope from section 2 and never
+widens one.
 
 ---
 

@@ -19,6 +19,7 @@ needs the `X-CSRF-Token` header (see "Sessions and CSRF").
 | `GET` | `/api` | Nothing | The GraphiQL explorer, only when `RIM_ENABLE_GRAPHIQL=true`. |
 | `GET` | `/api/ws` | Session | GraphQL subscriptions over a WebSocket. |
 | `GET` | `/api/sdl` | Nothing | The schema in SDL, as `text/plain`. |
+| `GET`, `POST` | `/api/bot/v1/...` | A bot token, never a session | The bot API: the one set of routes a bot token works on (`bots.md`). |
 | `GET` | `/.well-known/rim-server` | Nothing | The signed discovery document. |
 | `GET` | `/healthz` | Nothing | Liveness. |
 | `GET` | `/readyz` | Nothing | Readiness. |
@@ -680,6 +681,11 @@ JSON body naming the refusal:
 | 429 | `{"error":"too_many_connections"}` | A WebSocket upgrade over `RIM_RATE_WS_CONNECTIONS_PER_USER`. |
 | 403 | `{"error":"blocked"}` | The client address is on the operator's IP deny list. |
 
+### Errors from the bot API
+
+Routes under `/api/bot/v1` answer `{"refusal":"...","message":"...","retrySafe":bool}`, with the kinds of
+`command_model.md`, "Refusals" (`bots.md`). The limits above still answer in their own shape first.
+
 ### Errors from the file routes
 
 The file and plugin bundle routes answer `{"error":"<message>"}` with:
@@ -749,9 +755,28 @@ each list.
   `MessageReport.automatic` and `clearMessageFlag`; `delete_member_messages`:
   `memberMessageCounts`, `deleteMemberMessages` and the `MessagesDeleted` event;
   `member_timeout_changed`: `ServerMember.timeoutReason` and the `MemberTimeoutChanged` event;
-  `conversation_member_removals`: `conversationMemberRemovals`). A client asks
-  for such a field only when its name is listed, so it keeps working against older servers; it
-  ignores names it does not know.
+  `conversation_member_removals`: `conversationMemberRemovals`; `bot_disclosure`: `User.isBot`,
+  `User.bot`, `ServerMember.isBot` and `ServerMember.bot`; `command_run_id`:
+  `ExecuteCommandInput.runId` and `AuditLogEntry.runId`; `incoming_webhooks`: `IncomingWebhook`,
+  `incomingWebhooks`, `createIncomingWebhook` and `revokeIncomingWebhook`; `read_marker`:
+  `UnreadCount.unreadAfter`, `markAsUnread` and the `ReadMarkerRewound` event; `bot_events`:
+  `Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`, and
+  `/api/bot/v1/events`; `pipeline_post_as_bot`: `PipelineActionGql.postAsBot` and
+  `PipelineActionInput.postAsBot`; `webhook_formats`: `IncomingWebhook.template`,
+  `CreateIncomingWebhookInput.template`, `updateIncomingWebhookFormat`, `webhookFormats` and
+  `previewWebhookFormat`; `webhook_test_sessions`: `startWebhookTestSession`, `endWebhookTestSession`,
+  `webhookTestDeliveries`, `CreateIncomingWebhookInput.testSessionId` and
+  `CreatedIncomingWebhook.keptTestUrl`; `home_layout`: `HomeLayout`, `HomeLayoutSaved`,
+  `homeLayout`, `saveHomeLayout` and `resetHomeLayout`; `app_command_keybinds`: `createKeybind`
+  and `updateKeybind` accept app command ids, `command_model.md` App Commands; `account_macros`:
+  macro steps naming app and plugin commands, `UserCommandStep.ask`, `UserCommand.aiCallable`,
+  `UserCommand.nlDescription`, `UserCommand.intentSamples`, the same fields of the user command
+  inputs, and `macroStepCommands`, Macros below; `command_initiator_ui`: the `UI` value of
+  `CommandInitiator`, which app controls send, `command_model.md` Invocation Sources;
+  `command_relative_minutes`: the `minutes` argument of `admin.ban` and the `minutes` duration of
+  `notifications.mute_conversation`, `command_model.md`). A client asks
+  for such a field, or sends such a value, only when its name is listed, so it keeps working
+  against older servers; it ignores names it does not know.
 
 The discovery document carries the same `features`, and `registrationFull` as
 `registration.full`, for a client that has not connected yet.
@@ -821,6 +846,14 @@ outside the conversation is `NOT_FOUND`.
 
 `MessageReport.reporterUserId` is null for a report the check filed, and
 `MessageReport.automatic: Boolean!` tells such a report from a member's.
+
+### Agent runs in the audit log
+
+`ExecuteCommandInput.runId: String` is an identifier the desktop app gives one stretch of an
+agent's calls: 1 to 64 ASCII letters, digits, `_` or `-`, or `VALIDATION`. It is kept when the
+initiator is `AGENT` and ignored otherwise (`docs/command_model.md`). `AuditLogEntry.runId` returns
+it, null when there is none, and `AuditLogFilterInput.runId` narrows `listAuditLog` to the entries
+of that run, within what the caller may read (`docs/security/audit-access-matrix.md`).
 
 ### Deleting a person's messages
 
@@ -951,3 +984,83 @@ their own server.
 
 **Tries.** See "Limits". A wrong password is `UNAUTHENTICATED`, a wait `RATE_LIMITED` with
 `retryAfterSeconds`, and a locked password `PASSWORD_LOCKED`.
+
+### Bots
+
+An Owner or Moderator of a workspace manages its bots (`bots.md`; the contract is
+`specs/bots-v1.md`). Every root answers `FEATURE_DISABLED` while the `bots` feature is off, and so
+does `addConversationMembers` naming a bot; `removeConversationMember` still removes one.
+
+| Root | Who | Does |
+|---|---|---|
+| `bots(serverId): [Bot!]!` | Any member | The workspace's bots, deactivated ones included. `FORBIDDEN` for anyone else. |
+| `botTokens(botUserId): [BotToken!]!` | Owner, Moderator | The bot's tokens, revoked ones included, never their secret. `FORBIDDEN` for anyone else, `NOT_FOUND` for an unknown bot. |
+| `createBot(input): CreatedBot!` | Owner, Moderator | Creates a bot, a guest of the workspace in no channel, and its first token, labelled `default`. `CreatedBot.token` is shown this once. `seesMemberJoins` is off when left out. `VALIDATION` for the direct space, a bad field or a workspace with 25 active bots. |
+| `updateBot(input): Bot!` | Owner, Moderator | Changes the fields given, `seesMemberJoins` among them, which says whether the bot gets `member_joined` events. |
+| `deactivateBot(botUserId): Bot!` | Owner, Moderator | Revokes its tokens and webhooks and removes it from the workspace and its channels. Its messages stay. Doing it again changes nothing. |
+| `createBotToken(botUserId, label): CreatedBotToken!` | Owner, Moderator | A new token, shown this once. `VALIDATION` for a label that is not 1 to 64 characters, a deactivated bot or a bot with 5 active tokens. |
+| `revokeBotToken(tokenId): BotToken!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown token and for a token of a bot in a workspace the caller does not moderate. |
+| `incomingWebhooks(serverId): [IncomingWebhook!]!` | Owner, Moderator | The workspace's webhooks, revoked ones included, never their token. `template` is the webhook's own format, and null for a plain webhook and an unedited GitHub one. `FORBIDDEN` for anyone else. |
+| `createIncomingWebhook(input): CreatedIncomingWebhook!` | Owner, Moderator | Creates the channel's webhook, bound to a bot, and adds the bot to the channel if it is not there. `CreatedIncomingWebhook.token` is shown this once. `FORBIDDEN` for anyone else and for a private channel the caller is not in. `VALIDATION` for anything but a plaintext channel that is not archived and for a bot of another workspace or a deactivated one. `CONFLICT` when the channel has a webhook that is not revoked. `NOT_FOUND` for an unknown conversation or bot. With `input.template`, `preset` must be `PLAIN`, and a format that is refused is `VALIDATION`, naming the rule. With `input.testSessionId` of the caller's open unbound session of that workspace, the webhook keeps that session's token, the session ends, `CreatedIncomingWebhook.keptTestUrl` is true and `token` is the empty string, since the server holds only the hash and the client already has the URL. An expired or ended session gives `keptTestUrl` false and a new `token`, shown once; someone else's or another workspace's is `VALIDATION`. Without `testSessionId`, `keptTestUrl` is false. |
+| `updateIncomingWebhookFormat(id, preset, template): IncomingWebhook!` | Owner, Moderator | Changes how the webhook turns a delivery into a message. The URL stays the same. `template` needs `preset` `PLAIN`; `PLAIN` or `GITHUB` with no `template` goes back to that preset. `VALIDATION` for a format that is refused, naming the rule, and for a revoked webhook. `FORBIDDEN` for a private channel the caller is not in. `NOT_FOUND` for an unknown webhook and for one of a workspace the caller does not moderate. |
+| `webhookFormats: [WebhookFormatInfo!]!` | Anyone signed in | The ready-made formats, the same for everyone: key, name, setup note, format, sample headers and sample body. |
+| `previewWebhookFormat(serverId, template, headers, body): WebhookFormatPreview!` | Owner, Moderator | Runs a format on a sample as a delivery would, and posts and stores nothing. `headers` are `WebhookHeaderInput`s and `body` the text of a delivery. `outcome` is `POSTS` with `rule`, `text` and `link`; `NO_RULE`; `NO_VALUE` with `rule` and the `placeholder`; `BODY_REFUSED` or `FORMAT_REFUSED` with the `reason`, and for a format the `rule` it names. `FORBIDDEN` for anyone else. `VALIDATION` for a sample over 256 KiB, its headers and body together. |
+| `startWebhookTestSession(serverId, webhookId): WebhookTestSession!` | Owner, Moderator | Opens a session that holds what arrives, in memory, for its starter alone. It answers `id` and `expiresAt`, and without `webhookId` a `token` for a URL that posts nothing; with one it copies the webhook's deliveries and `token` is null. `FORBIDDEN` without the standing of creating a webhook, or of changing that one's format. `NOT_FOUND` for an unknown webhook or one of another workspace. `RATE_LIMITED` past 3 open sessions in the workspace or 20 on the server. |
+| `endWebhookTestSession(sessionId): Boolean!` | Its starter | Drops the session and what it holds. `NOT_FOUND` for anyone else and for one that ended. |
+| `webhookTestDeliveries(sessionId, after): WebhookTestDeliveries!` | Its starter | What arrived after `after`, oldest first, and the expiry, which the read extends. `NOT_FOUND` for anyone else, for one that ended, and once the starter lacks the standing to start it. |
+| `revokeIncomingWebhook(id): IncomingWebhook!` | Owner, Moderator | Revokes it. Doing it again changes nothing. `NOT_FOUND` for an unknown webhook and for one of a workspace the caller does not moderate. |
+
+`runBy` and `readsGoTo` are 1 to 200 characters of plain text, trimmed. Text with a control or format
+character is `VALIDATION`.
+
+`User.isBot` and `ServerMember.isBot` mark a bot. `User.bot` and `ServerMember.bot` are a `BotInfo`,
+what the person who added it says about it, and null for anyone else: they answer while the feature
+is off too. `Message.author` is a `User`, so a client draws a bot's messages from it. A bot's
+`handle` and `principalId` are null.
+
+What a bot itself can call is not GraphQL: its token works on `/api/bot/v1` alone (`bots.md`). An
+incoming webhook's token works on `POST /api/hooks/{token}` alone, and a client builds that URL from the
+address it is signed in to (`bots.md`, "Incoming webhooks").
+
+`createConversation` naming a bot and `addConversationMembers` naming a bot for anything but a
+plaintext channel are `VALIDATION` ("A bot can only be in a channel"). `addConversationMembers`
+naming a bot is `FORBIDDEN` for anyone but an Owner or Moderator, and `setMemberRole` on a bot is
+`VALIDATION`.
+
+### Home layout
+
+A signed-in person's Home layout, one per account, kept on their home server (`home-layout.md`
+has the layout's format, the checks and the rules). Each root needs a session; the mutations
+need the CSRF header.
+
+| Root | Does |
+|---|---|
+| `homeLayout: HomeLayout` | The caller's layout, `{ layout: JSON!, editedAt: DateTime!, updatedAt: DateTime! }`, or null when none is stored. |
+| `saveHomeLayout(layout: JSON!, editedAt: DateTime!): HomeLayoutSaved!` | Stores the layout unless the stored one has a later `editedAt`, an `editedAt` later than the server's clock counting as the clock. Answers `{ kept: Boolean!, layout: HomeLayout! }`: `kept` true with the layout just stored, or false with the stored one that was kept. `VALIDATION` names the check a layout fails. |
+| `resetHomeLayout: Boolean!` | Deletes the stored layout, so the default shows. Answers whether a layout was stored. |
+
+A person from another server gets `FORBIDDEN` from all three. The mutations count against
+`RIM_RATE_MUTATIONS_PER_MIN_PER_SESSION` like any other and write no audit entry. Present when
+`serverInfo.capabilities` lists `home_layout`.
+
+### Macros
+
+A person's macros are their own commands, kept with their account on their home server
+(`command_model.md`, Commands And Macros, has the rules). The API keeps the name user command.
+Each root needs a session; the mutations need the CSRF header. Present when
+`serverInfo.capabilities` lists `account_macros`; an older server has the roots below without
+the new fields and accepts only steps naming built-ins the server runs.
+
+| Root | Does |
+|---|---|
+| `userCommands: [UserCommand!]!`, `userCommand(id: String!): UserCommand` | The caller's macros, enabled or not, with `aiCallable`, `nlDescription`, `intentSamples` and steps `{ commandId, args, ask }`. |
+| `createUserCommand(input: CreateUserCommandInput!): Command!` | Creates a macro. `aiCallable` defaults to false; `nlDescription` and `intentSamples` default to empty; a step's `ask` defaults to none. |
+| `updateUserCommand(input: UpdateUserCommandInput!): Command!` | Replaces a macro's title, description, steps and `isEnabled`. An omitted `aiCallable`, `nlDescription` or `intentSamples` keeps the stored value, and an omitted step `ask` keeps what the stored step at the same position asked for when it names the same command. |
+| `deleteUserCommand(input: DeleteUserCommandInput!): Boolean!` | Deletes a macro. |
+| `macroStepCommands: [Command!]!` | Every built-in and app command a macro step may name, sorted by id, whatever the caller's role and workspace: the built-ins the server lists, the ones the client runs included, and the app commands, without the agent-management ones. Plugin commands are not in it. |
+
+`createMacro`, `updateMacro`, `deleteMacro`, `executeMacro`, `myMacros` and `macroByName`, the
+workspace macros, are deprecated in the schema and keep working; a client moves their macros
+into the person's macros once (`command_model.md`, Workspace macros, deprecated). `commands` on
+the `AI` surface and `commandDiscover` no longer list workspace macros as `macro.<id>`; they
+list the caller's agent-callable macros as `user.<key>`.

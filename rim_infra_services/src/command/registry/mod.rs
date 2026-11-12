@@ -1,4 +1,6 @@
 mod admin;
+mod app_commands;
+mod category;
 mod chat;
 mod chat_messages;
 mod conversation;
@@ -13,6 +15,10 @@ mod workspace;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::CommandDefinitionDto;
 use rim_services::command::sanitize::sanitize_command_ai_fields;
+
+#[cfg(test)]
+pub(crate) use app_commands::AGENT_MANAGEMENT_COMMANDS;
+pub(crate) use app_commands::{APP_COMMANDS, AppCommand, app_command, is_agent_management_command};
 
 pub(crate) fn builtin_commands() -> Vec<CommandDefinitionDto> {
     let mut defs = builtin_commands_raw();
@@ -122,6 +128,7 @@ pub(crate) fn required_role(command_id: &str) -> RequiredRole {
         | "admin.ban"
         | "admin.unban"
         | "admin.timeout"
+        | "admin.clear_timeout"
         | "admin.set_role"
         | "admin.delete_member_messages"
         | "chat.set_slow_mode"
@@ -179,6 +186,18 @@ mod tests {
     }
 
     #[test]
+    fn every_builtin_is_in_a_fixed_category() {
+        for command in builtin_commands() {
+            assert!(
+                category::ALL.contains(&command.category.as_str()),
+                "{}: {}",
+                command.id,
+                command.category
+            );
+        }
+    }
+
+    #[test]
     fn builtin_commands_ids_are_unique() {
         let commands = builtin_commands();
         let mut ids: Vec<&str> = commands.iter().map(|c| c.id.as_str()).collect();
@@ -231,8 +250,10 @@ mod tests {
     fn collect_ai_callable_inventory_matches_reviewed_set() {
         // The builtins the agent may call. Every one is authorized by the service behind it, so
         // the agent gains no access the user does not already have. Membership, moderation and
-        // notification commands are gated by `ConversationService`, `ModerationService` and
-        // `NotificationService`; the desktop-local navigation commands run on the client; every
+        // notification commands are gated by `ConversationService`, `ModerationService`,
+        // `NotificationService` and `NotificationPreferenceService`; pins and topics by
+        // `PinService` and `ConversationService`; the desktop-local navigation commands run on
+        // the client; every
         // agent write is Mutating and therefore confirmation-gated. Left out on purpose:
         // `chat.remove_conversation_member`, `admin.kick`, `admin.ban`, `admin.unban` and
         // `admin.set_role` (dangerous); the commands that act on the user's selected message
@@ -261,6 +282,8 @@ mod tests {
             "chat.search_messages",
             "chat.get_recent_messages",
             "chat.pin_message",
+            "chat.unpin_message",
+            "chat.set_topic",
             "chat.toggle_reaction",
             "chat.join_channel",
             "chat.leave_conversation",
@@ -270,10 +293,13 @@ mod tests {
             "chat.set_slow_mode",
             "chat.set_channel_posting",
             "admin.timeout",
+            "admin.clear_timeout",
             "chat.report_message",
             "notifications.set_level",
             "notifications.dnd",
             "notifications.mark_all_read",
+            "notifications.mute_conversation",
+            "notifications.unmute_conversation",
             "workspace.open_search",
             "workspace.search_in_channel",
             "workspace.open_marketplace",
@@ -296,6 +322,26 @@ mod tests {
         expected.sort();
 
         assert_eq!(ids, expected);
+    }
+
+    /// Marking something unread changes only the caller's state, and is not an agent's to decide.
+    #[test]
+    fn mark_as_unread_is_a_personal_command_off_the_ai_surface() {
+        let cmds = builtin_commands();
+        let command = cmds
+            .iter()
+            .find(|c| c.id == "chat.mark_as_unread")
+            .expect("registered");
+        assert!(!command.ai_callable);
+        assert!(!collect_ai_callable_inventory(&cmds).contains(&"chat.mark_as_unread"));
+        assert!(command.required_capabilities.is_empty());
+        assert!(command.visible_in_palette);
+        assert!(command.visible_in_context_menus);
+        assert!(command.keybind_capable);
+        assert_eq!(
+            command.sensitivity,
+            rim_services::command::sensitivity::CommandSensitivityDto::Mutating
+        );
     }
 
     #[test]

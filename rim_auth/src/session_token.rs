@@ -52,6 +52,48 @@ pub fn generate_public_link_token() -> String {
     )
 }
 
+/// The prefix of a bot's token.
+pub const BOT_TOKEN_PREFIX: &str = "rimbot_";
+
+/// How many characters follow the prefix of a bot's or webhook's token: 32 bytes, base64url-nopad.
+const BOT_TOKEN_BODY_CHARS: usize = 43;
+
+/// Generate a bot's token: [`BOT_TOKEN_PREFIX`] and 32 random bytes, base64url-nopad. Only its
+/// SHA-256 ([`hash_token`]) is ever persisted.
+pub fn generate_bot_token() -> String {
+    generate_token(BOT_TOKEN_PREFIX)
+}
+
+/// Whether `raw` has the shape of a bot's token: `rimbot_` and 43 base64url characters.
+pub fn is_bot_token_shape(raw: &str) -> bool {
+    has_token_shape(raw, BOT_TOKEN_PREFIX)
+}
+
+/// The prefix of an incoming webhook's token.
+pub const WEBHOOK_TOKEN_PREFIX: &str = "rimhook_";
+
+/// Generate an incoming webhook's token: [`WEBHOOK_TOKEN_PREFIX`] and 32 random bytes,
+/// base64url-nopad. Only its SHA-256 ([`hash_token`]) is ever persisted.
+pub fn generate_webhook_token() -> String {
+    generate_token(WEBHOOK_TOKEN_PREFIX)
+}
+
+/// Whether `raw` has the shape of an incoming webhook's token: `rimhook_` and 43 base64url
+/// characters.
+pub fn is_webhook_token_shape(raw: &str) -> bool {
+    has_token_shape(raw, WEBHOOK_TOKEN_PREFIX)
+}
+
+/// Whether `raw` is `prefix` and the base64url characters of 32 bytes.
+fn has_token_shape(raw: &str, prefix: &str) -> bool {
+    raw.strip_prefix(prefix).is_some_and(|body| {
+        body.len() == BOT_TOKEN_BODY_CHARS
+            && body
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    })
+}
+
 /// `N` bytes from the OS random generator, base64url-nopad. `what` names the value in the log
 /// line written before panicking when the entropy source fails.
 fn random_b64url<const N: usize>(what: &str) -> String {

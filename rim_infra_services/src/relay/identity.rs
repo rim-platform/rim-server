@@ -370,7 +370,7 @@ pub(crate) async fn store_remote(
     };
 
     let (user_id, created) = match store.host_repo.find_user(principal_id).await? {
-        Some((_, UserKind::Local)) => return Ok(None),
+        Some((_, UserKind::Local | UserKind::Bot)) => return Ok(None),
         Some((user_id, UserKind::Remote)) => (user_id, false),
         None => {
             let user_id = store

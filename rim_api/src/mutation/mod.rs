@@ -23,6 +23,7 @@ pub(crate) mod account;
 pub(crate) mod account_password;
 pub(crate) mod attachment;
 pub(crate) mod auth;
+pub(crate) mod bot;
 pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod conversation;
@@ -30,6 +31,7 @@ pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
+pub(crate) mod home_layout;
 pub(crate) mod instance_moderation;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
@@ -136,4 +138,8 @@ pub(crate) struct MutationGroup9(
 );
 
 #[derive(MergedObject, Default)]
-pub(crate) struct MutationGroup10(workspace::WorkspaceMembershipMutations);
+pub(crate) struct MutationGroup10(
+    workspace::WorkspaceMembershipMutations,
+    bot::BotMutations,
+    home_layout::HomeLayoutMutations,
+);

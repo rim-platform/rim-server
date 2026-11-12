@@ -267,13 +267,36 @@ mutation Exec($serverId: ID!, $args: JSON!, $commandId: String! = "chat.post_mes
 }
 "#;
 
+const EXECUTE_AS: &str = r#"
+mutation Exec($serverId: ID!, $args: JSON!, $commandId: String!, $initiator: CommandInitiator) {
+  executeCommand(input: {
+    commandId: $commandId
+    args: $args
+    commandContext: { workspaceId: $serverId }
+    initiator: $initiator
+  }) { status message }
+}
+"#;
+
+const EXECUTE_IN_RUN: &str = r#"
+mutation Exec($serverId: ID!, $initiator: CommandInitiator, $runId: String) {
+  executeCommand(input: {
+    commandId: "chat.list_channels"
+    args: { server_id: $serverId }
+    commandContext: { workspaceId: $serverId }
+    initiator: $initiator
+    runId: $runId
+  }) { status message }
+}
+"#;
+
 const AUDIT_LOG: &str = r#"
 query Audit($filter: AuditLogFilterInput, $pagination: AuditLogPaginationInput) {
   listAuditLog(filter: $filter, pagination: $pagination) {
     items {
       id actorUserId serverId commandId initiator argsRedacted sensitivity dangerous
       confirmationKind typedVerb outcome errorKind capabilityCheckOutcome confirmationOutcome
-      createdAt
+      runId createdAt
     }
     nextCursor
     pageInfo { hasNextPage hasPrevPage }
@@ -404,6 +427,28 @@ impl Fixture {
     async fn audit_page(&self, filter: Value, pagination: Value) -> Value {
         let vars = json!({ "filter": filter, "pagination": pagination });
         exec_ok(&self.schema, self.alice.request(AUDIT_LOG, vars)).await["listAuditLog"].clone()
+    }
+
+    /// How many audit rows of the fixture's workspace hold `needle` in any column.
+    async fn audit_rows_holding(&self, needle: &str) -> i64 {
+        use sea_orm::ConnectionTrait;
+
+        self.ctx
+            .conn
+            .query_one_raw(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Postgres,
+                "SELECT count(*) AS n FROM command_audit_log AS c \
+                 WHERE c.server_id = $1 AND row_to_json(c)::text LIKE $2",
+                [
+                    uuid::Uuid::from(self.server.id).into(),
+                    format!("%{needle}%").into(),
+                ],
+            ))
+            .await
+            .expect("query")
+            .expect("row")
+            .try_get::<i64>("", "n")
+            .expect("count")
     }
 
     async fn audit_rows(&self, command_id: &str) -> Vec<entity::command_audit_log::Model> {
@@ -634,6 +679,162 @@ async fn timed_out_member_cannot_send_or_run_mutating_commands() {
     assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
     assert_eq!(f.audit_rows("admin.timeout").await.len(), 1);
     assert_eq!(f.audit_rows("admin.clear_timeout").await.len(), 1);
+}
+
+impl Fixture {
+    /// The variables of an `EXECUTE_AS` call of `command_id` in the fixture's channel, with
+    /// `extra` added to the arguments and `initiator` as the initiator.
+    fn channel_command(&self, command_id: &str, extra: Value, initiator: &str) -> Value {
+        let mut args = json!({ "server_id": self.server_id, "conversation_id": self.channel_id });
+        if let (Some(args), Some(extra)) = (args.as_object_mut(), extra.as_object()) {
+            args.extend(extra.clone());
+        }
+        json!({
+            "serverId": self.server_id,
+            "commandId": command_id,
+            "args": args,
+            "initiator": initiator,
+        })
+    }
+}
+
+/// A timed-out member still changes their own state through `executeCommand`, as the GraphQL
+/// mutations allow: muting, marking read and leaving. Pinning, which others see, is refused.
+#[tokio::test]
+async fn a_timed_out_member_runs_commands_that_change_only_their_own_state() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let in_channel = json!({ "serverId": f.server_id, "conversationId": f.channel_id });
+    exec_ok(&f.schema, f.carol.request(JOIN_CHANNEL, in_channel)).await;
+    let message_id = f.send(&f.alice, &f.channel_id, "pin me").await;
+    let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+    let vars = json!({
+        "serverId": f.server_id,
+        "userId": f.carol.user_id.to_string(),
+        "until": until.to_rfc3339(),
+    });
+    exec_ok(&f.schema, f.mona.request(TIMEOUT, vars)).await;
+    let run = |command_id: &str, extra: Value| {
+        f.carol
+            .request(EXECUTE_AS, f.channel_command(command_id, extra, "UI"))
+    };
+
+    for (command_id, extra) in [
+        (
+            "notifications.mute_conversation",
+            json!({ "duration": "1h" }),
+        ),
+        ("chat.mark_as_read", json!({})),
+    ] {
+        let ok = exec_ok(&f.schema, run(command_id, extra)).await;
+        assert_eq!(
+            ok["executeCommand"]["status"],
+            json!("SUCCESS"),
+            "{command_id}"
+        );
+    }
+    let code = exec_err_code(
+        &f.schema,
+        run("chat.pin_message", json!({ "message_id": message_id })),
+    )
+    .await;
+    assert_eq!(code, "TIMED_OUT");
+    let ok = exec_ok(&f.schema, run("chat.leave_conversation", json!({}))).await;
+    assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
+}
+
+/// Marking read and changing notifications write no command audit row, since the workspace's
+/// Owners and Moderators read that log; pinning keeps its row, with the `UI` initiator as `ui`.
+#[tokio::test]
+async fn own_view_commands_write_no_audit_row_and_a_pin_keeps_its_row() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let in_channel = json!({ "serverId": f.server_id, "conversationId": f.channel_id });
+    exec_ok(&f.schema, f.bob.request(JOIN_CHANNEL, in_channel)).await;
+    let message_id = f.send(&f.alice, &f.channel_id, "pin me").await;
+
+    for (command_id, extra) in [
+        ("chat.mark_as_read", json!({})),
+        (
+            "notifications.mute_conversation",
+            json!({ "duration": "1h" }),
+        ),
+        ("notifications.unmute_conversation", json!({})),
+        ("chat.pin_message", json!({ "message_id": message_id })),
+    ] {
+        let ok = exec_ok(
+            &f.schema,
+            f.bob
+                .request(EXECUTE_AS, f.channel_command(command_id, extra, "UI")),
+        )
+        .await;
+        assert_eq!(
+            ok["executeCommand"]["status"],
+            json!("SUCCESS"),
+            "{command_id}"
+        );
+    }
+
+    for command_id in [
+        "chat.mark_as_read",
+        "notifications.mute_conversation",
+        "notifications.unmute_conversation",
+    ] {
+        assert!(f.audit_rows(command_id).await.is_empty(), "{command_id}");
+    }
+    let pins = f.audit_rows("chat.pin_message").await;
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].initiator, "ui");
+    assert_eq!(pins[0].actor_user_id, uuid::Uuid::from(f.bob.user_id));
+}
+
+/// `admin.clear_timeout` through `executeCommand`: a member's call is refused by role, a
+/// moderator's ends the timeout in force once (audited once by the moderation service) and then
+/// reports that nothing was cleared.
+#[tokio::test]
+async fn the_clear_timeout_command_ends_a_timeout_like_the_mutation() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+    exec_ok(
+        &f.schema,
+        f.mona.request(
+            TIMEOUT,
+            json!({
+                "serverId": f.server_id,
+                "userId": f.carol.user_id.to_string(),
+                "until": until.to_rfc3339(),
+            }),
+        ),
+    )
+    .await;
+    let clear = json!({
+        "serverId": f.server_id,
+        "commandId": "admin.clear_timeout",
+        "args": { "user_id": f.carol.user_id.to_string() },
+    });
+
+    let code = exec_err_code(&f.schema, f.bob.request(EXECUTE, clear.clone())).await;
+    assert_eq!(code, "FORBIDDEN", "members cannot clear timeouts");
+    assert!(f.member_entry(&f.alice, &f.carol).await["timeoutUntil"].is_string());
+
+    for message in ["timeout cleared", "member was not timed out"] {
+        let data = exec_ok(&f.schema, f.mona.request(EXECUTE, clear.clone())).await;
+        assert_eq!(data["executeCommand"]["status"], json!("SUCCESS"));
+        assert_eq!(data["executeCommand"]["message"], json!(message));
+    }
+    assert_eq!(
+        f.member_entry(&f.alice, &f.carol).await["timeoutUntil"],
+        Value::Null
+    );
+    f.send(&f.carol, &f.channel_id, "back").await;
+    let moderation_rows = f
+        .audit_rows("admin.clear_timeout")
+        .await
+        .into_iter()
+        .filter(|row| row.initiator == "moderation")
+        .count();
+    assert_eq!(moderation_rows, 1);
 }
 
 impl Fixture {
@@ -1491,7 +1692,9 @@ async fn audit_log_pages_newest_first_and_filters_by_verb_and_command() {
             "commandId": "chat.post_message",
             "initiator": "palette",
             "argsRedacted": {
-                "server_id": f.server_id, "conversation_id": f.channel_id, "text": "second",
+                "server_id": f.server_id,
+                "conversation_id": f.channel_id,
+                "text": { "redacted_content": true, "chars": 6 },
             },
             "sensitivity": "mutating",
             "dangerous": false,
@@ -1501,6 +1704,7 @@ async fn audit_log_pages_newest_first_and_filters_by_verb_and_command() {
             "errorKind": null,
             "capabilityCheckOutcome": null,
             "confirmationOutcome": null,
+            "runId": null,
         })
     );
     assert_eq!(
@@ -1571,6 +1775,187 @@ async fn audit_log_pages_newest_first_and_filters_by_verb_and_command() {
         let code = exec_err_code(&f.schema, f.alice.request(AUDIT_LOG, vars)).await;
         assert_eq!(code, "VALIDATION", "{filter} {pagination}");
     }
+}
+
+/// `executeCommand` keeps `runId` on the audit entry of an `AGENT` call and `listAuditLog` filters
+/// by it, within what the caller may read: a member their own rows, the owner the workspace's. A
+/// call with another initiator keeps no id, and a malformed id is `VALIDATION`.
+#[tokio::test]
+async fn audit_log_keeps_and_filters_an_agent_run_id() {
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let call = |initiator: &str, run_id: &str| json!({ "serverId": f.server_id, "initiator": initiator, "runId": run_id });
+    for (who, vars) in [
+        (&f.bob, call("AGENT", "r_1")),
+        (&f.alice, call("AGENT", "r_1")),
+        (&f.bob, call("AGENT", "r_2")),
+        (&f.bob, call("PALETTE", "r_palette")),
+    ] {
+        let ok = exec_ok(&f.schema, who.request(EXECUTE_IN_RUN, vars)).await;
+        assert_eq!(ok["executeCommand"]["status"], json!("SUCCESS"));
+    }
+
+    let bob_id = f.bob.user_id.to_string();
+    let alice_id = f.alice.user_id.to_string();
+    let rows = |data: &Value| -> Vec<(String, String, String)> {
+        data["listAuditLog"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|row| {
+                (
+                    row["actorUserId"].as_str().expect("actor").to_string(),
+                    row["initiator"].as_str().expect("initiator").to_string(),
+                    row["runId"].as_str().expect("run id").to_string(),
+                )
+            })
+            .collect()
+    };
+    let read = |filter: Value| json!({ "filter": filter });
+    let own_run = read(json!({ "serverId": f.server_id, "actorUserId": bob_id, "runId": "r_1" }));
+
+    let bobs = exec_ok(&f.schema, f.bob.request(AUDIT_LOG, own_run)).await;
+    assert_eq!(
+        rows(&bobs),
+        [(bob_id.clone(), "agent".to_string(), "r_1".to_string())]
+    );
+
+    let workspace_run = read(json!({ "serverId": f.server_id, "runId": "r_1" }));
+    assert_eq!(
+        exec_err_code(&f.schema, f.bob.request(AUDIT_LOG, workspace_run.clone())).await,
+        "FORBIDDEN",
+        "a member reads no one else's rows of a run"
+    );
+    let owners = exec_ok(&f.schema, f.alice.request(AUDIT_LOG, workspace_run)).await;
+    assert_eq!(
+        rows(&owners),
+        [
+            (alice_id, "agent".to_string(), "r_1".to_string()),
+            (bob_id.clone(), "agent".to_string(), "r_1".to_string()),
+        ]
+    );
+
+    let palette = read(json!({ "serverId": f.server_id, "runId": "r_palette" }));
+    let none = exec_ok(&f.schema, f.alice.request(AUDIT_LOG, palette)).await;
+    assert!(rows(&none).is_empty(), "only an agent's call keeps the id");
+    let palette_rows = read(json!({ "serverId": f.server_id, "actorUserId": bob_id }));
+    let bob_all = exec_ok(&f.schema, f.bob.request(AUDIT_LOG, palette_rows)).await;
+    let palette_row = bob_all["listAuditLog"]["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|row| row["initiator"] == json!("palette"))
+        .expect("the palette call");
+    assert_eq!(palette_row["runId"], Value::Null);
+
+    for bad in ["", "has space", &"x".repeat(65)] {
+        assert_eq!(
+            exec_err_code(&f.schema, f.bob.request(EXECUTE_IN_RUN, call("AGENT", bad))).await,
+            "VALIDATION",
+            "{bad:?}"
+        );
+    }
+}
+
+/// `chat.post_message` from an agent keeps the text's length in the audit log and none of its
+/// text, on the held call and on the call carrying the proof; the ids stay for moderation.
+#[tokio::test]
+async fn the_audit_log_keeps_only_the_length_of_an_agents_message() {
+    const POST: &str = r#"
+    mutation Post($input: ExecuteCommandInput!) {
+      executeCommand(input: $input) {
+        status confirmationRequired { token argsHash }
+      }
+    }
+    "#;
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let text = "audit-canary žluťoučký kůň";
+    let call = json!({
+        "commandId": "chat.post_message",
+        "args": { "server_id": f.server_id, "conversation_id": f.channel_id, "text": text },
+        "commandContext": { "workspaceId": f.server_id },
+        "initiator": "AGENT",
+    });
+
+    let held = exec_ok(&f.schema, f.alice.request(POST, json!({ "input": call }))).await;
+    let held = &held["executeCommand"];
+    assert_eq!(held["status"], json!("CONFIRMATION_REQUIRED"));
+    let challenge = &held["confirmationRequired"];
+    let mut proved = call.clone();
+    proved["confirmation"] = json!({ "inBandToken": {
+        "token": challenge["token"], "argsHash": challenge["argsHash"],
+    } });
+    let sent = exec_ok(&f.schema, f.alice.request(POST, json!({ "input": proved }))).await;
+    assert_eq!(sent["executeCommand"]["status"], json!("SUCCESS"));
+
+    let rows = f.audit_rows("chat.post_message").await;
+    assert_eq!(rows.len(), 2, "the held call and the proof");
+    for row in &rows {
+        assert_eq!(row.initiator, "agent");
+        assert_eq!(row.args_redacted["server_id"], json!(f.server_id));
+        assert_eq!(row.args_redacted["conversation_id"], json!(f.channel_id));
+        assert_eq!(
+            row.args_redacted["text"],
+            json!({ "redacted_content": true, "chars": text.chars().count() })
+        );
+    }
+
+    assert_eq!(
+        f.audit_rows_holding("audit-canary").await,
+        0,
+        "no audit row holds the message text"
+    );
+}
+
+/// A pipe's audit row keeps its stages and the length of what a person wrote in the expression, and
+/// one that does not parse keeps a fixed marker and error while its caller still hears why.
+#[tokio::test]
+async fn the_audit_log_keeps_no_text_written_inside_a_pipe_expression() {
+    const PIPE: &str = r#"
+    mutation Pipe($input: ExecuteCommandInput!) {
+      executeCommand(input: $input) { status }
+    }
+    "#;
+    let f = setup().await;
+    f.ctx.seed_capabilities().await;
+    let pipe = |expression: &str| {
+        json!({ "input": {
+            "commandId": expression,
+            "isPipe": true,
+            "commandContext": { "workspaceId": f.server_id },
+        } })
+    };
+
+    let ran = exec_ok(
+        &f.schema,
+        f.alice.request(
+            PIPE,
+            pipe("chat.list_channels text=pipe-canary | chat.list_channels"),
+        ),
+    )
+    .await;
+    assert_eq!(ran["executeCommand"]["status"], json!("SUCCESS"));
+    let rows = f
+        .audit_rows("chat.list_channels text=[REDACTED:11] | chat.list_channels")
+        .await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].outcome, "success");
+
+    let refused = f
+        .schema
+        .execute(f.alice.request(
+            PIPE,
+            pipe("chat.list_channels text=pipe-canary stray-canary"),
+        ))
+        .await;
+    assert!(refused.errors[0].message.contains("stray-canary"));
+    let rows = f.audit_rows("unparsed | pipe").await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].outcome, "error");
+    assert_eq!(rows[0].error_kind.as_deref(), Some("InvalidPipeExpression"));
+
+    assert_eq!(f.audit_rows_holding("canary").await, 0);
 }
 
 /// `row` without the fields named in `drop`.
@@ -2486,8 +2871,8 @@ async fn every_command_root_refuses_an_anonymous_caller() {
 }
 
 /// User commands are per account: another member and the workspace owner see no command of
-/// bob's (`NOT_FOUND`) and may name their own command the same, and a step may name only the
-/// caller's own user commands.
+/// bob's (`NOT_FOUND`) and may name their own command the same, and a new one may not name
+/// bob's as a step.
 #[tokio::test]
 async fn a_user_command_belongs_to_its_creator_alone() {
     let f = setup().await;
@@ -2508,7 +2893,7 @@ async fn a_user_command_belongs_to_its_creator_alone() {
     .await;
     assert_eq!(
         (code.as_str(), message.as_str()),
-        ("VALIDATION", "unknown command step `user.greet`")
+        ("VALIDATION", "macro steps must not reference other macros")
     );
 
     let theirs = exec_ok(
@@ -2565,6 +2950,7 @@ async fn command_listings_follow_membership_and_role() {
     ];
     let moderator = [
         "admin.ban",
+        "admin.clear_timeout",
         "admin.kick",
         "admin.set_role",
         "admin.timeout",

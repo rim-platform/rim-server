@@ -6,6 +6,7 @@ use chrono::Duration;
 use rim_services::account_deletion::service::AccountDeletionService;
 use rim_services::audit::service::AuditLogService;
 use rim_services::auth::service::{AuthService, RequestAuthenticator};
+use rim_services::bot::service::BotService;
 use rim_services::capability::service::CapabilityService;
 use rim_services::channel_lens::service::ChannelLensService;
 use rim_services::command::service::CommandService;
@@ -96,6 +97,7 @@ pub struct DefaultAppServiceProvider {
     command_service: Arc<dyn CommandService>,
     conversation_service: Arc<dyn ConversationService>,
     custom_emoji_service: Arc<dyn CustomEmojiService>,
+    bot_service: Arc<dyn BotService>,
     key_auth_service: Arc<dyn KeyAuthService>,
     keybind_service: Arc<dyn KeybindService>,
     link_preview: crate::link_preview::DefaultLinkPreviewService,
@@ -133,6 +135,7 @@ pub struct DefaultAppServiceProvider {
     account_password_service:
         Arc<dyn rim_services::account_password::service::AccountPasswordService>,
     session_key_service: Arc<dyn rim_services::session_key::service::SessionKeyService>,
+    home_layout_service: Arc<dyn rim_services::home_layout::service::HomeLayoutService>,
 }
 
 impl DefaultAppServiceProvider {
@@ -261,6 +264,8 @@ impl DefaultAppServiceProvider {
             observers.clone(),
         )
         .with_e2ee_repo(Arc::clone(&repos.e2ee_repo))
+        .with_bot_repo(Arc::clone(&repos.bot_repo))
+        .with_feature_gate(Arc::clone(&feature_gate))
         .with_direct_space(federation.direct_space_id)
         .with_limits(limits)
         .with_default_workspace(Arc::clone(&default_workspace_service));
@@ -427,6 +432,7 @@ impl DefaultAppServiceProvider {
             user_service: Arc::clone(&user_service),
             workspace_state_service: Arc::clone(&workspace_state_service),
             audit_log_service: Some(Arc::clone(&audit_log_service)),
+            notification_preference_service: Arc::clone(&notification_preference_service),
             moderation_service: Arc::clone(&moderation_service),
             notification_service: Arc::clone(&notification_service),
         };
@@ -439,9 +445,7 @@ impl DefaultAppServiceProvider {
         if let Some(direct_space_id) = federation.direct_space_id {
             command_service_concrete = command_service_concrete.with_direct_space(direct_space_id);
         }
-        let command_service_concrete = Arc::new(command_service_concrete);
-        let command_service: Arc<dyn CommandService> =
-            Arc::clone(&command_service_concrete) as Arc<dyn CommandService>;
+        let command_service: Arc<dyn CommandService> = Arc::new(command_service_concrete);
         let keybind_service: Arc<dyn KeybindService> = Arc::new(
             crate::keybind::DefaultKeybindService::new(
                 repos.for_keybind(),
@@ -469,6 +473,20 @@ impl DefaultAppServiceProvider {
             )
             .with_direct_space(federation.direct_space_id),
         );
+        let bot_service: Arc<dyn BotService> = Arc::new(
+            crate::bot::DefaultBotService::new(
+                repos.for_bot(),
+                observers.clone(),
+                Arc::clone(&feature_gate),
+                Arc::clone(&moderation_service),
+                Arc::clone(&conversation_service),
+            )
+            .with_audit_log_service(Arc::clone(&audit_log_service))
+            .with_direct_space(federation.direct_space_id)
+            .with_reserved_names(federation.reserved_names.clone())
+            .with_limits(limits)
+            .with_database(db.clone()),
+        );
         let macro_service: Arc<dyn MacroService> = Arc::new(
             crate::macro_def::DefaultMacroService::new(
                 repos.for_macro(),
@@ -482,13 +500,6 @@ impl DefaultAppServiceProvider {
             .with_default_workspace(default_workspace_rules.clone()),
         );
 
-        // Break the command↔macro init cycle: the command service is constructed
-        // first (macro cell empty), then the macro service is built from it, then
-        // the macro service is set back into the single command-service instance.
-        // keybind/pipeline hold the same Arc, so they observe macros too — no
-        // comment-only invariant.
-        let _ = command_service_concrete.set_macro_service(Arc::clone(&macro_service));
-
         let channel_lens_service: Arc<dyn ChannelLensService> = Arc::new(
             crate::channel_lens::DefaultChannelLensService::new(repos.for_channel_lens()),
         );
@@ -501,7 +512,8 @@ impl DefaultAppServiceProvider {
             )
             .with_direct_space(federation.direct_space_id)
             .with_limits(limits)
-            .with_default_workspace(default_workspace_rules),
+            .with_default_workspace(default_workspace_rules)
+            .with_feature_gate(Arc::clone(&feature_gate)),
         );
 
         let device_link_service: Arc<dyn DeviceLinkService> =
@@ -571,6 +583,13 @@ impl DefaultAppServiceProvider {
             .with_limits(limits),
         );
 
+        let home_layout_service: Arc<dyn rim_services::home_layout::service::HomeLayoutService> =
+            Arc::new(crate::home_layout::DefaultHomeLayoutService::new(Arc::new(
+                rim_infra_db::sea_orm_impl::home_layout::SeaOrmHomeLayoutRepository::new(
+                    rim_infra_db::DbHandle::from(db.clone()),
+                ),
+            )));
+
         Self {
             audit_log_service,
             auth_service,
@@ -578,6 +597,7 @@ impl DefaultAppServiceProvider {
             command_service,
             conversation_service,
             custom_emoji_service,
+            bot_service,
             key_auth_service,
             keybind_service,
             link_preview,
@@ -613,6 +633,7 @@ impl DefaultAppServiceProvider {
             public_join_link_service,
             account_password_service,
             session_key_service,
+            home_layout_service,
         }
     }
 
@@ -667,6 +688,9 @@ impl AppServiceProvider for DefaultAppServiceProvider {
     }
     fn custom_emoji_service(&self) -> Arc<dyn CustomEmojiService> {
         Arc::clone(&self.custom_emoji_service)
+    }
+    fn bot_service(&self) -> Arc<dyn BotService> {
+        Arc::clone(&self.bot_service)
     }
     fn link_preview_service(&self) -> Arc<dyn LinkPreviewService> {
         Arc::new(self.link_preview.clone())
@@ -777,5 +801,11 @@ impl AppServiceProvider for DefaultAppServiceProvider {
         &self,
     ) -> Arc<dyn rim_services::session_key::service::SessionKeyService> {
         Arc::clone(&self.session_key_service)
+    }
+
+    fn home_layout_service(
+        &self,
+    ) -> Arc<dyn rim_services::home_layout::service::HomeLayoutService> {
+        Arc::clone(&self.home_layout_service)
     }
 }

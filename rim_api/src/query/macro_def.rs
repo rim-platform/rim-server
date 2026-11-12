@@ -13,6 +13,9 @@ impl MacroQueries {
     // ── Macros ──────────────────────────────────────────────────────────
 
     /// The caller's own macros in the workspace. `FORBIDDEN` for a non-member.
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn my_macros(&self, ctx: &Context<'_>, server_id: ID) -> Result<Vec<MacroDef>> {
         let actor = require_actor(ctx)?;
         let svc =
@@ -30,6 +33,9 @@ impl MacroQueries {
         Ok(macros.into_iter().map(Into::into).collect())
     }
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn macro_by_name(
         &self,
         ctx: &Context<'_>,

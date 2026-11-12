@@ -28,6 +28,8 @@ pub struct Model {
     #[sea_orm(column_type = "String(StringLen::N(32))", nullable)]
     pub confirmation_outcome: Option<String>,
     pub parent_audit_id: Option<Uuid>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub run_id: Option<String>,
     pub created_at: DateTimeWithTimeZone,
 }
 

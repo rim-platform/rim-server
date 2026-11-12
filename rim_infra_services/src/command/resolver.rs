@@ -5,12 +5,17 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use async_recursion::async_recursion;
 
 use rim_services::command::dto::{
-    CommandDefinitionDto, CommandExecutionTargetDto, UserCommandDto, UserCommandStepDto,
+    CommandDefinitionDto, CommandExecutionTargetDto, CommandSourceKindDto,
+    UserCommandCompositionDto, UserCommandDto, UserCommandStepDto,
 };
 use rim_services::command::sensitivity::CommandSensitivityDto;
+use rim_services::command::verb::TypedVerb;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
+use super::own_state;
+use super::registry::app_command;
+use super::user_commands::is_plugin_command_shape;
 
 const RECURSION_CYCLE_DETECTED: &str = "user command recursion cycle detected";
 
@@ -33,6 +38,9 @@ pub(super) struct Resolved {
     /// User commands on the longest chain of nested user commands it starts: zero for a
     /// builtin, one for a user command whose steps are all builtins.
     pub depth: usize,
+    /// The command changes only the caller's own state: a builtin
+    /// [`own_state::changes_only_callers_state`] names, or a user command whose every step does.
+    pub changes_only_callers_state: bool,
 }
 
 /// What the steps of one user command add up to.
@@ -44,6 +52,40 @@ struct Composition {
     step_sensitivities: Vec<CommandSensitivityDto>,
     expanded_steps: usize,
     depth: usize,
+    /// Every step, nested ones included, is a command the server runs, and none asks for an
+    /// argument.
+    server_runs: bool,
+    /// Every step is an AI-callable builtin the server runs, with every argument fixed.
+    agent_runnable: bool,
+    /// Every step changes only the caller's own state.
+    changes_only_callers_state: bool,
+}
+
+/// The definition a macro step naming the plugin command `command_id` counts with: run by the
+/// client, keybind-capable and `Safe`, since the client applies the plugin's own rules.
+fn plugin_step_definition(command_id: &str) -> CommandDefinitionDto {
+    CommandDefinitionDto {
+        id: command_id.to_string(),
+        title: command_id.to_string(),
+        description: String::new(),
+        category: String::new(),
+        source_kind: CommandSourceKindDto::Plugin,
+        execution_target: CommandExecutionTargetDto::DesktopLocal,
+        arguments: vec![],
+        required_context: vec![],
+        required_capabilities: vec![],
+        visible_in_palette: false,
+        visible_in_context_menus: false,
+        keybind_capable: true,
+        dangerous: false,
+        user_command_id: None,
+        nl_description: None,
+        intent_samples: vec![],
+        ai_callable: false,
+        sensitivity: CommandSensitivityDto::Safe,
+        typed_verb: TypedVerb::Other,
+        rate_limit_per_minute: None,
+    }
 }
 
 /// Resolves command ids to definitions for one actor. Each of the actor's user commands is
@@ -116,6 +158,7 @@ impl<'a> CommandResolver<'a> {
         }
         if let Some(definition) = self.service.builtin_or_test_definition(command_id) {
             let resolved = Resolved {
+                changes_only_callers_state: own_state::changes_only_callers_state(&definition.id),
                 definition,
                 expanded_steps: 1,
                 depth: 0,
@@ -150,15 +193,26 @@ impl<'a> CommandResolver<'a> {
             .await
             .map(|composition| Resolved {
                 definition: user_command.as_command_definition_with_metadata(
-                    CommandExecutionTargetDto::Backend,
-                    composition.required_context.into_iter().collect(),
-                    composition.required_capabilities.into_iter().collect(),
-                    composition.keybind_capable,
-                    composition.dangerous,
-                    &composition.step_sensitivities,
+                    UserCommandCompositionDto {
+                        execution_target: if composition.server_runs {
+                            CommandExecutionTargetDto::Backend
+                        } else {
+                            CommandExecutionTargetDto::DesktopLocal
+                        },
+                        required_context: composition.required_context.into_iter().collect(),
+                        required_capabilities: composition
+                            .required_capabilities
+                            .into_iter()
+                            .collect(),
+                        keybind_capable: composition.keybind_capable,
+                        dangerous: composition.dangerous,
+                        step_sensitivities: composition.step_sensitivities,
+                        agent_runnable: composition.agent_runnable,
+                    },
                 ),
                 expanded_steps: composition.expanded_steps,
                 depth: composition.depth + 1,
+                changes_only_callers_state: composition.changes_only_callers_state,
             });
         match &result {
             Ok(resolved) => {
@@ -173,7 +227,9 @@ impl<'a> CommandResolver<'a> {
     }
 
     /// Checks that `steps`, as the steps of the user command `command_key`, each resolve to a
-    /// backend command without reaching `command_key` again.
+    /// command without reaching `command_key` again. Returns whether the AI agent may run a
+    /// macro with these steps: each an AI-callable builtin the server runs, with every argument
+    /// fixed.
     ///
     /// # Errors
     ///
@@ -182,8 +238,10 @@ impl<'a> CommandResolver<'a> {
         &mut self,
         command_key: &str,
         steps: &[UserCommandStepDto],
-    ) -> ServiceResult<()> {
-        self.compose(command_key, steps).await.map(|_| ())
+    ) -> ServiceResult<bool> {
+        self.compose(command_key, steps)
+            .await
+            .map(|composition| composition.agent_runnable)
     }
 
     /// Resolves the steps of the user command `command_key` while it is open.
@@ -211,17 +269,22 @@ impl<'a> CommandResolver<'a> {
             step_sensitivities: Vec::with_capacity(steps.len()),
             expanded_steps: 0,
             depth: 0,
+            server_runs: true,
+            agent_runnable: true,
+            changes_only_callers_state: true,
         };
         for step in steps {
-            let resolved = self.resolve(&step.command_id).await?.ok_or_else(|| {
+            let resolved = self.resolve_step(&step.command_id).await?.ok_or_else(|| {
                 ServiceError::Validation(format!("unknown command step `{}`", step.command_id))
             })?;
             let definition = resolved.definition;
-            if definition.execution_target != CommandExecutionTargetDto::Backend {
-                return Err(ServiceError::Validation(
-                    "user commands may only compose backend commands in v1".to_string(),
-                ));
-            }
+            let server_runs = definition.execution_target == CommandExecutionTargetDto::Backend
+                && step.ask.is_empty();
+            composition.server_runs &= server_runs;
+            composition.agent_runnable &= server_runs
+                && definition.source_kind == CommandSourceKindDto::BuiltIn
+                && definition.ai_callable;
+            composition.changes_only_callers_state &= resolved.changes_only_callers_state;
             composition.expanded_steps = composition
                 .expanded_steps
                 .saturating_add(resolved.expanded_steps);
@@ -240,6 +303,27 @@ impl<'a> CommandResolver<'a> {
             composition.step_sensitivities.push(definition.sensitivity);
         }
         Ok(composition)
+    }
+
+    /// Resolves the macro step `command_id`: as [`Self::resolve`], else to an app command, else,
+    /// for an id shaped like a plugin's, to [`plugin_step_definition`]. Each counts one step.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resolve`].
+    async fn resolve_step(&mut self, command_id: &str) -> ServiceResult<Option<Resolved>> {
+        if let Some(resolved) = self.resolve(command_id).await? {
+            return Ok(Some(resolved));
+        }
+        let definition = app_command(command_id).or_else(|| {
+            is_plugin_command_shape(command_id).then(|| plugin_step_definition(command_id))
+        });
+        Ok(definition.map(|definition| Resolved {
+            definition,
+            expanded_steps: 1,
+            depth: 0,
+            changes_only_callers_state: false,
+        }))
     }
 
     /// The actor's user command `key`, read once.

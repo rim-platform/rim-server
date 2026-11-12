@@ -5,19 +5,21 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![
         CommandDefinitionDto {
             id: "state.get".to_string(),
             title: "Get State".to_string(),
             description: "Get a workspace state entry by key.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -36,7 +38,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "scope".to_string(),
                     title: "Scope".to_string(),
-                    description: "Scope: 'server' or 'user'.".to_string(),
+                    description: "Workspace (shared with the workspace) or user (only you).".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: false,
                     default_value: Some(serde_json::json!("server")),
@@ -68,13 +70,13 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.set".to_string(),
             title: "Set State".to_string(),
             description: "Set a workspace state entry.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -93,7 +95,8 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "value".to_string(),
                     title: "Value".to_string(),
-                    description: "JSON value to store.".to_string(),
+                    description: "Value to store: JSON such as true, 42 or {\"a\":1} is stored as that value, \
+                         anything else as text.".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: true,
                     default_value: None,
@@ -102,7 +105,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "scope".to_string(),
                     title: "Scope".to_string(),
-                    description: "Scope: 'server' or 'user'.".to_string(),
+                    description: "Workspace (shared with the workspace) or user (only you).".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: false,
                     default_value: Some(serde_json::json!("server")),
@@ -110,9 +113,9 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 },
                 CommandArgumentDto {
                     name: "ttl".to_string(),
-                    title: "TTL".to_string(),
-                    description: "Time-to-live in seconds (optional).".to_string(),
-                    argument_type: CommandArgumentTypeDto::String,
+                    title: "Expires after (seconds)".to_string(),
+                    description: "Seconds until the entry expires; leave empty to keep it.".to_string(),
+                    argument_type: CommandArgumentTypeDto::Integer,
                     required: false,
                     default_value: None,
                     allowed_values: None,
@@ -142,13 +145,13 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.delete".to_string(),
             title: "Delete State".to_string(),
             description: "Delete a workspace state entry.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -167,7 +170,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "scope".to_string(),
                     title: "Scope".to_string(),
-                    description: "Scope: 'server' or 'user'.".to_string(),
+                    description: "Workspace (shared with the workspace) or user (only you).".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: false,
                     default_value: Some(serde_json::json!("server")),
@@ -198,13 +201,13 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.list".to_string(),
             title: "List State".to_string(),
             description: "List workspace state entries by prefix.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -223,7 +226,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 CommandArgumentDto {
                     name: "scope".to_string(),
                     title: "Scope".to_string(),
-                    description: "Scope: 'server' or 'user'.".to_string(),
+                    description: "Workspace (shared with the workspace) or user (only you).".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: false,
                     default_value: Some(serde_json::json!("server")),
@@ -233,7 +236,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                     name: "limit".to_string(),
                     title: "Limit".to_string(),
                     description: "Max entries to return (default 100, max 500).".to_string(),
-                    argument_type: CommandArgumentTypeDto::String,
+                    argument_type: CommandArgumentTypeDto::Integer,
                     required: false,
                     default_value: None,
                     allowed_values: None,
@@ -263,13 +266,13 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "state.incr".to_string(),
             title: "Increment State".to_string(),
             description: "Increment a numeric workspace state entry.".to_string(),
-            category: "State".to_string(),
+            category: category::STATE.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -289,15 +292,15 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                     name: "delta".to_string(),
                     title: "Delta".to_string(),
                     description: "Amount to increment by (default 1).".to_string(),
-                    argument_type: CommandArgumentTypeDto::String,
+                    argument_type: CommandArgumentTypeDto::Integer,
                     required: false,
-                    default_value: Some(serde_json::json!("1")),
+                    default_value: Some(serde_json::json!(1)),
                     allowed_values: None,
                 },
                 CommandArgumentDto {
                     name: "scope".to_string(),
                     title: "Scope".to_string(),
-                    description: "Scope: 'server' or 'user'.".to_string(),
+                    description: "Workspace (shared with the workspace) or user (only you).".to_string(),
                     argument_type: CommandArgumentTypeDto::String,
                     required: false,
                     default_value: Some(serde_json::json!("server")),

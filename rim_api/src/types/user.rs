@@ -82,8 +82,10 @@ pub struct User {
     /// handle domain, or a person from another server's username at their home server and that
     /// server's handle domain. Null when it is not known (a person from another server whose
     /// home server did not say, or whose handle domain does not point back at it) and for a
-    /// deleted account.
+    /// deleted account or a bot.
     pub handle: Option<String>,
+    /// Whether this account is a bot, which nobody signs in to.
+    pub is_bot: bool,
 }
 
 impl From<rim_services::user::dto::UserDto> for User {
@@ -103,6 +105,7 @@ impl From<rim_services::user::dto::UserDto> for User {
             deletion_scheduled_for: value.deletion_scheduled_for,
             instance_operator: false,
             handle: value.handle,
+            is_bot: value.is_bot,
         }
     }
 }
@@ -213,5 +216,13 @@ impl User {
         ctx: &async_graphql::Context<'_>,
     ) -> async_graphql::Result<Option<String>> {
         Ok(self.ban(ctx).await?.and_then(|ban| ban.reason))
+    }
+
+    /// What the person who added this bot says about it; null for anyone but a bot.
+    async fn bot(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+    ) -> async_graphql::Result<Option<crate::types::BotInfo>> {
+        crate::types::bot::load_bot_info(ctx, self.is_bot, &self.id).await
     }
 }

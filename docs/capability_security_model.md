@@ -152,6 +152,11 @@ This means:
 - integration commands use integration-granted capabilities only
 - user-defined commands/macros cannot exceed the capabilities of the commands they compose plus any
   explicit local permissions granted by the user
+- a plugin runs a command that is not its own only when its manifest lists the id in
+  `runs_commands` and the person granted it; the command keeps its own permissions and gates, so
+  the grant adds no capability, a `Mutating` command waits for the person's confirmation on every
+  call, and a dangerous or `Restricted` command is never run for a plugin
+  (`command_model.md`, Who Can Run Commands)
 
 This rule is required to avoid privilege escalation.
 
@@ -227,7 +232,9 @@ Recommended trust groups:
 - `plugin`
 - `integration`
 
-Later, bot/app/webhook principals should also become explicit trust-bearing identities.
+A bot is an account of a workspace with tokens of its own (`bots.md`); what it can reach follows
+from its `GUEST` role. Later, app and webhook principals should also become explicit trust-bearing
+identities.
 
 Trust boundaries should be visible in:
 

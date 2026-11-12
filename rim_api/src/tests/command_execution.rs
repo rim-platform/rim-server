@@ -36,7 +36,7 @@ async fn execute_command_mutation_returns_result() {
 /// captured value — if the resolver dropped the field, defaulted it
 /// silently, or mapped to the wrong variant, the assertion fires.
 ///
-/// Covers all 7 wire variants. The audit log and the confirmation policy read this field on
+/// Covers all 8 wire variants. The audit log and the confirmation policy read this field on
 /// the service side, so the test pins the wire contract.
 #[tokio::test]
 async fn execute_command_initiator_round_trips_through_graphql() {
@@ -49,6 +49,7 @@ async fn execute_command_initiator_round_trips_through_graphql() {
         ("CONTEXT_MENU", CommandInitiator::ContextMenu),
         ("PLUGIN", CommandInitiator::Plugin),
         ("CLI", CommandInitiator::Cli),
+        ("UI", CommandInitiator::Ui),
     ];
 
     for (wire, expected) in cases {
@@ -125,6 +126,9 @@ fn quick_group(title: &str, is_enabled: bool) -> rim_services::command::dto::Use
         description: "desc".to_string(),
         steps: vec![],
         is_enabled,
+        ai_callable: false,
+        nl_description: String::new(),
+        intent_samples: vec![],
     }
 }
 
@@ -134,12 +138,17 @@ async fn create_user_command_mutation_returns_the_resolved_command() {
     let actor = UserId::new();
     let stored = quick_group("Quick Group", true);
     let resolved = stored.as_command_definition_with_metadata(
-        rim_services::command::dto::CommandExecutionTargetDto::Backend,
-        vec![],
-        vec![],
-        true,
-        false,
-        &[rim_services::command::sensitivity::CommandSensitivityDto::Mutating],
+        rim_services::command::dto::UserCommandCompositionDto {
+            execution_target: rim_services::command::dto::CommandExecutionTargetDto::Backend,
+            required_context: vec![],
+            required_capabilities: vec![],
+            keybind_capable: true,
+            dangerous: false,
+            step_sensitivities: vec![
+                rim_services::command::sensitivity::CommandSensitivityDto::Mutating,
+            ],
+            agent_runnable: true,
+        },
     );
     let mut command = MockCommandService::new();
     command.expect_create_user_command().returning(move |_cmd| {
@@ -239,5 +248,37 @@ async fn execute_command_rate_limited_error_carries_extension_shape() {
         ext.get("retryAfterSeconds"),
         Some(&Value::from(42_i64)),
         "retryAfterSeconds must be present and match the service value"
+    );
+}
+
+#[tokio::test]
+async fn execute_command_says_what_kind_of_refusal_it_was() {
+    let actor = UserId::new();
+    let mut command = MockCommandService::new();
+    command.expect_execute_command().returning(|_cmd| {
+        Box::pin(async {
+            Err(ServiceError::CapabilityMissing {
+                capability: "delete_member_messages".to_string(),
+            })
+        })
+    });
+
+    let schema = schema_with_command_mock(command);
+    let req = authed_request(
+        r#"mutation { executeCommand(input: { commandId: "chat.post_message" }) { status } }"#,
+        actor,
+    );
+
+    let res = schema.execute(req).await;
+    assert!(!res.errors.is_empty(), "expected a GQL error");
+    let ext = res.errors[0]
+        .extensions
+        .as_ref()
+        .expect("missing extensions");
+    assert_eq!(ext.get("code"), Some(&Value::from("FORBIDDEN")));
+    assert_eq!(ext.get("refusal"), Some(&Value::from("DENIED")));
+    assert_eq!(
+        ext.get("missing"),
+        Some(&Value::from("delete_member_messages"))
     );
 }

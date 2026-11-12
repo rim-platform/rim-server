@@ -8,6 +8,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 fn arg(
     name: &str,
     title: &str,
@@ -61,7 +63,6 @@ fn moderation_command(
     id: &str,
     title: &str,
     description: &str,
-    category: &str,
     capability: &str,
     arguments: Vec<CommandArgumentDto>,
     typed_verb: TypedVerb,
@@ -70,7 +71,7 @@ fn moderation_command(
         id: id.to_string(),
         title: title.to_string(),
         description: description.to_string(),
-        category: category.to_string(),
+        category: category::MODERATION.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments,
@@ -101,7 +102,6 @@ fn admin_command(
         id,
         title,
         description,
-        "Admin",
         "admin.manage_members",
         arguments,
         typed_verb,
@@ -132,11 +132,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Kick Member",
                 "Remove a member from the workspace (Owner/Moderator). They can re-join with a \
                  new invite.",
-                vec![
-                    workspace_arg(),
-                    member_arg("User id of the member to kick."),
-                    reason_arg(),
-                ],
+                vec![workspace_arg(), member_arg("Member to kick."), reason_arg()],
                 TypedVerb::Delete,
             )
         },
@@ -148,13 +144,22 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Remove a member and block them from re-joining (Owner/Moderator).",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the member to ban."),
+                    member_arg("Member to ban."),
                     reason_arg(),
                     arg(
                         "expires_at",
                         "Expires",
-                        "Optional RFC 3339 time when the ban ends; omit to ban until unbanned.",
+                        "When the ban ends, as a date and time; leave empty to ban until unbanned. \
+                         Ignored when `minutes` is given.",
                         CommandArgumentTypeDto::String,
+                        false,
+                    ),
+                    arg(
+                        "minutes",
+                        "Minutes",
+                        "Ban for this many minutes from now; leave empty to ban until unbanned or \
+                         until `expires_at`. 1 to 5256000 (ten years).",
+                        CommandArgumentTypeDto::Integer,
                         false,
                     ),
                 ],
@@ -165,7 +170,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             "admin.unban",
             "Unban User",
             "Lift a workspace ban (Owner/Moderator).",
-            vec![workspace_arg(), member_arg("User id of the banned user.")],
+            vec![workspace_arg(), member_arg("Banned member to unban.")],
             TypedVerb::Write,
         ),
         agent_callable(
@@ -175,7 +180,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Mute a member for a number of minutes (Owner/Moderator, at most 30 days).",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the member to time out."),
+                    member_arg("Member to time out."),
                     arg(
                         "minutes",
                         "Minutes",
@@ -197,6 +202,23 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "give alex a one day timeout for spamming",
             ],
         ),
+        agent_callable(
+            admin_command(
+                "admin.clear_timeout",
+                "Clear Timeout",
+                "End a member's timeout early (Owner/Moderator).",
+                vec![workspace_arg(), member_arg("Timed-out member.")],
+                TypedVerb::Write,
+            ),
+            "End a workspace member's timeout early so they can send messages and act again. \
+             Only owners and moderators may do this, with the same rules as timing someone out. \
+             Use when the user asks to lift, end or clear someone's timeout.",
+            &[
+                "clear sam's timeout",
+                "lift the timeout on alex",
+                "let this user post again",
+            ],
+        ),
         CommandDefinitionDto {
             dangerous: true,
             ..admin_command(
@@ -205,7 +227,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Change a member's role (Owner: any role but owner; Moderator: member or guest).",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the member."),
+                    member_arg("Member."),
                     CommandArgumentDto {
                         allowed_values: Some(vec![
                             "moderator".to_string(),
@@ -233,7 +255,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                  or week, or all of them (Owner/Moderator); at most 1000 per run.",
                 vec![
                     workspace_arg(),
-                    member_arg("User id of the person whose messages to delete."),
+                    member_arg("Member whose messages to delete."),
                     CommandArgumentDto {
                         allowed_values: Some(vec![
                             "1h".to_string(),
@@ -270,7 +292,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Set Slow Mode",
                 "Limit how often members may post in a channel (Owner/Moderator; 0 turns it \
                  off).",
-                "Chat",
                 "chat.write",
                 vec![
                     workspace_arg(),
@@ -307,7 +328,6 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 "Set Who Can Post",
                 "Let everyone or only the owner and moderators post in a channel \
                  (Owner/Moderator).",
-                "Chat",
                 "chat.write",
                 vec![
                     workspace_arg(),
@@ -368,22 +388,31 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
                 ..moderation_command(
                     "chat.report_message",
                     "Report Message",
-                    "Report the selected message to the workspace moderators.",
-                    "Chat",
+                    "Report a message to the workspace moderators.",
                     "chat.write",
-                    vec![arg(
-                        "reason",
-                        "Reason",
-                        "Why the message should be reviewed.",
-                        CommandArgumentTypeDto::String,
-                        true,
-                    )],
+                    vec![
+                        arg(
+                            "message_id",
+                            "Message",
+                            "Identifier of the message to report; defaults to the selected \
+                             message.",
+                            CommandArgumentTypeDto::MessageId,
+                            false,
+                        ),
+                        arg(
+                            "reason",
+                            "Reason",
+                            "Why the message should be reviewed.",
+                            CommandArgumentTypeDto::String,
+                            true,
+                        ),
+                    ],
                     TypedVerb::Write,
                 )
             },
-            "Report the selected message to the workspace moderators with a short reason. \
-             Each member can report a message once. Use when the user asks to report or flag \
-             a message for review.",
+            "Report a message, named by message_id, to the workspace moderators with a short \
+             reason. Each member can report a message once. Use when the user asks to report or \
+             flag a message for review.",
             &[
                 "report this message as spam",
                 "flag this for the moderators, it is harassment",

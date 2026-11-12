@@ -190,9 +190,11 @@ The normative contracts, for anyone building a client or another server:
 - `docs/specs/device-linking-v1.md`: giving a new device its certified key
 - `docs/specs/e2ee-mls-v1.md`: end-to-end encryption with MLS
 - `docs/specs/server-to-server-v1.md`: server identity, the signed HTTP API, relays and hosts
+- `docs/specs/bots-v1.md`: bot accounts, their API and incoming webhooks
 - `docs/specs/plugin-protocol-v1.md`: the client plugin protocol
 - `docs/specs/web-plugins-v1.md`: sandboxed web plugins
 - `docs/specs/workspace-plugins-v1.md`: signed manifests and workspace plugin registries
+- `docs/specs/agent-data-flow-v1.md`: what RIM hands to an agent on your machine, and what it records
 
 `docs/README.md` lists every document in `docs/`.
 

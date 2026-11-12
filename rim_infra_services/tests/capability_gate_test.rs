@@ -61,6 +61,9 @@ mod fixtures {
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
                 audit_log_service: None,
+                notification_preference_service: std::sync::Arc::new(
+                    rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+                ),
                 moderation_service: std::sync::Arc::new(
                     rim_services::moderation::service::MockModerationService::no_timeouts(),
                 ),
@@ -82,7 +85,7 @@ fn actor() -> Actor {
 /// The test wires a CapabilityService that explicitly denies `chat.write`
 /// (simulating either: actor not a workspace member, OR the cap not in the
 /// registry). The gate must turn the
-/// denial into `ServiceError::PermissionDenied` AND prevent the message
+/// denial into `ServiceError::CapabilityMissing` AND prevent the message
 /// from being sent.
 #[tokio::test]
 async fn execute_command_denies_when_capability_check_rejects() {
@@ -116,14 +119,15 @@ async fn execute_command_denies_when_capability_check_rejects() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         })
         .await;
 
     match result {
-        Err(ServiceError::PermissionDenied) => {}
+        Err(ServiceError::CapabilityMissing { capability }) if capability == "chat.write" => {}
         Err(other) => {
             panic!(
-                "capability gate regression: expected PermissionDenied from capability gate, got {other:?}"
+                "capability gate regression: expected CapabilityMissing from capability gate, got {other:?}"
             )
         }
         Ok(_) => panic!(
@@ -200,6 +204,9 @@ async fn execute_command_proceeds_when_capability_check_passes() {
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -221,6 +228,7 @@ async fn execute_command_proceeds_when_capability_check_passes() {
         confirmation: None,
         is_pipe: false,
         initiator: CommandInitiator::Palette,
+        run_id: None,
     })
     .await
     .expect("gate approval should let the dispatch reach the inner service");

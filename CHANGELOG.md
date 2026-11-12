@@ -23,9 +23,173 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Added
 
+- The agent contract (`docs/specs/agent-data-flow-v1.md`) now covers agents the desktop app starts
+  and installs and connecting an agent from the app, and keybinds can name the new agent session
+  commands (`agents.connect_agent`, `agents.start_session`, `agents.stop_session`,
+  `workspace.open_agent_sessions`, `agents.ask_about_message`, `agents.ask_about_conversation`).
+- Keybinds to app commands, the commands the client runs itself such as Open Home, Open Unreads
+  and Toggle Notifications: `createKeybind` and `updateKeybind` accept their ids for personal and
+  workspace keybinds, so those bindings sync across devices and a workspace can share them. The
+  server never lists, runs or offers them to an agent (`docs/command_model.md`, App Commands).
+  Listed in `serverInfo.capabilities` as `app_command_keybinds`.
+- Five built-in commands for what the GraphQL mutations already do: `chat.unpin_message`,
+  `chat.set_topic`, `admin.clear_timeout`, `notifications.mute_conversation` and
+  `notifications.unmute_conversation`. Each keeps its mutation's rules and falls back to the
+  focused conversation (and, for unpinning, the selected message). The mute takes `1h`, `8h`,
+  `until_tomorrow` (09:00 tomorrow in the timezone of the caller's do-not-disturb window, else
+  UTC), `forever` or an `until` time. The agent may call all five, each after the person
+  confirms; the AI-callable set grows from 42 to 47 (`docs/command_model.md`).
+- Keybinds can name the next app commands the client adds: opening each settings tab
+  (`settings.open.*`), window, update and sign-out commands, message selection and editing,
+  invitations, lenses, Unreads, moderation, bots and webhooks, plugins, people actions, and the
+  agent commands, including approving or refusing an agent's request or pairing
+  (`docs/command_model.md`, App Commands).
+- Home layout: a signed-in person's Home is saved on their own server, one layout per account, so
+  every device shows the same boxes in the same order (`homeLayout`, `saveHomeLayout`,
+  `resetHomeLayout`, `docs/home-layout.md`). The edit made last wins: a save carries `editedAt`, and
+  one older than the stored layout answers `kept: false` with the stored one. The server checks the
+  layout's shape and size only, keeps no audit entry and never logs it, and the account purge removes
+  it. Listed in `serverInfo.capabilities` as `home_layout`.
+- Webhook test sessions: an Owner or Moderator can see what a service really sends, held in memory
+  for at most an hour and readable only by them (`startWebhookTestSession`, `webhookTestDeliveries`,
+  `endWebhookTestSession`, `specs/bots-v1.md`). A new webhook's test URL posts nothing, and saving the
+  webhook with `CreateIncomingWebhookInput.testSessionId` keeps that URL
+  (`CreatedIncomingWebhook.keptTestUrl`). A session on an existing webhook copies its deliveries. Only
+  the `x-` headers a format may use and the body are held. Listed in `serverInfo.capabilities` as
+  `webhook_test_sessions`.
+- Webhook formats: an Owner or Moderator can say how an incoming webhook turns a delivery into a
+  message, with rules that test an `x-` header or a body field and a text with placeholders, and
+  change it later without a new URL (`CreateIncomingWebhookInput.template`, `IncomingWebhook.template`,
+  `updateIncomingWebhookFormat`, `specs/bots-v1.md`). `webhookFormats` lists the ready-made ones,
+  GitHub and Grafana, and `previewWebhookFormat` tries a format on a sample. Listed in
+  `serverInfo.capabilities` as `webhook_formats`. The GitHub preset is now the shipped GitHub format,
+  so a value from GitHub loses its format characters, such as a bidirectional override, and a pull
+  request or issue number sent as a string posts. A server rolled back to a release without formats
+  treats a webhook that has one as plain.
+- A pipeline can welcome people: an Owner or Moderator can add a Post as bot action to the Member Joined
+  trigger (`PipelineActionInput.postAsBot`, `PipelineActionGql.postAsBot`, `specs/bots-v1.md`). Listed in
+  `serverInfo.capabilities` as `pipeline_post_as_bot`. A server rolled back to a release without it can't
+  read a pipeline that has one, so remove those first.
+- Bots can poll `GET /api/bot/v1/events` for new messages in their channels and, if allowed, members
+  joining. An Owner or Moderator allows it with `Bot.seesMemberJoins`, in `createBot` and `updateBot`,
+  and `GET /api/bot/v1/me` says whether it is on (`specs/bots-v1.md`). Listed in
+  `serverInfo.capabilities` as `bot_events`.
+- A conversation can be marked unread from a message, with `markAsUnread` or
+  `chat.mark_as_unread`, and `unreadCounts` says where its unread messages begin
+  (`UnreadCount.unreadAfter`). The person's other clients learn of it from a `ReadMarkerRewound`
+  event. Listed in `serverInfo.capabilities` as `read_marker`.
+- Incoming webhooks: one URL per channel, bound to a bot, with a GitHub preset for releases, pull
+  requests and issues (`IncomingWebhook`, `POST /api/hooks/{token}`, `docs/specs/bots-v1.md`). Listed
+  in `serverInfo.capabilities` as `incoming_webhooks`. Requests to them have the `webhook` route class
+  in the HTTP metrics, and refused calls over a webhook's limit count as `webhook` in the rate limit
+  metric. Switched off with the `bots` feature. A reverse proxy's access log can hold these URLs, so
+  keep it private (`docs/self-hosting.md`).
+- `serverInfo.capabilities` lists `bot_disclosure` on a server with `User.isBot`, `User.bot`,
+  `ServerMember.isBot` and `ServerMember.bot`, and `command_run_id` on one with
+  `ExecuteCommandInput.runId` and `AuditLogEntry.runId`, so a client asks for them only there.
 - A `notificationEvents` subscription: the viewer's notifications from every workspace on this
   server, on one subscription and with no other events. Listed in `serverInfo.capabilities` as
   `notification_events`.
+- `executeCommand` and `executeMacro` errors say what kind of refusal they are in a `refusal`
+  extension (`DENIED`, `FAILED`, `EXPIRED`, `INVALID`), with `missing` naming a capability the caller
+  lacks and `retrySafe` saying whether repeating a failed call is safe (`docs/command_model.md`).
+- `ExecuteCommandInput.runId` and `AuditLogEntry.runId`, with a `runId` filter on `listAuditLog`, link
+  an agent's calls in one stretch. `CommandInitiator::Agent` only. Audit exports gain `runId`.
+- Macros are the person's own commands, kept with their account on their home server as user
+  commands (`user.<key>`, category `Macro`). A step may now name an app command or a plugin
+  command, not only a built-in the server runs, and may ask for arguments when the macro runs
+  (`UserCommandStep.ask`, `UserCommandStepInput.ask`). The client runs such a macro step by step;
+  `executeCommand` refuses it with `VALIDATION` "this macro has steps only the app runs; run it
+  from the app". `macroStepCommands` lists the built-in and app commands a step may name
+  (`docs/command_model.md`, Commands And Macros). Listed in `serverInfo.capabilities` as
+  `account_macros`.
+- The AI agent may run a macro its owner allowed (`UserCommand.aiCallable`, `nlDescription` and
+  `intentSamples`, and the same fields of `CreateUserCommandInput` and `UpdateUserCommandInput`)
+  when every step is a built-in the server runs and the agent may run itself, with every argument
+  fixed. Such a macro is listed
+  on the `AI` surface and by `commandDiscover` as `user.<key>` and runs as one call, which the
+  person confirms when a step changes something. `executeCommand` refuses the agent any other
+  macro with `FORBIDDEN`.
+- The `UI` value of `CommandInitiator`, for buttons, toggles, dialog actions and Home quick boxes
+  that run their command through `executeCommand`. It is a human initiator: it needs a
+  confirmation only for dangerous and `Restricted` commands, and the audit log shows it as `ui`
+  (`docs/command_model.md`, Invocation Sources). Listed in `serverInfo.capabilities` as
+  `command_initiator_ui`.
+- `admin.ban` takes an optional `minutes`, and `notifications.mute_conversation` a duration
+  `minutes` with a `minutes` count, so macros and agents can ban or mute for a number of minutes
+  from now. Listed in `serverInfo.capabilities` as `command_relative_minutes`
+  (`docs/command_model.md`).
+
+### Changed
+
+- `state.set` `ttl`, `state.incr` `delta` and `state.list` `limit` are numbers, and numeric
+  strings still work; so do the `limit` of `chat.search_messages` and `chat.get_recent_messages`.
+  `admin.invite_member` no longer asks for a person it never used (a `user_id` is ignored), and
+  command titles and descriptions say "Workspace" and use plainer words (`Pause Notifications`
+  for do not disturb).
+- The timeout gate of `executeCommand` lets a timed-out member run the commands that change only
+  their own state, as the GraphQL mutations do: `chat.mark_as_read`, `chat.mark_as_unread`,
+  `chat.leave_conversation` and every `notifications.*` command, and a macro whose steps are all
+  of these (`docs/command_model.md`, Timeout gate).
+- `chat.mark_as_read`, `chat.mark_as_unread` and the `notifications.*` commands write no command
+  audit row, nor a row as a step of a workspace macro, since the workspace's Owners and Moderators
+  read the audit log and the rows would show a person's reading habits. The audit tracing line is
+  still logged (`docs/command_model.md`, Audit row).
+- Built-in commands are in sixteen fixed categories (Navigation, Messages, Conversations, Search,
+  People, Home, Unreads, Notifications, Moderation, Workspace, Agents, Bots & Webhooks, Plugins,
+  View, App, State) in place of Admin, Chat and Workspace (`docs/command_model.md`, Categories).
+  `workspace.previous_channel`, `workspace.next_channel` and `workspace.next_unread_channel` are
+  titled Previous Conversation, Next Conversation and Next Unread Conversation.
+  `workspace.navigate_to_dm` declares its required `conversation_id`, and `chat.report_message`
+  takes an optional `message_id` that falls back to the selected message, so the agent can name
+  the message it reports.
+- `workspace.open_marketplace` is titled Browse Plugins in place of Open Marketplace, and says it
+  opens Settings > Plugins; its id and keybind stay (`docs/command_model.md`).
+- **Upgrade:** a migration adds the column `command_audit_log.run_id` and the index
+  `idx_command_audit_log_actor_run_id`; on a large `command_audit_log` table, writes to it wait while
+  the index is built.
+- **Upgrade:** a migration adds the index `idx_message_mention_user_created`; on a large
+  `message_mention` table, writes to it wait while the index is built.
+- Bot accounts: an Owner or Moderator creates a bot with revocable tokens and a required statement
+  of who runs it and where what it reads goes (`Bot`, `BotToken`, `createBot`,
+  `docs/specs/bots-v1.md`). Switched off with the `bots` feature.
+- A bot API under `/api/bot/v1` for reading, searching, posting and polling for mentions, in the
+  channels a bot was added to (`docs/specs/bots-v1.md`). `CommandInitiator::Bot` appears in the audit
+  log. Refused calls over a token's limit count as `bot_api` in the rate limit metric. A bot gets no
+  notifications, digests or pushes.
+
+- A user command is in category `Macro` in place of `User`. A new one may no longer name another
+  user command as a step; one saved with such a step keeps it when updated
+  (`docs/command_model.md`, Commands And Macros).
+
+### Changed
+
+- The command audit log no longer keeps message text, search words, moderation reasons, channel
+  descriptions, group titles or stored state values, only their length. This applies to new rows:
+  existing rows age out with the audit retention. `AuditLogEntry.argsRedacted` holds
+  `{"redacted_content": true, "chars": <count>}` in their place, and a pipe's
+  `AuditLogEntry.commandId` holds `text=[REDACTED:<count>]`. A pipe that does not parse is kept as
+  `unparsed | pipe` with the `errorKind` `InvalidPipeExpression` (`docs/command_model.md`).
+- `User.isBot` and `ServerMember.isBot` say whether an account is a bot, and `User.bot` and
+  `ServerMember.bot` what the person who added it says about it. A bot has no `handle`.
+- `bots` answers a Guest `FORBIDDEN`, as it does a non-member. An Owner or Moderator adds a bot to a
+  public channel without joining it; a private channel still needs them in it
+  (`addConversationMembers`).
+- **Upgrade:** rolling back the binary after bots exist: calls naming a bot's id fail with an
+  internal error, because the older binary can't read the new `kind`. Deactivate bots before rolling
+  back.
+
+### Deprecated
+
+- Workspace macros: `createMacro`, `updateMacro`, `deleteMacro`, `executeMacro`, `myMacros` and
+  `macroByName` are deprecated in the schema and keep working. A client that finds
+  `account_macros` moves the person's workspace macros into their macros once.
+
+### Removed
+
+- `commands` on the `AI` surface and `commandDiscover` no longer offer an `ai_callable` workspace
+  macro as `macro.<id>`, an id `executeCommand` never ran; they offer agent-callable macros as
+  `user.<key>`.
 
 ### Security
 

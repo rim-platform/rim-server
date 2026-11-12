@@ -956,8 +956,198 @@ async fn a_remote_member_joins_through_the_relay_and_channel_traffic_flows_both_
     r.stop().await;
 }
 
+/// A bot of a hosted workspace takes part in nothing across servers: its host offers it to no
+/// relay, and a remote member sees it, marked with what its owner says about it, as anything from
+/// that host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_member_sees_a_bot_of_the_workspace_as_a_bot() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let mut rita = sign_up(&r, "rita", 2).await;
+    let (ws, general, invite) = workspace(&h, &hannah).await;
+    rita.join(&h, &r, &ws, Some(&invite)).await;
+
+    let created = hannah
+        .ok(
+            r#"mutation($input: CreateBotInput!) { createBot(input: $input) { token bot { userId } } }"#,
+            json!({ "input": {
+                "serverId": ws, "name": "Helper", "runBy": "Hannah", "readsGoTo": "Nowhere",
+            }}),
+        )
+        .await["createBot"]
+        .clone();
+    let bot = created["bot"]["userId"].as_str().expect("id").to_string();
+    let token = created["token"].as_str().expect("token");
+
+    let joined = rita
+        .item_of(&h, "MemberJoined", |i| i.event["user_id"] == json!(bot))
+        .await;
+    assert_eq!(joined.workspace_id, ws);
+
+    let members = rita
+        .remote(
+            &h,
+            r#"query($s: ID!) { serverMembers(serverId: $s) {
+                userId isBot principalId memberRole bot { runBy readsGoTo addedByName }
+            } }"#,
+            json!({ "s": ws }),
+        )
+        .await["serverMembers"]
+        .clone();
+    let shown = members
+        .as_array()
+        .expect("members")
+        .iter()
+        .find(|m| m["userId"] == json!(bot))
+        .expect("the bot is listed")
+        .clone();
+    assert_eq!(shown["isBot"], true);
+    assert_eq!(shown["principalId"], Value::Null);
+    assert_eq!(shown["memberRole"], "GUEST");
+    assert_eq!(shown["bot"]["runBy"], "Hannah");
+    let bots = rita
+        .remote(
+            &h,
+            "query($s: ID!) { bots(serverId: $s) { name readsGoTo } }",
+            json!({ "s": ws }),
+        )
+        .await;
+    assert_eq!(bots["bots"][0]["readsGoTo"], "Nowhere");
+
+    assert_eq!(
+        scalar(
+            &h,
+            r#"SELECT count(*) AS n FROM "user" WHERE kind = 'bot' AND id = $1
+                 AND home_relay IS NULL AND principal_id IS NULL"#,
+            vec![bot.parse::<Uuid>().expect("uuid").into()],
+        )
+        .await,
+        1,
+        "a bot has no home relay and no identity to offer another server"
+    );
+
+    // What the bot posts on its host reaches the remote member, with its name.
+    hannah
+        .ok(
+            r#"mutation($s: ID!, $c: ID!, $u: [ID!]!) {
+                addConversationMembers(serverId: $s, conversationId: $c, userIds: $u) { memberIds }
+            }"#,
+            json!({ "s": ws, "c": general, "u": [bot] }),
+        )
+        .await;
+    let posted: Value = reqwest::Client::new()
+        .post(format!(
+            "{}/api/bot/v1/channels/{general}/messages",
+            h.origin
+        ))
+        .bearer_auth(token)
+        .json(&json!({ "text": "hello from the bot" }))
+        .send()
+        .await
+        .expect("post")
+        .json()
+        .await
+        .expect("json");
+    let message_id = posted["id"].as_str().expect("a posted message").to_string();
+    let delivered = rita
+        .item_of(&h, "NewMessage", |i| {
+            i.event["message"]["id"] == json!(message_id)
+        })
+        .await;
+    assert_eq!(delivered.event["message"]["text"], "hello from the bot");
+    assert_eq!(delivered.stream, format!("c:{general}"));
+    let shown = rita
+        .remote(
+            &h,
+            r#"query($s: ID!, $c: ID!) {
+                messages(serverId: $s, conversationId: $c, dir: BEFORE, limit: 1, includeDeleted: false) {
+                    items { id author { displayName isBot bot { runBy } } }
+                }
+            }"#,
+            json!({ "s": ws, "c": general }),
+        )
+        .await["messages"]["items"][0]
+        .clone();
+    assert_eq!(shown["id"], json!(message_id));
+    assert_eq!(shown["author"]["displayName"], "Helper");
+    assert_eq!(shown["author"]["isBot"], true);
+    assert_eq!(shown["author"]["bot"]["runBy"], "Hannah");
+
+    h.stop().await;
+    r.stop().await;
+}
+
 /// A remote member hears of a rename on `w`, and leaves through her relay: her own stream
 /// carries the departure, the host ends her delegations and her relay ends the subscription.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_members_join_fires_a_welcome_with_their_home_username() {
+    let (h, r) = nodes().await;
+    let hannah = sign_up(&h, "hannah", 1).await;
+    let rita = sign_up(&r, "rita", 2).await;
+    let (ws, general, invite) = workspace(&h, &hannah).await;
+
+    let bot = hannah
+        .ok(
+            r#"mutation($input: CreateBotInput!) { createBot(input: $input) { bot { userId } } }"#,
+            json!({ "input": {
+                "serverId": ws, "name": "Greeter", "runBy": "Hannah", "readsGoTo": "Nowhere",
+            }}),
+        )
+        .await["createBot"]["bot"]["userId"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    hannah
+        .ok(
+            r#"mutation($s: ID!, $c: ID!, $u: [ID!]!) {
+                addConversationMembers(serverId: $s, conversationId: $c, userIds: $u) { memberIds }
+            }"#,
+            json!({ "s": ws, "c": general, "u": [bot] }),
+        )
+        .await;
+    hannah
+        .ok(
+            "mutation($input: CreatePipelineInput!) { createPipeline(input: $input) { id } }",
+            json!({ "input": {
+                "serverId": ws,
+                "name": "Welcome",
+                "trigger": { "kind": "MEMBER_JOINED" },
+                "actions": [{
+                    "commandId": "chat.post_message",
+                    "postAsBot": {
+                        "botUserId": bot,
+                        "conversationId": general,
+                        "text": "Welcome {username}, shown as {name}",
+                    },
+                }],
+            }}),
+        )
+        .await;
+
+    rita.join(&h, &r, &ws, Some(&invite)).await;
+
+    let posted = eventually("the welcome on the host", || async {
+        hannah
+            .ok(
+                r#"query($s: ID!, $c: ID!) {
+                    messages(serverId: $s, conversationId: $c, dir: AFTER, limit: 20, includeDeleted: false) {
+                        items { text author { id isBot } }
+                    }
+                }"#,
+                json!({ "s": ws, "c": general }),
+            )
+            .await["messages"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|message| message["author"]["id"] == json!(bot))
+            .cloned()
+    })
+    .await;
+    assert_eq!(posted["author"]["isBot"], true);
+    assert_eq!(posted["text"], "Welcome rita, shown as rita");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_remote_member_sees_a_rename_and_leaves_through_the_relay() {
     let (h, r) = nodes().await;

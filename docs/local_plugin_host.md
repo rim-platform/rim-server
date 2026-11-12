@@ -34,6 +34,8 @@ The manifest uses snake_case keys and describes:
 - `commands`, each with `id`, `title`, `description`, `arguments`, `dangerous`,
   `required_context`, `required_capabilities`, `ai_callable`, `output_schema` and
   `keybind_capable`
+- `runs_commands`, the commands that are not the plugin's own and that it asks to run (protocol
+  v1, section 12)
 - `keybind_suggestions`, `context_actions` and `panels`, each panel with `id`, `title`,
   `description` and an optional `slot`
 - `settings_schema`, the settings the user fills in, each with `key`, `title`, `description`,
@@ -73,6 +75,13 @@ running a command whose manifest lists `required_capabilities` and on every plug
 can: capabilities govern what the host does for it, not what the process can do on the machine.
 Dangerous commands run only after the user confirms each run, and the AI agent can never confirm
 one (protocol v1, section 10).
+
+A plugin runs a command that is not its own with its `rim.command.execute` request to the host
+(protocol v1, section 9), and only an id its manifest lists in `runs_commands` and the user
+granted at install or update. The host never runs a dangerous or `Restricted` command, another
+plugin's command or an agent-management command for it, asks the user before every `Mutating`
+one, allows 20 such calls a minute, and records every run in the plugin's audit
+(`command_model.md`, Who Can Run Commands).
 
 Reading its own settings needs no capability (protocol v1, section 15). The host keeps a
 plugin's secret settings in the desktop's secret vault and hands them to that plugin in plain
@@ -131,7 +140,7 @@ Panel → host messages, with what each does today:
 
 | Message | Status |
 |---|---|
-| `rim.command.execute` | Works. Runs one of the plugin's **own** commands (`plugin.<plugin_id>.` prefix, checked again in the Rust host). A panel cannot confirm a dangerous command. |
+| `rim.command.execute` | Works. Runs one of the plugin's **own** commands (`plugin.<plugin_id>.` prefix, checked again in the Rust host), or a command id the user granted it in `runs_commands`, under the rules of the plugin's own `rim.command.execute` request (protocol v1, section 9). A panel cannot confirm a dangerous command. |
 | `rim.ui.notification.show` | Gated on `ui.notify`. Shows a toast headed with the plugin's name, and a desktop notification while the window is in the background and the user already allows them. |
 | `rim.ui.dialog.confirm` | Only logged. |
 | `rim.settings.open` | Carries nothing but its `type` and gets no answer. Opens the plugin's own settings form over the current view, so the panel stays where it was and is there again when the form closes. A panel never receives setting values; its plugin reads them with `rim.settings.get` (protocol v1, section 15). |
@@ -143,8 +152,9 @@ Host → panel messages:
 |---|---|
 | `theme.changed` | Sent on mount and on every theme change. |
 | `panel.state_update` | Sent on mount with the panel state the plugin last stored, then on every change the plugin makes, and with `state: null` when the plugin stops. |
-| `rim.command.result` | The answer to a panel's `rim.command.execute` that carried a `requestId`: `requestId`, `ok`, `message`, `payload`, and `cancelled: true` when the user declined to confirm a dangerous command. |
-| `panel.state_patch`, `panel.visibility`, `panel.focus`, `panel.blur`, `conversation.changed` | Declared in the bridge's types, never sent. |
+| `rim.command.result` | The answer to a panel's `rim.command.execute` that carried a `requestId`: `requestId`, `ok`, `message`, `payload`, and `cancelled: true` when the user declined a confirmation. For a command that is not the plugin's own, `payload` is always `null`: the plugin never receives its output. |
+| `conversation.changed` | Sent only when the plugin holds `chat.read`: on mount and whenever the conversation shown changes, with its `conversationId`, or `null` while no conversation is the page shown. |
+| `panel.state_patch`, `panel.visibility`, `panel.focus`, `panel.blur` | Declared in the bridge's types, never sent. |
 
 ### Focus Management
 

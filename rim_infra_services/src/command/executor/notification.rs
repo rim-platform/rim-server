@@ -3,16 +3,17 @@ use serde_json::Value;
 use rim_core::notification::model::{DndPause, NotificationLevel};
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 use rim_services::notification::command::{
-    MarkNotificationsReadCmd, MarkNotificationsReadTarget, SetConversationNotificationLevelCmd,
-    SetDndPauseCmd,
+    GetNotificationSettingsQuery, MarkNotificationsReadCmd, MarkNotificationsReadTarget,
+    SetConversationNotificationLevelCmd, SetDndPauseCmd,
 };
+use rim_services::notification_preference::command::{MuteConversationCmd, UnmuteConversationCmd};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::command::CommandServices;
 
 use super::{
-    optional_integer_arg, optional_string_arg, require_string_arg, resolve_conversation_id,
-    resolve_workspace_id,
+    optional_integer_arg, optional_string_arg, relative_minutes_arg, require_string_arg,
+    resolve_conversation_id, resolve_workspace_id,
 };
 
 /// Longest `notifications.dnd` pause given in minutes (7 days).
@@ -137,6 +138,173 @@ pub(super) async fn dnd(
     ))
 }
 
+/// When a `notifications.mute_conversation` mute ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MuteEnd {
+    /// At this time.
+    At(chrono::DateTime<chrono::Utc>),
+    /// At 09:00 tomorrow in the caller's timezone.
+    TomorrowMorning,
+    /// Never: the mute lasts until the conversation is unmuted.
+    Never,
+}
+
+/// Longest mute `notifications.mute_conversation` accepts as `minutes`: one year.
+const MAX_MUTE_MINUTES: i64 = 365 * 24 * 60;
+
+/// `duration` = `1h` | `8h` | `until_tomorrow` | `forever` | `until` (with `until` RFC 3339, in
+/// the future) | `minutes` (with `minutes` from now). `until` and `minutes` are refused with any
+/// other duration.
+fn parse_mute_end(
+    args: &serde_json::Map<String, Value>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> ServiceResult<MuteEnd> {
+    let duration = require_string_arg(args, "duration")?
+        .trim()
+        .to_ascii_lowercase();
+    let minutes = relative_minutes_arg(args, MAX_MUTE_MINUTES)?;
+    if duration == "minutes" {
+        let minutes = minutes.ok_or_else(|| {
+            ServiceError::Validation("duration `minutes` needs a `minutes` count".to_string())
+        })?;
+        return Ok(MuteEnd::At(now + chrono::Duration::minutes(minutes)));
+    }
+    if minutes.is_some() {
+        return Err(ServiceError::Validation(
+            "`minutes` is only read with duration `minutes`".to_string(),
+        ));
+    }
+    let until = optional_string_arg(args, "until").filter(|s| !s.trim().is_empty());
+    if until.is_some() && duration != "until" {
+        return Err(ServiceError::Validation(
+            "`until` is only read with duration `until`".to_string(),
+        ));
+    }
+    match duration.as_str() {
+        "1h" => Ok(MuteEnd::At(now + chrono::Duration::hours(1))),
+        "8h" => Ok(MuteEnd::At(now + chrono::Duration::hours(8))),
+        "until_tomorrow" => Ok(MuteEnd::TomorrowMorning),
+        "forever" => Ok(MuteEnd::Never),
+        "until" => {
+            let raw = until.ok_or_else(|| {
+                ServiceError::Validation("duration `until` needs an `until` time".to_string())
+            })?;
+            let until = chrono::DateTime::parse_from_rfc3339(raw.trim())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .map_err(|_| {
+                    ServiceError::Validation("invalid RFC 3339 timestamp arg `until`".to_string())
+                })?;
+            if until <= now {
+                return Err(ServiceError::Validation(
+                    "`until` must be in the future".to_string(),
+                ));
+            }
+            Ok(MuteEnd::At(until))
+        }
+        _ => Err(ServiceError::Validation(
+            "`duration` must be one of 1h, 8h, until_tomorrow, forever, until, minutes".to_string(),
+        )),
+    }
+}
+
+/// 09:00 on the day after `now` in `timezone`. A 09:00 the zone skips that day is read an hour
+/// later; it never happens in a zone in use today.
+fn tomorrow_morning(
+    now: chrono::DateTime<chrono::Utc>,
+    timezone: chrono_tz::Tz,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+
+    let today = now.with_timezone(&timezone).date_naive();
+    let tomorrow = today.succ_opt().unwrap_or(today);
+    let nine = chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap_or_default();
+    let local = tomorrow.and_time(nine);
+    timezone
+        .from_local_datetime(&local)
+        .earliest()
+        .or_else(|| {
+            timezone
+                .from_local_datetime(&(local + chrono::Duration::hours(1)))
+                .earliest()
+        })
+        .map(|at| at.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|| chrono::Utc.from_utc_datetime(&local))
+}
+
+/// The caller's timezone as the server knows it: that of their daily do-not-disturb window in
+/// the workspace, or UTC when they have none.
+async fn caller_timezone(
+    services: &CommandServices,
+    actor: Actor,
+    server_id: rim_core::server::model::ServerId,
+) -> ServiceResult<chrono_tz::Tz> {
+    let settings = services
+        .notification_service
+        .get_settings(GetNotificationSettingsQuery { actor, server_id })
+        .await?;
+    Ok(settings
+        .dnd
+        .and_then(|window| window.timezone.parse::<chrono_tz::Tz>().ok())
+        .unwrap_or(chrono_tz::UTC))
+}
+
+pub(super) async fn mute_conversation(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let server_id = resolve_workspace_id(&args, context.as_ref(), "server_id")?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
+    let now = chrono::Utc::now();
+    let muted_until = match parse_mute_end(&args, now)? {
+        MuteEnd::At(until) => Some(until),
+        MuteEnd::TomorrowMorning => Some(tomorrow_morning(
+            now,
+            caller_timezone(services, actor, server_id).await?,
+        )),
+        MuteEnd::Never => None,
+    };
+    services
+        .notification_preference_service
+        .mute_conversation(MuteConversationCmd {
+            actor,
+            server_id,
+            conversation_id,
+            muted_until,
+        })
+        .await?;
+    Ok(success(
+        "conversation muted",
+        serde_json::json!({
+            "conversation_id": conversation_id.to_string(),
+            "muted_until": muted_until.map(|until| until.to_rfc3339()),
+        }),
+    ))
+}
+
+pub(super) async fn unmute_conversation(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let server_id = resolve_workspace_id(&args, context.as_ref(), "server_id")?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
+    services
+        .notification_preference_service
+        .unmute_conversation(UnmuteConversationCmd {
+            actor,
+            server_id,
+            conversation_id,
+        })
+        .await?;
+    Ok(success(
+        "conversation unmuted",
+        serde_json::json!({ "conversation_id": conversation_id.to_string() }),
+    ))
+}
+
 pub(super) async fn mark_all_read(
     services: &CommandServices,
     actor: Actor,
@@ -169,10 +337,18 @@ mod tests {
         ConversationNotificationLevelDto, NotificationSettingsDto,
     };
     use rim_services::notification::service::MockNotificationService;
+    use rim_services::notification_preference::service::MockNotificationPreferenceService;
 
     use super::*;
 
     fn services(notification: MockNotificationService) -> CommandServices {
+        services_with(notification, MockNotificationPreferenceService::new())
+    }
+
+    fn services_with(
+        notification: MockNotificationService,
+        preferences: MockNotificationPreferenceService,
+    ) -> CommandServices {
         CommandServices {
             auth_service: Arc::new(rim_services::auth::service::MockAuthService::new()),
             capability_service: Arc::new(
@@ -197,6 +373,7 @@ mod tests {
                 rim_services::workspace_state::service::MockWorkspaceStateService::new(),
             ),
             audit_log_service: None,
+            notification_preference_service: Arc::new(preferences),
             moderation_service: Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -405,5 +582,307 @@ mod tests {
         .await
         .expect("mark all read");
         assert_eq!(result.payload.expect("payload")["marked"], 4);
+    }
+    fn at(rfc3339: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(rfc3339)
+            .expect("ts")
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn mute_durations_parse() {
+        let now = at("2030-01-01T12:00:00Z");
+        let end = |value: Value| parse_mute_end(&args(value), now);
+        assert_eq!(
+            end(serde_json::json!({ "duration": "1h" })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T13:00:00Z")))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "8H" })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T20:00:00Z")))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "until_tomorrow" })).ok(),
+            Some(MuteEnd::TomorrowMorning)
+        );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "forever" })).ok(),
+            Some(MuteEnd::Never)
+        );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "until", "until": "2030-01-02T08:00:00+01:00" }))
+                .ok(),
+            Some(MuteEnd::At(at("2030-01-02T07:00:00Z")))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "minutes", "minutes": 45 })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T12:45:00Z")))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "duration": "minutes", "minutes": "45" })).ok(),
+            Some(MuteEnd::At(at("2030-01-01T12:45:00Z")))
+        );
+        for bad in [
+            serde_json::json!({ "minutes": 45 }),
+            serde_json::json!({ "duration": "minutes" }),
+            serde_json::json!({ "duration": "forever", "minutes": 45 }),
+            serde_json::json!({ "duration": "minutes", "minutes": 0 }),
+            serde_json::json!({ "duration": "minutes", "minutes": 525_601 }),
+            serde_json::json!({ "duration": "minutes", "minutes": "soon" }),
+            serde_json::json!({}),
+            serde_json::json!({ "duration": "2h" }),
+            serde_json::json!({ "duration": "until" }),
+            serde_json::json!({ "duration": "until", "until": "tomorrow" }),
+            serde_json::json!({ "duration": "until", "until": "2030-01-01T12:00:00Z" }),
+            serde_json::json!({ "duration": "until", "until": "2029-12-31T12:00:00Z" }),
+            serde_json::json!({ "duration": "1h", "until": "2030-01-02T08:00:00Z" }),
+        ] {
+            assert!(
+                matches!(end(bad.clone()), Err(ServiceError::Validation(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn tomorrow_morning_is_nine_on_the_next_local_day() {
+        // 23:30 UTC on 1 January is already 2 January in Prague (UTC+1), so tomorrow is the 3rd.
+        assert_eq!(
+            tomorrow_morning(at("2030-01-01T23:30:00Z"), chrono_tz::Europe::Prague),
+            at("2030-01-03T08:00:00Z")
+        );
+        // 03:00 UTC on 2 January is still 1 January in Chicago (UTC-6).
+        assert_eq!(
+            tomorrow_morning(at("2030-01-02T03:00:00Z"), chrono_tz::America::Chicago),
+            at("2030-01-02T15:00:00Z")
+        );
+        assert_eq!(
+            tomorrow_morning(at("2030-01-01T23:30:00Z"), chrono_tz::UTC),
+            at("2030-01-02T09:00:00Z")
+        );
+        // Summer time starts overnight: 09:00 the next day is in CEST (UTC+2).
+        assert_eq!(
+            tomorrow_morning(at("2030-03-30T12:00:00Z"), chrono_tz::Europe::Prague),
+            at("2030-03-31T07:00:00Z")
+        );
+    }
+
+    fn mutes(
+        workspace: ServerId,
+        conversation: ConversationId,
+        check: impl Fn(Option<chrono::DateTime<chrono::Utc>>) -> bool + Send + Sync + 'static,
+    ) -> MockNotificationPreferenceService {
+        let mut preferences = MockNotificationPreferenceService::new();
+        preferences
+            .expect_mute_conversation()
+            .withf(move |cmd| {
+                cmd.server_id == workspace
+                    && cmd.conversation_id == conversation
+                    && check(cmd.muted_until)
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        preferences
+    }
+
+    #[tokio::test]
+    async fn mute_for_an_hour_mutes_the_focused_conversation() {
+        let workspace = ServerId::new();
+        let conversation = ConversationId::new();
+        let before = chrono::Utc::now();
+        let preferences = mutes(workspace, conversation, move |until| {
+            until.is_some_and(|until| {
+                let minutes = (until - before).num_minutes();
+                (59..=61).contains(&minutes)
+            })
+        });
+        let mut notification = MockNotificationService::new();
+        notification.expect_get_settings().never();
+        let result = mute_conversation(
+            &services_with(notification, preferences),
+            Actor::new(UserId::new()),
+            args(serde_json::json!({ "duration": "1h" })),
+            Some(context(workspace, Some(conversation))),
+        )
+        .await
+        .expect("mute");
+        let payload = result.payload.expect("payload");
+        assert_eq!(payload["conversation_id"], conversation.to_string());
+        assert!(payload["muted_until"].is_string());
+    }
+
+    #[tokio::test]
+    async fn mute_forever_sets_no_end() {
+        let workspace = ServerId::new();
+        let conversation = ConversationId::new();
+        let preferences = mutes(workspace, conversation, |until| until.is_none());
+        let result = mute_conversation(
+            &services_with(MockNotificationService::new(), preferences),
+            Actor::new(UserId::new()),
+            args(serde_json::json!({
+                "duration": "forever",
+                "conversation_id": conversation.to_string(),
+            })),
+            Some(context(workspace, Some(ConversationId::new()))),
+        )
+        .await
+        .expect("mute forever");
+        assert_eq!(result.payload.expect("payload")["muted_until"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn mute_until_a_time_ends_then() {
+        let workspace = ServerId::new();
+        let conversation = ConversationId::new();
+        let preferences = mutes(workspace, conversation, |until| {
+            until == Some(at("2099-06-01T07:00:00Z"))
+        });
+        mute_conversation(
+            &services_with(MockNotificationService::new(), preferences),
+            Actor::new(UserId::new()),
+            args(serde_json::json!({ "duration": "until", "until": "2099-06-01T09:00:00+02:00" })),
+            Some(context(workspace, Some(conversation))),
+        )
+        .await
+        .expect("mute until");
+    }
+
+    fn settings_with_window(
+        server_id: ServerId,
+        timezone: Option<&str>,
+    ) -> NotificationSettingsDto {
+        NotificationSettingsDto {
+            dnd: timezone.map(|tz| rim_core::notification::model::DndWindow {
+                start: chrono::NaiveTime::from_hms_opt(22, 0, 0).expect("time"),
+                end: chrono::NaiveTime::from_hms_opt(7, 0, 0).expect("time"),
+                timezone: tz.to_string(),
+            }),
+            ..settings(server_id, DndPause::Off)
+        }
+    }
+
+    #[tokio::test]
+    async fn mute_until_tomorrow_uses_the_do_not_disturb_window_timezone() {
+        for (timezone, zone) in [
+            (Some("Asia/Tokyo"), chrono_tz::Asia::Tokyo),
+            (None, chrono_tz::UTC),
+        ] {
+            let workspace = ServerId::new();
+            let conversation = ConversationId::new();
+            let before = chrono::Utc::now();
+            // 09:00 local, between 9 and 33 hours ahead (an hour either way across a clock
+            // change).
+            let preferences = mutes(workspace, conversation, move |until| {
+                until.is_some_and(|until| {
+                    until.with_timezone(&zone).time()
+                        == chrono::NaiveTime::from_hms_opt(9, 0, 0).expect("time")
+                        && (8..=34).contains(&(until - before).num_hours())
+                })
+            });
+            let mut notification = MockNotificationService::new();
+            let tz = timezone.map(str::to_string);
+            notification
+                .expect_get_settings()
+                .withf(move |query| query.server_id == workspace)
+                .times(1)
+                .returning(move |query| {
+                    let tz = tz.clone();
+                    Box::pin(
+                        async move { Ok(settings_with_window(query.server_id, tz.as_deref())) },
+                    )
+                });
+            mute_conversation(
+                &services_with(notification, preferences),
+                Actor::new(UserId::new()),
+                args(serde_json::json!({ "duration": "until_tomorrow" })),
+                Some(context(workspace, Some(conversation))),
+            )
+            .await
+            .expect("mute until tomorrow");
+        }
+    }
+
+    #[tokio::test]
+    async fn mute_passes_the_services_refusal_through() {
+        let mut preferences = MockNotificationPreferenceService::new();
+        preferences
+            .expect_mute_conversation()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(ServiceError::NotFound) }));
+        let err = mute_conversation(
+            &services_with(MockNotificationService::new(), preferences),
+            Actor::new(UserId::new()),
+            args(serde_json::json!({ "duration": "8h" })),
+            Some(context(ServerId::new(), Some(ConversationId::new()))),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn mute_without_a_conversation_or_with_a_bad_duration_calls_nothing() {
+        let mut preferences = MockNotificationPreferenceService::new();
+        preferences.expect_mute_conversation().never();
+        let services = services_with(MockNotificationService::new(), preferences);
+        for (value, conversation) in [
+            (serde_json::json!({ "duration": "1h" }), None),
+            (
+                serde_json::json!({ "duration": "soon" }),
+                Some(ConversationId::new()),
+            ),
+        ] {
+            let err = mute_conversation(
+                &services,
+                Actor::new(UserId::new()),
+                args(value),
+                Some(context(ServerId::new(), conversation)),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unmute_unmutes_the_focused_conversation() {
+        let workspace = ServerId::new();
+        let conversation = ConversationId::new();
+        let mut preferences = MockNotificationPreferenceService::new();
+        preferences
+            .expect_unmute_conversation()
+            .withf(move |cmd| cmd.server_id == workspace && cmd.conversation_id == conversation)
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        let result = unmute_conversation(
+            &services_with(MockNotificationService::new(), preferences),
+            Actor::new(UserId::new()),
+            serde_json::Map::new(),
+            Some(context(workspace, Some(conversation))),
+        )
+        .await
+        .expect("unmute");
+        assert_eq!(
+            result.payload.expect("payload")["conversation_id"],
+            conversation.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn unmute_passes_the_services_refusal_through() {
+        let mut preferences = MockNotificationPreferenceService::new();
+        preferences
+            .expect_unmute_conversation()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(ServiceError::NotFound) }));
+        let err = unmute_conversation(
+            &services_with(MockNotificationService::new(), preferences),
+            Actor::new(UserId::new()),
+            serde_json::Map::new(),
+            Some(context(ServerId::new(), Some(ConversationId::new()))),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound), "{err:?}");
     }
 }

@@ -532,7 +532,7 @@ entity of a remote space by (host server id, id).
 | `c:<conversationId>` | Every event with a `conversation_id` (messages, reactions, pins, threads, conversation membership, link previews, `MlsCommitAccepted`, `MlsMembershipChanged`) | 1, 2, … |
 | `u:<principalId>` | Events for one user (`NotificationDue`, `UserMentioned`, `ReadStateUpdated`, `MlsWelcomeAvailable`, `DmInvite`); for a guest, the directory events about them | 1, 2, … |
 | `w` | Other space-wide events (`MemberJoined`, `MemberLeft`, `MemberRoleChanged`, `MemberTimeoutChanged`, `WorkspacePluginChanged`, `WorkspaceUpdated`, pipeline and workspace-state events), to non-guests | 1, 2, … |
-| `e` | `TypingStarted`, `PresenceChanged` | `null` |
+| `e` | `TypingStarted`, `PresenceChanged`, `ReadMarkerRewound` (to its `user_id` only) | `null` |
 
 `seq` is assigned per `(workspace, stream)` in `host_event_stream`, in the transaction that writes
 the outbox rows. Recipients follow today's `user_can_see_event_as`, which S5-2 moves from `rim_api`
@@ -597,8 +597,10 @@ POST /s2s/v1/deliver
 - An event a relay does not get still takes its stream's `seq`. When the relay is back, the next
   event on each stream arrives with `seq > last + 1`, and the app reconciles from the host as for
   any gap ("What the client checks"): change feed, pins, reactions, members and `streamHeads`,
-  through the forward path. Not recovered: `e` events (no `seq`). A `DmInvite` written in that
-  window is sent again once the relay refuses a later item of its conversation (`not_subscribed`).
+  through the forward path. Not recovered: `e` events (no `seq`), so a client reads `unreadCounts`
+  again when it reconnects or opens the workspace, for a `ReadMarkerRewound` it missed. A
+  `DmInvite` written in that window is sent again once the relay refuses a later item of its
+  conversation (`not_subscribed`).
 
 ### Relay queues
 

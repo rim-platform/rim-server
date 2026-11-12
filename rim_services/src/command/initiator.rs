@@ -14,13 +14,15 @@
 //!   surface turned off.
 //!
 //! The initiator is asserted by the client; the server does not verify where a call came from.
+//! `Bot` is the exception: only the bot API sets it, after checking the bot's token.
 //!
 //! ## Wire contract
 //!
 //! Exposed as the GraphQL enum `CommandInitiator` (`PALETTE`, `AGENT`, `MACRO`, `KEYBIND`,
-//! `CONTEXT_MENU`, `PLUGIN`, `CLI`). `ExecuteCommandInput.initiator` is optional and defaults to
+//! `CONTEXT_MENU`, `PLUGIN`, `CLI`, `UI`). `ExecuteCommandInput.initiator` is optional and defaults to
 //! `Palette`: anything that does not say it is the agent is treated as a human action. The
-//! first-party client sends `AGENT` from its agent tools.
+//! first-party client sends `AGENT` from its agent tools. The enum has no value for `Bot`, so no
+//! GraphQL caller can claim it.
 //!
 //! ## Why an enum and not a free-form string
 //!
@@ -59,13 +61,19 @@ pub enum CommandInitiator {
     Plugin,
     /// Out-of-process CLI client (rim-cli) invoked over the GraphQL API.
     Cli,
+    /// A button or other control in the app: a toggle, a dialog action or a Home quick box.
+    Ui,
+    /// A bot, through the bot API. Nobody is there to confirm, so a command needing a confirmation
+    /// on its tier or `dangerous` flag is refused rather than asked.
+    Bot,
 }
 
 impl CommandInitiator {
     /// Returns `true` when this initiator is non-human and therefore subject
     /// to the always-confirm-for-Mutating rule. `Plugin` counts as agentic for
-    /// safety; only `Palette`, `Keybind`, `ContextMenu`, `Cli`, and
-    /// (transitively) `Macro` are human.
+    /// safety; `Palette`, `Keybind`, `ContextMenu`, `Ui`, `Cli`, and (transitively)
+    /// `Macro` are human. `Bot` is not agentic either: a bot's token is what stands
+    /// behind its calls, and a bot's reach is the bot API.
     ///
     /// `Macro` is treated as human here because a macro is a recorded series
     /// of human-issued steps; if an agent triggered the macro, the dispatch
@@ -87,6 +95,8 @@ impl CommandInitiator {
             Self::ContextMenu => "context_menu",
             Self::Plugin => "plugin",
             Self::Cli => "cli",
+            Self::Ui => "ui",
+            Self::Bot => "bot",
         }
     }
 }
@@ -126,6 +136,12 @@ mod tests {
         assert!(!CommandInitiator::ContextMenu.is_agentic());
         assert!(!CommandInitiator::Cli.is_agentic());
         assert!(!CommandInitiator::Macro.is_agentic());
+        assert!(!CommandInitiator::Ui.is_agentic());
+    }
+
+    #[test]
+    fn a_bot_is_not_agentic() {
+        assert!(!CommandInitiator::Bot.is_agentic());
     }
 
     #[test]
@@ -149,6 +165,8 @@ mod tests {
         assert_eq!(CommandInitiator::ContextMenu.as_audit_str(), "context_menu");
         assert_eq!(CommandInitiator::Plugin.as_audit_str(), "plugin");
         assert_eq!(CommandInitiator::Cli.as_audit_str(), "cli");
+        assert_eq!(CommandInitiator::Ui.as_audit_str(), "ui");
+        assert_eq!(CommandInitiator::Bot.as_audit_str(), "bot");
     }
 
     #[test]
@@ -164,6 +182,8 @@ mod tests {
             CommandInitiator::ContextMenu,
             CommandInitiator::Plugin,
             CommandInitiator::Cli,
+            CommandInitiator::Ui,
+            CommandInitiator::Bot,
         ] {
             assert_eq!(format!("{}", v), v.as_audit_str());
         }

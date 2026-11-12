@@ -109,6 +109,7 @@ impl Fixture {
             confirmation,
             is_pipe: false,
             initiator,
+            run_id: None,
         }
     }
 }
@@ -147,6 +148,9 @@ fn build_service(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -187,6 +191,9 @@ fn build_service_with_audit(
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: Some(
                 Arc::new(audit_service) as Arc<dyn rim_services::audit::service::AuditLogService>
+            ),
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
             ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
@@ -235,7 +242,7 @@ async fn dispatch_gates_end_to_end_smoke_test() {
     //
     // (b) **No confirmation token may be issued.** A regression that swaps
     //     the gate ordering (confirmation BEFORE cap) would still surface
-    //     PermissionDenied to the caller — masking the actual security
+    //     CapabilityMissing to the caller — masking the actual security
     //     leak: a token minted for the denied actor now sits in the store,
     //     and a later call could submit it. The `store.is_empty()`
     //     assertion below is the only way to catch this — observable
@@ -246,9 +253,9 @@ async fn dispatch_gates_end_to_end_smoke_test() {
             .execute_command(fx.execute_cmd(None, CommandInitiator::Agent))
             .await;
         match result {
-            Err(ServiceError::PermissionDenied) => {}
+            Err(ServiceError::CapabilityMissing { .. }) => {}
             other => {
-                panic!("S1: expected PermissionDenied from cap gate, got {other:?}")
+                panic!("S1: expected CapabilityMissing from cap gate, got {other:?}")
             }
         }
         assert!(

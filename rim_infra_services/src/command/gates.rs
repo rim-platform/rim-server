@@ -9,7 +9,7 @@ use super::dispatch::Dispatch;
 impl Dispatch {
     /// Every command the dispatch reaches: the single command, or each pipe stage that names
     /// one.
-    fn definitions(&self) -> Vec<&CommandDefinitionDto> {
+    pub(super) fn definitions(&self) -> Vec<&CommandDefinitionDto> {
         match self {
             Self::Single(resolved) => resolved.iter().map(|r| &r.definition).collect(),
             Self::Pipe(stages) => stages
@@ -79,16 +79,22 @@ impl Dispatch {
 
 impl DefaultCommandService {
     /// Timeout gate: `Err(TimedOut { until })` when `definition` is Mutating (or
-    /// stricter) and the actor is timed out in the context's workspace. Without a workspace
-    /// context there is nothing to check here; the services behind the command still apply
-    /// their own write gates.
+    /// stricter), does not change only the caller's own state, and the actor is timed out in the
+    /// context's workspace. `changes_only_callers_state` says whether it changes only the
+    /// caller's own state. Without a workspace context there is nothing to check here; the
+    /// services behind the command still apply their own write gates.
+    ///
+    /// # Errors
+    ///
+    /// `TimedOut` as above; an error of the moderation service.
     pub(super) async fn ensure_command_not_timed_out(
         &self,
         definition: &CommandDefinitionDto,
+        changes_only_callers_state: bool,
         actor: &Actor,
         context: Option<&CommandContextDto>,
     ) -> ServiceResult<()> {
-        if definition.sensitivity < CommandSensitivityDto::Mutating {
+        if definition.sensitivity < CommandSensitivityDto::Mutating || changes_only_callers_state {
             return Ok(());
         }
         let Some(server_id) = context.and_then(|c| c.workspace_id) else {
@@ -103,5 +109,86 @@ impl DefaultCommandService {
             Some(until) => Err(ServiceError::TimedOut { until }),
             None => Ok(()),
         }
+    }
+}
+
+/// `err` as the caller of a dispatch sees it: a technical failure becomes
+/// [`ServiceError::CommandFailed`], which is safe to retry only when every command reached reads
+/// and none is dangerous. Any other error is returned unchanged.
+pub(super) fn with_retry_safety(
+    err: ServiceError,
+    sensitivity: CommandSensitivityDto,
+    dangerous: bool,
+) -> ServiceError {
+    match err {
+        failure @ (ServiceError::Unavailable
+        | ServiceError::Timeout
+        | ServiceError::Internal(_)
+        | ServiceError::UpstreamUnavailable { .. }) => ServiceError::CommandFailed {
+            failure: Box::new(failure),
+            retry_safe: sensitivity < CommandSensitivityDto::Mutating && !dangerous,
+        },
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn retry_safe(err: ServiceError) -> bool {
+        match err {
+            ServiceError::CommandFailed { retry_safe, .. } => retry_safe,
+            other => panic!("not wrapped: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failed_read_is_safe_to_retry() {
+        assert!(retry_safe(with_retry_safety(
+            ServiceError::Timeout,
+            CommandSensitivityDto::Safe,
+            false
+        )));
+        assert!(retry_safe(with_retry_safety(
+            ServiceError::Timeout,
+            CommandSensitivityDto::Sensitive,
+            false
+        )));
+    }
+
+    #[test]
+    fn a_failed_change_is_not_safe_to_retry() {
+        assert!(!retry_safe(with_retry_safety(
+            ServiceError::Unavailable,
+            CommandSensitivityDto::Mutating,
+            false
+        )));
+        assert!(!retry_safe(with_retry_safety(
+            ServiceError::Unavailable,
+            CommandSensitivityDto::Restricted,
+            false
+        )));
+    }
+
+    #[test]
+    fn a_failed_dangerous_read_is_not_safe_to_retry() {
+        assert!(!retry_safe(with_retry_safety(
+            ServiceError::Internal(None),
+            CommandSensitivityDto::Safe,
+            true
+        )));
+    }
+
+    #[test]
+    fn a_policy_refusal_is_not_wrapped() {
+        assert!(matches!(
+            with_retry_safety(
+                ServiceError::PermissionDenied,
+                CommandSensitivityDto::Safe,
+                false
+            ),
+            ServiceError::PermissionDenied
+        ));
     }
 }

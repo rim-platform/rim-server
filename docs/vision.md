@@ -50,7 +50,9 @@ These are the rules every agent feature is held to; `ROADMAP.md` says which exis
 - **Whoever runs an agent decides where.** They also choose its model or key. The RIM project runs
   no model service for agents, and no agent's prompts go through one. Every agent reaches RIM as a
   client, with the same limits and checks as anyone else.
-- **Your own agent runs on your machine.** It talks directly to the provider you chose.
+- **Your own agent runs on your machine.** It talks directly to the provider you chose. The
+  desktop app can start an agent you chose and let you direct it, with any agent that speaks the
+  Agent Client Protocol.
 - **A server's owner may run an agent on that server.** It is their choice, and it is off until
   they turn it on. It can read only what the server can already read, never an encrypted
   conversation, and people on that server can see that it runs, who runs it and where what it
@@ -69,6 +71,8 @@ These are the rules every agent feature is held to; `ROADMAP.md` says which exis
 - **Plugin commands are approved one by one.** An agent gets only the commands a plugin offers to
   agents and you approve for that agent. An outside agent still asks before an approved command
   that changes something. A dangerous command is only proposed for you to run.
+  An outside agent can also be given RIM's own commands, approved one by one in the same way;
+  it asks you every time, and a dangerous one is only proposed.
 - **A bot has its own identity.** It has a token an Owner or Moderator can revoke, and whoever runs
   it chooses where, with their own model and key. It acts within its grants without a confirmation,
   and the people in a channel can see who runs it and where what it reads goes. Bots never join

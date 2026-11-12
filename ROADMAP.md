@@ -19,7 +19,7 @@ that RIM is ready for production, waits for that outside review (`docs/security-
 
 | Area | |
 |---|---|
-| Chat | Workspaces, public and private channels, DMs and groups, threads, replies, edits, forwards, attachments with quotas, reactions, pins, mentions, read state, an inbox, notification rules with an email digest, presence and typing, link previews, custom emoji, full-text search |
+| Chat | Workspaces, public and private channels, DMs and groups, threads, replies, edits, forwards, attachments with quotas, reactions, pins, mentions, read state with mark unread, an inbox, Home and Unreads pages, notification rules with an email digest, presence and typing, link previews, custom emoji, full-text search |
 | Moderation | Owner, Moderator, Member and Guest; kick, ban, timeout, slow mode, message reports including franked reports of encrypted messages; an audit log with retention |
 | The programmable layer | A command registry with typed arguments, sensitivity tiers and confirmations; user commands and macros; keybinds with layers and an opt-in Vim profile; pipelines; workspace state; channel lenses |
 | Plugins | Local-process plugins on the desktop and sandboxed web plugins on the desktop and the web; a TypeScript SDK and a frozen protocol; per-workspace registries of publisher-signed plugins; four first-party plugins (Kubernetes pods, GitHub pull requests, polls, releases) |
@@ -78,12 +78,12 @@ In order:
    has to be running for this, so it gains a way to stay in the tray.
 4. **Bots and incoming webhooks.** A bot account a workspace Owner or Moderator creates, with
    tokens it can revoke; one incoming webhook URL per channel, bound to a bot, with its own rate
-   limit; a GitHub preset first, so releases post themselves. Bots never join encrypted
-   conversations. A bot's token gives an agent an identity the server verifies, with its own
-   grants. The agent behind a bot runs where its owner chooses, with its owner's model and key: on
-   a personal machine it answers while that machine is on, and a server's owner can run it next to
-   the server, as the content check runs. The channel shows who runs it and where what it reads
-   goes. The public relay runs no such agent.
+   limit; formats anyone can write, with ready-made ones such as GitHub, so releases post
+   themselves. Bots never join encrypted conversations. A bot's token gives an agent an identity
+   the server verifies, with its own grants. The agent behind a bot runs where its owner chooses,
+   with its owner's model and key: on a personal machine it answers while that machine is on, and
+   a server's owner can run it next to the server, as the content check runs. The channel shows
+   who runs it and where what it reads goes. The public relay runs no such agent.
 5. **A first-run path** in the clients that grows with the product: create a key and write down
    the phrase, choose a drive for the archive, pick a relay, install a first plugin.
 6. **Data export** per person and per workspace.
@@ -102,8 +102,7 @@ build them.
   shows the need. It never reveals what the agent read somewhere more private.
 - **Approvals by another person:** a person with authority approves what a bot asked for, with
   stored run records, picked up after the agent items in "Next" have been in daily use.
-- **Home:** one page across your workspaces for what needs you (mentions, replies, decisions, your
-  agents' runs), with cards that plugins add. Nothing in it is a copy of another tool.
+- **Cards on Home:** plugins adding their own cards to Home, once the SDK has a way to.
 - **Calls:** voice calls with the team, and video and screen sharing after them, because talking
   a thing through is sometimes better than writing it. They follow the same rules as messages:
   calls in DMs and private groups are end-to-end encrypted, and a self-hosted server can carry
@@ -117,8 +116,8 @@ build them.
   follow the contract from "Next", and on the public relay they stay on your own machine.
 - **`rim-cli`:** `rim send`, `rim search`, `rim watch` and `rim macro run` with a host-local
   token; it doubles as a contract test of the GraphQL API.
-- **Reach:** the web app as an installable PWA with web push and a narrow layout. No native
-  mobile app; the cache and encryption code is Rust a future mobile build can reuse.
+- **Reach:** the web app as an installable PWA with web push and a phone layout; narrow windows
+  work today, with nothing built for touch. No native mobile app; the cache and encryption code is Rust a future mobile build can reuse.
 - **Post-quantum signatures:** Ed25519 + ML-DSA-44 for identity and device keys, profile cards,
   login proofs, MLS credentials and server-to-server signatures, after the review. The formats
   already carry an algorithm tag and room for the larger keys.

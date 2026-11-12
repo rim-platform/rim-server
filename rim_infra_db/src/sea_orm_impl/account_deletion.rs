@@ -139,11 +139,13 @@ struct LeftConversationRow {
     members: Vec<Uuid>,
 }
 
-/// The workspaces (not the direct space) where the account is the only member.
+/// The workspaces (not the direct space) where the account is the only member but for bots,
+/// which have nobody behind them to keep the workspace for.
 const SOLE_MEMBER_WORKSPACES: &str = "SELECT s.id FROM server s \
      JOIN server_member m ON m.server_id = s.id AND m.user_id = $1 \
      WHERE s.kind = 'workspace' \
        AND NOT EXISTS (SELECT 1 FROM server_member o \
+                       JOIN \"user\" u ON u.id = o.user_id AND u.kind <> 'bot' \
                        WHERE o.server_id = s.id AND o.user_id <> $1)";
 
 /// The encrypted conversations the account is a member of, with their other active members.
@@ -207,6 +209,7 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                       AND me.member_role = 'owner' \
                  WHERE s.kind = 'workspace' \
                    AND EXISTS (SELECT 1 FROM server_member o \
+                               JOIN \"user\" u ON u.id = o.user_id AND u.kind <> 'bot' \
                                WHERE o.server_id = s.id AND o.user_id <> $1) \
                    AND NOT EXISTS (SELECT 1 FROM server_member o \
                                    WHERE o.server_id = s.id AND o.user_id <> $1 \
@@ -553,6 +556,7 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                         "keybinds",
                         "DELETE FROM keybind WHERE scope = 'user' AND subject_id = $1",
                     ),
+                    ("home_layout", "DELETE FROM home_layout WHERE user_id = $1"),
                     (
                         "macros",
                         "DELETE FROM macro m WHERE m.user_id = $1 \

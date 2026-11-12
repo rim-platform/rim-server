@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use rim_core::account_password::repository::AccountPasswordRepository;
 use rim_core::auth::repository::{InstanceInviteRepository, InviteRepository, SessionRepository};
+use rim_core::bot::repository::BotRepository;
 use rim_core::capability::repository::CapabilityRegistryRepository;
 use rim_core::channel_lens::repository::ChannelLensRepository;
 use rim_core::command::repository::UserCommandRepository;
@@ -61,6 +62,7 @@ pub struct AppRepos {
     pub read_state_repo: Arc<dyn ConversationReadStateRepository>,
     pub link_preview_repo: Arc<dyn LinkPreviewRepository>,
     pub custom_emoji_repo: Arc<dyn CustomEmojiRepository>,
+    pub bot_repo: Arc<dyn BotRepository>,
     pub workspace_state_repo: Arc<dyn WorkspaceStateRepository>,
     pub pipeline_repo: Arc<dyn PipelineRepository>,
     pub capability_registry_repo: Arc<dyn CapabilityRegistryRepository>,
@@ -217,6 +219,8 @@ pub struct ReadStateRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     /// Reading a conversation also marks its notifications read.
     pub notification_repo: Arc<dyn NotificationRepository>,
+    /// The message a conversation is marked unread from.
+    pub message_repo: Arc<dyn MessageRepository>,
 }
 
 #[derive(Clone)]
@@ -529,6 +533,7 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             notification_repo: Arc::clone(&self.notification_repo),
+            message_repo: Arc::clone(&self.message_repo),
         }
     }
 
@@ -557,6 +562,7 @@ impl AppRepos {
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
             message_repo: Arc::clone(&self.message_repo),
+            bot_repo: Arc::clone(&self.bot_repo),
         }
     }
 
@@ -585,6 +591,17 @@ impl AppRepos {
         Arc::clone(&self.link_preview_repo)
     }
 
+    pub fn for_bot(&self) -> crate::bot::BotRepos {
+        crate::bot::BotRepos {
+            bot_repo: Arc::clone(&self.bot_repo),
+            server_member_repo: Arc::clone(&self.server_member_repo),
+            conversation_repo: Arc::clone(&self.conversation_repo),
+            conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            moderation_repo: Arc::clone(&self.moderation_repo),
+            message_mention_repo: Arc::clone(&self.message_mention_repo),
+        }
+    }
+
     pub fn for_custom_emoji(&self) -> crate::custom_emoji::CustomEmojiRepos {
         crate::custom_emoji::CustomEmojiRepos {
             custom_emoji_repo: Arc::clone(&self.custom_emoji_repo),
@@ -606,6 +623,8 @@ impl AppRepos {
             server_member_repo: Arc::clone(&self.server_member_repo),
             conversation_repo: Arc::clone(&self.conversation_repo),
             conversation_member_repo: Arc::clone(&self.conversation_member_repo),
+            bot_repo: Arc::clone(&self.bot_repo),
+            user_repo: Arc::clone(&self.user_repo),
         }
     }
 
@@ -699,6 +718,7 @@ impl AppRepos {
             custom_emoji_repo: Arc::new(
                 sea_orm_impl::custom_emoji::SeaOrmCustomEmojiRepository::new(handle.clone()),
             ),
+            bot_repo: Arc::new(sea_orm_impl::bot::SeaOrmBotRepository::new(handle.clone())),
             workspace_state_repo: Arc::new(
                 sea_orm_impl::workspace_state::SeaOrmWorkspaceStateRepository::new(handle.clone()),
             ),

@@ -9,6 +9,7 @@ pub(crate) mod account;
 pub(crate) mod account_password;
 pub(crate) mod attachment;
 pub(crate) mod audit;
+pub(crate) mod bot;
 pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod command_result;
@@ -17,6 +18,7 @@ pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
+pub(crate) mod home_layout;
 pub(crate) mod instance_moderation;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
@@ -47,6 +49,12 @@ pub use attachment::{Attachment, AttachmentStatusEnum, UploadTicket};
 pub use audit::{
     AuditLogEntry, AuditLogFilterInput, AuditLogPage, AuditLogPageInfo, AuditLogPaginationInput,
     AuditOutcomeGql, TypedVerbGql,
+};
+pub use bot::{
+    Bot, BotInfo, BotToken, CreateBotInput, CreateIncomingWebhookInput, CreatedBot,
+    CreatedBotToken, CreatedIncomingWebhook, IncomingWebhook, UpdateBotInput, WebhookFormatInfo,
+    WebhookFormatPreview, WebhookHeader, WebhookPreset, WebhookPreviewOutcome,
+    WebhookTestBodyState, WebhookTestDeliveries, WebhookTestDelivery, WebhookTestSession,
 };
 pub use channel_lens::{
     ChannelLens, FilterConditionGql, FilterConditionInput, FilterField, FilterLogic, FilterOp,
@@ -80,6 +88,7 @@ pub use e2ee::{
     PrincipalDevices, ReportEncryptedMessageInput, RequestMlsReaddInput, SendEncryptedMessageInput,
     SubmitMlsCommitInput,
 };
+pub use home_layout::{HomeLayout, HomeLayoutSaved};
 pub use instance_moderation::{
     InstanceAbuseReport, InstanceAccount, InstanceIpBlock, InstanceIpBlockOutcome,
     InstancePrincipalBlock, InstancePrincipalBlockOutcome, InstancePrincipalUnblockOutcome,

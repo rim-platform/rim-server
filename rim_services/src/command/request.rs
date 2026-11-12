@@ -1,6 +1,8 @@
 use crate::Actor;
 use crate::command::confirmation::ConfirmationProof;
-use crate::command::dto::{CommandContextDto, CommandSurfaceDto, UserCommandStepDto};
+use crate::command::dto::{
+    CommandContextDto, CommandSurfaceDto, UpdateUserCommandStepDto, UserCommandStepDto,
+};
 use crate::command::initiator::CommandInitiator;
 
 #[derive(Debug, Clone)]
@@ -53,6 +55,10 @@ pub struct ExecuteCommandCmd {
     /// `execute_command`, NOT `Macro`, so the agent confirmation rule applies
     /// to nested steps too.
     pub initiator: CommandInitiator,
+    /// The identifier the client gives one stretch of an agent's calls, kept on this call's
+    /// audit entry when [`Self::initiator`] is `Agent`. It is not part of what a confirmation
+    /// proof binds.
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,16 +68,33 @@ pub struct CreateUserCommandCmd {
     pub title: String,
     pub description: String,
     pub steps: Vec<UserCommandStepDto>,
+    /// Whether the AI agent may run the macro.
+    pub ai_callable: bool,
+    /// How the macro is described to the AI agent; empty for none.
+    pub nl_description: String,
+    /// Example phrases for the AI agent.
+    pub intent_samples: Vec<String>,
 }
 
+/// Replaces a macro's title, description, steps and enabled state. Each `None` keeps the stored
+/// value.
 #[derive(Debug, Clone)]
 pub struct UpdateUserCommandCmd {
     pub actor: Actor,
     pub command_id: String,
     pub title: String,
     pub description: String,
-    pub steps: Vec<UserCommandStepDto>,
+    pub steps: Vec<UpdateUserCommandStepDto>,
     pub is_enabled: bool,
+    pub ai_callable: Option<bool>,
+    pub nl_description: Option<String>,
+    pub intent_samples: Option<Vec<String>>,
+}
+
+/// Lists every command a macro step may name.
+#[derive(Debug, Clone)]
+pub struct ListMacroStepCommandsQuery {
+    pub actor: Actor,
 }
 
 #[derive(Debug, Clone)]

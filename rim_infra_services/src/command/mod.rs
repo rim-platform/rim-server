@@ -2,6 +2,7 @@ mod discover;
 mod dispatch;
 mod executor;
 mod gates;
+pub(crate) mod own_state;
 mod pipe_parser;
 mod rate_limiter;
 pub(crate) mod registry;
@@ -30,21 +31,25 @@ use rim_services::command::dto::{
     CommandContextDto, CommandDefinitionDto, CommandResultDto, CommandResultStatusDto,
     CommandSurfaceDto, UserCommandDto, UserCommandStepDto,
 };
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::{
     CreateUserCommandCmd, DeleteUserCommandCmd, ExecuteCommandCmd, GetCommandQuery,
-    GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery, UpdateUserCommandCmd,
+    GetUserCommandQuery, ListCommandsQuery, ListMacroStepCommandsQuery, ListUserCommandsQuery,
+    UpdateUserCommandCmd,
+};
+use rim_services::command::sanitize::{
+    MAX_INTENT_SAMPLE_LEN, MAX_NL_DESCRIPTION_LEN, sanitize_nl_text,
 };
 use rim_services::command::sensitivity::{CommandSensitivityDto, sanitize_args_for_audit};
 use rim_services::command::service::CommandService;
 use rim_services::conversation::service::ConversationService;
-use rim_services::macro_def::service::MacroService;
 use rim_services::message::service::MessageService;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::CommandRepos;
 use crate::command::dispatch::Dispatch;
 use crate::command::resolver::CommandResolver;
-use crate::command::user_commands::PersistedUserCommandStep;
+use crate::command::user_commands::{persisted_steps, steps_with_stored_asks};
 
 #[derive(Clone)]
 pub struct CommandServices {
@@ -70,6 +75,10 @@ pub struct CommandServices {
     /// `notifications.mark_all_read` dispatch to it.
     pub notification_service:
         std::sync::Arc<dyn rim_services::notification::service::NotificationService>,
+    /// `notifications.mute_conversation` and `notifications.unmute_conversation` dispatch to it.
+    pub notification_preference_service: std::sync::Arc<
+        dyn rim_services::notification_preference::service::NotificationPreferenceService,
+    >,
     /// Database audit sink. `None` in test/unit contexts
     /// that don't wire up a DB. When `Some`, every `execute_command` result
     /// writes a structured row alongside the `tracing::info!(target: "audit")`
@@ -89,15 +98,6 @@ pub struct DefaultCommandService {
     /// In-memory per-(actor, command_id) sliding-window rate limiter.
     /// Single-node only: each process keeps its own windows.
     pub(super) rate_limiter: rate_limiter::RateLimiter,
-    /// AI-surface macro discovery source, wired **after** construction to break
-    /// the command↔macro circular init dependency (provider builds the command
-    /// service first, then the macro service from it, then calls
-    /// [`Self::set_macro_service`]). Wrapped in `Arc<OnceLock<_>>` so that the
-    /// single write is visible through every `Arc<dyn CommandService>` clone the
-    /// provider hands to keybind/pipeline/macro. `None` (unset) in test contexts
-    /// and until the provider wires it. When set, `list_commands(Surface::Ai)`
-    /// delegates macro synthesis to `MacroService::synthesize_command_definitions`.
-    pub(super) macro_service: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<dyn MacroService>>>,
     /// This server's direct space, where a guest may run some commands that elsewhere need a
     /// member.
     pub(super) direct_space_id: Option<rim_core::server::model::ServerId>,
@@ -117,6 +117,10 @@ impl DefaultCommandService {
     pub(super) const MAX_EXPANDED_STEPS: usize = 100;
     /// Characters of a user command's title.
     pub(super) const MAX_USER_COMMAND_TITLE_CHARS: usize = 128;
+    /// Intent samples one macro may keep.
+    pub(super) const MAX_USER_COMMAND_INTENT_SAMPLES: usize = 10;
+    /// The refusal of `aiCallable` on a macro the AI agent may not run.
+    pub(super) const AGENT_RUNNABLE_RULE: &'static str = "only a macro whose steps are all commands the AI agent may run, run on the server with every argument fixed, can be run by the AI agent";
 
     pub fn new(repos: CommandRepos, services: CommandServices) -> Self {
         Self::with_confirmation_store(repos, services, shared_in_memory_store())
@@ -135,7 +139,6 @@ impl DefaultCommandService {
             services,
             confirmation_store,
             rate_limiter: rate_limiter::RateLimiter::new(),
-            macro_service: std::sync::Arc::new(std::sync::OnceLock::new()),
             direct_space_id: None,
             #[cfg(test)]
             extra_builtins: vec![],
@@ -161,7 +164,6 @@ impl DefaultCommandService {
             services,
             confirmation_store: shared_in_memory_store(),
             rate_limiter: rate_limiter::RateLimiter::new(),
-            macro_service: std::sync::Arc::new(std::sync::OnceLock::new()),
             direct_space_id: None,
             extra_builtins,
         }
@@ -220,11 +222,56 @@ impl DefaultCommandService {
         )
     }
 
+    /// Refuses a macro's natural-language description longer than [`MAX_NL_DESCRIPTION_LEN`]
+    /// characters, more than [`Self::MAX_USER_COMMAND_INTENT_SAMPLES`] intent samples or one
+    /// longer than [`MAX_INTENT_SAMPLE_LEN`] characters, and any of them that looks like an
+    /// instruction to a model. Returns them cleaned of control characters and trimmed.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` naming the field.
+    fn sanitized_agent_text(
+        nl_description: &str,
+        intent_samples: &[String],
+    ) -> ServiceResult<(String, Vec<String>)> {
+        ensure_chars(
+            nl_description,
+            MAX_NL_DESCRIPTION_LEN,
+            "a macro's natural-language description",
+        )?;
+        let nl_description =
+            sanitize_nl_text(nl_description, MAX_NL_DESCRIPTION_LEN).map_err(|err| {
+                ServiceError::Validation(format!("a macro's natural-language description: {err}"))
+            })?;
+        if intent_samples.len() > Self::MAX_USER_COMMAND_INTENT_SAMPLES {
+            return Err(ServiceError::Validation(format!(
+                "a macro may have at most {} intent samples",
+                Self::MAX_USER_COMMAND_INTENT_SAMPLES
+            )));
+        }
+        let intent_samples = intent_samples
+            .iter()
+            .map(|sample| {
+                ensure_chars(sample, MAX_INTENT_SAMPLE_LEN, "a macro intent sample")?;
+                sanitize_nl_text(sample, MAX_INTENT_SAMPLE_LEN).map_err(|err| {
+                    ServiceError::Validation(format!("a macro intent sample: {err}"))
+                })
+            })
+            .collect::<ServiceResult<Vec<_>>>()?;
+        Ok((nl_description, intent_samples))
+    }
+
     pub(super) fn validate_user_command_steps(
         command_key: &str,
         steps: &[UserCommandStepDto],
+        stored: Option<&UserCommandDto>,
     ) -> ServiceResult<()> {
-        user_commands::validate_user_command_steps(command_key, steps, Self::builtin_definition)
+        user_commands::validate_user_command_steps(
+            command_key,
+            steps,
+            stored,
+            Self::builtin_definition,
+        )
     }
 
     pub(super) fn command_matches_surface(
@@ -238,26 +285,15 @@ impl DefaultCommandService {
     pub(super) fn parse_user_command(user_command: UserCommand) -> ServiceResult<UserCommandDto> {
         user_commands::parse_user_command(user_command)
     }
+}
 
-    /// Wire the macro service into this command service exactly once, after the
-    /// macro service has been constructed. Idempotent-safe: a second call is a
-    /// no-op and is logged, never a panic. Returns `Ok(())` on the first set,
-    /// `Err(())` if already set — callers may ignore the result in production
-    /// wiring where set-once is guaranteed by construction order.
-    // `Err(())` carries no information beyond "already set" (see the
-    // tracing::warn! above for the diagnostic); a dedicated error type would
-    // add ceremony without adding value for a set-once cell.
-    #[allow(clippy::result_unit_err)]
-    pub(crate) fn set_macro_service(
-        &self,
-        macro_service: std::sync::Arc<dyn MacroService>,
-    ) -> Result<(), ()> {
-        self.macro_service.set(macro_service).map_err(|_| {
-            tracing::warn!(
-                event = "command_service_macro_double_set",
-                "set_macro_service called after macro service already wired; ignoring"
-            );
-        })
+/// What the audit keeps of a call's error: its message, or a fixed kind for a pipe expression that
+/// did not parse, since that message can quote a word of the expression.
+fn audited_error(err: &ServiceError, unparsed_pipe: bool) -> String {
+    if unparsed_pipe && matches!(err, ServiceError::Validation(_)) {
+        pipe_parser::UNPARSED_PIPE_ERROR_KIND.to_string()
+    } else {
+        err.to_string()
     }
 }
 
@@ -299,22 +335,6 @@ impl CommandService for DefaultCommandService {
         }
 
         if query.surface == CommandSurfaceDto::Ai {
-            // Delegate AI-callable macro discovery to MacroService — single
-            // source of truth for MacroDef→CommandDefinitionDto mapping.
-            if let (Some(macro_svc), Some(server_id)) = (
-                self.macro_service.get().map(std::sync::Arc::as_ref),
-                context.and_then(|c| c.workspace_id),
-            ) {
-                use rim_services::macro_def::request::SynthesizeMacroCommandsQuery;
-                let synthesized = macro_svc
-                    .synthesize_command_definitions(SynthesizeMacroCommandsQuery {
-                        actor: query.actor,
-                        server_id,
-                    })
-                    .await?;
-                commands.extend(synthesized);
-            }
-
             commands = self
                 .filter_ai_surface(&query.actor, context, commands, &user_steps)
                 .await?;
@@ -344,8 +364,18 @@ impl CommandService for DefaultCommandService {
         // Snapshot the audit fields BEFORE moving `cmd` into
         // `execute_command_inner` (which consumes args/context).
         let actor_id = cmd.actor.user_id;
-        let command_id_for_audit = cmd.command_id.clone();
+        let unparsed_pipe =
+            cmd.is_pipe && pipe_parser::parse_pipe_expression(&cmd.command_id).is_err();
+        let command_id_for_audit = if cmd.is_pipe {
+            pipe_parser::audit_expression(&cmd.command_id)
+        } else {
+            cmd.command_id.clone()
+        };
         let initiator_for_audit = cmd.initiator;
+        let run_id_for_audit = cmd
+            .run_id
+            .clone()
+            .filter(|_| cmd.initiator == CommandInitiator::Agent);
         let server_id_for_audit: uuid::Uuid = cmd
             .context
             .as_ref()
@@ -366,6 +396,11 @@ impl CommandService for DefaultCommandService {
             Ok(Dispatch::Single(Some(resolved))) => Some(resolved.definition.typed_verb),
             _ => None,
         };
+        let writes_audit_row = !matches!(
+            &dispatch,
+            Ok(Dispatch::Single(Some(resolved)))
+                if own_state::changes_only_callers_view(&resolved.definition.id)
+        );
         let confirmation_kind = match &cmd.confirmation {
             None => "none",
             Some(ConfirmationProof::InBandToken { .. }) => "in_band_token",
@@ -381,7 +416,7 @@ impl CommandService for DefaultCommandService {
                 }
                 CommandResultStatusDto::Error => (AuditOutcome::Error, None),
             },
-            Err(ServiceError::PermissionDenied) => (
+            Err(ServiceError::PermissionDenied | ServiceError::CapabilityMissing { .. }) => (
                 AuditOutcome::PermissionDenied,
                 Some("PermissionDenied".to_string()),
             ),
@@ -392,7 +427,7 @@ impl CommandService for DefaultCommandService {
             Err(ServiceError::RateLimited { .. }) => {
                 (AuditOutcome::RateLimited, Some("RateLimited".to_string()))
             }
-            Err(err) => (AuditOutcome::Error, Some(format!("{err}"))),
+            Err(err) => (AuditOutcome::Error, Some(audited_error(err, unparsed_pipe))),
         };
 
         match &result {
@@ -416,12 +451,17 @@ impl CommandService for DefaultCommandService {
                     initiator = %initiator_for_audit,
                     args = %sanitized_args,
                     result_status = AuditOutcome::Error.as_str(),
-                    error = %err,
+                    error = %audited_error(err, unparsed_pipe),
                 );
             }
         }
 
-        if let Some(audit_svc) = &self.services.audit_log_service {
+        if let Some(audit_svc) = self
+            .services
+            .audit_log_service
+            .as_ref()
+            .filter(|_| writes_audit_row)
+        {
             let entry = AuditLogEntryDto {
                 id: uuid::Uuid::now_v7(),
                 actor_user_id: actor_id.into(),
@@ -438,6 +478,7 @@ impl CommandService for DefaultCommandService {
                 capability_check_outcome: None,
                 confirmation_outcome: None,
                 parent_audit_id: None,
+                run_id: run_id_for_audit,
                 created_at: chrono::Utc::now(),
             };
             if let Err(e) = audit_svc.write_entry(entry).await {
@@ -449,7 +490,7 @@ impl CommandService for DefaultCommandService {
             }
         }
 
-        result
+        result.map_err(|err| gates::with_retry_safety(err, sensitivity, dangerous))
     }
 
     async fn create_user_command(
@@ -469,7 +510,9 @@ impl CommandService for DefaultCommandService {
             ));
         }
         Self::validate_user_command_text(&cmd.title, &cmd.description)?;
-        Self::validate_user_command_steps(key, &cmd.steps)?;
+        let (nl_description, intent_samples) =
+            Self::sanitized_agent_text(&cmd.nl_description, &cmd.intent_samples)?;
+        Self::validate_user_command_steps(key, &cmd.steps, None)?;
         if self
             .repos
             .user_command_repo
@@ -481,8 +524,14 @@ impl CommandService for DefaultCommandService {
                 "user command already exists".to_string(),
             ));
         }
-        self.validate_user_command_for_actor(cmd.actor, key, &cmd.steps, true)
+        let agent_runnable = self
+            .validate_user_command_for_actor(cmd.actor, key, &cmd.steps, true)
             .await?;
+        if cmd.ai_callable && !agent_runnable {
+            return Err(ServiceError::Validation(
+                Self::AGENT_RUNNABLE_RULE.to_string(),
+            ));
+        }
 
         let created = self
             .repos
@@ -492,17 +541,11 @@ impl CommandService for DefaultCommandService {
                 command_key: key.to_string(),
                 title: cmd.title.trim().to_string(),
                 description: cmd.description.trim().to_string(),
-                steps_json: serde_json::to_value(
-                    cmd.steps
-                        .iter()
-                        .map(|step| PersistedUserCommandStep {
-                            command_id: step.command_id.clone(),
-                            args: step.args.clone(),
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(ServiceError::internal)?,
+                steps_json: persisted_steps(&cmd.steps)?,
                 is_enabled: true,
+                ai_callable: cmd.ai_callable,
+                nl_description,
+                intent_samples,
             })
             .await?;
 
@@ -514,17 +557,41 @@ impl CommandService for DefaultCommandService {
         cmd: UpdateUserCommandCmd,
     ) -> ServiceResult<UserCommandDto> {
         let key = cmd.command_id.trim();
-        Self::validate_user_command_steps(key, &cmd.steps)?;
+        user_commands::validate_user_command_step_shape(
+            key,
+            &steps_with_stored_asks(cmd.steps.clone(), &[]),
+        )?;
         let existing = self
             .repos
             .user_command_repo
             .get_by_key_for_user(cmd.actor.user_id, key)
             .await?
             .ok_or(ServiceError::NotFound)?;
+        let stored = Self::parse_user_command(existing.clone())?;
+        let steps = steps_with_stored_asks(cmd.steps, &stored.steps);
+        Self::validate_user_command_steps(key, &steps, Some(&stored))?;
 
         Self::validate_user_command_text(&cmd.title, &cmd.description)?;
-        self.validate_user_command_for_actor(cmd.actor, key, &cmd.steps, false)
+        let (nl_description, intent_samples) = Self::sanitized_agent_text(
+            cmd.nl_description
+                .as_deref()
+                .unwrap_or(&stored.nl_description),
+            cmd.intent_samples
+                .as_deref()
+                .unwrap_or(&stored.intent_samples),
+        )?;
+        let agent_runnable = self
+            .validate_user_command_for_actor(cmd.actor, key, &steps, false)
             .await?;
+        let ai_callable = match cmd.ai_callable {
+            Some(true) if !agent_runnable => {
+                return Err(ServiceError::Validation(
+                    Self::AGENT_RUNNABLE_RULE.to_string(),
+                ));
+            }
+            Some(ai_callable) => ai_callable,
+            None => stored.ai_callable && agent_runnable,
+        };
 
         let updated = self
             .repos
@@ -534,17 +601,11 @@ impl CommandService for DefaultCommandService {
                 UpdateUserCommand {
                     title: cmd.title.trim().to_string(),
                     description: cmd.description.trim().to_string(),
-                    steps_json: serde_json::to_value(
-                        cmd.steps
-                            .iter()
-                            .map(|step| PersistedUserCommandStep {
-                                command_id: step.command_id.clone(),
-                                args: step.args.clone(),
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                    .map_err(ServiceError::internal)?,
+                    steps_json: persisted_steps(&steps)?,
                     is_enabled: cmd.is_enabled,
+                    ai_callable,
+                    nl_description,
+                    intent_samples,
                 },
             )
             .await?;
@@ -596,6 +657,21 @@ impl CommandService for DefaultCommandService {
             .map(Self::parse_user_command)
             .collect::<ServiceResult<Vec<_>>>()?;
         commands.sort_by(|left, right| left.command_key.cmp(&right.command_key));
+        Ok(commands)
+    }
+
+    async fn list_macro_step_commands(
+        &self,
+        _query: ListMacroStepCommandsQuery,
+    ) -> ServiceResult<Vec<CommandDefinitionDto>> {
+        let mut commands = Self::builtin_commands();
+        commands.extend(
+            registry::APP_COMMANDS
+                .iter()
+                .filter(|command| !registry::is_agent_management_command(command.id))
+                .map(registry::AppCommand::definition),
+        );
+        commands.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(commands)
     }
 

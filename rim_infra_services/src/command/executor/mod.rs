@@ -59,6 +59,7 @@ pub(super) async fn execute_builtin_command(
         "chat.list_channels" => chat::list_channels(services, actor, args, context).await,
         "chat.create_channel" => chat::create_channel(services, actor, args, context).await,
         "chat.mark_as_read" => chat::mark_as_read(services, actor, args, context).await,
+        "chat.mark_as_unread" => chat::mark_as_unread(services, actor, args, context).await,
         "chat.mark_all_as_read" => chat::mark_all_as_read(services, actor, args, context).await,
         "chat.search_messages" => chat::search_messages(services, actor, args, context).await,
         "chat.get_recent_messages" => {
@@ -66,12 +67,15 @@ pub(super) async fn execute_builtin_command(
         }
         "chat.list_members" => member::list_members(services, actor, args, context).await,
         "chat.pin_message" => pin::pin_message(services, actor, args, context).await,
+        "chat.unpin_message" => pin::unpin_message(services, actor, args, context).await,
+        "chat.set_topic" => conversation::set_topic(services, actor, args, context).await,
         "chat.toggle_reaction" => reaction::toggle_reaction(services, actor, args, context).await,
         "admin.invite_member" => admin::invite_member(services, actor, args, context).await,
         "admin.kick" => moderation::kick(services, actor, args, context).await,
         "admin.ban" => moderation::ban(services, actor, args, context).await,
         "admin.unban" => moderation::unban(services, actor, args, context).await,
         "admin.timeout" => moderation::timeout(services, actor, args, context).await,
+        "admin.clear_timeout" => moderation::clear_timeout(services, actor, args, context).await,
         "admin.set_role" => moderation::set_role(services, actor, args, context).await,
         "admin.delete_member_messages" => {
             moderation::delete_member_messages(services, actor, args, context).await
@@ -83,6 +87,12 @@ pub(super) async fn execute_builtin_command(
         "chat.report_message" => moderation::report_message(services, actor, args, context).await,
         "notifications.set_level" => notification::set_level(services, actor, args, context).await,
         "notifications.dnd" => notification::dnd(services, actor, args, context).await,
+        "notifications.mute_conversation" => {
+            notification::mute_conversation(services, actor, args, context).await
+        }
+        "notifications.unmute_conversation" => {
+            notification::unmute_conversation(services, actor, args, context).await
+        }
         "notifications.mark_all_read" => {
             notification::mark_all_read(services, actor, args, context).await
         }
@@ -140,6 +150,26 @@ pub(super) fn optional_integer_arg(map: &serde_json::Map<String, Value>, key: &s
         Value::String(s) => s.parse::<i64>().ok(),
         _ => None,
     }
+}
+
+/// The `minutes` arg of a command whose end can be given as minutes from now: `None` when it is
+/// absent, null or blank, the number of minutes when it is an integer (or numeric string) from 1
+/// to `max`, and a validation error for anything else.
+pub(super) fn relative_minutes_arg(
+    map: &serde_json::Map<String, Value>,
+    max: i64,
+) -> ServiceResult<Option<i64>> {
+    match map.get("minutes") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => return Ok(None),
+        Some(_) => {}
+    }
+    optional_integer_arg(map, "minutes")
+        .filter(|m| (1..=max).contains(m))
+        .map(Some)
+        .ok_or_else(|| {
+            ServiceError::Validation(format!("arg `minutes` must be an integer from 1 to {max}"))
+        })
 }
 
 /// Parse an optional boolean arg that may arrive as a JSON bool (preferred) or the strings

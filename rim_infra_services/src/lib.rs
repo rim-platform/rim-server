@@ -16,6 +16,7 @@ pub mod avatar_image;
 // Public: DefaultAuthService is re-exported below for integration tests
 // (signup_txn_regression) that construct the service directly against a live database.
 pub mod auth;
+pub(crate) mod bot;
 pub mod capability;
 pub(crate) mod channel_lens;
 pub(crate) mod clock;
@@ -45,6 +46,7 @@ pub mod file_storage;
 pub mod franking_keys;
 // pub: the composition root (rim_server/src/app.rs) builds DefaultHostService and the outbox
 // writer and sender tasks.
+pub(crate) mod home_layout;
 pub mod host;
 /// Public for `rim_server`, whose `invite` command issues, lists and revokes the operator's
 /// instance invites.

@@ -86,6 +86,9 @@ fn build_service(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -313,6 +316,7 @@ async fn execute_command_chat_list_channels_returns_projected_payload() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("execute_command for chat.list_channels must succeed under valid actor");

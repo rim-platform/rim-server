@@ -132,6 +132,14 @@ impl MigratorTrait for Migrator {
             Box::new(m20261029_084741_add_message_flag::Migration),
             Box::new(m20261029_163002_add_message_author_index::Migration),
             Box::new(m20261103_153230_add_conversation_member_removal::Migration),
+            Box::new(m20261106_064600_add_command_audit_run_id::Migration),
+            Box::new(m20261106_070423_create_bot::Migration),
+            Box::new(m20261106_092601_add_message_mention_user_time_index::Migration),
+            Box::new(m20261106_121740_create_incoming_webhook::Migration),
+            Box::new(m20261107_014136_add_bot_sees_member_joins::Migration),
+            Box::new(m20261107_085948_add_incoming_webhook_template::Migration),
+            Box::new(m20261107_151959_create_home_layout::Migration),
+            Box::new(m20261109_090838_add_macro_fields_to_user_command::Migration),
         ]
     }
 }
@@ -251,3 +259,11 @@ mod m20261026_120342_add_user_profile_locked_until;
 mod m20261029_084741_add_message_flag;
 mod m20261029_163002_add_message_author_index;
 mod m20261103_153230_add_conversation_member_removal;
+mod m20261106_064600_add_command_audit_run_id;
+mod m20261106_070423_create_bot;
+mod m20261106_092601_add_message_mention_user_time_index;
+mod m20261106_121740_create_incoming_webhook;
+mod m20261107_014136_add_bot_sees_member_joins;
+mod m20261107_085948_add_incoming_webhook_template;
+mod m20261107_151959_create_home_layout;
+mod m20261109_090838_add_macro_fields_to_user_command;

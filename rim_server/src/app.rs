@@ -89,6 +89,10 @@ pub struct AppRuntime {
     pub session_revocations: Arc<dyn SessionRevocations>,
     /// The terms page `RIM_TERMS_FILE` names; `None` when the server serves no terms.
     pub(crate) terms_page: Option<Arc<crate::terms::TermsPage>>,
+    /// What the routes of the bot API use, with each token's call limit.
+    pub(crate) bot_api: Arc<crate::bot_api::BotApi>,
+    /// What the incoming webhook route uses, with each webhook's post limit.
+    pub(crate) webhook_api: Arc<crate::webhook_api::WebhookApi>,
 }
 
 /// Server identity and server-to-server traffic as wired at boot.
@@ -671,11 +675,13 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
 
     let typing_tracker = Arc::new(rim_infra_services::typing::TypingTracker::new());
 
-    // Background task: check presence timeouts and clean up stale typing entries every 30 seconds.
+    // Background task: check presence timeouts, clean up stale typing entries and drop expired
+    // webhook test sessions every 30 seconds.
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     {
         let pm = Arc::clone(&presence_manager);
         let tt = Arc::clone(&typing_tracker);
+        let bots = service_provider.bot_service();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
@@ -683,6 +689,7 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
                     _ = interval.tick() => {
                         pm.check_timeouts();
                         tt.cleanup_stale();
+                        bots.sweep_test_sessions();
                     }
                     _ = shutdown_rx.changed() => {
                         break;
@@ -1125,6 +1132,10 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
     let auth_service = service_provider.auth_service();
     let user_service = service_provider.user_service();
     let relay_abuse_service = service_provider.relay_abuse_service();
+    let bot_api = Arc::new(crate::bot_api::BotApi::new(service_provider.as_ref()));
+    let webhook_api = Arc::new(crate::webhook_api::WebhookApi::new(
+        service_provider.as_ref(),
+    ));
 
     Ok(AppRuntime {
         schema,
@@ -1150,6 +1161,8 @@ pub async fn build_app_runtime(config: &RIMConfig) -> std::io::Result<AppRuntime
         ip_deny_list,
         session_revocations,
         terms_page: terms_page.map(Arc::new),
+        bot_api,
+        webhook_api,
     })
 }
 

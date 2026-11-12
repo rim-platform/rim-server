@@ -89,6 +89,9 @@ fn build_service(
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -180,6 +183,7 @@ async fn palette_chat_list_channels_uses_context_workspace_id_when_args_omit_ser
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         })
         .await
         .expect("palette chat.list_channels must succeed when context carries workspace_id");
@@ -252,6 +256,7 @@ async fn palette_chat_list_members_uses_context_workspace_id_when_args_omit_serv
                     timeout_until: None,
                     timeout_reason: None,
                     principal_id: None,
+                    is_bot: false,
                 }])
             })
         });
@@ -268,6 +273,7 @@ async fn palette_chat_list_members_uses_context_workspace_id_when_args_omit_serv
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         })
         .await
         .expect("palette chat.list_members must succeed when context carries workspace_id");

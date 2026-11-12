@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rim_core::conversation::model::ConversationId;
-use rim_core::conversation_read_state::repository::ConversationReadStateRepository;
+use rim_core::conversation_read_state::repository::{
+    ConversationReadStateRepository, ConversationUnread,
+};
 use rim_core::repository::error::RepoResult;
 use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
@@ -54,7 +56,7 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
         &self,
         user_id: UserId,
         conversation_ids: &[ConversationId],
-    ) -> RepoResult<Vec<(ConversationId, i64)>> {
+    ) -> RepoResult<Vec<ConversationUnread>> {
         if conversation_ids.is_empty() {
             return Ok(vec![]);
         }
@@ -71,7 +73,8 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
             .query_all_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 format!(
-                    r#"SELECT c.id AS conversation_id, COUNT(m.id) AS unread_count
+                    r#"SELECT c.id AS conversation_id, COUNT(m.id) AS unread_count,
+                       COALESCE(crs.last_read_at, cm.joined_at, c.created_at) AS unread_after
                    FROM conversation c
                    LEFT JOIN conversation_member cm
                        ON cm.user_id = $1 AND cm.conversation_id = c.id
@@ -84,7 +87,7 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
                        AND m.is_deleted = false
                        AND m.sent_by != $1
                    WHERE c.id = ANY($2) AND NOT {}
-                   GROUP BY c.id
+                   GROUP BY c.id, COALESCE(crs.last_read_at, cm.joined_at, c.created_at)
                    HAVING COUNT(m.id) > 0"#,
                     hidden("$1", "c.id")
                 ),
@@ -97,7 +100,13 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
         for row in rows {
             let conv_id: Uuid = row.try_get("", "conversation_id").map_err(map_db_err)?;
             let count: i64 = row.try_get("", "unread_count").map_err(map_db_err)?;
-            result.push((conv_id.into(), count));
+            let unread_after: DateTime<Utc> =
+                row.try_get("", "unread_after").map_err(map_db_err)?;
+            result.push(ConversationUnread {
+                conversation_id: conv_id.into(),
+                count,
+                unread_after,
+            });
         }
 
         Ok(result)
@@ -132,5 +141,43 @@ impl ConversationReadStateRepository for SeaOrmConversationReadStateRepository {
             .map_err(map_db_err)?;
 
         Ok(())
+    }
+
+    async fn rewind(
+        &self,
+        user_id: UserId,
+        conversation_id: ConversationId,
+        to: DateTime<Utc>,
+    ) -> RepoResult<bool> {
+        let user_uuid: Uuid = user_id.into();
+        let conv_uuid: Uuid = conversation_id.into();
+        let ts: chrono::DateTime<chrono::FixedOffset> = to.into();
+
+        // The only path that moves the marker backward: the guard is the reverse of `upsert`'s.
+        // The SELECT lets an existing marker reach that guard. Without one it yields a row only
+        // for a time before the unread count's baseline, so no unread message stops counting.
+        let result = self
+            .db
+            .execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"INSERT INTO conversation_read_state (user_id, conversation_id, last_read_at)
+                   SELECT $1::uuid, c.id, $3::timestamptz
+                   FROM conversation c
+                   LEFT JOIN conversation_member cm
+                       ON cm.user_id = $1::uuid AND cm.conversation_id = c.id
+                   WHERE c.id = $2::uuid
+                     AND ($3::timestamptz < COALESCE(cm.joined_at, c.created_at)
+                          OR EXISTS (SELECT 1 FROM conversation_read_state crs
+                                     WHERE crs.user_id = $1::uuid
+                                       AND crs.conversation_id = $2::uuid))
+                   ON CONFLICT (user_id, conversation_id)
+                   DO UPDATE SET last_read_at = EXCLUDED.last_read_at
+                   WHERE conversation_read_state.last_read_at > EXCLUDED.last_read_at"#,
+                [user_uuid.into(), conv_uuid.into(), ts.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(result.rows_affected() > 0)
     }
 }

@@ -5,8 +5,8 @@ use rim_core::conversation::model::PostingPolicy;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 use rim_services::moderation::command::{
-    BanMemberCmd, DeleteMemberMessagesCmd, KickMemberCmd, ReportMessageCmd, SetChannelPostingCmd,
-    SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
+    BanMemberCmd, ClearTimeoutCmd, DeleteMemberMessagesCmd, KickMemberCmd, ReportMessageCmd,
+    SetChannelPostingCmd, SetMemberRoleCmd, SetSlowModeCmd, TimeoutMemberCmd, UnbanMemberCmd,
 };
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -14,7 +14,8 @@ use crate::command::CommandServices;
 
 use super::{
     optional_bool_arg, optional_integer_arg, optional_string_arg, parse_uuid_arg,
-    require_string_arg, resolve_conversation_id, resolve_workspace_id,
+    relative_minutes_arg, require_string_arg, resolve_conversation_id, resolve_message_id,
+    resolve_workspace_id,
 };
 
 /// Longest timeout the `admin.timeout` command accepts, in minutes (30 days); the service
@@ -67,6 +68,28 @@ pub(super) async fn kick(
     ))
 }
 
+/// Longest ban `admin.ban` accepts as `minutes`: ten years.
+const MAX_BAN_MINUTES: i64 = 10 * 365 * 24 * 60;
+
+/// When a ban ends: `minutes` from now when given (then `expires_at` is ignored), else the RFC
+/// 3339 `expires_at`, else never.
+fn parse_ban_end(
+    args: &serde_json::Map<String, Value>,
+    now: DateTime<Utc>,
+) -> ServiceResult<Option<DateTime<Utc>>> {
+    if let Some(minutes) = relative_minutes_arg(args, MAX_BAN_MINUTES)? {
+        return Ok(Some(now + Duration::minutes(minutes)));
+    }
+    match optional_string_arg(args, "expires_at").filter(|s| !s.trim().is_empty()) {
+        Some(raw) => chrono::DateTime::parse_from_rfc3339(raw.trim())
+            .map(|dt| Some(dt.with_timezone(&Utc)))
+            .map_err(|_| {
+                ServiceError::Validation("invalid RFC 3339 timestamp arg `expires_at`".to_string())
+            }),
+        None => Ok(None),
+    }
+}
+
 pub(super) async fn ban(
     services: &CommandServices,
     actor: Actor,
@@ -74,19 +97,7 @@ pub(super) async fn ban(
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
     let (server_id, user_id) = target(&args, context.as_ref())?;
-    let expires_at = match optional_string_arg(&args, "expires_at").filter(|s| !s.trim().is_empty())
-    {
-        Some(raw) => Some(
-            chrono::DateTime::parse_from_rfc3339(raw.trim())
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .map_err(|_| {
-                    ServiceError::Validation(
-                        "invalid RFC 3339 timestamp arg `expires_at`".to_string(),
-                    )
-                })?,
-        ),
-        None => None,
-    };
+    let expires_at = parse_ban_end(&args, Utc::now())?;
     let ban = services
         .moderation_service
         .ban(BanMemberCmd {
@@ -160,6 +171,34 @@ pub(super) async fn timeout(
         serde_json::json!({
             "user_id": user_id.to_string(),
             "until": timeout.until.to_rfc3339(),
+        }),
+    ))
+}
+
+pub(super) async fn clear_timeout(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let (server_id, user_id) = target(&args, context.as_ref())?;
+    let cleared = services
+        .moderation_service
+        .clear_timeout(ClearTimeoutCmd {
+            actor,
+            server_id,
+            user_id,
+        })
+        .await?;
+    Ok(success(
+        if cleared {
+            "timeout cleared"
+        } else {
+            "member was not timed out"
+        },
+        serde_json::json!({
+            "user_id": user_id.to_string(),
+            "cleared": cleared,
         }),
     ))
 }
@@ -335,9 +374,7 @@ pub(super) async fn report_message(
     let conversation_id = context.conversation_id.ok_or_else(|| {
         ServiceError::Validation("command requires conversation context".to_string())
     })?;
-    let message_id = context.selected_message_id.ok_or_else(|| {
-        ServiceError::Validation("command requires selected message context".to_string())
-    })?;
+    let message_id = resolve_message_id(&args, Some(&context), "message_id")?;
     let reason = require_string_arg(&args, "reason")?;
     let report = services
         .moderation_service
@@ -400,6 +437,9 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: Arc::new(moderation),
             notification_service: Arc::new(
                 rim_services::notification::service::MockNotificationService::new(),
@@ -426,6 +466,53 @@ mod tests {
 
     fn object(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
         value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn ban_end_reads_minutes_before_expires_at() {
+        let now = chrono::DateTime::parse_from_rfc3339("2030-01-01T12:00:00Z")
+            .expect("ts")
+            .with_timezone(&chrono::Utc);
+        let end = |value: serde_json::Value| super::parse_ban_end(&object(value), now);
+        let plus = |minutes: i64| Some(now + chrono::Duration::minutes(minutes));
+
+        assert_eq!(end(serde_json::json!({})).ok(), Some(None));
+        assert_eq!(
+            end(serde_json::json!({ "minutes": 90 })).ok(),
+            Some(plus(90))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": "90" })).ok(),
+            Some(plus(90))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": 5_256_000 })).ok(),
+            Some(plus(5_256_000))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": 30, "expires_at": "2031-01-01T00:00:00Z" })).ok(),
+            Some(plus(30))
+        );
+        assert_eq!(
+            end(serde_json::json!({ "minutes": "", "expires_at": "2031-01-01T00:00:00Z" })).ok(),
+            Some(Some(
+                chrono::DateTime::parse_from_rfc3339("2031-01-01T00:00:00Z")
+                    .expect("ts")
+                    .with_timezone(&chrono::Utc)
+            ))
+        );
+        for bad in [
+            serde_json::json!({ "minutes": 0 }),
+            serde_json::json!({ "minutes": -5 }),
+            serde_json::json!({ "minutes": 5_256_001 }),
+            serde_json::json!({ "minutes": "soon" }),
+            serde_json::json!({ "expires_at": "tomorrow" }),
+        ] {
+            assert!(
+                matches!(end(bad.clone()), Err(ServiceError::Validation(_))),
+                "{bad}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -475,6 +562,92 @@ mod tests {
             .await
             .unwrap_err();
             assert!(matches!(err, ServiceError::Validation(_)), "{minutes}");
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_timeout_reports_whether_one_was_in_force() {
+        let workspace = ServerId::new();
+        let target = UserId::new();
+        let mut moderation = MockModerationService::new();
+        let mut in_force = [true, false].into_iter();
+        moderation
+            .expect_clear_timeout()
+            .withf(move |cmd| cmd.server_id == workspace && cmd.user_id == target)
+            .times(2)
+            .returning(move |_| {
+                let cleared = in_force.next().unwrap_or(false);
+                Box::pin(async move { Ok(cleared) })
+            });
+        let services = make_services(moderation);
+        let args = object(serde_json::json!({ "user_id": target.to_string() }));
+
+        let first = super::clear_timeout(
+            &services,
+            Actor::new(UserId::new()),
+            args.clone(),
+            Some(context(workspace, None, None)),
+        )
+        .await
+        .expect("clear timeout");
+        assert_eq!(first.message, "timeout cleared");
+        let payload = first.payload.expect("payload");
+        assert_eq!(payload["cleared"], true);
+        assert_eq!(payload["user_id"], target.to_string());
+
+        let second = super::clear_timeout(
+            &services,
+            Actor::new(UserId::new()),
+            args,
+            Some(context(workspace, None, None)),
+        )
+        .await
+        .expect("clearing no timeout succeeds");
+        assert_eq!(second.payload.expect("payload")["cleared"], false);
+    }
+
+    #[tokio::test]
+    async fn clear_timeout_passes_the_services_refusal_through() {
+        let mut moderation = MockModerationService::new();
+        moderation.expect_clear_timeout().times(1).returning(|_| {
+            Box::pin(async {
+                Err(ServiceError::Forbidden(
+                    "moderators cannot act on other moderators".to_string(),
+                ))
+            })
+        });
+        let services = make_services(moderation);
+        let err = super::clear_timeout(
+            &services,
+            Actor::new(UserId::new()),
+            object(serde_json::json!({ "user_id": UserId::new().to_string() })),
+            Some(context(ServerId::new(), None, None)),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ServiceError::Forbidden(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn clear_timeout_needs_a_member_and_a_workspace() {
+        let mut moderation = MockModerationService::new();
+        moderation.expect_clear_timeout().never();
+        let services = make_services(moderation);
+        for (args, context) in [
+            (
+                serde_json::json!({}),
+                Some(context(ServerId::new(), None, None)),
+            ),
+            (
+                serde_json::json!({ "user_id": UserId::new().to_string() }),
+                None,
+            ),
+        ] {
+            let err =
+                super::clear_timeout(&services, Actor::new(UserId::new()), object(args), context)
+                    .await
+                    .unwrap_err();
+            assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
         }
     }
 
@@ -596,7 +769,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn report_message_needs_a_selected_message() {
+    async fn report_message_takes_the_message_id_or_the_selected_message() {
         let workspace = ServerId::new();
         let conversation = ConversationId::new();
         let message = MessageId::new();
@@ -604,7 +777,7 @@ mod tests {
         moderation
             .expect_report_message()
             .withf(move |cmd| cmd.message_id == message && cmd.reason == "spam")
-            .times(1)
+            .times(2)
             .returning(|cmd| {
                 Box::pin(async move {
                     Ok(MessageReportDto {
@@ -651,5 +824,17 @@ mod tests {
         )
         .await
         .expect("report");
+        super::report_message(
+            &services,
+            actor,
+            object(serde_json::json!({ "message_id": message.to_string(), "reason": "spam" })),
+            Some(context(
+                workspace,
+                Some(conversation),
+                Some(MessageId::new()),
+            )),
+        )
+        .await
+        .expect("report by message_id");
     }
 }

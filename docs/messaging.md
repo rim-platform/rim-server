@@ -78,6 +78,17 @@ This document describes the backend contract for conversations, messages, thread
   member of: joined public channels, private channels, DMs and groups. A public channel the user
   can read but has not joined carries no unread badge; after joining, messages count from the
   join time.
+- Each entry of `unreadCounts` has `unreadAfter`: messages sent after this time count as unread.
+  It is the read marker, or the join time for someone who has not read the conversation.
+- The read marker only moves forward, with one exception: `markAsUnread` (or
+  `chat.mark_as_unread`) moves it to just before a message, so that the message and every later
+  one count as unread. The message has to be a root message of the conversation that is not
+  deleted and that the caller can read: a thread reply is `VALIDATION`, because replies do not
+  count as unread, and a deleted message, a message of another conversation and an unknown id
+  are all `NOT_FOUND`. Marking something unread never makes anything less unread: a marker
+  already before the message stays, and someone with no marker yet stays unread from their join
+  time, unless the message is older than that, which writes a marker just before it. An encrypted
+  conversation works the same way: the marker and the times are not encrypted.
 
 ## Who May Start A DM
 
@@ -203,6 +214,11 @@ decide, and each may only tighten the one above it:
 | `MODERATOR` | Moderation (kick, ban, timeout, delete any message, slow mode, posting permissions, reports) and channel management (archive, remove members). Changes roles only between `MEMBER` and `GUEST`. Posts in every channel they can write in, whatever its posting policy. |
 | `MEMBER` | The default. Reads and writes wherever they are a member (public channels without joining) where the channel's posting policy lets them, creates channels and groups, joins public channels, invites people into conversations. In the server's default workspace only the Owner and Moderators create channels (`FORBIDDEN`). |
 | `GUEST` | Restricted. Reads and writes only in conversations they were explicitly added to. |
+
+A bot (`bots.md`) is a `GUEST` whose role cannot change: `setMemberRole` on it is `VALIDATION`. It is
+in the channels an Owner or Moderator added it to, and only those: `addConversationMembers` naming a
+bot is `FORBIDDEN` for anyone else. A direct message, a group or an encrypted conversation with a bot
+is `VALIDATION` ("A bot can only be in a channel").
 
 - **Migration:** before the member role existed every new member was created as `guest`, so "guest" meant an
   ordinary member. The `m20261005_024730_add_member_role` migration adds `member` to the
@@ -617,6 +633,11 @@ Two new `WorkspaceEvent` variants (snake_case fields, like every other variant):
   "…", "flagged": true}`: the automatic text art check flagged a message (`true`), or an
   Owner, a Moderator or a later check cleared its flag (`false`). Delivered to everyone who
   reads the conversation, like the message events: a private channel's to its members only.
+- `{"type": "ReadMarkerRewound", "workspace_id": "…", "conversation_id": "…", "user_id": "…"}`:
+  `user_id` moved their read marker of the conversation back and it changed. Delivered to that
+  person alone, on each of their clients. It carries no counts: a client reads `unreadCounts`
+  again. It is not recovered offline, so a client also reads `unreadCounts` when it reconnects or
+  opens the workspace. Listed in `serverInfo.capabilities` as `read_marker`.
 - `{"type": "MessagesDeleted", "workspace_id": "…", "conversation_id": "…", "conversation_type":
   "Channel", "message_ids": ["…"], "thread_ids": ["…"]}`: `deleteMemberMessages` deleted these
   messages of one channel; `thread_ids` are the distinct threads of the deleted replies. Same
@@ -755,6 +776,7 @@ notify again. Deleting a message deletes its unread notifications (read ones sta
   (exactly one; returns how many changed; ids of other users are ignored).
 - `markAsRead` on a conversation also marks its notifications for messages sent up to `readAt`
   read, in the same transaction; `markAllAsRead` marks every notification of the workspace read.
+  `markAsUnread` leaves notifications alone: one already read stays read.
 - Notifications older than 90 days are deleted hourly.
 
 ### `NotificationDue` event

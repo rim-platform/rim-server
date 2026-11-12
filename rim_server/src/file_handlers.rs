@@ -2189,6 +2189,7 @@ mod tests {
                     deletion_scheduled_for: None,
                     profile_locked_until: None,
                     handle: None,
+                    is_bot: false,
                 };
                 Box::pin(async move { Ok(vec![user]) })
             });

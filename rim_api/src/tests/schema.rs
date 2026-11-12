@@ -189,9 +189,10 @@ fn user_sdl_ends_with_the_probation_end_the_pending_deletion_the_operator_role_a
         sdl.contains(
             "principalId: String probationEndsAt: DateTime profileLockedUntil: DateTime \
              deletionScheduledFor: DateTime \
-             instanceOperator: Boolean! handle: String banned: Boolean! bannedUntil: DateTime banReason: String }"
+             instanceOperator: Boolean! handle: String isBot: Boolean! banned: Boolean! \
+             bannedUntil: DateTime banReason: String bot: BotInfo }"
         ),
-        "User keeps profile fields followed by workspace ban status"
+        "User keeps profile fields followed by workspace ban status and what a bot discloses"
     );
 }
 
@@ -235,6 +236,19 @@ async fn server_info_lists_its_capabilities() {
         "member_timeout_changed",
         "conversation_member_removals",
         "notification_events",
+        "bot_disclosure",
+        "command_run_id",
+        "incoming_webhooks",
+        "read_marker",
+        "bot_events",
+        "pipeline_post_as_bot",
+        "webhook_formats",
+        "webhook_test_sessions",
+        "home_layout",
+        "app_command_keybinds",
+        "account_macros",
+        "command_initiator_ui",
+        "command_relative_minutes",
     ] {
         assert!(
             capabilities.contains(&serde_json::json!(capability)),
@@ -651,16 +665,81 @@ fn account_password_sdl_matches_the_contract() {
     }
 }
 
+/// The bot roots, followed by the Home layout roots, and the types they answer.
+#[test]
+fn bot_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "bots(serverId: ID!): [Bot!]! botTokens(botUserId: ID!): [BotToken!]! \
+         incomingWebhooks(serverId: ID!): [IncomingWebhook!]! webhookFormats: \
+         [WebhookFormatInfo!]! previewWebhookFormat(serverId: ID!, template: JSON!, headers: \
+         [WebhookHeaderInput!]!, body: String!): WebhookFormatPreview! webhookTestDeliveries(sessionId: \
+         ID!, after: Int): WebhookTestDeliveries! homeLayout: HomeLayout }",
+        "createBot(input: CreateBotInput!): CreatedBot! updateBot(input: UpdateBotInput!): Bot! \
+         deactivateBot(botUserId: ID!): Bot! createBotToken(botUserId: ID!, label: String!): \
+         CreatedBotToken! revokeBotToken(tokenId: ID!): BotToken! createIncomingWebhook(input: \
+         CreateIncomingWebhookInput!): CreatedIncomingWebhook! revokeIncomingWebhook(id: ID!): \
+         IncomingWebhook! updateIncomingWebhookFormat(id: ID!, preset: WebhookPreset!, template: \
+         JSON): IncomingWebhook! startWebhookTestSession(serverId: ID!, webhookId: ID): \
+         WebhookTestSession! endWebhookTestSession(sessionId: ID!): Boolean! saveHomeLayout(",
+        "type BotInfo { runBy: String! readsGoTo: String! addedByName: String }",
+        "type Bot { userId: ID! serverId: ID! name: String! runBy: String! readsGoTo: String! \
+         addedByName: String createdAt: DateTime! deactivatedAt: DateTime seesMemberJoins: Boolean! }",
+        "type BotToken { id: ID! label: String! createdAt: DateTime! lastUsedAt: DateTime \
+         revokedAt: DateTime }",
+        "type CreatedBot { bot: Bot! token: String! }",
+        "type CreatedBotToken { botToken: BotToken! token: String! }",
+        "enum WebhookPreset { PLAIN GITHUB }",
+        "type IncomingWebhook { id: ID! conversationId: ID! botUserId: ID! preset: WebhookPreset! \
+         template: JSON createdAt: DateTime! lastUsedAt: DateTime revokedAt: DateTime }",
+        "type CreatedIncomingWebhook { webhook: IncomingWebhook! token: String! keptTestUrl: \
+         Boolean! }",
+        "type WebhookTestSession { id: ID! token: String expiresAt: DateTime! }",
+        "enum WebhookTestBodyState { TEXT TOO_LARGE NOT_TEXT }",
+        "type WebhookTestDelivery { id: Int! receivedAt: DateTime! contentType: String headers: \
+         [WebhookHeader!]! bodyState: WebhookTestBodyState! body: String }",
+        "type WebhookTestDeliveries { deliveries: [WebhookTestDelivery!]! expiresAt: DateTime! }",
+        "input CreateIncomingWebhookInput { conversationId: ID! botUserId: ID! preset: \
+         WebhookPreset! template: JSON testSessionId: ID }",
+        "type WebhookHeader { name: String! value: String! }",
+        "input WebhookHeaderInput { name: String! value: String! }",
+        "type WebhookFormatInfo { key: String! name: String! setupNote: String! format: JSON! \
+         sampleHeaders: [WebhookHeader!]! sampleBody: String! }",
+        "enum WebhookPreviewOutcome { POSTS NO_RULE NO_VALUE BODY_REFUSED FORMAT_REFUSED }",
+        "type WebhookFormatPreview { outcome: WebhookPreviewOutcome! rule: Int text: String link: \
+         String placeholder: String reason: String }",
+        "bannedUntil: DateTime isBot: Boolean! bot: BotInfo }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
+/// The Home layout roots, appended last, and the types they answer.
+#[test]
+fn home_layout_sdl_matches_the_contract() {
+    let sdl = compact_sdl_without_descriptions(&test_sdl());
+    for expected in [
+        "homeLayout: HomeLayout }",
+        "saveHomeLayout(layout: JSON!, editedAt: DateTime!): HomeLayoutSaved! \
+         resetHomeLayout: Boolean! }",
+        "type HomeLayout { layout: JSON! editedAt: DateTime! updatedAt: DateTime! }",
+        "type HomeLayoutSaved { kept: Boolean! layout: HomeLayout! }",
+    ] {
+        assert!(sdl.contains(expected), "SDL lacks `{expected}`");
+    }
+}
+
 /// The session key roots, appended after the account password roots and the public join link
-/// queries and followed by the workspace membership roots, and the keep choice of key signup.
+/// queries and followed by the workspace membership and bot roots, and the keep choice of key
+/// signup.
 #[test]
 fn session_key_sdl_matches_the_contract() {
     let sdl = compact_sdl_without_descriptions(&test_sdl());
     for expected in [
         "passwordResetFinish(resetId: ID!, registrationUpload: String!): Boolean! setReloadKey: \
          String! reloadSession: ReloadSessionPayload! leaveWorkspace(serverId: ID!): Boolean! \
-         renameWorkspace(serverId: ID!, name: String!): Server! }",
-        "myJoinRequests: [JoinRequest!]! sessionKeepKey: String }",
+         renameWorkspace(serverId: ID!, name: String!): Server! createBot(",
+        "myJoinRequests: [JoinRequest!]! sessionKeepKey: String bots(",
         "type ReloadSessionPayload { reloadKey: String! nextReloadKey: String! }",
         "confirmedMinimumAge: Int keepSignedIn: Boolean! keepKeyHeld: Boolean! }",
     ] {

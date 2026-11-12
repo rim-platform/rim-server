@@ -5,7 +5,10 @@ use rim_services::{Actor, ServiceResult};
 use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandResultStatusDto};
 
-use super::{optional_string_arg, parse_scope_arg, require_string_arg, resolve_workspace_id};
+use super::{
+    optional_integer_arg, optional_string_arg, parse_scope_arg, require_string_arg,
+    resolve_workspace_id,
+};
 
 pub(super) async fn get(
     services: &CommandServices,
@@ -72,7 +75,7 @@ pub(super) async fn set(
         Err(_) => serde_json::Value::String(value_str),
     };
     let scope = parse_scope_arg(&args)?;
-    let ttl_seconds = optional_string_arg(&args, "ttl").and_then(|s| s.parse::<i64>().ok());
+    let ttl_seconds = optional_integer_arg(&args, "ttl");
 
     let entry = services
         .workspace_state_service
@@ -158,7 +161,7 @@ pub(super) async fn list(
     )?;
     let prefix = optional_string_arg(&args, "prefix").unwrap_or_default();
     let scope = parse_scope_arg(&args)?;
-    let limit = optional_string_arg(&args, "limit").and_then(|s| s.parse::<u64>().ok());
+    let limit = optional_integer_arg(&args, "limit").and_then(|v| u64::try_from(v).ok());
 
     let entries = services
         .workspace_state_service
@@ -206,9 +209,7 @@ pub(super) async fn incr(
         "server_id",
     )?;
     let key = require_string_arg(&args, "key")?;
-    let delta = optional_string_arg(&args, "delta")
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(1);
+    let delta = optional_integer_arg(&args, "delta").unwrap_or(1);
     let scope = parse_scope_arg(&args)?;
 
     let entry = services
@@ -291,6 +292,9 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(ws_state),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -741,6 +745,54 @@ mod tests {
         if let rim_services::ServiceError::Validation(msg) = err {
             assert!(msg.contains("server_id"));
             assert!(msg.contains("context.workspace_id"));
+        }
+    }
+
+    // ── numeric arguments ────────────────────────────────────────────────────
+
+    /// `ttl`, `delta` and `limit` read a JSON number and a numeric string alike.
+    #[tokio::test]
+    async fn numeric_args_accept_numbers_and_numeric_strings() {
+        use serde_json::json;
+
+        for (ttl, delta, limit) in [
+            (json!(90), json!(5), json!(7)),
+            (json!("90"), json!("5"), json!("7")),
+        ] {
+            let ws = ServerId::new();
+
+            let mut wss = MockWorkspaceStateService::new();
+            wss.expect_set()
+                .withf(|cmd| cmd.ttl_seconds == Some(90))
+                .return_once(move |_| Box::pin(async move { Ok(fake_entry(ws, "k")) }));
+            let svc = make_services(wss);
+            let mut args = args_with_ws_key_value(ws, "k", "v");
+            args.insert("ttl".to_string(), ttl);
+            super::set(&svc, actor(), args, None)
+                .await
+                .expect("state.set with ttl must succeed");
+
+            let mut wss = MockWorkspaceStateService::new();
+            wss.expect_increment()
+                .withf(|cmd| cmd.delta == 5)
+                .return_once(move |_| Box::pin(async move { Ok(fake_entry(ws, "k")) }));
+            let svc = make_services(wss);
+            let mut args = args_with_ws_and_key(ws, "k");
+            args.insert("delta".to_string(), delta);
+            super::incr(&svc, actor(), args, None)
+                .await
+                .expect("state.incr with delta must succeed");
+
+            let mut wss = MockWorkspaceStateService::new();
+            wss.expect_list()
+                .withf(|q| q.limit == Some(7))
+                .return_once(|_| Box::pin(async { Ok(vec![]) }));
+            let svc = make_services(wss);
+            let mut args = args_with_ws_and_key(ws, "k");
+            args.insert("limit".to_string(), limit);
+            super::list(&svc, actor(), args, None)
+                .await
+                .expect("state.list with limit must succeed");
         }
     }
 }

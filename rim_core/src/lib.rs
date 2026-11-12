@@ -2,6 +2,7 @@ pub mod account_deletion;
 pub mod account_password;
 pub mod audit;
 pub mod auth;
+pub mod bot;
 pub mod capability;
 pub mod channel_lens;
 pub mod command;
@@ -15,6 +16,7 @@ pub mod device_link;
 // pub: rim_infra_db stores it, rim_services and rim_infra_services apply it, rim_api shows it.
 pub mod dm_policy;
 pub mod e2ee;
+pub mod home_layout;
 pub mod host;
 pub mod ip_block;
 pub mod key_identity;

@@ -23,6 +23,19 @@ pub const CAPABILITIES: &[&str] = &[
     "member_timeout_changed",
     "conversation_member_removals",
     "notification_events",
+    "bot_disclosure",
+    "command_run_id",
+    "incoming_webhooks",
+    "read_marker",
+    "bot_events",
+    "pipeline_post_as_bot",
+    "webhook_formats",
+    "webhook_test_sessions",
+    "home_layout",
+    "app_command_keybinds",
+    "account_macros",
+    "command_initiator_ui",
+    "command_relative_minutes",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.
@@ -186,7 +199,13 @@ impl ServerInfo {
     /// `deleteMemberMessages`, the `MessagesDeleted` event), `member_timeout_changed`
     /// (`ServerMember.timeoutReason`, the `MemberTimeoutChanged` event),
     /// `conversation_member_removals` (`conversationMemberRemovals`), `notification_events`
-    /// (`notificationEvents`). A client ignores names it does not know.
+    /// (`notificationEvents`), `bot_disclosure` (`User.isBot`, `User.bot`, `ServerMember.isBot`,
+    /// `ServerMember.bot`), `command_run_id` (`ExecuteCommandInput.runId`, `AuditLogEntry.runId`),
+    /// `read_marker` (`UnreadCount.unreadAfter`, `markAsUnread`, the `ReadMarkerRewound` event),
+    /// `bot_events` (`Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`,
+    /// and `/api/bot/v1/events`), `pipeline_post_as_bot` (`PipelineActionGql.postAsBot`,
+    /// `PipelineActionInput.postAsBot`).
+    /// A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES
             .iter()
@@ -234,7 +253,7 @@ impl ServerInfo {
 pub struct ServerFeatureInfo {
     /// The feature's name, as `RIM_FEATURES_DISABLED` takes it: `attachments`, `link_previews`,
     /// `email`, `custom_emoji`, `workspace_plugins`, `ai_commands`, `avatars`, `plugin_link_fetch`,
-    /// `text_art_check` or `avatar_check`. A client ignores a name it does not know.
+    /// `text_art_check`, `avatar_check` or `bots`. A client ignores a name it does not know.
     pub key: String,
     pub state: ServerFeatureState,
     /// Why an unavailable feature is unavailable; null otherwise.

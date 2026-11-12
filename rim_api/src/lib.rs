@@ -67,8 +67,8 @@ pub fn build_schema(
     federation: Option<federation::FederationContext>,
 ) -> AppSchema {
     use crate::loaders::{
-        LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader, ThreadReplyCountLoader,
-        UserLoader,
+        BotInfoLoader, LinkPreviewLoader, MentionLoader, PinLoader, ReactionLoader,
+        ThreadReplyCountLoader, UserLoader,
     };
     use async_graphql::dataloader::DataLoader;
 
@@ -78,6 +78,10 @@ pub fn build_schema(
     );
     let user_loader = DataLoader::new(
         UserLoader::new(service_provider.user_service()),
+        tokio::spawn,
+    );
+    let bot_info_loader = DataLoader::new(
+        BotInfoLoader::new(service_provider.bot_service()),
         tokio::spawn,
     );
     let reaction_loader = DataLoader::new(
@@ -151,6 +155,9 @@ pub fn build_schema(
         .data(observers)
         .data(author_ban_loader)
         .data(user_loader)
+        .data(bot_info_loader)
+        .data(service_provider.bot_service())
+        .data(service_provider.home_layout_service())
         .data(reaction_loader)
         .data(mention_loader)
         .data(pin_loader)

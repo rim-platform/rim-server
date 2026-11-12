@@ -21,6 +21,7 @@
 use async_graphql::MergedObject;
 
 pub(crate) mod audit;
+pub(crate) mod bot;
 pub(crate) mod channel_lens;
 pub(crate) mod command;
 pub(crate) mod conversation;
@@ -28,6 +29,7 @@ pub(crate) mod custom_emoji;
 pub(crate) mod device_link;
 pub(crate) mod dm_policy;
 pub(crate) mod e2ee;
+pub(crate) mod home_layout;
 pub(crate) mod instance_moderation;
 pub(crate) mod invite;
 pub(crate) mod key_identity;
@@ -60,6 +62,7 @@ pub struct Query(
     QueryGroup7,
     QueryGroup8,
     QueryGroup9,
+    QueryGroup10,
 );
 
 #[derive(MergedObject, Default)]
@@ -130,4 +133,8 @@ pub(crate) struct QueryGroup9(
     invite::WorkspaceInviteQueries,
     public_join_link::PublicJoinLinkQueries,
     session_key::SessionKeyQueries,
+    bot::BotQueries,
 );
+
+#[derive(MergedObject, Default)]
+pub(crate) struct QueryGroup10(home_layout::HomeLayoutQueries);

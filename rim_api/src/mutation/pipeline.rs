@@ -10,6 +10,9 @@ pub(crate) struct PipelineMutations;
 
 #[Object]
 impl PipelineMutations {
+    /// Create a pipeline. Any member, but only an Owner or Moderator may give it a Post as bot
+    /// action (`FORBIDDEN`), on the Member Joined trigger, with an active bot of the workspace and
+    /// a plaintext channel that is not archived and that the bot is in (`VALIDATION`).
     async fn create_pipeline(
         &self,
         ctx: &Context<'_>,
@@ -25,13 +28,8 @@ impl PipelineMutations {
         let actions = input
             .actions
             .into_iter()
-            .map(
-                |a| rim_services::pipeline::dto::PipelineActionDto::ExecuteCommand {
-                    command_id: a.command_id,
-                    args: a.args.map(|j| j.0),
-                },
-            )
-            .collect();
+            .map(build_pipeline_action_dto)
+            .collect::<async_graphql::Result<Vec<_>>>()?;
 
         let pipeline = svc
             .create(rim_services::pipeline::request::CreatePipelineCmd {
@@ -51,7 +49,10 @@ impl PipelineMutations {
     }
 
     /// Replace a pipeline's definition. Allowed for its creator and for an Owner or Moderator
-    /// of its workspace; anyone else gets `FORBIDDEN`.
+    /// of its workspace; anyone else gets `FORBIDDEN`. Adding or changing a Post as bot action
+    /// takes an Owner or Moderator; keeping one unchanged takes only the right to change the
+    /// pipeline. A client that does not know the action sends it back as `chat.post_message` with
+    /// the `args` it was given, which keeps it; other `args` are `VALIDATION`.
     async fn update_pipeline(
         &self,
         ctx: &Context<'_>,
@@ -68,13 +69,8 @@ impl PipelineMutations {
         let actions = input
             .actions
             .into_iter()
-            .map(
-                |a| rim_services::pipeline::dto::PipelineActionDto::ExecuteCommand {
-                    command_id: a.command_id,
-                    args: a.args.map(|j| j.0),
-                },
-            )
-            .collect();
+            .map(build_pipeline_action_dto)
+            .collect::<async_graphql::Result<Vec<_>>>()?;
 
         let pipeline = svc
             .update(rim_services::pipeline::request::UpdatePipelineCmd {
@@ -139,6 +135,36 @@ impl PipelineMutations {
 
         Ok(pipeline.into())
     }
+}
+
+/// The action `input` describes.
+///
+/// # Errors
+/// `VALIDATION` for `postAsBot` with any command but `chat.post_message` or with `args`, and a
+/// malformed id.
+fn build_pipeline_action_dto(
+    input: crate::types::PipelineActionInput,
+) -> async_graphql::Result<rim_services::pipeline::dto::PipelineActionDto> {
+    use rim_services::pipeline::dto::{POST_AS_BOT_COMMAND, PipelineActionDto};
+
+    let Some(post) = input.post_as_bot else {
+        return Ok(PipelineActionDto::ExecuteCommand {
+            command_id: input.command_id,
+            args: input.args.map(|j| j.0),
+        });
+    };
+    if input.command_id != POST_AS_BOT_COMMAND || input.args.is_some() {
+        return Err(map_service_error(rim_services::ServiceError::Validation(
+            format!("postAsBot goes with the command {POST_AS_BOT_COMMAND} and no args"),
+        )));
+    }
+    Ok(PipelineActionDto::PostAsBot {
+        bot_user_id: parse_uuid_id::<rim_core::user::model::UserId>(&post.bot_user_id)?,
+        conversation_id: parse_uuid_id::<rim_core::conversation::model::ConversationId>(
+            &post.conversation_id,
+        )?,
+        text: post.text,
+    })
 }
 
 fn build_pipeline_trigger_dto(

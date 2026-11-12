@@ -391,13 +391,18 @@ async fn user_command_query_returns_steps_and_passes_the_id() {
                     rim_services::command::dto::UserCommandStepDto {
                         command_id: "chat.list_channels".to_string(),
                         args: None,
+                        ask: vec![],
                     },
                     rim_services::command::dto::UserCommandStepDto {
                         command_id: "chat.post_message".to_string(),
                         args: Some(serde_json::json!({ "body": "hi" })),
+                        ask: vec![],
                     },
                 ],
                 is_enabled: false,
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
             }))
         })
     });
@@ -459,8 +464,12 @@ async fn user_commands_query_lists_the_services_commands() {
                 steps: vec![rim_services::command::dto::UserCommandStepDto {
                     command_id: "chat.list_channels".to_string(),
                     args: None,
+                    ask: vec![],
                 }],
                 is_enabled: true,
+                ai_callable: false,
+                nl_description: String::new(),
+                intent_samples: vec![],
             }])
         })
     });

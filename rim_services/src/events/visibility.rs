@@ -125,8 +125,12 @@ pub fn user_can_see_event_as(event: &WorkspaceEvent, user_id: &str, is_guest: bo
             user_id,
         ),
 
-        // ReadStateUpdated — only visible to the owning user
+        // Read state events — only visible to the owning user
         WorkspaceEvent::ReadStateUpdated {
+            user_id: event_user_id,
+            ..
+        }
+        | WorkspaceEvent::ReadMarkerRewound {
             user_id: event_user_id,
             ..
         } => event_user_id.to_string() == user_id,
@@ -254,6 +258,22 @@ mod tests {
     use rim_core::message::model::MessageId;
     use rim_core::message_thread::model::MessageThreadId;
     use rim_core::server::model::ServerId;
+
+    /// A rewound read marker reaches its owner alone, whatever the role of whoever else asks.
+    #[test]
+    fn rewound_read_marker_visible_to_its_owner_only() {
+        let owner = rim_core::user::model::UserId::new();
+        let event = WorkspaceEvent::ReadMarkerRewound {
+            workspace_id: ServerId::new(),
+            conversation_id: ConversationId::new(),
+            user_id: owner,
+        };
+        assert!(user_can_see_event_as(&event, &owner.to_string(), false));
+        assert!(user_can_see_event_as(&event, &owner.to_string(), true));
+        let other = rim_core::user::model::UserId::new().to_string();
+        assert!(!user_can_see_event_as(&event, &other, false));
+        assert!(!user_can_see_event_as(&event, &other, true));
+    }
 
     /// A channel-scoped pin has no `conversation_member` rows, so `member_user_ids` is empty;
     /// `MessagePinned`/`MessageUnpinned` must still reach the channel's subscribers through the

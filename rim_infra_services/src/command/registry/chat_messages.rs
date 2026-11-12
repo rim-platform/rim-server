@@ -5,19 +5,21 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
     vec![
         CommandDefinitionDto {
             id: "chat.post_message".to_string(),
             title: "Post Message".to_string(),
             description: "Send a message to a conversation.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![
                 CommandArgumentDto {
                     name: "server_id".to_string(),
-                    title: "Server".to_string(),
+                    title: "Workspace".to_string(),
                     description: "Workspace/server identifier.".to_string(),
                     argument_type: CommandArgumentTypeDto::WorkspaceId,
                     required: true,
@@ -74,7 +76,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.reply_to_selected_message".to_string(),
             title: "Reply To Selected Message".to_string(),
             description: "Reply to the selected message using current context.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![CommandArgumentDto {
@@ -108,7 +110,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.delete_message".to_string(),
             title: "Delete Message".to_string(),
             description: "Delete the selected message.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![],
@@ -134,7 +136,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.copy_message_text".to_string(),
             title: "Copy Message Text".to_string(),
             description: "Copy the selected message text to clipboard.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,
             arguments: vec![],
@@ -156,7 +158,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.open_thread".to_string(),
             title: "Open Thread".to_string(),
             description: "Open or create a thread for the selected message.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,
             // `root_message_id` lets the AI surface target a
@@ -203,7 +205,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.edit_message".to_string(),
             title: "Edit Message".to_string(),
             description: "Edit the selected message.".to_string(),
-            category: "Chat".to_string(),
+            category: category::MESSAGES.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::Backend,
             arguments: vec![CommandArgumentDto {
@@ -237,7 +239,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.scroll_to_bottom".to_string(),
             title: "Scroll to Bottom".to_string(),
             description: "Scroll the message list to the bottom.".to_string(),
-            category: "Chat".to_string(),
+            category: category::VIEW.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,
             arguments: vec![],
@@ -264,7 +266,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             id: "chat.scroll_to_top".to_string(),
             title: "Scroll to Top".to_string(),
             description: "Scroll the message list to the top.".to_string(),
-            category: "Chat".to_string(),
+            category: category::VIEW.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,
             arguments: vec![],

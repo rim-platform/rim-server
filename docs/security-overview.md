@@ -189,13 +189,21 @@ whose log forks is refused until an operator checks it out of band.
   its publisher signed with their identity key. Every client verifies it against the publisher's
   key log and checks the bundle's hash, so the server is not trusted for what the plugin is.
   Plugins installed from a folder, git or a link are labelled unsigned.
+- **Commands a plugin runs.** Beyond its own commands, a plugin runs only the command ids its
+  manifest lists in `runs_commands` and the person granted, and never a dangerous or
+  `Restricted` command, another plugin's command or one that manages agents. A granted id gives no
+  implicit escalation: the command runs with the person's own permissions under its usual gates,
+  a `Mutating` one only after the person confirms that call, and the plugin gets back the
+  status and message, not the output ([command model](command_model.md)).
 - **The AI agent** acts through the command registry with a model and key the user brings. The
   server asks for a confirmation before it runs a mutating command the agent started, and before
   any dangerous command whoever started it; the agent can never confirm one itself. The client
   declares the agent when it calls, so the gate holds the agent to the person, not a modified
   client to the server ([command model](command_model.md)). In encrypted conversations the agent
   is off until the person turns it on, with a warning that the text goes to the model provider,
-  and every post there is confirmed.
+  and every post there is confirmed. An outside agent connected to the desktop app runs only the
+  built-ins the person approved for it, each call waits for the person's approval, and a
+  dangerous one is only proposed.
 - **Updates.** The desktop installs an update only when its minisign signature verifies against
   the key built into the app, and only after the user confirms the restart
   ([updater](../../rim-ui/docs/updater.md)). Release checksums are signed with cosign keyless,
@@ -236,7 +244,10 @@ whose log forks is refused until an operator checks it out of band.
   out and delete, and review reports of plaintext messages, franked reports of encrypted ones,
   and reported DM requests.
 - **The audit log** records every command run, with secret-looking arguments redacted, and
-  every moderation action with ids and flags only, never reasons or message text. Owners and
+  every moderation action with ids and flags only, never reasons or message text. Marking a
+  conversation read or unread and changing notification settings write no row: they change only
+  the person's own view, and rows of them would show Owners and Moderators a person's reading
+  habits. Owners and
   Moderators of a workspace read all of its rows; members, guests and everyone else read only
   their own. A request for another user's rows needs a workspace and returns the whole workspace
   log, so it cannot reveal whether that user ever acted there

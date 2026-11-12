@@ -22,6 +22,7 @@ pub(crate) fn account(id: UserId, created_at: DateTime<Utc>, principal_id: Optio
         deletion_scheduled_for: None,
         profile_locked_until: None,
         handle: rim_core::user::model::UserHandle::Local,
+        is_bot: false,
     }
 }
 

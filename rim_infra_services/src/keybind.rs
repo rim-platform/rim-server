@@ -448,6 +448,11 @@ impl DefaultKeybindService {
                 } else {
                     crate::command::registry::builtin_commands()
                         .into_iter()
+                        .chain(
+                            crate::command::registry::APP_COMMANDS
+                                .iter()
+                                .map(|command| command.definition()),
+                        )
                         .map(|definition| (definition.id.clone(), definition))
                         .collect()
                 };
@@ -468,7 +473,9 @@ impl DefaultKeybindService {
         Ok(effective)
     }
 
-    /// The definition of `command_id` as `actor` resolves it, when it may be bound to a key.
+    /// The definition of `command_id` as `actor` resolves it, when it may be bound to a key. An
+    /// app command, which the client runs and the command service does not know, is bound like
+    /// a builtin.
     ///
     /// # Errors
     ///
@@ -479,14 +486,18 @@ impl DefaultKeybindService {
         actor: rim_services::Actor,
         command_id: &str,
     ) -> ServiceResult<CommandDefinitionDto> {
-        let command = self
-            .services
-            .command_service
-            .get_command(GetCommandQuery {
-                actor,
-                command_id: command_id.to_string(),
-            })
-            .await?;
+        let command = match crate::command::registry::app_command(command_id) {
+            Some(command) => Some(command),
+            None => {
+                self.services
+                    .command_service
+                    .get_command(GetCommandQuery {
+                        actor,
+                        command_id: command_id.to_string(),
+                    })
+                    .await?
+            }
+        };
 
         match command {
             Some(command) if command.keybind_capable => Ok(command),
@@ -1267,6 +1278,7 @@ mod tests {
                 "chat.search_messages",
                 Some(serde_json::json!({ "server_id": workspace_id.to_string() })),
             ),
+            stored_keybind(workspace, "Ctrl+6", "workspace.open_home", None),
         ];
         let dropped = [
             stored_keybind(workspace, "Ctrl+3", "chat.leave_conversation", None),
@@ -1277,6 +1289,12 @@ mod tests {
                 Some(serde_json::json!({ "server_id": WorkspaceId::new().to_string() })),
             ),
             stored_keybind(workspace, "Ctrl+5", "user.cleanup", None),
+            stored_keybind(
+                workspace,
+                "Ctrl+7",
+                "workspace.open_home",
+                Some(serde_json::json!({ "server_id": WorkspaceId::new().to_string() })),
+            ),
         ];
         let mut command_service = MockCommandService::new();
         command_service.expect_get_command().returning(|query| {
@@ -1314,5 +1332,62 @@ mod tests {
         let mut workspace_ids = workspace_ids;
         workspace_ids.sort_by_key(|id| id.to_string());
         assert_eq!(workspace_ids, expected);
+    }
+
+    /// An app command is bound like a builtin, in either scope, without asking the command
+    /// service, which does not know it; one that is not keybind-capable is refused.
+    #[tokio::test]
+    async fn keybinds_may_name_app_commands() {
+        let actor = actor();
+        let workspace_id = WorkspaceId::new();
+        for (subject, scope, workspace) in [
+            (
+                KeybindSubject::User(actor.user_id),
+                KeybindScopeDto::User,
+                None,
+            ),
+            (
+                KeybindSubject::Workspace(workspace_id),
+                KeybindScopeDto::Workspace,
+                Some(workspace_id),
+            ),
+        ] {
+            let svc = service(
+                FakeKeybindRepository {
+                    entries: std::sync::Mutex::new(vec![]),
+                    created: std::sync::Mutex::new(Some(stored_keybind(
+                        subject,
+                        "Ctrl+H",
+                        "workspace.open_home",
+                        None,
+                    ))),
+                },
+                MockCommandService::new(),
+            );
+            let create = |command_id: &str| CreateKeybindCmd {
+                actor,
+                scope,
+                workspace_id: workspace,
+                keystroke: "Ctrl+H".to_string(),
+                command_id: command_id.to_string(),
+                context: rim_services::keybind::dto::KeybindContextDto::Global,
+                preset_args: None,
+            };
+
+            let created = svc
+                .create_keybind(create("workspace.open_home"))
+                .await
+                .expect("an app command is bindable");
+            assert_eq!(created.command_id, "workspace.open_home");
+
+            let err = svc
+                .create_keybind(create("workspace.edit_home"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m.contains("not keybind-capable")),
+                "{err:?}"
+            );
+        }
     }
 }

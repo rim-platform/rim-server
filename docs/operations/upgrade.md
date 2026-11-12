@@ -142,6 +142,27 @@ checkout, `deploy/upgrade.sh <previous version>` does the same after a backup. T
 `dc up -d` stops at the failing `migrate`; use `--no-deps` as above. When you upgrade again there is
 no migration left to run.
 
+**Bots.** After bots exist, calls naming a bot's id fail with an internal error on the older
+binary, because it can't read the new `kind`. Deactivate bots before rolling back.
+
+**Post as bot.** Once a workspace stores a `PostAsBot` action, an older binary can't read it, and that
+workspace's pipelines stop listing and firing until the action is removed. The older binary can't remove
+it either, so remove these actions before rolling back. This lists them:
+
+```sql
+SELECT id, server_id FROM pipeline WHERE actions_data::text LIKE '%PostAsBot%';
+```
+
+**Webhook formats.** An older binary ignores a webhook's `template`, so that webhook acts as a plain one:
+a body with a string `text` posts that text, and any other body answers `400` and posts nothing. It still
+lists and can be revoked, and the next upgrade brings its format back. A webhook on the GitHub preset with
+no format of its own keeps working.
+
+**Home layouts.** The table stays, but an older binary has no `homeLayout`, `saveHomeLayout` or
+`resetHomeLayout` and doesn't list `home_layout`. The app then shows its default Home with no way
+to edit it, and a save it sends before it notices is refused as an unknown field and says the
+layout wasn't saved. The stored layouts are untouched and come back with the next upgrade.
+
 **Further back.** Restore the backup taken before the upgrade (`docs/self-hosting.md`,
 "Restore"). Everything written since that backup is lost.
 

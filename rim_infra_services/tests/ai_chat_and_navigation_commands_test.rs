@@ -95,6 +95,9 @@ fn build_service_with_store(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -310,6 +313,7 @@ async fn execute_command_post_message_round_trips_through_executor() {
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.post_message via Agent initiator with proof must succeed");
@@ -432,6 +436,7 @@ async fn execute_command_create_channel_with_description_calls_update_topic() {
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.create_channel with description must succeed");
@@ -528,6 +533,7 @@ async fn execute_command_create_channel_without_description_skips_update_topic()
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.create_channel without description must succeed");
@@ -600,6 +606,7 @@ async fn execute_command_create_channel_with_empty_description_skips_update_topi
             confirmation: Some(proof),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("empty description must succeed and skip update_topic");

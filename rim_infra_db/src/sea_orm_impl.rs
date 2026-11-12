@@ -1,6 +1,7 @@
 pub mod account_deletion;
 pub mod account_password;
 pub mod audit;
+pub mod bot;
 pub mod capability_registry;
 pub mod channel_lens;
 pub mod conversation;
@@ -11,6 +12,7 @@ pub mod default_workspace;
 pub mod device_link;
 pub mod dm_policy;
 pub mod e2ee;
+pub mod home_layout;
 pub mod host;
 pub mod instance_invite;
 pub mod invite;

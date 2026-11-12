@@ -112,6 +112,9 @@ fn build_service_with_conversations(
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(workspace_state_service),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -275,6 +278,7 @@ async fn agent_state_get_runs_without_confirmation() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("state.get must run for the agent without a proof");
@@ -299,6 +303,7 @@ async fn agent_state_set_without_proof_returns_challenge_and_does_not_write() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("an unconfirmed agent write returns a challenge, not an error");
@@ -341,6 +346,7 @@ async fn agent_state_set_with_proof_writes() {
             }),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("state.set with a valid proof must run for the agent");
@@ -366,6 +372,7 @@ async fn palette_state_set_still_runs_in_one_step() {
             confirmation: None,
             is_pipe: false,
             initiator: CommandInitiator::Palette,
+            run_id: None,
         })
         .await
         .expect("a human state.set needs no confirmation");
@@ -436,6 +443,7 @@ async fn agent_create_group_with_proof_accepts_comma_separated_member_ids() {
             }),
             is_pipe: false,
             initiator: CommandInitiator::Agent,
+            run_id: None,
         })
         .await
         .expect("chat.create_group with a valid proof must run for the agent");

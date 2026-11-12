@@ -42,8 +42,8 @@ use uuid::Uuid;
 use support::mls::content;
 use support::nodes::{Node, databases_with, start};
 use support::relay::{
-    ACK_WELCOMES, CLAIM, CREATE, EDIT_ENCRYPTED, HEADS, Item, MARK_READ, PUBLISH, Person,
-    RELAY_INFO, REQUESTS, RESET, SEND_ENCRYPTED, SUBMIT, WELCOMES, anonymous_direct_space,
+    ACK_WELCOMES, CLAIM, CREATE, EDIT_ENCRYPTED, HEADS, Item, MARK_READ, MARK_UNREAD, PUBLISH,
+    Person, RELAY_INFO, REQUESTS, RESET, SEND_ENCRYPTED, SUBMIT, WELCOMES, anonymous_direct_space,
     device_key_id, drained, eventually, key_signup, keys, open_registration, password_key_login,
     relays, sign_up, sign_up_with_card, statement, user_id, verify_item,
 };
@@ -229,6 +229,25 @@ async fn an_encrypted_dm_crosses_relays_from_invite_to_read_state() {
         })
         .await;
     assert_eq!(state.stream, format!("u:{}", bob.principal()));
+
+    // He marks it unread from Alice's encrypted message; that comes back on `e`, without a `seq`,
+    // so his own stream keeps its order for a client that does not know the event.
+    let unread = bob
+        .remote(
+            &a,
+            MARK_UNREAD,
+            json!({ "input": { "workspaceId": direct, "conversationId": conv, "messageId": message_id } }),
+        )
+        .await;
+    assert_eq!(unread["markAsUnread"], json!(true));
+    let rewound = bob
+        .item_of(&a, "ReadMarkerRewound", |i| {
+            i.event["conversation_id"] == json!(conv)
+        })
+        .await;
+    assert_eq!(rewound.stream, "e");
+    assert_eq!(rewound.seq, None);
+    assert_eq!(rewound.event["user_id"], state.event["user_id"]);
 
     // Stream heads at the home: his streams, not the members-only `w`.
     let heads = bob

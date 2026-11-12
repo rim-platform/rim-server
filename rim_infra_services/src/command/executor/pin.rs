@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use rim_services::pin::command::PinMessageCmd;
+use rim_services::pin::command::{PinMessageCmd, UnpinMessageCmd};
 use rim_services::{Actor, ServiceResult};
 
 use crate::command::CommandServices;
@@ -38,6 +38,43 @@ pub(super) async fn pin_message(
         payload: Some(serde_json::json!({
             "success": true,
             "pinned": message_id.to_string(),
+        })),
+        follow_up_commands: vec![],
+        pipeline_stages: None,
+        confirmation_required: None,
+    })
+}
+
+pub(super) async fn unpin_message(
+    services: &CommandServices,
+    actor: Actor,
+    args: serde_json::Map<String, Value>,
+    context: Option<CommandContextDto>,
+) -> ServiceResult<CommandResultDto> {
+    let server_id = resolve_workspace_id::<rim_core::server::model::ServerId>(
+        &args,
+        context.as_ref(),
+        "server_id",
+    )?;
+    let conversation_id = resolve_conversation_id(&args, context.as_ref(), "conversation_id")?;
+    let message_id = resolve_message_id(&args, context.as_ref(), "message_id")?;
+
+    services
+        .pin_service
+        .unpin_message(UnpinMessageCmd {
+            actor,
+            server_id,
+            conversation_id,
+            message_id,
+        })
+        .await?;
+
+    Ok(CommandResultDto {
+        status: CommandResultStatusDto::Success,
+        message: "message unpinned".to_string(),
+        payload: Some(serde_json::json!({
+            "success": true,
+            "unpinned": message_id.to_string(),
         })),
         follow_up_commands: vec![],
         pipeline_stages: None,
@@ -99,6 +136,9 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -315,5 +355,113 @@ mod tests {
             assert!(msg_text.contains("server_id"));
             assert!(msg_text.contains("context.workspace_id"));
         }
+    }
+    /// Without args the focused conversation's selected message is unpinned.
+    #[tokio::test]
+    async fn unpin_message_uses_the_focused_conversation_and_selected_message() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let msg = MessageId::new();
+        let mut pin = MockPinService::new();
+        pin.expect_unpin_message()
+            .withf(move |cmd| {
+                cmd.server_id == ws && cmd.conversation_id == conv && cmd.message_id == msg
+            })
+            .times(1)
+            .return_once(|_| Box::pin(async { Ok(()) }));
+
+        let svc = make_services(pin);
+        let result = super::unpin_message(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_selecting(ws, Some(conv), Some(msg))),
+        )
+        .await
+        .expect("the selected message is unpinned");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+        let payload = result.payload.expect("payload");
+        assert_eq!(payload["unpinned"], msg.to_string());
+    }
+
+    /// `conversation_id` and `message_id` args win over the focus and the selection.
+    #[tokio::test]
+    async fn unpin_message_args_win_over_context() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let msg = MessageId::new();
+        let mut pin = MockPinService::new();
+        pin.expect_unpin_message()
+            .withf(move |cmd| cmd.conversation_id == conv && cmd.message_id == msg)
+            .times(1)
+            .return_once(|_| Box::pin(async { Ok(()) }));
+
+        let svc = make_services(pin);
+        super::unpin_message(
+            &svc,
+            actor(),
+            partial_args(conv, msg),
+            Some(ctx_selecting(
+                ws,
+                Some(ConversationId::new()),
+                Some(MessageId::new()),
+            )),
+        )
+        .await
+        .expect("the arg message is unpinned");
+    }
+
+    /// The service's refusal of someone else's pin reaches the caller unchanged.
+    #[tokio::test]
+    async fn unpin_message_passes_the_services_refusal_through() {
+        let mut pin = MockPinService::new();
+        pin.expect_unpin_message().times(1).return_once(|_| {
+            Box::pin(async {
+                Err(rim_services::ServiceError::Forbidden(
+                    "only the member who pinned it, an owner or a moderator can unpin this \
+                     message"
+                        .to_string(),
+                ))
+            })
+        });
+
+        let svc = make_services(pin);
+        let err = super::unpin_message(
+            &svc,
+            actor(),
+            full_args(ServerId::new(), ConversationId::new(), MessageId::new()),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, rim_services::ServiceError::Forbidden(_)),
+            "{err:?}"
+        );
+    }
+
+    /// Neither a `message_id` arg nor a selected message is a validation error, and the service
+    /// is not called.
+    #[tokio::test]
+    async fn unpin_message_without_a_message_is_validation() {
+        let mut pin = MockPinService::new();
+        pin.expect_unpin_message().never();
+        let svc = make_services(pin);
+        let err = super::unpin_message(
+            &svc,
+            actor(),
+            serde_json::Map::new(),
+            Some(ctx_selecting(
+                ServerId::new(),
+                Some(ConversationId::new()),
+                None,
+            )),
+        )
+        .await
+        .unwrap_err();
+        let rim_services::ServiceError::Validation(msg) = err else {
+            panic!("expected Validation, got: {err:?}");
+        };
+        assert!(msg.contains("context.selected_message_id"), "{msg}");
     }
 }

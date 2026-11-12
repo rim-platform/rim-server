@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use tracing::instrument;
 
+use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
 use rim_core::message::model::MessageId;
@@ -60,6 +61,8 @@ pub struct NotificationRepos {
     pub conversation_member_repo: Arc<dyn ConversationMemberRepository>,
     /// Thread participants for thread-reply notifications.
     pub message_repo: Arc<dyn MessageRepository>,
+    /// Finds the bot accounts among recipients, which are never notified.
+    pub bot_repo: Arc<dyn BotRepository>,
 }
 
 pub struct DefaultNotificationService {
@@ -451,6 +454,26 @@ impl NotificationService for DefaultNotificationService {
         if candidates.is_empty() || cmd.message.is_deleted {
             return Ok(0);
         }
+        let bots: HashSet<UserId> = self
+            .repos
+            .bot_repo
+            .bots_among(&candidates)
+            .await?
+            .into_iter()
+            .collect();
+        let candidates: Vec<UserId> = candidates
+            .into_iter()
+            .filter(|id| !bots.contains(id))
+            .collect();
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        let members: Vec<UserId> = cmd
+            .member_user_ids
+            .iter()
+            .copied()
+            .filter(|id| !bots.contains(id))
+            .collect();
 
         let thread_participants: HashSet<UserId> = match cmd.message.thread_id {
             Some(thread_id) => self
@@ -499,7 +522,7 @@ impl NotificationService for DefaultNotificationService {
             message: &cmd.message,
             conversation: &cmd.conversation,
             thread_participants: &thread_participants,
-            members: &cmd.member_user_ids,
+            members: &members,
             prefs_by_user: &prefs_by_user,
             settings_by_user: &settings_by_user,
             now,
@@ -550,6 +573,9 @@ impl NotificationService for DefaultNotificationService {
         let author = cmd.message.sent_by;
         // Skips the loads when no rule could pass; `decide_reaction` applies the same checks.
         if author == cmd.by || cmd.message.is_deleted || !cmd.member_user_ids.contains(&author) {
+            return Ok(false);
+        }
+        if !self.repos.bot_repo.bots_among(&[author]).await?.is_empty() {
             return Ok(false);
         }
         let pref = self

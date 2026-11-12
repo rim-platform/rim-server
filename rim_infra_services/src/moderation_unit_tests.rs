@@ -140,6 +140,7 @@ mod tests {
             deletion_scheduled_for: None,
             profile_locked_until: None,
             handle: rim_core::user::model::UserHandle::Local,
+            is_bot: false,
         }
     }
 
@@ -193,6 +194,8 @@ mod tests {
         direct_space: bool,
         /// Users with no account: `get_by_id` finds nobody.
         unknown_users: Vec<UserId>,
+        /// Users whose account is a bot.
+        bots: Vec<UserId>,
         /// What `count_author_channel_messages` answers.
         author_counts: AuthorChannelCounts,
         /// The channels holding the target's messages, each with its messages newest first;
@@ -225,6 +228,7 @@ mod tests {
                 operators: Vec::new(),
                 direct_space: false,
                 unknown_users: Vec::new(),
+                bots: Vec::new(),
                 author_counts: AuthorChannelCounts::default(),
                 author_channels: Vec::new(),
                 count_scopes: Arc::default(),
@@ -282,9 +286,13 @@ mod tests {
 
             let mut user_repo = MockUserRepository::new();
             let unknown = self.unknown_users.clone();
-            user_repo
-                .expect_get_by_id()
-                .returning(move |id| Ok((!unknown.contains(&id)).then(|| user(id))));
+            let bots = self.bots.clone();
+            user_repo.expect_get_by_id().returning(move |id| {
+                Ok((!unknown.contains(&id)).then(|| User {
+                    is_bot: bots.contains(&id),
+                    ..user(id)
+                }))
+            });
             user_repo.expect_get_by_ids().returning(|ids| {
                 Ok(ids
                     .iter()
@@ -1110,6 +1118,46 @@ mod tests {
     }
 
     // ── set_member_role ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_bot_stays_a_guest_whoever_asks() {
+        let [owner, moderator, bot, guest] = users();
+        let mut fx = Fx::new(&[
+            (owner, Owner),
+            (moderator, Moderator),
+            (bot, Guest),
+            (guest, Guest),
+        ]);
+        fx.bots = vec![bot];
+        let mut repo = MockModerationRepository::new();
+        repo.expect_get_active_timeout()
+            .returning(|_, _, _| Box::pin(async { Ok(None) }));
+        let svc = fx.service(repo);
+        let set = |actor, target, role| SetMemberRoleCmd {
+            actor: Actor::new(actor),
+            server_id: fx.server_id,
+            user_id: target,
+            role,
+        };
+
+        for (actor, role) in [(owner, Moderator), (owner, Member), (moderator, Member)] {
+            assert!(matches!(
+                svc.set_member_role(set(actor, bot, role)).await,
+                Err(ServiceError::Validation(_))
+            ));
+        }
+        assert_eq!(
+            svc.set_member_role(set(owner, bot, Guest))
+                .await
+                .expect("no change")
+                .member_role,
+            Guest
+        );
+        assert!(fx.audited().is_empty());
+        svc.set_member_role(set(owner, guest, Member))
+            .await
+            .expect("a person may be promoted");
+    }
 
     #[tokio::test]
     async fn set_member_role_matrix_events_and_audit() {

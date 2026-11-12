@@ -301,6 +301,30 @@ impl ReadStateMutations {
         Ok(true)
     }
 
+    /// Moves the viewer's read marker back so that the message and every later one count as
+    /// unread. Nothing becomes less unread: when they already count, the marker stays.
+    /// Notifications already read stay read.
+    async fn mark_as_unread(&self, ctx: &Context<'_>, input: MarkAsUnreadInput) -> Result<bool> {
+        let actor = require_actor(ctx)?;
+        let svc =
+            ctx.data::<std::sync::Arc<dyn rim_services::read_state::service::ReadStateService>>()?;
+        let workspace_id = parse_uuid_id::<rim_core::server::model::ServerId>(&input.workspace_id)?;
+        let conversation_id =
+            parse_uuid_id::<rim_core::conversation::model::ConversationId>(&input.conversation_id)?;
+        let message_id = parse_uuid_id::<rim_core::message::model::MessageId>(&input.message_id)?;
+
+        svc.mark_as_unread(rim_services::read_state::dto::MarkAsUnreadCmd {
+            actor: Actor::new(actor),
+            workspace_id,
+            conversation_id,
+            message_id,
+        })
+        .await
+        .map_err(map_service_error)?;
+
+        Ok(true)
+    }
+
     async fn mark_all_as_read(&self, ctx: &Context<'_>, input: MarkAllAsReadInput) -> Result<bool> {
         let actor = require_actor(ctx)?;
         let svc =
@@ -420,6 +444,13 @@ pub struct MarkAsReadInput {
     pub workspace_id: ID,
     pub conversation_id: ID,
     pub read_at: DateTime<Utc>,
+}
+
+#[derive(InputObject)]
+pub struct MarkAsUnreadInput {
+    pub workspace_id: ID,
+    pub conversation_id: ID,
+    pub message_id: ID,
 }
 
 #[derive(InputObject)]

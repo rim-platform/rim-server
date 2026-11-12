@@ -8,13 +8,15 @@ use serde_json::Value;
 use rim_services::command::confirmation::{issue_in_band, verify_in_band};
 use rim_services::command::dto::{
     CommandContextDto, CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto,
-    CommandResultStatusDto, UserCommandDto, UserCommandStepDto,
+    CommandResultStatusDto, CommandSourceKindDto, UserCommandDto, UserCommandStepDto,
 };
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::request::ExecuteCommandCmd;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
 use super::executor;
+use super::own_state;
 use super::pipe_parser::{self, PipeSegment};
 use super::resolver::{CommandResolver, Resolved, expanded_steps_exceeded};
 use super::user_commands;
@@ -96,6 +98,29 @@ impl Dispatch {
         Ok(())
     }
 
+    /// Refuses a dispatch that reaches a macro the server does not run for `initiator`: for the
+    /// AI agent, one its owner did not let the agent run or whose steps no longer allow it; for
+    /// anyone, one with a step only the client runs.
+    ///
+    /// # Errors
+    ///
+    /// `PermissionDenied` for the agent; `Validation` for a macro with a client-run step.
+    fn ensure_macros_run_here(&self, initiator: CommandInitiator) -> ServiceResult<()> {
+        for definition in self
+            .definitions()
+            .into_iter()
+            .filter(|d| d.source_kind == CommandSourceKindDto::User)
+        {
+            if initiator == CommandInitiator::Agent && !definition.ai_callable {
+                return Err(ServiceError::PermissionDenied);
+            }
+            if definition.execution_target != CommandExecutionTargetDto::Backend {
+                return Err(ServiceError::Validation(MACRO_RUNS_IN_THE_APP.to_string()));
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves what `cmd` dispatches for its actor: each stage of a pipe, or its one command.
     ///
     /// # Errors
@@ -122,6 +147,9 @@ impl Dispatch {
 }
 
 const RECURSION_DEPTH_EXCEEDED: &str = "user command recursion depth exceeded";
+
+/// The refusal of a macro with a step only the client runs.
+const MACRO_RUNS_IN_THE_APP: &str = "this macro has steps only the app runs; run it from the app";
 
 impl DefaultCommandService {
     pub(super) fn builtin_definition(command_id: &str) -> Option<CommandDefinitionDto> {
@@ -163,9 +191,10 @@ impl DefaultCommandService {
     /// Refuses `steps` for the actor's user command `command_key` unless, with the actor's
     /// stored user commands, no chain of user commands through it is deeper than the executor
     /// runs, neither it nor a stored command calling it expands to more than
-    /// [`Self::MAX_EXPANDED_STEPS`] builtin steps, and each step resolves to a backend command
-    /// without a cycle. A new command (`creating`) is also refused once the actor has
-    /// [`Self::MAX_USER_COMMANDS_PER_USER`] user commands.
+    /// [`Self::MAX_EXPANDED_STEPS`] builtin steps, and each step resolves to a command without a
+    /// cycle. A new command (`creating`) is also refused once the actor has
+    /// [`Self::MAX_USER_COMMANDS_PER_USER`] user commands. Returns whether the AI agent may run
+    /// a macro with these steps.
     ///
     /// # Errors
     ///
@@ -176,7 +205,7 @@ impl DefaultCommandService {
         command_key: &str,
         steps: &[UserCommandStepDto],
         creating: bool,
-    ) -> ServiceResult<()> {
+    ) -> ServiceResult<bool> {
         let stored = self
             .repos
             .user_command_repo
@@ -425,8 +454,13 @@ impl DefaultCommandService {
             // reach builtins here without passing the top-level gates in `execute_command_inner`.
             self.ensure_role_admits(&ctx.actor, command_id, args.as_ref(), ctx.context.as_ref())
                 .await?;
-            self.ensure_command_not_timed_out(&definition, &ctx.actor, ctx.context.as_ref())
-                .await?;
+            self.ensure_command_not_timed_out(
+                &definition,
+                own_state::changes_only_callers_state(command_id),
+                &ctx.actor,
+                ctx.context.as_ref(),
+            )
+            .await?;
             return self
                 .execute_builtin(ctx.actor, command_id, args, ctx.context)
                 .await;
@@ -459,6 +493,7 @@ impl DefaultCommandService {
 
         let dispatch = dispatch?;
         dispatch.ensure_within_limits()?;
+        dispatch.ensure_macros_run_here(cmd.initiator)?;
         let run = Arc::new(RunScope::new(resolver.into_user_commands()));
 
         // ── Capability gate ─────────────────────────────────────────────
@@ -469,7 +504,13 @@ impl DefaultCommandService {
                 self.services
                     .capability_service
                     .check(&cmd.actor, workspace_id, cap)
-                    .await?;
+                    .await
+                    .map_err(|err| match err {
+                        ServiceError::PermissionDenied => ServiceError::CapabilityMissing {
+                            capability: cap.clone(),
+                        },
+                        other => other,
+                    })?;
             }
         }
 
@@ -524,16 +565,22 @@ impl DefaultCommandService {
             }
         }
 
-        let top_level_def = match &dispatch {
-            Dispatch::Single(resolved) => resolved.as_ref().map(|r| &r.definition),
+        let top_level = match &dispatch {
+            Dispatch::Single(resolved) => resolved.as_deref(),
             Dispatch::Pipe(_) => None,
         };
+        let top_level_def = top_level.map(|r| &r.definition);
         // ── Timeout gate ────────────────────────────────────────────────
         // A timed-out member cannot run Mutating commands in that workspace; reads still work.
         // Also before the rate limiter, so a refused command consumes no slot.
-        if let Some(def) = top_level_def {
-            self.ensure_command_not_timed_out(def, &cmd.actor, cmd.context.as_ref())
-                .await?;
+        if let Some(resolved) = top_level {
+            self.ensure_command_not_timed_out(
+                &resolved.definition,
+                resolved.changes_only_callers_state,
+                &cmd.actor,
+                cmd.context.as_ref(),
+            )
+            .await?;
         }
 
         // ── Rate-limit gate (runs after capability + confirmation) ──────

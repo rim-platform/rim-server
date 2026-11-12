@@ -344,6 +344,8 @@ impl From<ChannelListFilterInput> for rim_core::conversation::repository::Channe
 pub struct UnreadCount {
     pub conversation_id: async_graphql::ID,
     pub count: i64,
+    /// Messages sent after this time count as unread.
+    pub unread_after: chrono::DateTime<chrono::Utc>,
 }
 
 impl From<rim_services::read_state::dto::UnreadCountDto> for UnreadCount {
@@ -351,6 +353,7 @@ impl From<rim_services::read_state::dto::UnreadCountDto> for UnreadCount {
         Self {
             conversation_id: async_graphql::ID(value.conversation_id.to_string()),
             count: value.count,
+            unread_after: value.unread_after,
         }
     }
 }

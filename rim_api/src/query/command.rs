@@ -2,7 +2,7 @@ use async_graphql::*;
 use rim_core::server_feature::model::ServerFeature;
 use rim_services::Actor;
 use rim_services::command::request::{
-    GetUserCommandQuery, ListCommandsQuery, ListUserCommandsQuery,
+    GetUserCommandQuery, ListCommandsQuery, ListMacroStepCommandsQuery, ListUserCommandsQuery,
 };
 use rim_services::command::service::CommandService;
 
@@ -25,8 +25,8 @@ impl CommandQueries {
     /// apart from a confirmation, a timeout in force and the arguments given. Naming the direct
     /// space makes the caller a guest of it.
     ///
-    /// `AI` lists only the AI-callable commands, plus the caller's AI-callable macros of the
-    /// workspace, and fails with `FEATURE_DISABLED` while the AI command surface is off.
+    /// `AI` lists only the AI-callable commands, the caller's agent-callable macros among them,
+    /// and fails with `FEATURE_DISABLED` while the AI command surface is off.
     async fn commands(
         &self,
         ctx: &Context<'_>,
@@ -65,8 +65,8 @@ impl CommandQueries {
     ///
     /// With `intentPhrase` the commands are ranked by how well the phrase matches their
     /// intent samples, title and natural-language description. `limit` defaults to 50 and is
-    /// capped at 100. `workspaceId` scopes the list to one workspace, including its AI-callable
-    /// macros.
+    /// capped at 100. `workspaceId` scopes the list to one workspace; the caller's
+    /// agent-callable macros are listed for a workspace where they may run every step.
     ///
     /// Limited to 5 calls per 60-second sliding window per user; more fail with
     /// `RATE_LIMITED`. Fails with `FEATURE_DISABLED` while the AI command surface is off.
@@ -97,6 +97,28 @@ impl CommandQueries {
             .map_err(crate::errors::map_service_error)?;
 
         Ok(commands.into_iter().map(Into::into).collect())
+    }
+
+    /// Every built-in and app command a macro step may name, sorted by id, whatever the
+    /// caller's role and workspace: the built-ins the server runs and those the client runs,
+    /// and the app commands other than the agent-management ones. Plugin commands are not in
+    /// it.
+    async fn macro_step_commands(&self, ctx: &Context<'_>) -> Result<Vec<Command>> {
+        let actor = require_actor(ctx)?;
+        let svc = ctx.data::<std::sync::Arc<dyn CommandService>>()?;
+        let ai_commands = feature_state(ctx, ServerFeature::AiCommands)?;
+
+        let commands = svc
+            .list_macro_step_commands(ListMacroStepCommandsQuery {
+                actor: Actor::new(actor),
+            })
+            .await
+            .map_err(crate::errors::map_service_error)?;
+
+        Ok(commands
+            .into_iter()
+            .map(|c| shown_command(&ai_commands, c.into()))
+            .collect())
     }
 }
 

@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use rim_infra_db::begin_transaction;
 use sea_orm::DatabaseConnection;
 
 use rim_services::events::{EventObserver, Observers, WorkspaceEvent};
 use rim_services::read_state::dto::{
-    MarkAllAsReadCmd, MarkAsReadCmd, UnreadCountDto, UnreadCountsQuery,
+    MarkAllAsReadCmd, MarkAsReadCmd, MarkAsUnreadCmd, UnreadCountDto, UnreadCountsQuery,
 };
 use rim_services::read_state::service::ReadStateService;
 use rim_services::{ServiceError, ServiceResult};
@@ -96,6 +96,55 @@ impl ReadStateService for DefaultReadStateService {
         Ok(())
     }
 
+    async fn mark_as_unread(&self, cmd: MarkAsUnreadCmd) -> ServiceResult<()> {
+        ensure_conversation_member_access(
+            ConversationAccessRepos::from_arcs(
+                &self.repos.server_member_repo,
+                &self.repos.conversation_repo,
+                &self.repos.conversation_member_repo,
+            ),
+            cmd.actor.user_id,
+            cmd.workspace_id,
+            cmd.conversation_id,
+        )
+        .await?;
+
+        let message = self
+            .repos
+            .message_repo
+            .get_by_id(cmd.message_id)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        if message.conversation_id != cmd.conversation_id || message.is_deleted {
+            return Err(ServiceError::NotFound);
+        }
+        if message.thread_id.is_some() {
+            return Err(ServiceError::Validation(
+                "a thread reply cannot be marked unread".to_string(),
+            ));
+        }
+
+        // Unread means sent after the marker, so the marker goes just before the message.
+        let rewound = self
+            .repos
+            .read_state_repo
+            .rewind(
+                cmd.actor.user_id,
+                cmd.conversation_id,
+                message.sent_at - TimeDelta::microseconds(1),
+            )
+            .await?;
+        if rewound {
+            self.observers.emit(WorkspaceEvent::ReadMarkerRewound {
+                workspace_id: cmd.workspace_id,
+                conversation_id: cmd.conversation_id,
+                user_id: cmd.actor.user_id,
+            });
+        }
+
+        Ok(())
+    }
+
     async fn mark_all_as_read(&self, cmd: MarkAllAsReadCmd) -> ServiceResult<()> {
         let now = Utc::now();
 
@@ -176,9 +225,10 @@ impl ReadStateService for DefaultReadStateService {
 
         Ok(counts
             .into_iter()
-            .map(|(conversation_id, count)| UnreadCountDto {
-                conversation_id,
-                count,
+            .map(|unread| UnreadCountDto {
+                conversation_id: unread.conversation_id,
+                count: unread.count,
+                unread_after: unread.unread_after,
             })
             .collect())
     }
@@ -186,20 +236,29 @@ impl ReadStateService for DefaultReadStateService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
-    use rim_core::conversation::model::ConversationId;
+    use chrono::Utc;
+    use rim_core::conversation::model::{
+        Conversation, ConversationId, ConversationType, PostingPolicy,
+    };
     use rim_core::conversation::repository::MockConversationRepository;
     use rim_core::conversation_member::repository::MockConversationMemberRepository;
-    use rim_core::conversation_read_state::repository::MockConversationReadStateRepository;
+    use rim_core::conversation_read_state::repository::{
+        ConversationUnread, MockConversationReadStateRepository,
+    };
+    use rim_core::message::model::{Message, MessageId};
+    use rim_core::message::repository::MockMessageRepository;
+    use rim_core::message_thread::model::MessageThreadId;
     use rim_core::notification::repository::MockNotificationRepository;
     use rim_core::server::model::ServerId;
+    use rim_core::server_member::model::{MemberStanding, ServerMemberRole};
     use rim_core::server_member::repository::MockServerMemberRepository;
     use rim_core::user::model::UserId;
-    use rim_services::Actor;
-    use rim_services::events::NoopBroadcaster;
-    use rim_services::read_state::dto::{MarkAllAsReadCmd, UnreadCountsQuery};
+    use rim_services::events::{Broadcaster, NoopBroadcaster, WorkspaceEvent};
+    use rim_services::read_state::dto::{MarkAllAsReadCmd, MarkAsUnreadCmd, UnreadCountsQuery};
     use rim_services::read_state::service::ReadStateService;
+    use rim_services::{Actor, ServiceError, ServiceResult};
 
     use super::DefaultReadStateService;
     use crate::ReadStateRepos;
@@ -239,9 +298,256 @@ mod tests {
                 server_member_repo: Arc::new(server_member_repo),
                 conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
                 notification_repo: Arc::new(notification_repo),
+                message_repo: Arc::new(MockMessageRepository::new()),
             },
             rim_services::events::Observers::new(Arc::new(NoopBroadcaster)),
         )
+    }
+
+    /// Records every event a service emits.
+    #[derive(Default)]
+    struct RecordingBroadcaster(Mutex<Vec<WorkspaceEvent>>);
+
+    impl Broadcaster for RecordingBroadcaster {
+        fn broadcast(&self, event: WorkspaceEvent) {
+            self.0.lock().expect("events").push(event);
+        }
+    }
+
+    /// What `mark_as_unread` finds: who is calling, the conversation and the message.
+    struct UnreadCase {
+        workspace: ServerId,
+        actor: UserId,
+        conversation: Conversation,
+        message: Option<Message>,
+        standing: Option<MemberStanding>,
+        conversation_member: bool,
+        read_state_repo: MockConversationReadStateRepository,
+    }
+
+    impl UnreadCase {
+        /// A member of `workspace` marking a public channel's root message unread.
+        fn new() -> Self {
+            let workspace = ServerId::new();
+            let conversation = Conversation {
+                id: ConversationId::new(),
+                server_id: workspace,
+                conversation_type: ConversationType::Channel,
+                title: None,
+                topic: None,
+                created_at: Utc::now(),
+                last_activity_at: Utc::now(),
+                is_private: false,
+                archived_at: None,
+                created_by: None,
+                slow_mode_seconds: 0,
+                posting_policy: PostingPolicy::Everyone,
+                posting_allows_threads: true,
+                encrypted_at: None,
+            };
+            let message = Message {
+                id: MessageId::new(),
+                conversation_id: conversation.id,
+                thread_id: None,
+                parent_message_id: None,
+                forwarded_from_message_id: None,
+                sent_at: Utc::now(),
+                edited_at: None,
+                sent_by: UserId::new(),
+                text: Some("hello".to_string()),
+                is_deleted: false,
+                has_attachments: false,
+                encryption: None,
+                flagged_at: None,
+            };
+            Self {
+                workspace,
+                actor: UserId::new(),
+                conversation,
+                message: Some(message),
+                standing: Some(MemberStanding {
+                    role: ServerMemberRole::Member,
+                    timed_out_until: None,
+                }),
+                conversation_member: true,
+                read_state_repo: MockConversationReadStateRepository::new(),
+            }
+        }
+
+        /// The message the call names: the seeded one, or a new id when there is none.
+        fn message_id(&self) -> MessageId {
+            self.message.as_ref().map_or_else(MessageId::new, |m| m.id)
+        }
+
+        /// Run `mark_as_unread`, returning its result and the events it emitted.
+        async fn run(self) -> (ServiceResult<()>, Vec<WorkspaceEvent>) {
+            let cmd = MarkAsUnreadCmd {
+                actor: Actor::new(self.actor),
+                workspace_id: self.workspace,
+                conversation_id: self.conversation.id,
+                message_id: self.message_id(),
+            };
+            let mut server_member_repo = MockServerMemberRepository::new();
+            let standing = self.standing;
+            server_member_repo
+                .expect_get_member_standing()
+                .returning(move |_, _| Ok(standing));
+            server_member_repo
+                .expect_join_direct_space()
+                .returning(|_, _| Ok(false));
+            let mut conversation_repo = MockConversationRepository::new();
+            let conversation = self.conversation;
+            conversation_repo.expect_get_by_id().returning(move |_| {
+                let conversation = conversation.clone();
+                Box::pin(async move { Ok(Some(conversation)) })
+            });
+            let mut conversation_member_repo = MockConversationMemberRepository::new();
+            let is_member = self.conversation_member;
+            conversation_member_repo
+                .expect_is_member()
+                .returning(move |_, _| Box::pin(async move { Ok(is_member) }));
+            let mut message_repo = MockMessageRepository::new();
+            let message = self.message;
+            message_repo.expect_get_by_id().returning(move |_| {
+                let message = message.clone();
+                Box::pin(async move { Ok(message) })
+            });
+            let events = Arc::new(RecordingBroadcaster::default());
+            let service = DefaultReadStateService::new(
+                ReadStateRepos {
+                    read_state_repo: Arc::new(self.read_state_repo),
+                    conversation_repo: Arc::new(conversation_repo),
+                    server_member_repo: Arc::new(server_member_repo),
+                    conversation_member_repo: Arc::new(conversation_member_repo),
+                    notification_repo: Arc::new(MockNotificationRepository::new()),
+                    message_repo: Arc::new(message_repo),
+                },
+                rim_services::events::Observers::new(Arc::clone(&events) as Arc<dyn Broadcaster>),
+            );
+            let result = service.mark_as_unread(cmd).await;
+            let emitted = events.0.lock().expect("events").clone();
+            (result, emitted)
+        }
+
+        /// Run a call that must be refused, returning the error. Nothing is written or emitted.
+        async fn refused(mut self) -> ServiceError {
+            self.read_state_repo.expect_rewind().never();
+            let (result, events) = self.run().await;
+            assert!(events.is_empty(), "{events:?}");
+            result.expect_err("refused")
+        }
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_rewinds_to_just_before_the_message_and_tells_the_owner() {
+        let mut case = UnreadCase::new();
+        let (actor, workspace, conversation) = (case.actor, case.workspace, case.conversation.id);
+        let sent_at = case.message.as_ref().expect("message").sent_at;
+        case.read_state_repo
+            .expect_rewind()
+            .withf(move |user, id, to| {
+                *user == actor
+                    && *id == conversation
+                    && *to == sent_at - chrono::TimeDelta::microseconds(1)
+            })
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(true) }));
+        let (result, events) = case.run().await;
+        result.expect("marked unread");
+        let [
+            WorkspaceEvent::ReadMarkerRewound {
+                workspace_id,
+                conversation_id,
+                user_id,
+            },
+        ] = events.as_slice()
+        else {
+            panic!("expected one ReadMarkerRewound, got {events:?}");
+        };
+        assert_eq!(
+            (*workspace_id, *conversation_id, *user_id),
+            (workspace, conversation, actor)
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_emits_nothing_when_the_marker_stays() {
+        let mut case = UnreadCase::new();
+        case.read_state_repo
+            .expect_rewind()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(false) }));
+        let (result, events) = case.run().await;
+        result.expect("nothing to do is not an error");
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_refuses_someone_outside_the_workspace() {
+        let mut case = UnreadCase::new();
+        case.standing = None;
+        assert!(matches!(
+            case.refused().await,
+            ServiceError::PermissionDenied
+        ));
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_answers_not_found_for_a_conversation_of_another_workspace() {
+        let mut case = UnreadCase::new();
+        case.conversation.server_id = ServerId::new();
+        assert!(matches!(case.refused().await, ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_answers_not_found_for_a_private_channel_of_others() {
+        let mut case = UnreadCase::new();
+        case.conversation.is_private = true;
+        case.conversation_member = false;
+        assert!(matches!(case.refused().await, ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_refuses_a_dm_of_others() {
+        let mut case = UnreadCase::new();
+        case.conversation.conversation_type = ConversationType::Direct;
+        case.conversation_member = false;
+        assert!(matches!(
+            case.refused().await,
+            ServiceError::PermissionDenied
+        ));
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_answers_not_found_for_a_message_that_does_not_exist() {
+        let mut case = UnreadCase::new();
+        case.message = None;
+        assert!(matches!(case.refused().await, ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_answers_not_found_for_a_message_of_another_conversation() {
+        let mut case = UnreadCase::new();
+        case.message.as_mut().expect("message").conversation_id = ConversationId::new();
+        assert!(matches!(case.refused().await, ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_answers_not_found_for_a_deleted_message() {
+        let mut case = UnreadCase::new();
+        case.message.as_mut().expect("message").is_deleted = true;
+        assert!(matches!(case.refused().await, ServiceError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn mark_as_unread_refuses_a_thread_reply_as_validation() {
+        let mut case = UnreadCase::new();
+        case.message.as_mut().expect("message").thread_id = Some(MessageThreadId::new());
+        let err = case.refused().await;
+        let ServiceError::Validation(message) = err else {
+            panic!("expected Validation, got {err:?}");
+        };
+        assert_eq!(message, "a thread reply cannot be marked unread");
     }
 
     #[tokio::test]
@@ -253,7 +559,14 @@ mod tests {
             .expect_get_unread_counts()
             .withf(move |_, ids| ids == expected.as_slice())
             .returning(|_, ids| {
-                let counts = ids.iter().map(|id| (*id, 1)).collect();
+                let counts = ids
+                    .iter()
+                    .map(|id| ConversationUnread {
+                        conversation_id: *id,
+                        count: 1,
+                        unread_after: Utc::now(),
+                    })
+                    .collect();
                 Box::pin(async move { Ok(counts) })
             });
 

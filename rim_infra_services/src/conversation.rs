@@ -4,12 +4,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{info, instrument};
 
+use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::{
     Conversation, ConversationId, ConversationType as CoreConversationType, NewConversation,
 };
 use rim_core::conversation_member::model::{MemberRemoval, MemberRemovalId, Membership};
 use rim_core::e2ee::repository::E2eeRepository;
 use rim_core::repository::error::RepoErrorKind;
+use rim_core::server_feature::model::ServerFeature;
 use rim_core::server_member::model::ServerMemberRole;
 use rim_core::user::model::UserId;
 use rim_services::command::rate_limit::RateLimitDecision;
@@ -23,6 +25,7 @@ use rim_services::conversation::dto::{ConversationDto, ConversationMemberRemoval
 use rim_services::conversation::service::ConversationService;
 use rim_services::conversation::types::ConversationParticipants;
 use rim_services::default_workspace::DefaultWorkspaceService;
+use rim_services::feature::service::FeatureGate;
 use rim_services::host::service::HostService;
 use rim_services::limits::{InstanceLimits, ensure_below};
 use rim_services::{ServiceError, ServiceResult};
@@ -64,6 +67,9 @@ pub(crate) fn manages_channel(
         || (conversation.is_private && conversation.created_by == Some(user_id))
 }
 
+/// The refusal of a bot named for anything but a plaintext channel.
+const BOT_ONLY_IN_CHANNEL: &str = "A bot can only be in a channel";
+
 /// The refusal of a member who cannot read an encrypted conversation.
 fn not_ready() -> ServiceError {
     ServiceError::Validation(
@@ -79,6 +85,12 @@ pub struct DefaultConversationService {
     /// Readiness of members for encrypted conversations. `None` in unit tests that are not about
     /// them; the composition root wires it.
     e2ee_repo: Option<Arc<dyn E2eeRepository>>,
+    /// Tells bots among the people named, who only join plaintext channels. `None` in unit tests
+    /// that are not about them; the composition root wires it.
+    bot_repo: Option<Arc<dyn BotRepository>>,
+    /// Whether a bot can be added to a channel: not while the `bots` feature is off. `None` in
+    /// unit tests that are not about it; the composition root wires it.
+    feature_gate: Option<Arc<dyn FeatureGate>>,
     /// The relay's direct space, where everyone is a guest, guests start DMs and groups, and
     /// there are no channels.
     direct_space_id: Option<rim_core::server::model::ServerId>,
@@ -100,6 +112,8 @@ impl DefaultConversationService {
             repos,
             observers,
             e2ee_repo: None,
+            bot_repo: None,
+            feature_gate: None,
             direct_space_id: None,
             limits: InstanceLimits::default(),
             direct_space_starts: Arc::new(DailyCounter::per_day(
@@ -272,6 +286,18 @@ impl DefaultConversationService {
         Ok(())
     }
 
+    /// The repository that tells bots among the people named.
+    pub fn with_bot_repo(mut self, bot_repo: Arc<dyn BotRepository>) -> Self {
+        self.bot_repo = Some(bot_repo);
+        self
+    }
+
+    /// The instance's feature switches, which decide whether a bot can be added to a channel.
+    pub fn with_feature_gate(mut self, feature_gate: Arc<dyn FeatureGate>) -> Self {
+        self.feature_gate = Some(feature_gate);
+        self
+    }
+
     pub fn with_e2ee_repo(mut self, e2ee_repo: Arc<dyn E2eeRepository>) -> Self {
         self.e2ee_repo = Some(e2ee_repo);
         self
@@ -298,6 +324,22 @@ impl DefaultConversationService {
         }
         self.ensure_invites_below_cap(&pending).await?;
         Ok((active, pending))
+    }
+
+    /// The bots among `user_ids`.
+    async fn bots_among(&self, user_ids: &[UserId]) -> ServiceResult<Vec<UserId>> {
+        match &self.bot_repo {
+            Some(bot_repo) => Ok(bot_repo.bots_among(user_ids).await?),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// `Validation` when one of `user_ids` is a bot.
+    async fn ensure_no_bots(&self, user_ids: &[UserId]) -> ServiceResult<()> {
+        if self.bots_among(user_ids).await?.is_empty() {
+            return Ok(());
+        }
+        Err(ServiceError::Validation(BOT_ONLY_IN_CHANNEL.to_string()))
     }
 
     fn e2ee_repo(&self) -> ServiceResult<&Arc<dyn E2eeRepository>> {
@@ -727,6 +769,16 @@ impl ConversationService for DefaultConversationService {
         if cmd.participants == ConversationParticipants::Channel {
             ensure_workspace_features(self.direct_space_id, cmd.server_id)?;
         }
+        match &cmd.participants {
+            ConversationParticipants::DirectMessage { other_user_id } => {
+                self.ensure_no_bots(std::slice::from_ref(other_user_id))
+                    .await?;
+            }
+            ConversationParticipants::Group { member_ids } => {
+                self.ensure_no_bots(member_ids).await?;
+            }
+            ConversationParticipants::Channel => {}
+        }
         let direct = self.is_direct_space(cmd.server_id);
         if direct {
             let mut joining = vec![cmd.actor.user_id];
@@ -1108,22 +1160,44 @@ impl ConversationService for DefaultConversationService {
         }
         ensure_not_archived(&conversation)?;
 
-        // Public channels: anyone can read them, but only members invite others (join first).
-        if !self
-            .repos
-            .conversation_member_repo
-            .is_member(conversation.id, cmd.actor.user_id)
-            .await?
-        {
-            return Err(ServiceError::PermissionDenied);
-        }
-
         let mut seen = HashSet::new();
         let targets: Vec<UserId> = cmd
             .user_ids
             .into_iter()
             .filter(|id| seen.insert(*id))
             .collect();
+        let bots = self.bots_among(&targets).await?;
+        if !bots.is_empty()
+            && let Some(gate) = &self.feature_gate
+        {
+            gate.require(ServerFeature::Bots)?;
+        }
+
+        // Public channels: anyone can read them, but only members invite others (join first).
+        // A Moderator or Owner adds bots alone to a public channel without joining it.
+        let adds_only_bots = !targets.is_empty() && bots.len() == targets.len();
+        let without_joining =
+            adds_only_bots && role.is_moderator() && conversation.is_public_channel();
+        if !without_joining
+            && !self
+                .repos
+                .conversation_member_repo
+                .is_member(conversation.id, cmd.actor.user_id)
+                .await?
+        {
+            return Err(ServiceError::PermissionDenied);
+        }
+
+        if !bots.is_empty() {
+            if conversation.conversation_type != CoreConversationType::Channel
+                || conversation.is_encrypted()
+            {
+                return Err(ServiceError::Validation(BOT_ONLY_IN_CHANNEL.to_string()));
+            }
+            if !role.is_moderator() {
+                return Err(ServiceError::PermissionDenied);
+            }
+        }
         if conversation.conversation_type == CoreConversationType::Group
             && !conversation.is_encrypted()
         {

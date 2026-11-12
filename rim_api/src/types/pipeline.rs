@@ -104,11 +104,25 @@ impl From<rim_services::pipeline::dto::PipelineFilterDto> for PipelineFilterGql 
     }
 }
 
+/// A message a bot posts when someone joins.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct PipelinePostAsBotGql {
+    pub bot_user_id: async_graphql::ID,
+    pub conversation_id: async_graphql::ID,
+    /// The text as saved, with its placeholders.
+    pub text: String,
+}
+
 #[derive(SimpleObject, Clone, Debug)]
 pub struct PipelineActionGql {
     pub action_type: String,
+    /// For a Post as bot action, `chat.post_message`, the command it runs.
     pub command_id: Option<String>,
+    /// For a Post as bot action, the bot, channel and text, as a client that does not know
+    /// `postAsBot` shows them.
     pub args: Option<async_graphql::Json<serde_json::Value>>,
+    /// The bot, channel and text of a Post as bot action; null for any other.
+    pub post_as_bot: Option<PipelinePostAsBotGql>,
 }
 
 impl From<rim_services::pipeline::dto::PipelineActionDto> for PipelineActionGql {
@@ -119,6 +133,27 @@ impl From<rim_services::pipeline::dto::PipelineActionDto> for PipelineActionGql 
                 action_type: "ExecuteCommand".to_string(),
                 command_id: Some(command_id),
                 args: args.map(async_graphql::Json),
+                post_as_bot: None,
+            },
+            D::PostAsBot {
+                bot_user_id,
+                conversation_id,
+                text,
+            } => Self {
+                action_type: "PostAsBot".to_string(),
+                command_id: Some(rim_services::pipeline::dto::POST_AS_BOT_COMMAND.to_string()),
+                args: Some(async_graphql::Json(
+                    rim_services::pipeline::dto::post_as_bot_args(
+                        bot_user_id,
+                        conversation_id,
+                        &text,
+                    ),
+                )),
+                post_as_bot: Some(PipelinePostAsBotGql {
+                    bot_user_id: async_graphql::ID(bot_user_id.to_string()),
+                    conversation_id: async_graphql::ID(conversation_id.to_string()),
+                    text,
+                }),
             },
         }
     }
@@ -184,10 +219,25 @@ pub struct PipelineFilterInput {
     pub conditions: Vec<PipelineFilterConditionInput>,
 }
 
+/// A message a bot posts when someone joins.
+#[derive(InputObject, Clone, Debug)]
+pub struct PipelinePostAsBotInput {
+    /// An active bot of the workspace.
+    pub bot_user_id: async_graphql::ID,
+    /// A plaintext channel that is not archived, which the bot is already in.
+    pub conversation_id: async_graphql::ID,
+    /// What it posts, which may hold `{username}` and `{name}`.
+    pub text: String,
+}
+
 #[derive(InputObject, Clone, Debug)]
 pub struct PipelineActionInput {
+    /// The command to run; `chat.post_message` with `postAsBot`.
     pub command_id: String,
+    /// The command's arguments; left out with `postAsBot`.
     pub args: Option<async_graphql::Json<serde_json::Value>>,
+    /// Makes this a Post as bot action, on the Member Joined trigger only. Owner or Moderator.
+    pub post_as_bot: Option<PipelinePostAsBotInput>,
 }
 
 #[derive(InputObject, Clone, Debug)]

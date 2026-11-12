@@ -9,6 +9,7 @@ pub mod app;
 pub mod audit_cmd;
 pub(crate) mod audit_file;
 mod body;
+mod bot_api;
 pub mod config;
 mod edge;
 mod file_handlers;
@@ -27,6 +28,7 @@ mod s2s;
 pub mod server;
 pub mod server_key_cmd;
 pub(crate) mod terms;
+mod webhook_api;
 pub(crate) mod ws;
 
 pub use s2s::{S2sSettings, S2sState};

@@ -9,7 +9,7 @@ use rim_services::macro_def::request::{
 use rim_services::macro_def::service::MacroService;
 
 use crate::auth_context::require_actor;
-use crate::errors::map_service_error;
+use crate::errors::{map_command_error, map_service_error};
 use crate::features::require_initiator;
 use crate::ids::parse_uuid_id;
 use crate::types::{
@@ -23,6 +23,9 @@ pub(crate) struct MacroMutations;
 impl MacroMutations {
     // ── Macros ──────────────────────────────────────────────────────────
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn create_macro(&self, ctx: &Context<'_>, input: CreateMacroInput) -> Result<MacroDef> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
@@ -52,6 +55,9 @@ impl MacroMutations {
         Ok(result.into())
     }
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn update_macro(&self, ctx: &Context<'_>, input: UpdateMacroInput) -> Result<MacroDef> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
@@ -81,6 +87,9 @@ impl MacroMutations {
         Ok(result.into())
     }
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn delete_macro(&self, ctx: &Context<'_>, macro_id: ID) -> Result<bool> {
         let actor = require_actor(ctx)?;
         let svc = ctx.data::<std::sync::Arc<dyn MacroService>>()?;
@@ -95,6 +104,9 @@ impl MacroMutations {
         Ok(true)
     }
 
+    #[graphql(
+        deprecation = "Workspace macros are replaced by the person's macros: use userCommands, createUserCommand, updateUserCommand, deleteUserCommand and executeCommand"
+    )]
     async fn execute_macro(
         &self,
         ctx: &Context<'_>,
@@ -118,7 +130,7 @@ impl MacroMutations {
                     .unwrap_or_default(),
             })
             .await
-            .map_err(map_service_error)?;
+            .map_err(map_command_error)?;
 
         Ok(result.into())
     }

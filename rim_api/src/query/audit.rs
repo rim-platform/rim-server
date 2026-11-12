@@ -61,6 +61,7 @@ impl AuditLogQueries {
                     .as_str()
                     .to_string()
             }),
+            run_id: filter.run_id,
             since: filter
                 .since
                 .as_deref()

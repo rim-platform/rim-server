@@ -113,6 +113,9 @@ mod tests {
             user_service: Arc::new(MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
             audit_log_service: None,
+            notification_preference_service: std::sync::Arc::new(
+                rim_services::notification_preference::service::MockNotificationPreferenceService::new(),
+            ),
             moderation_service: std::sync::Arc::new(
                 rim_services::moderation::service::MockModerationService::no_timeouts(),
             ),
@@ -202,5 +205,31 @@ mod tests {
             assert!(msg.contains("server_id"));
             assert!(msg.contains("context.workspace_id"));
         }
+    }
+
+    /// A caller that still sends the removed `user_id` argument is not refused; it is ignored.
+    #[tokio::test]
+    async fn invite_member_ignores_a_legacy_user_id_arg() {
+        let ws = ServerId::new();
+        let ws_check = ws;
+        let mut auth = MockAuthService::new();
+        auth.expect_create_invite()
+            .withf(move |cmd| cmd.server_id == ws_check)
+            .return_once(move |_| Box::pin(async move { Ok(fake_invite_result(ws)) }));
+
+        let svc = make_services(auth);
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "server_id".to_string(),
+            serde_json::Value::String(ws.to_string()),
+        );
+        args.insert(
+            "user_id".to_string(),
+            serde_json::Value::String("someone".to_string()),
+        );
+        let result = super::invite_member(&svc, actor(), args, None)
+            .await
+            .expect("a legacy user_id must be ignored");
+        assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 }

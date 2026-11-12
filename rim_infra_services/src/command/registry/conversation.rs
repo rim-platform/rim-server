@@ -5,6 +5,8 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 fn workspace_arg() -> CommandArgumentDto {
     CommandArgumentDto {
         name: "server_id".to_string(),
@@ -43,7 +45,7 @@ fn membership_command(
         id: id.to_string(),
         title: title.to_string(),
         description: description.to_string(),
-        category: "Chat".to_string(),
+        category: category::CONVERSATIONS.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments,
@@ -82,13 +84,13 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         id: "chat.create_group".to_string(),
         title: "Create Group".to_string(),
         description: "Create a new group conversation.".to_string(),
-        category: "Chat".to_string(),
+        category: category::CONVERSATIONS.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments: vec![
             CommandArgumentDto {
                 name: "server_id".to_string(),
-                title: "Server".to_string(),
+                title: "Workspace".to_string(),
                 description: "Workspace/server identifier.".to_string(),
                 argument_type: CommandArgumentTypeDto::WorkspaceId,
                 required: true,
@@ -98,7 +100,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
             CommandArgumentDto {
                 name: "member_ids".to_string(),
                 title: "Members".to_string(),
-                description: "Member ids to include in the group.".to_string(),
+                description: "Members to include.".to_string(),
                 argument_type: CommandArgumentTypeDto::String,
                 required: true,
                 default_value: None,
@@ -187,7 +189,7 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
                     CommandArgumentDto {
                         name: "user_ids".to_string(),
                         title: "Members".to_string(),
-                        description: "User ids of the workspace members to add.".to_string(),
+                        description: "Workspace members to add.".to_string(),
                         argument_type: CommandArgumentTypeDto::String,
                         required: true,
                         default_value: None,
@@ -205,12 +207,15 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
             ],
         ),
         agent_callable(
-            membership_command(
-                "chat.archive_channel",
-                "Archive Channel",
-                "Archive a channel (Owner/Moderator). Archived channels are read-only.",
-                vec![workspace_arg(), conversation_arg("Channel to archive.")],
-            ),
+            CommandDefinitionDto {
+                category: category::MODERATION.to_string(),
+                ..membership_command(
+                    "chat.archive_channel",
+                    "Archive Channel",
+                    "Archive a channel (Owner/Moderator). Archived channels are read-only.",
+                    vec![workspace_arg(), conversation_arg("Channel to archive.")],
+                )
+            },
             "Archive a channel: it becomes read-only and is hidden from the default channel \
                  list, but its history stays readable and searchable. Only workspace owners and \
                  moderators may do this. Use when the user asks to archive or close a channel.",
@@ -221,12 +226,15 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
             ],
         ),
         agent_callable(
-            membership_command(
-                "chat.unarchive_channel",
-                "Unarchive Channel",
-                "Unarchive a channel (Owner/Moderator).",
-                vec![workspace_arg(), conversation_arg("Channel to unarchive.")],
-            ),
+            CommandDefinitionDto {
+                category: category::MODERATION.to_string(),
+                ..membership_command(
+                    "chat.unarchive_channel",
+                    "Unarchive Channel",
+                    "Unarchive a channel (Owner/Moderator).",
+                    vec![workspace_arg(), conversation_arg("Channel to unarchive.")],
+                )
+            },
             "Unarchive a channel so people can post in it again. Only workspace owners and \
                  moderators may do this. Use when the user asks to reopen or restore an \
                  archived channel.",
@@ -234,6 +242,39 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
                 "unarchive #launch",
                 "reopen the archived design channel",
                 "restore this channel",
+            ],
+        ),
+        agent_callable(
+            membership_command(
+                "chat.set_topic",
+                "Edit Topic…",
+                "Set or clear a conversation's topic. A channel's topic is changed by an owner, a \
+                 moderator or the private channel's creator.",
+                vec![
+                    workspace_arg(),
+                    conversation_arg(
+                        "Conversation whose topic to change; defaults to the focused conversation.",
+                    ),
+                    CommandArgumentDto {
+                        name: "topic".to_string(),
+                        title: "Topic".to_string(),
+                        description: "The new topic, at most 512 characters; empty clears it."
+                            .to_string(),
+                        argument_type: CommandArgumentTypeDto::String,
+                        required: true,
+                        default_value: None,
+                        allowed_values: None,
+                    },
+                ],
+            ),
+            "Set the topic shown at the top of a conversation, or clear it with an empty topic. \
+                 In a channel only owners, moderators and a private channel's creator may change \
+                 it; in a group or direct message any member may. Use when the user asks to set, \
+                 change or clear a conversation's topic.",
+            &[
+                "set the topic to release week",
+                "change this channel's topic",
+                "clear the topic",
             ],
         ),
         // Removing someone else is a moderation action: confirmation required, never agent-run.
@@ -249,7 +290,7 @@ fn membership_commands() -> Vec<CommandDefinitionDto> {
                     CommandArgumentDto {
                         name: "user_id".to_string(),
                         title: "Member".to_string(),
-                        description: "User id of the member to remove.".to_string(),
+                        description: "Member to remove.".to_string(),
                         argument_type: CommandArgumentTypeDto::UserId,
                         required: true,
                         default_value: None,

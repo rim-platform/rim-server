@@ -253,6 +253,7 @@ impl DefaultUserService {
     fn convert_to_dto(&self, user: rim_core::user::model::User) -> UserDto {
         UserDto {
             handle: self.handle(&user),
+            is_bot: user.is_bot,
             id: user.id,
             username: user.username,
             display_name: user.display_name,

@@ -51,7 +51,7 @@ use rim_services::notification::command::EncryptedMentions;
 use rim_services::{ServiceError, ServiceResult};
 
 /// Maximum allowed length (in characters) for message text.
-const MAX_MESSAGE_TEXT_LENGTH: usize = 10_000;
+pub(crate) const MAX_MESSAGE_TEXT_LENGTH: usize = 10_000;
 
 /// Bytes an encrypted message's ciphertext may carry beyond the instance's message-bytes cap:
 /// the MLS framing, signature and tag, and the client's content structure around the text.

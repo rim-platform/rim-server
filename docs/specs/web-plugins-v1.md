@@ -308,6 +308,7 @@ changes.
 | `rim.storage.get`, `rim.storage.set` | none | New, not frozen; below |
 | `rim.settings.get`, and `rim.settings.changed` from the host | none | As v1 section 15. In the web app a secret setting never has a value; below |
 | `rim.chat.*` | `chat.*` | The client message service, as for a local process (routed, not frozen; `e2ee-mls-v1.md`, "Plugins and the client message service"). Reads need a local message store; until the web app's service reads the browser's encrypted store, it answers them `INTERNAL_ERROR` with `data.reason: "noCache"` |
+| `rim.command.execute` | none; the `runs_commands` grant | As v1 section 9 (plugin to host): runs a granted command that is not the plugin's own, with the same rules, refusals and limits |
 | `rim.events.subscribe` | `events.read` | `CAPABILITY_DENIED`, as v1 section 18 |
 | `rim.process.*`, `rim.fs.*`, `rim.network.*` | `local.process`, `fs.*`, `network` | `CAPABILITY_DENIED`: this kind can never hold them |
 
@@ -359,9 +360,10 @@ scripts that import other files (bundle them), CSS `url()` and `@import` of pane
 `data:` URIs), and inline event handler attributes, which the policy forbids. The k8s panel's shape
 (an `index.html` with a `<style>` block and `<script src="app.js">`) works unchanged.
 
-The bridge is unchanged: the host accepts a panel's message only with origin `"null"` and
-`event.source` that panel's iframe, takes the plugin id from the iframe, lets `rim.command.execute`
-run only the plugin's own commands, and sends `theme.changed` and `panel.state_update`. A panel
+The bridge works as for a local process: the host accepts a panel's message only with origin
+`"null"` and `event.source` that panel's iframe, takes the plugin id from the iframe, lets
+`rim.command.execute` run the plugin's own commands and the ids it was granted in
+`runs_commands` (v1 section 12), and sends `theme.changed` and `panel.state_update`. A panel
 frame gets its plugin's policy, so it can show images from the listed origins. The TypeScript relay
 keeps `PanelRelay`'s semantics (replace or shallow merge, 1 MiB per plugin, `state: null` to open
 panels when the plugin stops). Focus and Escape work as for other panels.

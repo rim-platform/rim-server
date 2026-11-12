@@ -6,15 +6,95 @@ use rim_core::command::model::UserCommand;
 use rim_services::command::bounds::{
     MAX_STEP_ARGS_BYTES, ensure_args_size, ensure_command_id_size,
 };
-use rim_services::command::dto::{CommandDefinitionDto, UserCommandDto, UserCommandStepDto};
+use rim_services::command::dto::{
+    CommandDefinitionDto, UpdateUserCommandStepDto, UserCommandDto, UserCommandStepDto,
+};
 use rim_services::{ServiceError, ServiceResult};
 
 use super::DefaultCommandService;
+use super::registry::{app_command, is_agent_management_command};
 
+/// Argument names one step may ask for.
+const MAX_ASKED_ARGUMENTS: usize = 32;
+/// Bytes of one asked argument name.
+const MAX_ASKED_ARGUMENT_NAME_BYTES: usize = 64;
+
+/// One stored step of a macro, as `steps_json` keeps it. A step stored before steps could ask
+/// for arguments reads with none.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct PersistedUserCommandStep {
     pub command_id: String,
     pub args: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ask: Vec<String>,
+}
+
+impl From<&UserCommandStepDto> for PersistedUserCommandStep {
+    fn from(step: &UserCommandStepDto) -> Self {
+        Self {
+            command_id: step.command_id.clone(),
+            args: step.args.clone(),
+            ask: step.ask.clone(),
+        }
+    }
+}
+
+/// `steps` as `steps_json` stores them.
+///
+/// # Errors
+///
+/// `Internal` when they do not serialize.
+pub(super) fn persisted_steps(steps: &[UserCommandStepDto]) -> ServiceResult<Value> {
+    serde_json::to_value(
+        steps
+            .iter()
+            .map(PersistedUserCommandStep::from)
+            .collect::<Vec<_>>(),
+    )
+    .map_err(ServiceError::internal)
+}
+
+/// The steps of an update, each without `ask` taking what the stored step at the same position
+/// asked for when that step names the same command.
+pub(super) fn steps_with_stored_asks(
+    steps: Vec<UpdateUserCommandStepDto>,
+    stored: &[UserCommandStepDto],
+) -> Vec<UserCommandStepDto> {
+    steps
+        .into_iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let ask = step.ask.unwrap_or_else(|| {
+                stored
+                    .get(index)
+                    .filter(|stored| stored.command_id == step.command_id)
+                    .map(|stored| stored.ask.clone())
+                    .unwrap_or_default()
+            });
+            UserCommandStepDto {
+                command_id: step.command_id,
+                args: step.args,
+                ask,
+            }
+        })
+        .collect()
+}
+
+/// Whether `command_id` has the shape of a plugin command, `plugin.<pluginId>.<command>`: at
+/// least four segments after `plugin.`, each one or more ASCII letters, digits, `_` or `-`, the
+/// first three, the plugin id, without `_`.
+pub(super) fn is_plugin_command_shape(command_id: &str) -> bool {
+    let Some(rest) = command_id.strip_prefix("plugin.") else {
+        return false;
+    };
+    let segments: Vec<&str> = rest.split('.').collect();
+    segments.len() >= 4
+        && segments.iter().enumerate().all(|(index, segment)| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || (b == b'_' && index >= 3))
+        })
 }
 
 pub(super) fn user_command_exists_locally(command_id: &str) -> bool {
@@ -69,25 +149,87 @@ pub(super) fn validate_user_command_step_shape(
                 "user command cannot reference itself".to_string(),
             ));
         }
+        validate_asked_arguments(step)?;
     }
 
     Ok(())
 }
 
+/// Refuses a step that asks for more than [`MAX_ASKED_ARGUMENTS`] arguments, for one whose name
+/// is empty or longer than [`MAX_ASKED_ARGUMENT_NAME_BYTES`] bytes, for one name twice, or for a
+/// name its `args` also fix.
+///
+/// # Errors
+///
+/// `Validation` naming the rule.
+fn validate_asked_arguments(step: &UserCommandStepDto) -> ServiceResult<()> {
+    if step.ask.len() > MAX_ASKED_ARGUMENTS {
+        return Err(ServiceError::Validation(format!(
+            "a step may ask for at most {MAX_ASKED_ARGUMENTS} arguments"
+        )));
+    }
+    let fixed = step.args.as_ref().and_then(Value::as_object);
+    let mut seen = HashSet::new();
+    for name in &step.ask {
+        if name.is_empty() || name.len() > MAX_ASKED_ARGUMENT_NAME_BYTES {
+            return Err(ServiceError::Validation(format!(
+                "an asked argument name may be 1 to {MAX_ASKED_ARGUMENT_NAME_BYTES} bytes"
+            )));
+        }
+        if !seen.insert(name.as_str()) {
+            return Err(ServiceError::Validation(format!(
+                "a step asks for `{name}` twice"
+            )));
+        }
+        if fixed.is_some_and(|args| args.contains_key(name)) {
+            return Err(ServiceError::Validation(format!(
+                "a step both fixes and asks for `{name}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses `steps` for the macro `command_key` unless each names a builtin, an app command other
+/// than an agent-management one, a command shaped like a plugin's, or, only where `stored`, the
+/// macro as saved before, already names it, another macro; and unless each passes
+/// [`validate_user_command_step_shape`].
+///
+/// # Errors
+///
+/// `Validation` naming the step refused.
 pub(super) fn validate_user_command_steps(
     command_key: &str,
     steps: &[UserCommandStepDto],
+    stored: Option<&UserCommandDto>,
     builtin_lookup: impl Fn(&str) -> Option<CommandDefinitionDto>,
 ) -> ServiceResult<()> {
     validate_user_command_step_shape(command_key, steps)?;
 
     for step in steps {
-        if builtin_lookup(&step.command_id).is_none()
-            && !user_command_exists_locally(&step.command_id)
+        let command_id = step.command_id.as_str();
+        if user_command_exists_locally(command_id) {
+            let kept = stored.is_some_and(|stored| {
+                stored
+                    .steps
+                    .iter()
+                    .any(|stored_step| stored_step.command_id == command_id)
+            });
+            if !kept {
+                return Err(ServiceError::Validation(
+                    "macro steps must not reference other macros".to_string(),
+                ));
+            }
+        } else if is_agent_management_command(command_id) {
+            return Err(ServiceError::Validation(format!(
+                "macro steps must not manage agents (`{command_id}`)"
+            )));
+        } else if builtin_lookup(command_id).is_none()
+            && app_command(command_id).is_none()
+            && !is_plugin_command_shape(command_id)
         {
             return Err(ServiceError::Validation(format!(
-                "unknown command step `{}`",
-                step.command_id
+                "unknown command step `{command_id}`"
             )));
         }
     }
@@ -243,9 +385,13 @@ pub(super) fn parse_user_command(user_command: UserCommand) -> ServiceResult<Use
             .map(|step| UserCommandStepDto {
                 command_id: step.command_id,
                 args: step.args,
+                ask: step.ask,
             })
             .collect(),
         is_enabled: user_command.is_enabled,
+        ai_callable: user_command.ai_callable,
+        nl_description: user_command.nl_description,
+        intent_samples: user_command.intent_samples,
     })
 }
 
@@ -259,6 +405,7 @@ mod tests {
         UserCommandStepDto {
             command_id: id.to_string(),
             args: None,
+            ask: vec![],
         }
     }
 
@@ -291,14 +438,15 @@ mod tests {
 
     #[test]
     fn validate_steps_rejects_unknown_command() {
-        let err = validate_user_command_steps("user.test", &[step("unknown.command")], |_| None)
-            .unwrap_err();
+        let err =
+            validate_user_command_steps("user.test", &[step("unknown.command")], None, |_| None)
+                .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(msg) if msg.contains("unknown")));
     }
 
     #[test]
     fn validate_steps_accepts_builtin_command() {
-        validate_user_command_steps("user.test", &[step("chat.post_message")], |id| {
+        validate_user_command_steps("user.test", &[step("chat.post_message")], None, |id| {
             if id == "chat.post_message" {
                 Some(CommandDefinitionDto {
                     id: id.to_string(),
@@ -330,10 +478,210 @@ mod tests {
         .unwrap();
     }
 
+    /// A new macro's step may not name another macro; an update keeps a step naming one that
+    /// the stored macro already names.
     #[test]
-    fn validate_steps_accepts_user_command_reference() {
-        // user.* commands are accepted even without builtin lookup
-        validate_user_command_steps("user.test", &[step("user.other_command")], |_| None).unwrap();
+    fn a_macro_step_names_another_macro_only_where_it_did_before() {
+        let err = validate_user_command_steps("user.test", &[step("user.other")], None, |_| None)
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m == "macro steps must not reference other macros"),
+            "{err:?}"
+        );
+
+        let stored = UserCommandDto {
+            id: UserCommandId::new(),
+            command_key: "user.test".to_string(),
+            title: "Test".to_string(),
+            description: String::new(),
+            steps: vec![step("chat.mark_as_read"), step("user.other")],
+            is_enabled: true,
+            ai_callable: false,
+            nl_description: String::new(),
+            intent_samples: vec![],
+        };
+        validate_user_command_steps(
+            "user.test",
+            &[step("user.other"), step("chat.mark_as_read")],
+            Some(&stored),
+            DefaultCommandService::builtin_definition,
+        )
+        .expect("a nested macro the stored macro names is kept");
+        let err =
+            validate_user_command_steps("user.test", &[step("user.third")], Some(&stored), |_| {
+                None
+            })
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+    }
+
+    /// App commands and plugin-shaped ids are steps; agent-management ids are not.
+    #[test]
+    fn macro_steps_take_app_and_plugin_commands_but_not_agent_management() {
+        for id in [
+            "workspace.toggle_zen_mode",
+            "settings.open.keybinds",
+            "plugin.dev.example.poll.poll",
+            "plugin.dev.example.k8s.restart_pod",
+            "agents.allow_in_encrypted_conversation",
+        ] {
+            validate_user_command_steps("user.test", &[step(id)], None, |_| None)
+                .unwrap_or_else(|err| panic!("{id}: {err:?}"));
+        }
+        for id in [
+            "agents.approve_request",
+            "agents.disconnect",
+            "agents.open_runs",
+        ] {
+            let err =
+                validate_user_command_steps("user.test", &[step(id)], None, |_| None).unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == &format!("macro steps must not manage agents (`{id}`)")),
+                "{id}: {err:?}"
+            );
+        }
+        for id in [
+            "plugin.k8s.restart",
+            "plugin.dev.ex_ample.k8s.restart",
+            "workspace.nope",
+        ] {
+            let err =
+                validate_user_command_steps("user.test", &[step(id)], None, |_| None).unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == &format!("unknown command step `{id}`")),
+                "{id}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_command_shape_takes_a_three_segment_plugin_id_and_a_command() {
+        assert!(is_plugin_command_shape(
+            "plugin.dev.example.hello-world.say_hi"
+        ));
+        assert!(is_plugin_command_shape(
+            "plugin.dev.example.poll.poll.results"
+        ));
+        assert!(is_plugin_command_shape("plugin.Dev.Example.Tool.Run"));
+        assert!(!is_plugin_command_shape("plugin.dev.example.poll"));
+        assert!(!is_plugin_command_shape("plugin.dev..poll.x"));
+        assert!(!is_plugin_command_shape("plugin.dev.example.poll.bad id"));
+        assert!(!is_plugin_command_shape("plugin.dev_x.example.poll.run"));
+        assert!(!is_plugin_command_shape("plugins.dev.example.poll.run"));
+    }
+
+    /// An asked argument list is bounded, unique and apart from the fixed arguments.
+    #[test]
+    fn asked_arguments_are_bounded_unique_and_not_fixed() {
+        let asking = |ask: Vec<String>, args: Option<Value>| UserCommandStepDto {
+            command_id: "chat.post_message".to_string(),
+            args,
+            ask,
+        };
+        validate_user_command_step_shape(
+            "user.test",
+            &[asking(
+                vec!["text".to_string()],
+                Some(serde_json::json!({ "server_id": "s" })),
+            )],
+        )
+        .expect("a distinct asked argument is accepted");
+
+        let cases = [
+            (
+                asking((0..33).map(|i| format!("a{i}")).collect(), None),
+                "a step may ask for at most 32 arguments".to_string(),
+            ),
+            (
+                asking(vec![String::new()], None),
+                "an asked argument name may be 1 to 64 bytes".to_string(),
+            ),
+            (
+                asking(vec!["x".repeat(65)], None),
+                "an asked argument name may be 1 to 64 bytes".to_string(),
+            ),
+            (
+                asking(vec!["text".to_string(), "text".to_string()], None),
+                "a step asks for `text` twice".to_string(),
+            ),
+            (
+                asking(
+                    vec!["text".to_string()],
+                    Some(serde_json::json!({ "text": "hi" })),
+                ),
+                "a step both fixes and asks for `text`".to_string(),
+            ),
+        ];
+        for (step, refusal) in cases {
+            let err = validate_user_command_step_shape("user.test", &[step]).unwrap_err();
+            assert!(
+                matches!(&err, ServiceError::Validation(m) if m == &refusal),
+                "{refusal}: {err:?}"
+            );
+        }
+    }
+
+    /// A step stored before steps could ask reads with none, and one that asks for nothing is
+    /// stored without the field.
+    #[test]
+    fn persisted_steps_read_old_rows_and_omit_an_empty_ask() {
+        let old: PersistedUserCommandStep = serde_json::from_value(
+            serde_json::json!({ "command_id": "chat.mark_as_read", "args": null }),
+        )
+        .unwrap();
+        assert!(old.ask.is_empty());
+
+        let stored = persisted_steps(&[
+            step("chat.mark_as_read"),
+            UserCommandStepDto {
+                command_id: "chat.post_message".to_string(),
+                args: None,
+                ask: vec!["text".to_string()],
+            },
+        ])
+        .unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!([
+                { "command_id": "chat.mark_as_read", "args": null },
+                { "command_id": "chat.post_message", "args": null, "ask": ["text"] }
+            ])
+        );
+    }
+
+    /// An update's step without `ask` keeps the stored step's when both name the same command.
+    #[test]
+    fn update_steps_keep_the_stored_ask_of_the_same_command() {
+        let stored = vec![
+            UserCommandStepDto {
+                command_id: "chat.post_message".to_string(),
+                args: None,
+                ask: vec!["text".to_string()],
+            },
+            UserCommandStepDto {
+                command_id: "chat.set_topic".to_string(),
+                args: None,
+                ask: vec!["topic".to_string()],
+            },
+        ];
+        let update = |command_id: &str, ask: Option<Vec<String>>| UpdateUserCommandStepDto {
+            command_id: command_id.to_string(),
+            args: None,
+            ask,
+        };
+
+        let steps = steps_with_stored_asks(
+            vec![
+                update("chat.post_message", None),
+                update("chat.mark_as_read", None),
+                update("chat.set_topic", Some(vec![])),
+            ],
+            &stored,
+        );
+
+        assert_eq!(steps[0].ask, vec!["text".to_string()]);
+        assert!(steps[1].ask.is_empty());
+        assert!(steps[2].ask.is_empty());
     }
 
     #[test]
@@ -370,6 +718,9 @@ mod tests {
             is_enabled: true,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            ai_callable: false,
+            nl_description: String::new(),
+            intent_samples: vec![],
         };
         let dto = super::parse_user_command(user_command).unwrap();
         assert_eq!(dto.steps.len(), 2);
@@ -391,6 +742,9 @@ mod tests {
             is_enabled: false,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            ai_callable: false,
+            nl_description: String::new(),
+            intent_samples: vec![],
         };
         let err = super::parse_user_command(user_command).unwrap_err();
         assert!(matches!(err, ServiceError::Internal(_)));

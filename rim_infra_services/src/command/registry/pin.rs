@@ -5,12 +5,14 @@ use rim_services::command::dto::{
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::command::verb::TypedVerb;
 
+use super::category;
+
 pub(super) fn commands() -> Vec<CommandDefinitionDto> {
-    vec![CommandDefinitionDto {
+    let pin = CommandDefinitionDto {
         id: "chat.pin_message".to_string(),
         title: "Pin Message".to_string(),
         description: "Pin a message in a channel.".to_string(),
-        category: "Chat".to_string(),
+        category: category::MESSAGES.to_string(),
         source_kind: CommandSourceKindDto::BuiltIn,
         execution_target: CommandExecutionTargetDto::Backend,
         arguments: vec![
@@ -64,5 +66,38 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         sensitivity: CommandSensitivityDto::Mutating,
         typed_verb: TypedVerb::Write,
         rate_limit_per_minute: None,
-    }]
+    };
+    let unpin = CommandDefinitionDto {
+        id: "chat.unpin_message".to_string(),
+        title: "Unpin Message".to_string(),
+        description: "Unpin a pinned message.".to_string(),
+        arguments: pin
+            .arguments
+            .iter()
+            .cloned()
+            .map(|argument| match argument.name.as_str() {
+                "message_id" => CommandArgumentDto {
+                    description:
+                        "Identifier of the message to unpin; defaults to the selected message."
+                            .to_string(),
+                    ..argument
+                },
+                _ => argument,
+            })
+            .collect(),
+        nl_description: Some(
+            "Unpin a message so it leaves the conversation's pinned list. Anyone may unpin a \
+             message they pinned; a message someone else pinned in a channel needs an owner, a \
+             moderator or the private channel's creator. Use when the user asks to unpin or \
+             remove a pinned message."
+                .to_string(),
+        ),
+        intent_samples: vec![
+            "unpin that message".to_string(),
+            "take the old announcement off the pinned list".to_string(),
+            "remove this pin".to_string(),
+        ],
+        ..pin.clone()
+    };
+    vec![pin, unpin]
 }
