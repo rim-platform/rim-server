@@ -37,6 +37,16 @@ tag `v<version>`, the version every crate in the workspace carries.
   closing parenthesis) in the address they fetch, so a link at the end of a sentence shows its
   page instead of "Page not found". Parentheses inside an address are kept.
 
+### Security
+
+- A relay answers `400 bad_request` to `/api/remote/<hostServerId>/<path>` when the path has a
+  `.` or `..` segment (also percent-encoded, in any letter case), an encoded slash or backslash,
+  or a control character, and sends nothing to the host. Before, such a path could reach other
+  server-to-server endpoints of the host than `/forward/`, signed by the relay. The
+  server-to-server client also refuses any request whose path a URL parser would change, so no
+  caller is sent to another path than the one it names (`docs/specs/server-to-server-v1.md`,
+  "Forwarding").
+
 ## [0.0.9] - 2026-11-12
 
 ### Added
