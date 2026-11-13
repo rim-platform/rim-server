@@ -121,7 +121,9 @@ before it reconnects. The session ends this way:
 
 ### The schema: `GET /api/sdl`
 
-The whole GraphQL schema of the running build, in SDL, without a session.
+The whole GraphQL schema of the running build, in SDL, without a session. It is rendered once
+when the server starts, and the answer may be cached for five minutes
+(`Cache-Control: public, max-age=300`).
 
 ### Discovery: `GET /.well-known/rim-server`
 

@@ -21,6 +21,11 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Security
+
+- `GET /api/sdl` serves the schema rendered once at start, with `Cache-Control: public,
+  max-age=300`, instead of rendering it again for every request.
+
 ### Changed
 
 - The built-in AI agent is called the assistant in command titles: `workspace.open_agent` is Open

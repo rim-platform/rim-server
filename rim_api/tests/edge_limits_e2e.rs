@@ -155,6 +155,35 @@ async fn a_graphql_body_past_its_caps_gets_413_and_runs_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_schema_is_served_as_rendered_at_start_and_may_be_cached() {
+    let node = node(|_| {}).await;
+    let http = reqwest::Client::new();
+    let sdl = format!("{}/api/sdl", node.origin);
+    let first = http.get(&sdl).send().await.expect("sdl");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("public, max-age=300")
+    );
+    let first = first.text().await.expect("text");
+    assert!(first.contains("type Query"), "the schema");
+    let second = http
+        .get(&sdl)
+        .send()
+        .await
+        .expect("sdl")
+        .text()
+        .await
+        .expect("text");
+    assert_eq!(first, second);
+
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mutation_fields_past_the_budget_answer_rate_limited() {
     let node = node(|config| config.rate_mutations_per_min_per_session = Some(2)).await;
     let http = reqwest::Client::new();

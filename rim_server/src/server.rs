@@ -102,6 +102,7 @@ pub async fn serve(
     );
     let schema: AppSchema = runtime.schema;
     let schema_handle = schema.clone();
+    let sdl = web::Data::new(SchemaSdl::render(&schema));
     let request_authenticator = runtime.request_authenticator;
     let session_key_service = runtime.session_key_service;
     let session_revocations = runtime.session_revocations;
@@ -228,6 +229,7 @@ pub async fn serve(
             .app_data(web::Data::new(s2s_state.clone()))
             .app_data(readiness.clone())
             .app_data(web::Data::new(schema))
+            .app_data(sdl.clone())
             .app_data(web::Data::new(Arc::clone(&request_authenticator)))
             .app_data(web::Data::new(Arc::clone(&session_key_service)))
             .app_data(web::Data::new(Arc::clone(&session_revocations)))
@@ -258,11 +260,28 @@ pub async fn serve(
     })
 }
 
-/// GET /api/sdl — export the GraphQL schema in SDL format for codegen tooling.
-async fn sdl_handler(schema: web::Data<AppSchema>) -> HttpResponse {
+/// How long a client may keep the schema it read from `/api/sdl` before asking again.
+const SDL_MAX_AGE_SECONDS: u32 = 300;
+
+/// The schema in SDL, rendered once when the server starts.
+struct SchemaSdl(web::Bytes);
+
+impl SchemaSdl {
+    fn render(schema: &AppSchema) -> Self {
+        Self(web::Bytes::from(schema.sdl()))
+    }
+}
+
+/// GET /api/sdl — export the GraphQL schema in SDL format for codegen tooling: the bytes rendered
+/// at start, which a client may cache for [`SDL_MAX_AGE_SECONDS`].
+async fn sdl_handler(sdl: web::Data<SchemaSdl>) -> HttpResponse {
     HttpResponse::Ok()
         .content_type("text/plain; charset=utf-8")
-        .body(schema.sdl())
+        .insert_header((
+            actix_web::http::header::CACHE_CONTROL,
+            format!("public, max-age={SDL_MAX_AGE_SECONDS}"),
+        ))
+        .body(sdl.0.clone())
 }
 
 async fn graphql_handler(
