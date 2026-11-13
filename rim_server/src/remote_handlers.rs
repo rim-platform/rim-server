@@ -8,6 +8,7 @@ use actix_web::http::StatusCode;
 use actix_web::{HttpRequest, HttpResponse, web};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use percent_encoding::percent_decode_str;
 use rim_s2s::Role;
 use rim_services::auth::service::RequestAuthenticator;
 use rim_services::s2s::dto::{S2sMethod, S2sRequest, S2sResponse};
@@ -73,6 +74,26 @@ fn host_answer(answer: S2sResponse) -> HttpResponse {
 /// Marks the response to a forward the host gave no verified answer to.
 struct UpstreamUnavailable;
 
+/// Whether a forwarded path could name another host path once a URL parser reads it.
+///
+/// `raw_path` is the request path as sent and `tail` the route's decoded tail. Refused: an
+/// encoded slash or backslash (`%2F`, `%5C`, in any letter case) in either, and in `tail`
+/// decoded once more, a backslash, a control character, or a `.` or `..` segment.
+fn is_unsafe_tail(raw_path: &str, tail: &str) -> bool {
+    let encoded_separator = |s: &str| {
+        let lower = s.to_ascii_lowercase();
+        lower.contains("%2f") || lower.contains("%5c")
+    };
+    if encoded_separator(raw_path) || encoded_separator(tail) {
+        return true;
+    }
+    let decoded = percent_decode_str(tail).decode_utf8_lossy();
+    decoded.chars().any(|c| c == '\\' || c.is_control())
+        || decoded
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+}
+
 /// Forward a local user's device-signed request to the host it names, and count it.
 pub async fn handle_remote(
     req: HttpRequest,
@@ -135,6 +156,13 @@ async fn forward(
         );
     };
     let (host, tail) = path.into_inner();
+    if is_unsafe_tail(req.uri().path(), &tail) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the path has a `.` or `..` segment, an encoded slash or backslash, or a control character",
+        );
+    }
     if !rim_s2s::is_server_id(&host) {
         return error(StatusCode::NOT_FOUND, "not_found", "not a server id");
     }
@@ -228,7 +256,30 @@ async fn forward(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    use actix_web::{App, test};
+    use chrono::{DateTime, Utc};
+    use rim_core::key_identity::model::DeviceKeyId;
+    use rim_core::user::model::UserId;
+    use rim_infra_services::KeyedRateLimiter;
+    use rim_s2s::{
+        Endpoints, Limits, Registration, RegistrationMode, ServerDescriptor, ServerIdentity,
+        ServerKeyState, ServerSigner, SharedIdentity, sign_descriptor, sign_inception, timestamp,
+    };
+    use rim_services::auth::dto::RequestAuthResultDto;
+    use rim_services::auth::service::MockRequestAuthenticator;
+    use rim_services::host::service::MockHostService;
+    use rim_services::relay::service::MockRelayService;
+    use rim_services::remote_workspace::service::{
+        MockWorkspaceHostService, MockWorkspaceRelayService,
+    };
+    use rim_services::s2s::service::{MockPeerService, MockS2sClient, MockS2sNonceService};
+
     use super::*;
+    use crate::config::ServerRole;
+    use crate::s2s::S2sSettings;
 
     #[actix_web::test]
     async fn a_hosts_answer_keeps_its_retry_after_and_host_response_headers() {
@@ -261,5 +312,174 @@ mod tests {
             .await
             .expect("body");
         assert_eq!(&body[..], br#"{"error":"rate_limited"}"#);
+    }
+
+    /// The host the tests forward to; not this server.
+    const HOST: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
+
+    /// A relay identity from a fixed seed.
+    fn identity() -> SharedIdentity {
+        let signer = ServerSigner::from_seed([3; 32]);
+        let recovery = ServerSigner::from_seed([103; 32]);
+        let incepted_at = DateTime::from_timestamp(1_767_225_600, 0).expect("2026-01-01");
+        let inception = sign_inception(&signer, &recovery, incepted_at);
+        let state = ServerKeyState::from_inception(&inception).expect("inception");
+        let content = ServerDescriptor::new(
+            state.server_id.clone(),
+            0,
+            1,
+            vec![Role::Relay],
+            Endpoints {
+                graphql: "https://relay.example/api".into(),
+                websocket: "wss://relay.example/api/ws".into(),
+                s2s: Some("https://relay.example/s2s/v1".into()),
+            },
+            vec![79],
+            Limits {
+                max_body_bytes: 8_388_608,
+                clock_skew_seconds: 300,
+                max_deliver_items: 256,
+            },
+            Registration {
+                mode: RegistrationMode::Invite,
+                pow_bits: None,
+            },
+            None,
+            timestamp(Utc::now()),
+        );
+        let descriptor = sign_descriptor(&signer, &content).expect("descriptor");
+        SharedIdentity::new(ServerIdentity {
+            signer,
+            state,
+            log: vec![inception],
+            descriptor,
+            descriptor_content: content,
+        })
+    }
+
+    /// A relay whose user's device requests name [`HOST`], and whose client records each
+    /// path it is asked to send and answers `200`.
+    fn relay_state(sent: Arc<Mutex<Vec<String>>>) -> S2sState {
+        let mut relay = MockRelayService::new();
+        relay
+            .expect_check_outgoing_request()
+            .returning(|_, _, _, _| Box::pin(async { Ok(HOST.to_string()) }));
+        let mut client = MockS2sClient::new();
+        client.expect_send().returning(move |request| {
+            sent.lock().expect("lock").push(request.path);
+            Box::pin(async {
+                Ok(S2sResponse {
+                    status: 200,
+                    content_type: "application/json".to_string(),
+                    body: b"{}".to_vec(),
+                    key_seq: 0,
+                    headers: Vec::new(),
+                })
+            })
+        });
+        S2sState {
+            identity: identity(),
+            peers: Arc::new(MockPeerService::new()),
+            nonces: Arc::new(MockS2sNonceService::new()),
+            rate_limiter: Arc::new(KeyedRateLimiter::new(60, 60)),
+            settings: Arc::new(S2sSettings {
+                role: ServerRole::Relay,
+                origin: Some("https://relay.example".to_string()),
+                denied_peers: HashSet::new(),
+                allowed_relays: HashSet::new(),
+                max_body_bytes: 1024,
+            }),
+            client: Arc::new(client),
+            relay: Arc::new(relay),
+            host: Arc::new(MockHostService::new()),
+            workspace_host: Arc::new(MockWorkspaceHostService::new()),
+            workspace_relay: Arc::new(MockWorkspaceRelayService::new()),
+        }
+    }
+
+    /// An authenticator that signs every request in as one user with one device.
+    fn authenticator() -> Arc<dyn RequestAuthenticator> {
+        let mut authenticator = MockRequestAuthenticator::new();
+        authenticator
+            .expect_authenticate_session_token()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(RequestAuthResultDto {
+                        user_id: Some(UserId::new()),
+                        session_id: None,
+                        device_key_id: Some(DeviceKeyId::new()),
+                        expires_at: None,
+                        secret_hash: None,
+                    })
+                })
+            });
+        Arc::new(authenticator)
+    }
+
+    /// `GET` `uri` with device headers through the relay route; the status and the paths the
+    /// client was asked to send.
+    async fn get(uri: &str) -> (StatusCode, Vec<String>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(relay_state(Arc::clone(&sent))))
+                .app_data(web::Data::new(authenticator()))
+                .route(
+                    "/api/remote/{host_server_id}/{tail:.*}",
+                    web::get().to(handle_remote),
+                ),
+        )
+        .await;
+        let request = test::TestRequest::get()
+            .uri(uri)
+            .insert_header((RIM_DEVICE_REQUEST, URL_SAFE_NO_PAD.encode("{}")))
+            .insert_header((RIM_DEVICE_SIGNATURE, "ed25519:sig"))
+            .to_request();
+        let status = test::call_service(&app, request).await.status();
+        let sent = sent.lock().expect("lock").clone();
+        (status, sent)
+    }
+
+    #[actix_web::test]
+    async fn a_tail_forwards_to_the_hosts_forward_path() {
+        assert!(rim_s2s::is_server_id(HOST));
+        let (status, sent) = get(&format!(
+            "/api/remote/{HOST}/api/attachments/x/download?a=1"
+        ))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            sent,
+            vec!["/forward/api/attachments/x/download?a=1".to_string()]
+        );
+    }
+
+    #[actix_web::test]
+    async fn a_tail_with_a_dot_segment_is_refused_before_anything_is_sent() {
+        for tail in [
+            "../outbox",
+            "%2e%2e/outbox",
+            "a/%2E%2E/%2e%2e/outbox",
+            "./outbox",
+            "api/..",
+            "%2e%2e%2Foutbox",
+            "..%2foutbox",
+            "%252e%252e/outbox",
+            "api%2Fx",
+            "..%5Coutbox",
+            "api%5Cx",
+            ".%09./outbox",
+        ] {
+            let (status, sent) = get(&format!("/api/remote/{HOST}/{tail}?after=0")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{tail}");
+            assert!(sent.is_empty(), "{tail}: {sent:?}");
+        }
+    }
+
+    #[actix_web::test]
+    async fn dots_inside_a_segment_are_not_dot_segments() {
+        let (status, sent) = get(&format!("/api/remote/{HOST}/api/a..b/.x/x.")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(sent, vec!["/forward/api/a..b/.x/x.".to_string()]);
     }
 }

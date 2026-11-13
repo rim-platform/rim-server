@@ -483,7 +483,11 @@ transport in `rim_server`, in the `file_handlers.rs` pattern); GraphQL is
 refuses a device request naming another principal or device than the session's or a revoked
 device (`FORBIDDEN`), and sends `<host s2s>/forward<path>` with the body byte for byte, the client's
 `Content-Type`, both device headers and its own signature. It returns the host's status, body,
-`Content-Type`, `Rim-Host-Response`, `Rim-Host-Signature` and `Retry-After` unchanged.
+`Content-Type`, `Rim-Host-Response`, `Rim-Host-Signature` and `Retry-After` unchanged. The path is
+taken literally: one with a `.` or `..` segment (also percent-encoded, in any letter case), an
+encoded slash or backslash, or a control character is answered `400 bad_request` and not sent,
+and the relay never sends a request whose URL path differs from `<host s2s>/forward<path>` as
+written.
 
 The host's `/s2s/v1/forward/…` checks the S2S signature, then the device request (a non-revoked
 device of a user here; `host` is its own id; method, path, body hash; `seq`), then that the relay
