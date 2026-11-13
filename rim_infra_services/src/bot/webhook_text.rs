@@ -14,7 +14,14 @@ const MAX_PLAIN_CHARS: usize = 4_000;
 /// The most characters of a message a format makes, its link included.
 const MAX_LINE_CHARS: usize = 1_000;
 /// The longest link a message keeps, in characters. GitHub's own stay far below it.
-const MAX_LINK_CHARS: usize = 512;
+pub(super) const MAX_LINK_CHARS: usize = 512;
+/// The most characters of a delivery's value a message reads, after its leading whitespace: a
+/// message holds no more.
+const MAX_VALUE_CHARS: usize = MAX_LINE_CHARS;
+/// How far past [`MAX_LINE_CHARS`] a message's text is filled before the rest is left out:
+/// enough for neutralizing, which looks a few characters ahead, to treat the kept part as it
+/// treats the whole.
+pub(super) const MAX_FILLED_CHARS: usize = MAX_LINE_CHARS + 16;
 
 /// A body the webhook cannot read. It says why, in words a sender can act on and with nothing of
 /// the body in it.
@@ -85,12 +92,16 @@ pub(crate) fn plain_text(body: &[u8]) -> Result<Option<String>, DecodeError> {
     Ok(Some(neutralize_mentions(text)))
 }
 
-/// A value from a delivery ready for a message: a string that isn't blank, a number or a
-/// boolean, on one line, with whitespace and control characters turned into single spaces, format
-/// characters removed and its Markdown escaped. `None` for anything else, and for a string left
-/// blank by this.
+/// A value from a delivery ready for a message: a string that isn't blank, read up to its first
+/// [`MAX_VALUE_CHARS`] characters after its leading whitespace, a number or a boolean, on one
+/// line, with whitespace and control characters turned into single spaces, format characters
+/// removed and its Markdown escaped. `None` for anything else, and for a string left blank by
+/// this.
 pub(super) fn value_of(value: &Value) -> Option<String> {
-    let text = raw_of(value)?;
+    let text = match value {
+        Value::String(text) => first_chars(text.trim_start(), MAX_VALUE_CHARS).to_string(),
+        other => raw_of(other)?,
+    };
     let cleaned: String = text
         .chars()
         .filter_map(|c| {
@@ -113,12 +124,41 @@ pub(super) fn value_of(value: &Value) -> Option<String> {
 
 /// A value from a delivery as it was sent: a string that isn't blank, a number in decimal or a
 /// boolean as `true` or `false`. `None` for anything else.
-pub(super) fn raw_of(value: &Value) -> Option<String> {
+fn raw_of(value: &Value) -> Option<String> {
     match value {
         Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(flag) => Some(flag.to_string()),
         _ => None,
+    }
+}
+
+/// A value from a delivery for a link, as it was sent, as [`raw_of`] reads it but with at most
+/// one character more than [`MAX_LINK_CHARS`]: a longer one could not make a link anyway.
+pub(super) fn link_value_of(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.trim().is_empty() => {
+            Some(first_chars(text, MAX_LINK_CHARS + 1).to_string())
+        }
+        other => raw_of(other),
+    }
+}
+
+/// Whether a value from a delivery, as [`raw_of`] reads it, is exactly `expected`, compared
+/// without copying it.
+pub(super) fn raw_equals(value: &Value, expected: &str) -> bool {
+    match value {
+        Value::String(text) => !text.trim().is_empty() && text == expected,
+        Value::Number(_) | Value::Bool(_) => raw_of(value).as_deref() == Some(expected),
+        _ => false,
+    }
+}
+
+/// `text` up to its first `max` characters.
+fn first_chars(text: &str, max: usize) -> &str {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => &text[..end],
+        None => text,
     }
 }
 

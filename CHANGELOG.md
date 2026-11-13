@@ -32,13 +32,17 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `remoteServer` and `remoteIdentity` fetch discovery documents within limits: 10 fetches a
   minute per user and 60 a minute for all explicit pins, a fresh pin of an origin answered
   without a fetch, and a failed fetch answered from memory for 5 minutes. One request runs at
-  most 4 of `remoteServer` and `remoteIdentity` together; past a limit they answer
-  `RATE_LIMITED` or `TOO_MANY_ROOT_FIELDS` (`docs/specs/server-to-server-v1.md`, "Pinning a
-  peer").
+  most 4 of `remoteServer` and `remoteIdentity` together (with `previewWebhookFormat`, below);
+  past a limit they answer `RATE_LIMITED` or `TOO_MANY_ROOT_FIELDS`
+  (`docs/specs/server-to-server-v1.md`, "Pinning a peer").
 - Server-to-server requests naming servers this server does not know no longer use up the
   discovery budget for everyone: their fetches count against the sending address, 5 a minute,
   first pins and refetches of pinned peers each have a budget of their own, and an id that
   failed to pin from an origin is not fetched from it again for 5 minutes.
+- A webhook format reads at most the first 1,000 characters of each value and stops filling a
+  message once it is past the length it can post, so a large delivery or preview costs no more
+  than a short one, and one request runs at most 4 `previewWebhookFormat` fields together with
+  `remoteServer` and `remoteIdentity` (`docs/specs/bots-v1.md`).
 
 ### Changed
 

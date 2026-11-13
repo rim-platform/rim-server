@@ -215,7 +215,10 @@ array. A key holding a dot can't be reached.
 - A value MUST be put on one line, with whitespace and control characters turned into single spaces and
   format characters removed, so a bidi override can't reorder the message, and have its Markdown escaped.
   A joined emoji in a value can come apart. A value left blank by this has none. It MUST NOT be expanded
-  again: a title of `{sender.login}` shows as that text.
+  again: a title of `{sender.login}` shows as that text. A string value is read only up to its first 1,000
+  characters after its leading whitespace, since no message holds more, and a value for a link up to 513.
+  Once the filled text runs past the 1,000 characters, later pieces MAY be left out unread, but each
+  placeholder MUST still have a value.
 - The literal text is what the Owner or Moderator wrote, so its Markdown and line breaks stay.
 - Every mention in the result, the literal text's own included, MUST be made plain text, as for any
   webhook. The result MUST then be cut to 1,000 characters, counting the link.

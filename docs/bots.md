@@ -357,7 +357,8 @@ Each part is letters, digits, `_` and `-`. A key with a dot in it can't be reach
 - A value is put on one line: whitespace and control characters become single spaces, and format characters
   are removed, so a bidi override can't reorder the message and a joined emoji can come apart. Its Markdown is
   escaped. It is never expanded again, so a title of `{sender.login}` shows as that text. A header can't be a
-  placeholder, so a format can't print one.
+  placeholder, so a format can't print one. Only a string's first 1,000 characters, after its leading
+  whitespace, are read, since a post holds no more.
 - `<@id>`, `@channel` and `@here` are made plain text in the whole post, your own text included, and the
   post is cut to 1,000 characters, counting the link.
 
@@ -404,7 +405,8 @@ edited it. To share a format, copy its JSON. `updateIncomingWebhookFormat` with 
 
 **Trying one.** `previewWebhookFormat` takes a format, sample headers and a sample body of at most 256 KiB, and
 says which rule would decide and what it would post, or why nothing would. It runs what a delivery runs, and it
-posts and stores nothing.
+posts and stores nothing. One request runs at most 4 previews, counted with `remoteServer` and `remoteIdentity`
+and each alias counted.
 
 **An older app** shows a webhook with a format as Plain, and revoking it still works.
 

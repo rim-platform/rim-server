@@ -70,8 +70,10 @@ pub fn count_query_fields(fields: &[RootFields]) -> usize {
         .sum()
 }
 
-/// Query root fields whose work is costly: each may fetch from another server.
-pub const COSTLY_QUERY_FIELDS: &[&str] = &["remoteServer", "remoteIdentity"];
+/// Query root fields whose work is costly: each may fetch from another server, or renders a
+/// webhook format over a sample body.
+pub const COSTLY_QUERY_FIELDS: &[&str] =
+    &["remoteServer", "remoteIdentity", "previewWebhookFormat"];
 
 /// The most [`COSTLY_QUERY_FIELDS`] one HTTP request runs, across its batch, counted as
 /// [`MAX_QUERY_ROOT_FIELDS`] counts.
