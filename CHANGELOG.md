@@ -23,9 +23,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Changed
 
-- The built-in command `workspace.open_agent` is titled Open Assistant, and the Agents category
-  describes the assistant and the agents on your computer; Browse Plugins says what Settings >
-  Plugins offers.
+- The built-in AI agent is called the assistant in command titles: `workspace.open_agent` is Open
+  Assistant, `settings.open.agent` is Settings: Assistant, `settings.open.plugin_ai` is Settings:
+  Assistant's Plugin Commands and `agents.allow_in_encrypted_conversation` is Let the Assistant
+  Read This Conversation…. `settings.open.bots` is Settings: Bots & webhooks, the Agents category
+  describes the assistant and the agents on your computer, and Browse Plugins says what Settings >
+  Plugins offers. Command ids are unchanged, so keybinds and macros keep working.
 
 ## [0.0.9] - 2026-11-12
 

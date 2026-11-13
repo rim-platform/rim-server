@@ -6,7 +6,7 @@ principles every change is held to.
 ## In one sentence
 
 > RIM is the self-hosted communication workspace you program: commands, keybinds, macros,
-> pipelines, plugins and the Assistant on top of chat, private and decentralized.
+> pipelines, plugins and an AI assistant on top of chat, private and decentralized.
 
 RIM is a place for a team's daily work. It shows what needs you and links to the source, and it
 does not try to replace the project tracker, the calendar or CI. Agents are optional, and RIM

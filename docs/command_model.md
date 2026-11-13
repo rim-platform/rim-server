@@ -384,14 +384,14 @@ there.
 | `settings.open.macros` | Settings: Macros | App | |
 | `settings.open.pipelines` | Settings: Pipelines | App | Not in the direct space |
 | `settings.open.plugins` | Settings: Plugins | App | |
-| `settings.open.plugin_ai` | Settings: Plugin AI | App | Desktop only |
+| `settings.open.plugin_ai` | Settings: Assistant's Plugin Commands | App | Desktop only |
 | `settings.open.state` | Settings: State | App | Not in the direct space |
 | `settings.open.emoji` | Settings: Emoji | App | Where the server has custom emoji; not in the direct space |
 | `settings.open.agents` | Settings: Agents | App | Desktop only |
 | `settings.open.agent` | Settings: Assistant | App | Desktop only |
 | `settings.open.workspace` | Settings: Workspace | Workspace | Owners and moderators; not in the direct space |
 | `settings.open.workspace_moderation` | Settings: Moderation | Workspace | Owners and moderators; not in the direct space |
-| `settings.open.bots` | Settings: Bots | Workspace | Those who manage the workspace's bots; not in the direct space |
+| `settings.open.bots` | Settings: Bots & webhooks | Workspace | Those who manage the workspace's bots; not in the direct space |
 | `settings.open.moderation` | Settings: Instance moderation | App | Instance operators |
 | `settings.open.about` | Settings: About | App | |
 | `settings.assign_keybind` | Assign Keybind… | App | Opens the keybind assigner for the focused conversation, else the open workspace |

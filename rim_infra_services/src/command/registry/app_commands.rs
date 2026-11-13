@@ -249,7 +249,7 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     app("settings.open.plugins", "Settings: Plugins", category::APP),
     app(
         "settings.open.plugin_ai",
-        "Settings: Plugin AI",
+        "Settings: Assistant's Plugin Commands",
         category::APP,
     ),
     app("settings.open.state", "Settings: State", category::APP),
@@ -266,7 +266,11 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
         "Settings: Moderation",
         category::WORKSPACE,
     ),
-    app("settings.open.bots", "Settings: Bots", category::WORKSPACE),
+    app(
+        "settings.open.bots",
+        "Settings: Bots & webhooks",
+        category::WORKSPACE,
+    ),
     app(
         "settings.open.moderation",
         "Settings: Instance moderation",
