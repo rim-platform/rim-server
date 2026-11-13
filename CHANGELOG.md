@@ -31,6 +31,12 @@ tag `v<version>`, the version every crate in the workspace carries.
   Plugins offers. `moderation.block_principal` and `moderation.unblock_principal` are Block
   Account… and Unblock Account…. Command ids are unchanged, so keybinds and macros keep working.
 
+### Fixed
+
+- Link previews no longer include the punctuation that ends a sentence (a period, comma or
+  closing parenthesis) in the address they fetch, so a link at the end of a sentence shows its
+  page instead of "Page not found". Parentheses inside an address are kept.
+
 ## [0.0.9] - 2026-11-12
 
 ### Added
