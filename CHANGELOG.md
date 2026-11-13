@@ -43,6 +43,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   message once it is past the length it can post, so a large delivery or preview costs no more
   than a short one, and one request runs at most 4 `previewWebhookFormat` fields together with
   `remoteServer` and `remoteIdentity` (`docs/specs/bots-v1.md`).
+- A plugin bundle link download runs one at a time per account and stops after 30 seconds, so a
+  few accounts cannot hold every download slot (`docs/specs/web-plugins-v1.md`).
 
 ### Changed
 
