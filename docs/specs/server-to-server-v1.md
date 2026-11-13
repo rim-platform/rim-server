@@ -145,7 +145,20 @@ origins that are or resolve to a non-public address, as "Implementation" defines
 unless `RIM_S2S_ALLOW_PRIVATE_ADDRESSES=true`), replay the log, check the inception against the expected
 id, verify the descriptor (its `endpoints.s2s` must start with the origin), and store everything in
 `peer_server`. Refresh every 6 hours on use, on a `keyid` above the pinned head, and on a `401` from
-the peer; at most one fetch per peer per minute and 60 in total.
+the peer.
+
+**Fetch limits.** Each fetch is of one kind, and each kind has 60 fetches a minute of its own:
+refetching a pinned peer, pinning a peer a request names by its `keyid`, an explicit pin
+(`remoteServer`, a relay URL, a host origin) and checking a handle domain. One kind never uses up
+another's, so requests naming unknown servers cannot stop pinned peers from being refetched.
+A peer, or a handle domain, is fetched at most once a minute; a peer named by a `keyid` counts
+by its id together with the origin named, so naming an id with another origin uses up nothing
+of that id at its own origin. A fetch made for a signed-in user counts against that user too,
+10 a minute, and one made for an unauthenticated request against its client address, 5 a
+minute (an IPv6 address by its /64). An explicit pin of an origin whose `active` pin was fetched
+within 6 hours answers that pin without a fetch, and a fetch that failed (the origin did not
+answer or its document did not verify) answers the same failure for 5 minutes without fetching
+again; an explicit pin past a limit answers `RATE_LIMITED`.
 
 | Fetched log | Action |
 |---|---|
@@ -217,8 +230,8 @@ it checks the `handleDomain` the descriptor declares: it holds when it is the ho
 origin (no fetch), or when the domain resolves to the same server id. The outcome is stored with
 the pin (`peer_server.handle_domain`, null when the descriptor declares none or the domain points
 elsewhere; audit `s2s.peer_handle_domain` when it changes). A check that cannot run (the domain
-does not answer, or the fetch limits of the pin are reached; the check counts against the
-overall 60 a minute and once a minute per domain) keeps the stored outcome. A stored domain
+does not answer, or the fetch limits of the pin are reached; the check counts against the 60
+handle-domain checks a minute and once a minute per domain) keeps the stored outcome. A stored domain
 counts only while the pin's current descriptor still declares it and the peer is `active`.
 
 **Usernames across servers.** A relay's identity document and its join request carry the

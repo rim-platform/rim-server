@@ -29,6 +29,16 @@ tag `v<version>`, the version every crate in the workspace carries.
   alias, repeated field and fragment expansion, with or without a session and when forwarded
   by another server. A request over it answers one `TOO_MANY_ROOT_FIELDS` error and runs
   nothing (`docs/api.md`, "Limits").
+- `remoteServer` and `remoteIdentity` fetch discovery documents within limits: 10 fetches a
+  minute per user and 60 a minute for all explicit pins, a fresh pin of an origin answered
+  without a fetch, and a failed fetch answered from memory for 5 minutes. One request runs at
+  most 4 of `remoteServer` and `remoteIdentity` together; past a limit they answer
+  `RATE_LIMITED` or `TOO_MANY_ROOT_FIELDS` (`docs/specs/server-to-server-v1.md`, "Pinning a
+  peer").
+- Server-to-server requests naming servers this server does not know no longer use up the
+  discovery budget for everyone: their fetches count against the sending address, 5 a minute,
+  first pins and refetches of pinned peers each have a budget of their own, and an id that
+  failed to pin from an origin is not fetched from it again for 5 minutes.
 
 ### Changed
 

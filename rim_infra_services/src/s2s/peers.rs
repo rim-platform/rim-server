@@ -1,6 +1,7 @@
 //! Pinning peers from their discovery documents and keeping the pins current.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -17,7 +18,9 @@ use rim_s2s::{
 };
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::relay::dto::SignedJson;
-use rim_services::s2s::dto::{PeerBlockChange, PeerDto, PeerKeysDto, PeerLookup};
+use rim_services::s2s::dto::{
+    DiscoveryRequester, PeerBlockChange, PeerDto, PeerKeysDto, PeerLookup,
+};
 use rim_services::s2s::service::PeerService;
 use rim_services::{ServiceError, ServiceResult};
 use serde::Deserialize;
@@ -40,6 +43,108 @@ const REFRESH_AFTER_HOURS: i64 = 6;
 
 /// How long the previous key stays accepted after a `signer: server` rotation.
 const ROTATION_GRACE_HOURS: i64 = 24;
+
+/// How long a fetch that failed is answered with its failure instead of being made again.
+const FAILED_FETCH_MINUTES: i64 = 5;
+
+/// The most origins and failed fetches remembered at once.
+const MAX_REMEMBERED: usize = 10_000;
+
+/// Discovery fetches a signed-in user's requests may cause per minute.
+const FETCHES_PER_USER_PER_MINUTE: u32 = 10;
+
+/// Discovery fetches unauthenticated requests from one address may cause per minute.
+const FETCHES_PER_ADDRESS_PER_MINUTE: u32 = 5;
+
+/// Discovery fetches of one kind per minute, across every requester.
+const FETCHES_PER_KIND_PER_MINUTE: u32 = 60;
+
+/// What a discovery fetch is for. Each kind has a budget of its own, so fetches of one kind
+/// never use up another's.
+#[derive(Debug, Clone, Copy)]
+enum FetchKind {
+    /// Refetching a pinned peer.
+    Refresh,
+    /// Pinning a peer that a request names by its key id.
+    Introduced,
+    /// An explicit pin of an origin.
+    Pin,
+    /// Checking a pinned peer's handle domain.
+    HandleDomain,
+}
+
+impl FetchKind {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Refresh => "refresh",
+            Self::Introduced => "introduced",
+            Self::Pin => "pin",
+            Self::HandleDomain => "handle-domain",
+        }
+    }
+}
+
+/// Why a fetch failed, kept to answer the same way while it is remembered.
+#[derive(Debug, Clone)]
+enum FetchFailure {
+    Unreachable,
+    Invalid(String),
+}
+
+impl FetchFailure {
+    fn to_error(&self) -> ServiceError {
+        match self {
+            Self::Unreachable => ServiceError::Unavailable,
+            Self::Invalid(reason) => ServiceError::Validation(reason.clone()),
+        }
+    }
+}
+
+/// Recent outcomes of discovery fetches: the server id each origin pinned last, and the fetches
+/// that failed with when they failed. Each holds at most [`MAX_REMEMBERED`] entries.
+#[derive(Default)]
+struct RecentFetches {
+    pinned: Mutex<HashMap<String, String>>,
+    failed: Mutex<HashMap<String, (DateTime<Utc>, FetchFailure)>>,
+}
+
+impl RecentFetches {
+    /// The server id `origin` pinned last.
+    fn pinned_at(&self, origin: &str) -> Option<String> {
+        self.pinned.lock().ok()?.get(origin).cloned()
+    }
+
+    /// Remember that `origin` pinned `server_id`, and forget a failure of its fetches.
+    fn record_pinned(&self, origin: &str, server_id: &str) {
+        if let Ok(mut pinned) = self.pinned.lock() {
+            if pinned.len() >= MAX_REMEMBERED && !pinned.contains_key(origin) {
+                pinned.clear();
+            }
+            pinned.insert(origin.to_string(), server_id.to_string());
+        }
+    }
+
+    /// The failure of the fetch `key` when it failed within [`FAILED_FETCH_MINUTES`].
+    fn failed(&self, key: &str, now: DateTime<Utc>) -> Option<FetchFailure> {
+        let failed = self.failed.lock().ok()?;
+        let (at, failure) = failed.get(key)?;
+        (now - *at < chrono::Duration::minutes(FAILED_FETCH_MINUTES)).then(|| failure.clone())
+    }
+
+    /// Remember that the fetch `key` failed at `now`. When full of failures that have not
+    /// expired, the failure is not remembered.
+    fn record_failed(&self, key: &str, failure: FetchFailure, now: DateTime<Utc>) {
+        let Ok(mut failed) = self.failed.lock() else {
+            return;
+        };
+        if failed.len() >= MAX_REMEMBERED {
+            failed.retain(|_, (at, _)| now - *at < chrono::Duration::minutes(FAILED_FETCH_MINUTES));
+        }
+        if failed.len() < MAX_REMEMBERED {
+            failed.insert(key.to_string(), (now, failure));
+        }
+    }
+}
 
 /// Fetches a server's discovery document.
 #[async_trait]
@@ -247,7 +352,10 @@ pub struct DefaultPeerService {
     fetcher: Arc<dyn DiscoveryFetcher>,
     allow_http: bool,
     per_peer: KeyedRateLimiter,
-    overall: KeyedRateLimiter,
+    per_user: KeyedRateLimiter,
+    per_address: KeyedRateLimiter,
+    per_kind: KeyedRateLimiter,
+    recent: RecentFetches,
 }
 
 impl DefaultPeerService {
@@ -262,28 +370,72 @@ impl DefaultPeerService {
             fetcher,
             allow_http,
             per_peer: KeyedRateLimiter::new(60, 1),
-            overall: KeyedRateLimiter::new(60, 60),
+            per_user: KeyedRateLimiter::new(60, FETCHES_PER_USER_PER_MINUTE),
+            per_address: KeyedRateLimiter::new(60, FETCHES_PER_ADDRESS_PER_MINUTE),
+            per_kind: KeyedRateLimiter::new(60, FETCHES_PER_KIND_PER_MINUTE),
+            recent: RecentFetches::default(),
         }
     }
 
-    /// Whether a fetch for `server_id` fits one per peer per minute and 60 a minute in all.
-    fn may_fetch(&self, server_id: &str) -> bool {
+    /// Whether `requester`'s share of the budget allows another fetch now; this server's own
+    /// work has no share and always may.
+    fn requester_may_fetch(&self, requester: DiscoveryRequester, now: DateTime<Utc>) -> bool {
+        let decision = match requester {
+            DiscoveryRequester::Server => return true,
+            DiscoveryRequester::User(user_id) => {
+                self.per_user.check_and_record(&user_id.to_string(), now)
+            }
+            DiscoveryRequester::Address(address) => self.per_address.check_and_record(
+                &address.map_or_else(|| "unknown".to_string(), |ip| ip.to_string()),
+                now,
+            ),
+        };
+        matches!(decision, RateLimitDecision::Allowed)
+    }
+
+    /// Whether a fetch for `requester`, of the peer or origin `key` and of `kind`, fits:
+    /// `requester`'s share first, then once a minute per `key` (none for an explicit pin, whose
+    /// repeats the remembered outcomes answer), then the budget of `kind`. A refusal is
+    /// counted in the `peer_discovery` metric.
+    fn may_fetch(&self, key: &str, kind: FetchKind, requester: DiscoveryRequester) -> bool {
         let now = Utc::now();
-        if matches!(
-            self.per_peer.check_and_record(server_id, now),
-            RateLimitDecision::Limited { .. }
-        ) {
-            crate::metrics::rate_limited("peer_discovery");
-            return false;
-        }
-        let allowed = matches!(
-            self.overall.check_and_record("all", now),
-            RateLimitDecision::Allowed
-        );
+        let allowed = self.requester_may_fetch(requester, now)
+            && (matches!(kind, FetchKind::Pin)
+                || matches!(
+                    self.per_peer.check_and_record(key, now),
+                    RateLimitDecision::Allowed
+                ))
+            && matches!(
+                self.per_kind.check_and_record(kind.key(), now),
+                RateLimitDecision::Allowed
+            );
         if !allowed {
             crate::metrics::rate_limited("peer_discovery");
         }
         allowed
+    }
+
+    /// The pin of `origin` when it is `active`, fetched within [`REFRESH_AFTER_HOURS`] and of
+    /// `expected_server_id` when one is given: the pin of that id, else the one the origin
+    /// pinned last here.
+    async fn fresh_pin_at(
+        &self,
+        origin: &str,
+        expected_server_id: Option<&str>,
+    ) -> ServiceResult<Option<PeerServer>> {
+        let Some(server_id) = expected_server_id
+            .map(str::to_string)
+            .or_else(|| self.recent.pinned_at(origin))
+        else {
+            return Ok(None);
+        };
+        let Some(peer) = self.repo.find(&server_id).await? else {
+            return Ok(None);
+        };
+        let fresh = peer.status == PeerStatus::Active
+            && peer.origin == origin
+            && Utc::now() - peer.fetched_at < chrono::Duration::hours(REFRESH_AFTER_HOURS);
+        Ok(fresh.then_some(peer))
     }
 
     async fn fetch_verified(
@@ -454,7 +606,11 @@ impl DefaultPeerService {
         let checked = match declared_handle_domain(&peer) {
             None => None,
             Some(domain) => {
-                let check = if self.may_fetch(&format!("handle-domain:{domain}")) {
+                let check = if self.may_fetch(
+                    &format!("handle-domain:{domain}"),
+                    FetchKind::HandleDomain,
+                    DiscoveryRequester::Server,
+                ) {
                     check_handle_domain(
                         self.fetcher.as_ref(),
                         &peer.origin,
@@ -505,9 +661,13 @@ impl DefaultPeerService {
         Ok(peer)
     }
 
-    /// Refresh within the limits; a failure keeps the pin as it was.
-    async fn refresh_or_keep(&self, peer: PeerServer) -> ServiceResult<PeerLookup> {
-        if !self.may_fetch(&peer.server_id) {
+    /// Refresh within the limits, charged to `requester`; a failure keeps the pin as it was.
+    async fn refresh_or_keep(
+        &self,
+        peer: PeerServer,
+        requester: DiscoveryRequester,
+    ) -> ServiceResult<PeerLookup> {
+        if !self.may_fetch(&peer.server_id, FetchKind::Refresh, requester) {
             return Ok(lookup(&peer, Utc::now()));
         }
         match self.refresh_pinned(&peer).await {
@@ -532,18 +692,29 @@ impl PeerService for DefaultPeerService {
         server_id: &str,
         origin: Option<&str>,
         key_seq: Option<u32>,
+        requester: DiscoveryRequester,
     ) -> ServiceResult<PeerLookup> {
         let Some(peer) = self.repo.find(server_id).await? else {
             let Some(origin) = origin.and_then(|o| normalize_origin(o, self.allow_http).ok())
             else {
                 return Ok(PeerLookup::Unknown);
             };
-            if !self.may_fetch(server_id) {
+            // Keyed by id and origin together, so naming an id with another origin uses up
+            // neither the minute nor the remembered outcome of the id at its own origin.
+            let key = format!("{server_id} {origin}");
+            if self.recent.failed(&key, Utc::now()).is_some()
+                || !self.may_fetch(&key, FetchKind::Introduced, requester)
+            {
                 return Ok(PeerLookup::Unknown);
             }
             return match self.fetch_verified(&origin, Some(server_id)).await {
                 Ok(found) => match self.insert_pin(&origin, &found).await {
-                    Ok(peer) => Ok(lookup(&peer, Utc::now())),
+                    Ok(peer) => {
+                        // The new pin counts as the peer's fetch of this minute.
+                        self.per_peer.check_and_record(server_id, Utc::now());
+                        self.recent.record_pinned(&origin, &peer.server_id);
+                        Ok(lookup(&peer, Utc::now()))
+                    }
                     Err(ServiceError::Conflict(reason)) => {
                         tracing::warn!(
                             peer_server_id = %server_id,
@@ -560,6 +731,8 @@ impl PeerService for DefaultPeerService {
                         reason = %reason,
                         "could not pin an unknown peer"
                     );
+                    self.recent
+                        .record_failed(&key, FetchFailure::Invalid(reason), Utc::now());
                     Ok(PeerLookup::Unknown)
                 }
             };
@@ -570,28 +743,52 @@ impl PeerService for DefaultPeerService {
         let stale = Utc::now() - peer.fetched_at > chrono::Duration::hours(REFRESH_AFTER_HOURS);
         let ahead = key_seq.is_some_and(|seq| seq > peer.head_seq);
         if stale || ahead {
-            return self.refresh_or_keep(peer).await;
+            return self.refresh_or_keep(peer, requester).await;
         }
         Ok(lookup(&peer, Utc::now()))
     }
 
     async fn refresh(&self, server_id: &str) -> ServiceResult<PeerLookup> {
         match self.repo.find(server_id).await? {
-            Some(peer) if peer.status == PeerStatus::Active => self.refresh_or_keep(peer).await,
+            Some(peer) if peer.status == PeerStatus::Active => {
+                self.refresh_or_keep(peer, DiscoveryRequester::Server).await
+            }
             Some(peer) => Ok(lookup(&peer, Utc::now())),
             None => Ok(PeerLookup::Unknown),
         }
     }
 
-    async fn pin(&self, origin: &str, expected_server_id: Option<&str>) -> ServiceResult<PeerDto> {
+    async fn pin(
+        &self,
+        origin: &str,
+        expected_server_id: Option<&str>,
+        requester: DiscoveryRequester,
+    ) -> ServiceResult<PeerDto> {
         let origin = normalize_origin(origin, self.allow_http)
             .map_err(|e| ServiceError::Validation(e.to_string()))?;
+        if let Some(peer) = self.fresh_pin_at(&origin, expected_server_id).await? {
+            return Ok(to_dto(&peer));
+        }
+        let key = format!("{origin} {}", expected_server_id.unwrap_or_default());
+        if let Some(failure) = self.recent.failed(&key, Utc::now()) {
+            return Err(failure.to_error());
+        }
+        if !self.may_fetch(&key, FetchKind::Pin, requester) {
+            return Err(ServiceError::RateLimited {
+                retry_after_seconds: 60,
+            });
+        }
+        let failed = |failure: FetchFailure| {
+            let error = failure.to_error();
+            self.recent.record_failed(&key, failure, Utc::now());
+            error
+        };
         let bytes = self.fetcher.fetch(&origin).await.map_err(|e| {
             tracing::warn!(error = %e, "discovery fetch failed");
-            ServiceError::Unavailable
+            failed(FetchFailure::Unreachable)
         })?;
         let found = verify_discovery(&bytes, &origin, expected_server_id)
-            .map_err(ServiceError::Validation)?;
+            .map_err(|reason| failed(FetchFailure::Invalid(reason)))?;
         let peer = match self.repo.find(&found.state.server_id).await? {
             None => {
                 let peer = self.insert_pin(&origin, &found).await?;
@@ -611,6 +808,7 @@ impl PeerService for DefaultPeerService {
                 }
             },
         };
+        self.recent.record_pinned(&origin, &peer.server_id);
         Ok(to_dto(&peer))
     }
 

@@ -70,20 +70,52 @@ pub fn count_query_fields(fields: &[RootFields]) -> usize {
         .sum()
 }
 
+/// Query root fields whose work is costly: each may fetch from another server.
+pub const COSTLY_QUERY_FIELDS: &[&str] = &["remoteServer", "remoteIdentity"];
+
+/// The most [`COSTLY_QUERY_FIELDS`] one HTTP request runs, across its batch, counted as
+/// [`MAX_QUERY_ROOT_FIELDS`] counts.
+pub const MAX_COSTLY_QUERY_FIELDS: usize = 4;
+
+/// [`COSTLY_QUERY_FIELDS`] across a batch, counted as [`count_query_fields`] counts.
+pub fn count_costly_query_fields(fields: &[RootFields]) -> usize {
+    fields
+        .iter()
+        .filter_map(|f| f.as_ref().ok())
+        .filter(|f| f.query_count() > 0)
+        .flat_map(|f| f.fields.iter())
+        .filter(|name| COSTLY_QUERY_FIELDS.contains(&name.as_str()))
+        .count()
+}
+
 /// The GraphQL answer refusing a batch whose query root fields are over
-/// [`MAX_QUERY_ROOT_FIELDS`]: one `TOO_MANY_ROOT_FIELDS` error naming the limit, with nothing
-/// run. `None` for a batch within it.
+/// [`MAX_QUERY_ROOT_FIELDS`], or whose costly ones are over [`MAX_COSTLY_QUERY_FIELDS`]: one
+/// `TOO_MANY_ROOT_FIELDS` error naming the limit, with nothing run. `None` for a batch within
+/// both.
 pub fn query_fields_refusal(fields: &[RootFields]) -> Option<async_graphql::Response> {
-    if count_query_fields(fields) <= MAX_QUERY_ROOT_FIELDS {
+    let (message, limit) = if count_query_fields(fields) > MAX_QUERY_ROOT_FIELDS {
+        (
+            format!(
+                "a request runs at most {MAX_QUERY_ROOT_FIELDS} query root fields, aliases, \
+                 repeated fields and fragment expansions each counted"
+            ),
+            MAX_QUERY_ROOT_FIELDS,
+        )
+    } else if count_costly_query_fields(fields) > MAX_COSTLY_QUERY_FIELDS {
+        (
+            format!(
+                "a request runs at most {MAX_COSTLY_QUERY_FIELDS} of {}, aliases, repeated \
+                 fields and fragment expansions each counted",
+                COSTLY_QUERY_FIELDS.join(", ")
+            ),
+            MAX_COSTLY_QUERY_FIELDS,
+        )
+    } else {
         return None;
-    }
-    let error = async_graphql::Error::new(format!(
-        "a request runs at most {MAX_QUERY_ROOT_FIELDS} query root fields, aliases, repeated \
-         fields and fragment expansions each counted"
-    ))
-    .extend_with(|_, e| {
+    };
+    let error = async_graphql::Error::new(message).extend_with(|_, e| {
         e.set("code", TOO_MANY_ROOT_FIELDS);
-        e.set("limit", MAX_QUERY_ROOT_FIELDS as u64);
+        e.set("limit", limit as u64);
     });
     Some(async_graphql::Response::from_errors(vec![
         error.into_server_error(async_graphql::Pos::default()),
@@ -538,6 +570,39 @@ mod tests {
             "...F ".repeat(MAX_QUERY_ROOT_FIELDS + 1)
         )));
         assert!(query_fields_refusal(&batch_fields(&fragment)).is_some());
+    }
+
+    #[test]
+    fn costly_query_fields_are_capped_across_the_batch() {
+        let costly = |n: usize| {
+            let fields: Vec<String> = (0..n)
+                .map(|i| {
+                    format!("a{i}: remoteServer(origin: \"https://h{i}.example\") {{ serverId }}")
+                })
+                .collect();
+            async_graphql::Request::new(format!("{{ {} }}", fields.join(" ")))
+        };
+        let at_cap = async_graphql::BatchRequest::Batch(vec![
+            costly(MAX_COSTLY_QUERY_FIELDS - 1),
+            async_graphql::Request::new("{ remoteIdentity(principalId: \"p\") { principalId } }"),
+        ]);
+        assert_eq!(
+            count_costly_query_fields(&batch_fields(&at_cap)),
+            MAX_COSTLY_QUERY_FIELDS
+        );
+        assert!(query_fields_refusal(&batch_fields(&at_cap)).is_none());
+
+        let over = async_graphql::BatchRequest::Batch(vec![costly(3), costly(2)]);
+        let refusal = query_fields_refusal(&batch_fields(&over)).expect("refused");
+        let extensions = refusal.errors[0].extensions.as_ref().expect("extensions");
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::Value::from(TOO_MANY_ROOT_FIELDS))
+        );
+        assert_eq!(
+            extensions.get("limit"),
+            Some(&async_graphql::Value::from(MAX_COSTLY_QUERY_FIELDS as u64))
+        );
     }
 
     /// `depth` inline fragments around `field`.

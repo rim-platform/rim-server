@@ -5,7 +5,8 @@ use mockall::automock;
 
 use crate::ServiceResult;
 use crate::s2s::dto::{
-    PeerBlockChange, PeerDto, PeerLookup, S2sClientError, S2sRequest, S2sResponse,
+    DiscoveryRequester, PeerBlockChange, PeerDto, PeerLookup, S2sClientError, S2sRequest,
+    S2sResponse,
 };
 
 /// Peers this server talks to: pinning a peer's key log from its discovery document, keeping
@@ -14,26 +15,38 @@ use crate::s2s::dto::{
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait PeerService: Send + Sync {
     /// The keys `server_id` signs with. A peer not pinned yet is pinned from `origin` when one
-    /// is given (its inception must hash to `server_id`). A pinned peer is refetched from its
-    /// pinned origin when `key_seq` is above its head or the pin is over 6 hours old, at most
-    /// once a minute per peer and 60 times a minute in all; a failed refetch keeps the pin.
+    /// is given (its inception must hash to `server_id`); an origin that failed to pin that id
+    /// is not fetched again for 5 minutes. A pinned peer is refetched from its pinned origin
+    /// when `key_seq` is above its head or the pin is over 6 hours old; a failed refetch keeps
+    /// the pin. Every fetch is charged to `requester` and to the budget of its kind, first pins
+    /// and refetches each having their own, and to the peer, at most once a minute.
     async fn resolve(
         &self,
         server_id: &str,
         origin: Option<&str>,
         key_seq: Option<u32>,
+        requester: DiscoveryRequester,
     ) -> ServiceResult<PeerLookup>;
 
     /// Refetch a pinned peer now, within the same limits, as after a `401` from it.
     async fn refresh(&self, server_id: &str) -> ServiceResult<PeerLookup>;
 
-    /// Pin the server at `origin`, or refresh its pin when it is pinned already.
+    /// Pin the server at `origin`, or refresh its pin when it is pinned already. A pin of that
+    /// origin fetched within 6 hours is returned as it is, and an origin whose fetch failed is
+    /// answered with the same failure for 5 minutes, both without a fetch. A fetch is charged to
+    /// `requester` and to the budget of pins.
     ///
     /// # Errors
     /// `Validation` when the origin is not acceptable, the document does not verify, its id is
     /// not `expected_server_id`, or its descriptor has no server-to-server endpoint at the
-    /// origin; `Unavailable` when it cannot be fetched; `Forbidden` when the pin forked.
-    async fn pin(&self, origin: &str, expected_server_id: Option<&str>) -> ServiceResult<PeerDto>;
+    /// origin; `Unavailable` when it cannot be fetched; `RateLimited` when the budget of
+    /// `requester` or of pins is spent; `Forbidden` when the pin forked.
+    async fn pin(
+        &self,
+        origin: &str,
+        expected_server_id: Option<&str>,
+        requester: DiscoveryRequester,
+    ) -> ServiceResult<PeerDto>;
 
     /// A pinned peer's discovery document as JSON text, rebuilt from its pinned key log and
     /// descriptor.

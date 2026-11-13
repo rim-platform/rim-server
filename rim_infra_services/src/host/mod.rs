@@ -51,7 +51,7 @@ use rim_services::relay::dto::{
     ClaimConversation, Claimer, DeliverItem, IdentityDocument, OutboxPage, PeerClaimRequest,
     PeerClaimResponse,
 };
-use rim_services::s2s::dto::{PeerLookup, S2sMethod, S2sRequest};
+use rim_services::s2s::dto::{DiscoveryRequester, PeerLookup, S2sMethod, S2sRequest};
 use rim_services::s2s::service::{PeerService, S2sClient};
 use rim_services::session_revocation::SessionRevocations;
 use rim_services::{Actor, ServiceError, ServiceResult};
@@ -752,7 +752,11 @@ impl DefaultHostService {
             let Some(origin) = origin_of(&url) else {
                 continue;
             };
-            match self.peers.pin(&origin, None).await {
+            match self
+                .peers
+                .pin(&origin, None, DiscoveryRequester::Server)
+                .await
+            {
                 Ok(pinned) if pinned.server_id != self.own_id() => {
                     first.get_or_insert(pinned.server_id);
                 }
@@ -842,7 +846,11 @@ impl DefaultHostService {
         relay: &str,
         verified: &VerifiedIdentity,
     ) -> ServiceResult<bool> {
-        match self.peers.resolve(relay, None, None).await {
+        match self
+            .peers
+            .resolve(relay, None, None, DiscoveryRequester::Server)
+            .await
+        {
             Ok(PeerLookup::Ready(keys)) => {
                 self.relay_speaks_for(user_id, relay, &keys.origin, verified)
                     .await
@@ -1181,6 +1189,7 @@ impl HostService for DefaultHostService {
                     &member.principal_id,
                     &member.relay_urls,
                     &|server_id| self.admits_outbound(server_id),
+                    DiscoveryRequester::User(actor.user_id),
                 )
                 .await;
                 let user_id = match (fetched, existing) {
