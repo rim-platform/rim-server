@@ -19,19 +19,29 @@ that RIM is ready for production, waits for that outside review (`docs/security-
 
 | Area | |
 |---|---|
-| Chat | Workspaces, public and private channels, DMs and groups, threads, replies, edits, forwards, attachments with quotas, reactions, pins, mentions, read state with mark unread, an inbox, Home and Unreads pages, notification rules with an email digest, presence and typing, link previews, custom emoji, full-text search |
+| Chat | Workspaces, public and private channels, DMs and groups, threads, replies, edits, forwards, attachments with quotas, reactions, pins, mentions, read state with mark unread, an inbox, a Home page built from boxes, an Unreads page across workspaces, notification rules with an email digest, presence and typing, link previews, custom emoji, full-text search |
 | Moderation | Owner, Moderator, Member and Guest; kick, ban, timeout, slow mode, message reports including franked reports of encrypted messages; an audit log with retention |
-| The programmable layer | A command registry with typed arguments, sensitivity tiers and confirmations; user commands and macros; keybinds with layers and an opt-in Vim profile; pipelines; workspace state; channel lenses |
-| Plugins | Local-process plugins on the desktop and sandboxed web plugins on the desktop and the web; a TypeScript SDK and a frozen protocol; per-workspace registries of publisher-signed plugins; four first-party plugins (Kubernetes pods, GitHub pull requests, polls, releases) |
-| AI agent | Anthropic or OpenAI with your own key; built-in changes wait for confirmation; approved non-dangerous plugin commands run without asking each time |
+| The programmable layer | A command registry with typed arguments, sensitivity tiers and confirmations, where every button is also a command for the palette, a keybind, a macro or a Home box; refusals that say why a command did not run; macros kept with your account; keybinds with layers and an opt-in Vim profile; pipelines that can welcome people as a bot; workspace state; channel lenses |
+| Plugins | Local-process plugins on the desktop and sandboxed web plugins on the desktop and the web; a TypeScript SDK and a frozen protocol; per-workspace registries of publisher-signed plugins; plugins that run the app's own commands a person grants them; four first-party plugins (Kubernetes pods, GitHub pull requests, polls, releases) |
+| AI agents | A built-in agent with your own Anthropic or OpenAI key, whose changes wait for confirmation. Agents on your computer, such as Claude Code, connect to the desktop app: they read only the channels you grant, every send or change waits for your approval, and a run view shows what each was given. The desktop app can also install and start agent programs (Claude Code, Codex, Gemini CLI, opencode, Goose) in a folder and direct them from RIM. The contract is `docs/specs/agent-data-flow-v1.md` |
+| Bots and webhooks | Bot accounts an Owner or Moderator creates, with revocable tokens and a small REST API; one incoming webhook URL per channel, bound to a bot, with formats anyone can write and ready-made ones for GitHub and Grafana |
 | Identity | Accounts are key pairs: identity and device keys, an OPAQUE account password, device linking by code, a recovery phrase and an identity-key backup |
 | Encryption | MLS for DMs and private groups with a hybrid X25519 + ML-KEM-768 key agreement; channels stay plaintext |
 | Decentralization | Every server has its own key; relays with a request inbox for strangers; workspace hosts that serve members from other servers through their relay |
 | History on your devices | An encrypted local message cache with local search and offline reading; an encrypted archive in a folder, Google Drive, Dropbox, OneDrive, S3-compatible storage or a separate backup endpoint |
+| Desktop | Linux and Windows apps with signed updates; staying in the tray and starting at login, both opt-in |
 | Operations | A Docker Compose stack with backup, restore and a restore drill; health probes, Prometheus metrics, instance feature switches, an upgrade guide with rollback |
 
-## Now: early community testing
+## Now: people using it
 
+The features for daily use are in place. Until a few teams use RIM every day, the work is making
+it easy to start and reliable to keep open, not adding features.
+
+- Have two or three small teams outside the project use it for their real work, and fix what
+  they trip on first, so decisions rest on more than one person's use.
+- Make the first minutes short: a new person joins a workspace, exchanges messages and tries one
+  plugin, webhook or agent without help.
+- Move RIM's own development into a RIM workspace, so every feature is used daily.
 - Maintain the early `0.0.x` releases through the release checklist
   (`docs/operations/release-checklist.md`): signed server images and desktop builds for Linux
   and Windows, with feedback from people trying them.
@@ -39,10 +49,6 @@ that RIM is ready for production, waits for that outside review (`docs/security-
   workspace every new account joins, with the web client on `chat.rim-platform.org`
   (`docs/operations/relay-public.md`).
 - Make the four first-party plugins and their signed release bundles easy to discover and install.
-- Move RIM's own development into a RIM workspace, so every agent feature is used daily before it
-  ships.
-- Have two or three small teams outside the project try it, so decisions rest on more than one
-  person's use.
 - Start scheduling the outside cryptographic review.
 
 ## Next
@@ -52,45 +58,19 @@ explains an undecryptable message, and a manual multi-device test pass in the re
 The review runs on its own track: it does not wait for the items below, and if they slip, `0.1.0`
 does not.
 
-In order:
+Refusals that say why, the contract for where agents may move data, RIM in Claude Code and other
+agents, and bots with incoming webhooks shipped in server `0.0.9` and the clients `0.0.12`; they
+are under "What works today".
 
-1. **Refusals that say why.** When the command dispatcher refuses a call it says whether it was
-   denied by policy (naming what is missing, and the target only if you can already see it, so a
-   refusal never reveals a private channel), needs a confirmation, failed for a technical reason
-   (and whether retrying is safe), or expired. Clients show each as its own card instead of a
-   generic error.
-2. **Where agents may move data.** A contract in `docs/specs/`, written before the next item ships.
-   It covers what RIM hands to an agent: read grants, the record of what was given, content marked
-   as untrusted so text an agent reads is less able to steer it, the notice to others in an
-   encrypted conversation, and what plugin commands return. It also states what RIM cannot control
-   once an agent has the content.
-3. **RIM in Claude Code and other agents.** The desktop app serves RIM as a local MCP server,
-   and a Claude Code plugin packages it with a skill, so an agent on your machine can read your
-   conversations, search, draft replies and run commands. It acts as you, through your desktop
-   app: your keys stay on the device, encrypted conversations work, and every send or change
-   waits for your confirmation in RIM, under the same command registry and gate as the built-in
-   agent. Read-only by default; an encrypted conversation reaches the agent's model only with a
-   grant for that conversation, and the audit log records what the agent did. An agent is paired
-   with the desktop app, and it can read nothing until you grant a workspace or conversation.
-   Read-only tools come first and sending follows. The desktop keeps a record of what the agent was
-   given, and each task gets a run identifier that links its audit entries, in a run view only you
-   see. Outside agents can use plugin commands you approve one by one and per agent. The desktop app
-   has to be running for this, so it gains a way to stay in the tray.
-4. **Bots and incoming webhooks.** A bot account a workspace Owner or Moderator creates, with
-   tokens it can revoke; one incoming webhook URL per channel, bound to a bot, with its own rate
-   limit; formats anyone can write, with ready-made ones such as GitHub, so releases post
-   themselves. Bots never join encrypted conversations. A bot's token gives an agent an identity
-   the server verifies, with its own grants. The agent behind a bot runs where its owner chooses,
-   with its owner's model and key: on a personal machine it answers while that machine is on, and
-   a server's owner can run it next to the server, as the content check runs. The channel shows
-   who runs it and where what it reads goes. The public relay runs no such agent.
-5. **A first-run path** in the clients that grows with the product: create a key and write down
+In order, once the work in "Now" calls for them:
+
+1. **A first-run path** in the clients that grows with the product: create a key and write down
    the phrase, choose a drive for the archive, pick a relay, install a first plugin.
-6. **Data export** per person and per workspace.
-7. **Outgoing webhooks and richer pipelines**: posting, calling a webhook and setting state as
+2. **Data export** per person and per workspace.
+3. **Outgoing webhooks and richer pipelines**: posting, calling a webhook and setting state as
    pipeline actions, conditions, run history and retries; commands a bot registers in the
    palette.
-8. **Member lists at relay scale**, so a workspace with thousands of members does not load them
+4. **Member lists at relay scale**, so a workspace with thousands of members does not load them
    all at once, and handle lookup for `@username:rim-platform.org`.
 
 ## Later
@@ -101,7 +81,7 @@ build them.
 - **Agent work the team can see:** a run card shared in a conversation, picked up only if daily use
   shows the need. It never reveals what the agent read somewhere more private.
 - **Approvals by another person:** a person with authority approves what a bot asked for, with
-  stored run records, picked up after the agent items in "Next" have been in daily use.
+  stored run records, picked up after the agent features have been in daily use.
 - **Cards on Home:** plugins adding their own cards to Home, once the SDK has a way to.
 - **Calls:** voice calls with the team, and video and screen sharing after them, because talking
   a thing through is sometimes better than writing it. They follow the same rules as messages:
