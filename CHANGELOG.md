@@ -21,18 +21,6 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
-## [0.0.10] - 2026-11-13
-
-### Changed
-
-- The built-in AI agent is called the assistant in command titles: `workspace.open_agent` is Open
-  Assistant, `settings.open.agent` is Settings: Assistant, `settings.open.plugin_ai` is Settings:
-  Assistant's Plugin Commands and `agents.allow_in_encrypted_conversation` is Let the Assistant
-  Read This Conversation…. `settings.open.bots` is Settings: Bots & webhooks, the Agents category
-  describes the assistant and the agents on your computer, and Browse Plugins says what Settings >
-  Plugins offers. `moderation.block_principal` and `moderation.unblock_principal` are Block
-  Account… and Unblock Account…. Command ids are unchanged, so keybinds and macros keep working.
-
 ### Security
 
 - Attachments of a deleted message can no longer be downloaded, and an hourly job deletes their
@@ -60,6 +48,18 @@ tag `v<version>`, the version every crate in the workspace carries.
 - `upgrade.sh` and `rim-deploy` write the digests their signature checks verified
   (`RIM_SERVER_DIGEST`, `RIM_IMAGECHECK_DIGEST`, `RIM_WEB_DIGEST`) into `.env`, so compose runs
   exactly those images, and the third-party images in the compose files are pinned by digest.
+
+## [0.0.10] - 2026-11-13
+
+### Changed
+
+- The built-in AI agent is called the assistant in command titles: `workspace.open_agent` is Open
+  Assistant, `settings.open.agent` is Settings: Assistant, `settings.open.plugin_ai` is Settings:
+  Assistant's Plugin Commands and `agents.allow_in_encrypted_conversation` is Let the Assistant
+  Read This Conversation…. `settings.open.bots` is Settings: Bots & webhooks, the Agents category
+  describes the assistant and the agents on your computer, and Browse Plugins says what Settings >
+  Plugins offers. `moderation.block_principal` and `moderation.unblock_principal` are Block
+  Account… and Unblock Account…. Command ids are unchanged, so keybinds and macros keep working.
 
 ### Fixed
 
