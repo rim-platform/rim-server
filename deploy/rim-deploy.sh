@@ -11,7 +11,7 @@
 #
 # --check does nothing while <dir>/HOLD exists. For each repository, rim-server first, it skips
 # a latest release that is a pre-release or whose tag is not v<major>.<minor>.<patch>, one that
-# already runs (RIM_VERSION in <dir>/.env; for rim-ui the web client's version below), and one
+# is older than the version that runs (a rollback is a deploy by hand), one that already runs (RIM_VERSION in <dir>/.env; for rim-ui the web client's version below), and one
 # that <dir>/FAILED (rim-ui: <dir>/FAILED-web) names: a deploy that fails writes its version
 # there, and the version is tried again once the file is gone or by hand. When a version's
 # images are not published yet (upgrade.sh's exit 2) the check ends quietly and the next one
@@ -19,15 +19,18 @@
 # non-zero when either part failed.
 #
 # Before anything is fetched, the version's rim-server image must carry the signature of the
-# release workflow of its tag, since the tag's files run as root. The fetched files replace
-# those of the same name in the directory; .env and .env.previous are never touched, SOURCE
-# records the tag, and when the upgrade does not complete the files from before come back.
+# release workflow of its tag, since the tag's files run as root. The files come from the
+# commit that signature names, not from wherever the tag points when they are fetched, so a
+# tag that was moved afterwards installs nothing. The fetched files replace those of the same
+# name in the directory; .env and .env.previous are never touched, SOURCE records the tag and
+# the commit, and when the upgrade does not complete the files from before come back.
 #
 # The web client runs RIM_WEB_VERSION, else the tag of a RIM_WEB_IMAGE of
 # ghcr.io/rim-platform/rim-web:<version>, else RIM_VERSION. Its deploy needs the deployment to
 # run the `web` service and the rim-web image to carry the signature of rim-ui's release
 # workflow of the tag; it keeps .env as .env.previous, writes RIM_WEB_VERSION (or, while the
-# directory's compose.yml does not read it, RIM_WEB_IMAGE), pulls and restarts `web` and waits up
+# directory's compose.yml does not read it, RIM_WEB_IMAGE) and, when compose.yml reads it, the
+# verified digest as RIM_WEB_DIGEST so that image and no other runs, pulls and restarts `web` and waits up
 # to RIM_UPGRADE_TIMEOUT seconds (90) for it to be healthy, and puts .env.previous back when it
 # is not. Any other RIM_WEB_IMAGE is a custom web image, which is never deployed over.
 #
@@ -110,9 +113,31 @@ restore_files() {
 	restore=0
 }
 
+# Whether version $1 is older than $2: by major, minor and patch, and a pre-release before the
+# release of the same numbers.
+older() {
+	local a=${1%%-*} b=${2%%-*}
+	if [[ $a != "$b" ]]; then
+		[[ $(printf '%s\n%s\n' "$a" "$b" | sort -V | sed -n 1p) == "$a" ]]
+	else
+		[[ $1 == *-* && $2 != *-* ]]
+	fi
+}
+
+# The digest cosign's verification output $1 says the signature is over, or nothing.
+verified_digest() {
+	sed -n 's/.*"docker-manifest-digest" *: *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' <<<"$1" | head -n 1
+}
+
+# The commit cosign's verification output $1 says the signing workflow ran at, or nothing.
+verified_commit() {
+	sed -n 's/.*"githubWorkflowSha" *: *"\([0-9a-f]\{40\}\)".*/\1/p' <<<"$1" | head -n 1
+}
+
 # Whether the rim-server image of version $1 is published and signed by the rim-server release
 # workflow of tag v$1. Returns 1 with `status` set to 2 when it is not published yet; exits
-# when its signature does not verify.
+# when its signature does not verify or does not name the commit it was built from. Sets
+# `release_commit` to that commit.
 signed_release() {
 	local image=ghcr.io/$repo:$1
 	if ! docker manifest inspect "$image" >/dev/null 2>&1; then
@@ -121,23 +146,28 @@ signed_release() {
 		return 1
 	fi
 	command -v cosign >/dev/null || die "cosign is not installed"
-	cosign verify "$image" \
+	local verified
+	verified=$(cosign verify "$image" \
 		--certificate-identity "https://github.com/$repo/.github/workflows/release.yaml@refs/tags/v$1" \
-		--certificate-oidc-issuer "$issuer" >/dev/null ||
+		--certificate-oidc-issuer "$issuer") ||
 		die "$image is not signed by the release workflow of v$1; nothing from the tag runs"
+	release_commit=$(verified_commit "$verified")
+	[[ -n $release_commit ]] || die "the signature of $image names no commit; nothing from the tag runs"
 }
 
-# Downloads the tag v<version>, puts its deploy/ files into the directory and runs their
-# upgrade.sh, whose exit status it leaves in `status`; the files from before come back unless
-# that is 0.
+# Downloads the commit the signed image of v<version> was built from, puts its deploy/ files
+# into the directory and runs their upgrade.sh, whose exit status it leaves in `status`; the
+# files from before come back unless that is 0.
 deploy() {
 	local version=$1 url file
-	url=https://github.com/$repo/archive/refs/tags/v$version.tar.gz
+	release_commit=""
 
-	# The tag's files run as root, so they are fetched only for a version whose image an
-	# approved release run signed: a tag on its own installs nothing.
+	# The files run as root, so they are fetched only for a version whose image an approved
+	# release run signed, and from the commit that run names: a tag on its own installs
+	# nothing, and moving it changes nothing.
 	status=0
 	signed_release "$version" || return 0
+	url=https://github.com/$repo/archive/$release_commit.tar.gz
 
 	say "fetching $url"
 	curl -fsSL --retry 3 -o "$work/source.tar.gz" "$url" || die "could not download $url"
@@ -172,7 +202,7 @@ deploy() {
 		printf 'SOURCE\n' >>"$work/added"
 	fi
 	{
-		printf 'deploy/ of %s, tag v%s\n' "$repo" "$version"
+		printf 'deploy/ of %s, tag v%s, commit %s\n' "$repo" "$version" "$release_commit"
 		printf 'fetched %s from %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$url"
 		printf 'sha256 %s\n' "$(sha256sum "$work/source.tar.gz" | cut -d' ' -f1)"
 	} >"$dir/SOURCE"
@@ -189,18 +219,27 @@ deploy() {
 
 # Writes the web client's version $1 into the env file: RIM_WEB_VERSION, dropping a
 # RIM_WEB_IMAGE, when the directory's compose.yml reads RIM_WEB_VERSION; else RIM_WEB_IMAGE.
+# When compose.yml reads RIM_WEB_DIGEST, the digest $2 the signature was verified over goes in
+# as that, so the image that runs is the one that was verified.
 set_web() {
-	local tmp name=RIM_WEB_IMAGE value=$web_image:$1
+	local tmp name=RIM_WEB_IMAGE value=$web_image:$1 digest=""
 	if grep -q RIM_WEB_VERSION "$dir/compose.yml"; then
 		name=RIM_WEB_VERSION
 		value=$1
 	fi
+	if grep -q RIM_WEB_DIGEST "$dir/compose.yml"; then
+		digest=$2
+	fi
 	tmp=$(mktemp "$dir/.env.XXXXXX")
-	awk -v name="$name" -v line="$name=$value" '
+	awk -v name="$name" -v line="$name=$value" -v digest="$digest" '
 		index($0, name "=") == 1 { if (!done) print line; done = 1; next }
 		/^RIM_WEB_IMAGE=/ { next }
+		/^RIM_WEB_DIGEST=/ { next }
 		{ print }
-		END { if (!done) print line }
+		END {
+			if (!done) print line
+			if (digest != "") print "RIM_WEB_DIGEST=" digest
+		}
 	' "$dir/.env" >"$tmp"
 	mv "$tmp" "$dir/.env"
 }
@@ -232,14 +271,17 @@ deploy_web() {
 		return 0
 	fi
 	command -v cosign >/dev/null || die "cosign is not installed"
-	cosign verify "$image" \
+	local verified digest
+	verified=$(cosign verify "$image" \
 		--certificate-identity "https://github.com/$web_repo/.github/workflows/release.yaml@refs/tags/v$version" \
-		--certificate-oidc-issuer "$issuer" >/dev/null ||
+		--certificate-oidc-issuer "$issuer") ||
 		die "$image is not signed by the rim-ui release workflow of v$version"
+	digest=$(verified_digest "$verified")
+	[[ -n $digest ]] || die "cosign did not report the digest of $image"
 
 	say "deploying the web client $version; the old env file stays as .env.previous"
 	cp -p "$dir/.env" "$dir/.env.previous"
-	set_web "$version"
+	set_web "$version" "$digest"
 	if compose pull web && compose up -d --no-deps web && web_healthy; then
 		say "the web client runs $version"
 		return 0
@@ -307,6 +349,10 @@ check_server() {
 		say "$version is running; nothing to do"
 		return 0
 	fi
+	if [[ -n $current ]] && older "$version" "$current"; then
+		say "the latest release $version is older than the running $current; --check never rolls back, run rim-deploy $version to do it by hand"
+		return 0
+	fi
 	if [[ -f $dir/FAILED && $(<"$dir/FAILED") == "$version" ]]; then
 		say "$version failed to deploy before; remove $dir/FAILED to try it again, or run rim-deploy $version"
 		return 0
@@ -349,6 +395,10 @@ check_web() {
 	[[ -n $version ]] || return 0
 	if [[ $version == "$current" ]]; then
 		say "web client $version is running; nothing to do"
+		return 0
+	fi
+	if [[ -n $current ]] && older "$version" "$current"; then
+		say "the latest web client release $version is older than the running $current; --check never rolls back, run rim-deploy web $version to do it by hand"
 		return 0
 	fi
 	if [[ -f $dir/FAILED-web && $(<"$dir/FAILED-web") == "$version" ]]; then

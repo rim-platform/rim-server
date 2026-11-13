@@ -43,14 +43,18 @@ In order, it:
    when the web client runs; when one is not, it says which, changes nothing and exits 2;
 2. verifies the signatures against the release workflows, as `docs/self-hosting.md`, "Verify
    the images", says (cosign must be installed): `rim-web` against rim-ui's of the tag
-   `v<web client version>`;
+   `v<web client version>`. The digest each signature is over is kept: the images are pulled
+   by it in step 5;
 3. runs `deploy/backup.sh`, or says there is nothing to back up when the deployment has no
    data volume yet (the first start);
 4. writes `RIM_VERSION=<version>` into `deploy/.env`, keeping the file before as
    `deploy/.env.previous`. When the web client runs and `RIM_WEB_VERSION` is unset, it writes
    `RIM_WEB_VERSION` too: the version that ran before, so the web client stays as it is, or on
    the first start `<version>`. A `RIM_WEB_IMAGE` of `ghcr.io/rim-platform/rim-web:<version>`
-   becomes `RIM_WEB_VERSION=<version>` in the same write;
+   becomes `RIM_WEB_VERSION=<version>` in the same write. The verified digests go in too
+   (`RIM_SERVER_DIGEST`, `RIM_IMAGECHECK_DIGEST` and `RIM_WEB_DIGEST`), so compose runs exactly
+   the images whose signatures were checked, and a tag moved in the registry in between changes
+   nothing. With a digest set, change a version with this script, not by editing `.env`;
 5. pulls the images, runs the migrations (`dc run --rm migrate`) and `dc up -d`;
 6. waits up to 90 seconds (`RIM_UPGRADE_TIMEOUT`) for `/readyz`, then as long for
    `https://<RIM_DOMAIN>/.well-known/rim-server` from the host;

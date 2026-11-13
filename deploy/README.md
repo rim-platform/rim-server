@@ -173,8 +173,11 @@ rim-server first.
 **The server.** When rim-server's version is not `RIM_VERSION` in `.env`, the check first
 verifies with cosign that the version's `rim-server` image carries the signature of that tag's
 release workflow, since the tag's files run as root: a tag without an approved release run
-installs nothing. Then it downloads the tag's source tarball, copies its `deploy/` files over
-the directory, writes `SOURCE` (the tag, the time and the tarball's SHA-256) and runs the tag's
+installs nothing. The signature also names the commit the workflow ran at, and the check
+downloads the source tarball of that commit, not of the tag, so a tag moved after the release
+installs nothing either; a signature that names no commit stops the deploy. It copies the
+commit's `deploy/` files over the directory, writes `SOURCE` (the tag, the commit, the time and
+the tarball's SHA-256) and runs their
 `upgrade.sh <version>` there (`docs/operations/upgrade.md`): the signatures, the backup, the
 migrations, the start and the rollback are its steps. A server upgrade leaves the web client at
 the version it runs.
@@ -182,8 +185,9 @@ the version it runs.
 **The web client.** When the deployment runs the `web` service and rim-ui's version is not the
 web client's (`RIM_WEB_VERSION`, else `RIM_VERSION`), the check verifies that
 `ghcr.io/rim-platform/rim-web:<version>` carries the signature of rim-ui's release workflow of
-that tag, keeps `.env` as `.env.previous`, writes `RIM_WEB_VERSION=<version>` into `.env`, pulls
-the image and restarts the `web` container alone, nothing else. It waits up to 90 seconds
+that tag, keeps `.env` as `.env.previous`, writes `RIM_WEB_VERSION=<version>` into `.env` (and
+the verified digest as `RIM_WEB_DIGEST`, when `compose.yml` reads it, so the image that runs is
+the one that was verified), pulls the image and restarts the `web` container alone, nothing else. It waits up to 90 seconds
 (`RIM_UPGRADE_TIMEOUT`) for the container to be healthy; when it is not, `.env.previous` comes
 back and the web client from before starts again. There is no backup: the web client holds no
 data. On files from releases whose `compose.yml` does not read `RIM_WEB_VERSION` yet it writes
@@ -195,8 +199,9 @@ Nothing in GitHub reaches the host, and no git runs on it. A release is publishe
 `release.yaml` run is approved, so approving a release is the deployment; it runs within five
 minutes, so approve it in a quiet hour.
 
-The deployer writes nothing in `.env` but `RIM_VERSION` and the web client's version
-(`RIM_WEB_VERSION`, or the `RIM_WEB_IMAGE` above), keeps the file before each write as
+The deployer writes nothing in `.env` but `RIM_VERSION`, the web client's version
+(`RIM_WEB_VERSION`, or the `RIM_WEB_IMAGE` above) and the verified image digests
+(`RIM_SERVER_DIGEST`, `RIM_IMAGECHECK_DIGEST`, `RIM_WEB_DIGEST`, which `upgrade.sh` writes too), keeps the file before each write as
 `.env.previous`, and touches neither otherwise; every other file in the directory is the tag's, and the next deploy overwrites a file
 edited on the host. Settings change in `.env` by hand, and so do the **Upgrade:** lines of
 `CHANGELOG.md`, before the release is approved. When the upgrade does not complete, the files
@@ -229,7 +234,9 @@ same way. `RIM_DEPLOY_DIR` names another directory.
   nothing (`upgrade.sh` exits 2); the check puts the files back, ends quietly, and the next one
   tries again.
 - **Brakes.** A release marked **pre-release** on GitHub is never deployed by the timer, which is
-  how a release is published without deploying it. `touch /srv/rim-server/HOLD` stops the timer
+  how a release is published without deploying it. The timer never rolls back either: a latest
+release older than the version that runs is skipped, and an older version is deployed only by
+hand. `touch /srv/rim-server/HOLD` stops the timer
   deploying anything, server or web client, until the file is removed. A server deploy that
   fails writes its version to `FAILED`, a web client deploy that fails to `FAILED-web`, and the
   timer leaves that version alone until the file is removed; the next release deploys as usual.

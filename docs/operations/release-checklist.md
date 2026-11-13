@@ -214,6 +214,10 @@ tags. The next job creates the GitHub release with the changelog section and the
 one for Windows x86_64, and attaches them to its release with `latest.json` for the updater,
 `SHA256SUMS` signed with cosign keyless and a build-provenance attestation for each bundle.
 
+- [ ] The third-party images in `deploy/compose*.yml` and `deploy/backup-lib.sh` (PostgreSQL,
+      Caddy, the backup helper, the monitoring images) are pinned as `name:tag@sha256:<digest>`.
+      Bump a digest in the release that needs a newer image:
+      `docker buildx imagetools inspect <name>:<tag> --format '{{.Manifest.Digest}}'`.
 - [ ] Approve the run on its page ("Review deployments", environment `release`), after checking
       that it ran for the tag just pushed.
 - [ ] The run passes. A run that fails before "Build and push" published nothing: fix the cause,

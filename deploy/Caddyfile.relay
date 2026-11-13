@@ -1,5 +1,9 @@
 # TLS for the public relay; certificates come from Let's Encrypt for RIM_DOMAIN.
 {$RIM_DOMAIN} {
+	# Browsers that reached this site over https keep using https for a year. No preload and no
+	# subdomains: the header says nothing about names this file does not serve.
+	header Strict-Transport-Security "max-age=31536000"
+
 	# The forward path carries bodies up to 32 MiB.
 	request_body {
 		max_size 32MiB
