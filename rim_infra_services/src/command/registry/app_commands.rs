@@ -255,7 +255,7 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     app("settings.open.state", "Settings: State", category::APP),
     app("settings.open.emoji", "Settings: Emoji", category::APP),
     app("settings.open.agents", "Settings: Agents", category::APP),
-    app("settings.open.agent", "Settings: AI Agent", category::APP),
+    app("settings.open.agent", "Settings: Assistant", category::APP),
     app(
         "settings.open.workspace",
         "Settings: Workspace",
@@ -368,7 +368,7 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     ),
     app(
         "agents.allow_in_encrypted_conversation",
-        "Let the AI Agent Read This Conversation…",
+        "Let the Assistant Read This Conversation…",
         category::AGENTS,
     ),
     app(

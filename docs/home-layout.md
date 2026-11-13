@@ -62,6 +62,7 @@ The kinds the RIM app knows. The server doesn't check them; a client does.
 | `mentions` | Mentions and replies | none |
 | `unread` | Unread conversations | none |
 | `agentRuns` | The person's agents' runs | none |
+| `start` | Getting started, a short list of first things to try, each opening its screen | none |
 | `direct` | The latest direct messages | `count`: 3, 5 or 10 |
 | `channel` | One channel's latest messages | `workspaceId`, `conversationId`, `count`: 3, 5 or 10 |
 | `quick` | Buttons that run commands | `actions`: 1 to 6, each a `commandId` and optional `presetArgs` |

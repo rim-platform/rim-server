@@ -139,7 +139,7 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         CommandDefinitionDto {
             id: "workspace.open_marketplace".to_string(),
             title: "Browse Plugins".to_string(),
-            description: "Open Settings > Plugins to find, install and manage plugins.".to_string(),
+            description: "Open Settings > Plugins to install plugins from a folder, a git URL or a link, and manage them.".to_string(),
             category: category::PLUGINS.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,
@@ -167,8 +167,8 @@ pub(super) fn commands() -> Vec<CommandDefinitionDto> {
         },
         CommandDefinitionDto {
             id: "workspace.open_agent".to_string(),
-            title: "Open AI Agent".to_string(),
-            description: "Open the AI agent assistant.".to_string(),
+            title: "Open Assistant".to_string(),
+            description: "Open the assistant panel.".to_string(),
             category: category::AGENTS.to_string(),
             source_kind: CommandSourceKindDto::BuiltIn,
             execution_target: CommandExecutionTargetDto::DesktopLocal,

@@ -21,7 +21,7 @@ pub(crate) const NOTIFICATIONS: &str = "Notifications";
 pub(crate) const MODERATION: &str = "Moderation";
 /// The workspace itself.
 pub(crate) const WORKSPACE: &str = "Workspace";
-/// Outside agents and the in-app AI agent.
+/// The assistant built into RIM, and agents on your computer.
 pub(crate) const AGENTS: &str = "Agents";
 /// Bots, webhooks, the channel's bots panel.
 pub(crate) const BOTS_AND_WEBHOOKS: &str = "Bots & Webhooks";

@@ -6,7 +6,7 @@ principles every change is held to.
 ## In one sentence
 
 > RIM is the self-hosted communication workspace you program: commands, keybinds, macros,
-> pipelines, plugins and an AI operator on top of chat, private and decentralized.
+> pipelines, plugins and the Assistant on top of chat, private and decentralized.
 
 RIM is a place for a team's daily work. It shows what needs you and links to the source, and it
 does not try to replace the project tracker, the calendar or CI. Agents are optional, and RIM
@@ -34,10 +34,10 @@ someone else designed, you shape RIM around your work:
   end-to-end encrypted, so not even the server's operator can read them. People are key pairs,
   not accounts on someone's server, and their history is kept encrypted on their own devices and
   drives.
-- **An AI assistant on your terms.** Bring your own model provider and key. The agent works only
+- **An AI assistant on your terms.** Bring your own model provider and key. The assistant works only
   through the same commands you use, can operate whatever your plugins add, and waits for a
   person to confirm a built-in change. A plugin command runs without asking only if you approved
-  it for the agent, and a dangerous one is only proposed.
+  it for the assistant, and a dangerous one is only proposed.
 
 RIM does not ship a feature per kind of group. A development team, a company, an open-source
 community and an association start from the same core, and each adds what it needs.

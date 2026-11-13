@@ -21,6 +21,12 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Changed
+
+- The built-in command `workspace.open_agent` is titled Open Assistant, and the Agents category
+  describes the assistant and the agents on your computer; Browse Plugins says what Settings >
+  Plugins offers.
+
 ## [0.0.9] - 2026-11-12
 
 ### Added
