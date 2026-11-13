@@ -248,8 +248,23 @@ pub const MAX_HEADER_VALUE_CHARS: usize = 64;
 /// The most `x-` headers of a delivery a format reads.
 pub const MAX_DELIVERY_HEADERS: usize = 50;
 
+/// Whether `name`, in any case, is a header that carries the sender's address: `Forwarded`,
+/// `X-Forwarded-*`, `X-Real-IP`, `X-Client-IP`, `X-Cluster-Client-IP` and the like. A proxy in
+/// front of the server adds them, and none is kept.
+pub fn is_address_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "forwarded"
+        || lower.starts_with("x-forwarded")
+        || lower.starts_with("x-original-forwarded")
+        || matches!(
+            lower.as_str(),
+            "x-real-ip" | "x-client-ip" | "x-cluster-client-ip" | "x-originating-ip"
+        )
+}
+
 /// The headers of a delivery a format reads, from `(name, value)` pairs: names starting `x-`, in
-/// lowercase, with a value of at most [`MAX_HEADER_VALUE_CHARS`], and at most
+/// lowercase, not one that carries the sender's address, with a value of at most
+/// [`MAX_HEADER_VALUE_CHARS`], and at most
 /// [`MAX_DELIVERY_HEADERS`] of them. A preview reads a sample the same way.
 pub fn delivery_headers<'a>(
     headers: impl IntoIterator<Item = (&'a str, &'a str)>,
@@ -258,7 +273,9 @@ pub fn delivery_headers<'a>(
         .into_iter()
         .map(|(name, value)| (name.to_ascii_lowercase(), value))
         .filter(|(name, value)| {
-            name.starts_with("x-") && value.chars().count() <= MAX_HEADER_VALUE_CHARS
+            name.starts_with("x-")
+                && !is_address_header(name)
+                && value.chars().count() <= MAX_HEADER_VALUE_CHARS
         })
         .take(MAX_DELIVERY_HEADERS)
         .map(|(name, value)| (name, value.to_string()))
@@ -343,6 +360,19 @@ pub struct TestDeliveriesDto {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn delivery_headers_drop_the_ones_that_carry_the_senders_address() {
+        let kept = super::delivery_headers([
+            ("X-Forwarded-For", "203.0.113.7"),
+            ("x-forwarded-proto", "https"),
+            ("x-real-ip", "203.0.113.7"),
+            ("x-client-ip", "203.0.113.7"),
+            ("x-original-forwarded-for", "203.0.113.7"),
+            ("x-github-event", "ping"),
+        ]);
+        assert_eq!(kept, [("x-github-event".to_string(), "ping".to_string())]);
+    }
+
     use super::*;
 
     #[test]
