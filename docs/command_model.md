@@ -384,14 +384,14 @@ there.
 | `settings.open.macros` | Settings: Macros | App | |
 | `settings.open.pipelines` | Settings: Pipelines | App | Not in the direct space |
 | `settings.open.plugins` | Settings: Plugins | App | |
-| `settings.open.plugin_ai` | Settings: Plugin AI | App | Desktop only |
+| `settings.open.plugin_ai` | Settings: Assistant's Plugin Commands | App | Desktop only |
 | `settings.open.state` | Settings: State | App | Not in the direct space |
 | `settings.open.emoji` | Settings: Emoji | App | Where the server has custom emoji; not in the direct space |
 | `settings.open.agents` | Settings: Agents | App | Desktop only |
-| `settings.open.agent` | Settings: AI Agent | App | Desktop only |
+| `settings.open.agent` | Settings: Assistant | App | Desktop only |
 | `settings.open.workspace` | Settings: Workspace | Workspace | Owners and moderators; not in the direct space |
 | `settings.open.workspace_moderation` | Settings: Moderation | Workspace | Owners and moderators; not in the direct space |
-| `settings.open.bots` | Settings: Bots | Workspace | Those who manage the workspace's bots; not in the direct space |
+| `settings.open.bots` | Settings: Bots & webhooks | Workspace | Those who manage the workspace's bots; not in the direct space |
 | `settings.open.moderation` | Settings: Instance moderation | App | Instance operators |
 | `settings.open.about` | Settings: About | App | |
 | `settings.assign_keybind` | Assign Keybind… | App | Opens the keybind assigner for the focused conversation, else the open workspace |
@@ -419,13 +419,13 @@ there.
 | `notifications.mark_read` | Mark Notification Read | Notifications | The inbox's selected notification |
 | `unreads.mark_all_shown` | Unreads: Mark All Shown as Read | Unreads | Can be undone |
 | `unreads.toggle_muted` | Unreads: Show or Hide Muted | Unreads | |
-| `agents.allow_in_encrypted_conversation` | Let the AI Agent Read This Conversation… | Agents | Desktop only; always shows the warning and asks to confirm |
+| `agents.allow_in_encrypted_conversation` | Let the Assistant Read This Conversation… | Agents | Desktop only; always shows the warning and asks to confirm |
 | `moderation.open_reports` | Open Reports | Moderation | Owners and moderators |
 | `moderation.resolve_report` | Resolve Report… | Moderation | Owners and moderators; opens a report picker |
 | `moderation.dismiss_report` | Dismiss Report… | Moderation | Owners and moderators; opens a report picker |
 | `moderation.clear_flag` | Clear Flag | Moderation | Owners and moderators; the selected flagged message |
-| `moderation.block_principal` | Block Principal… | Moderation | Instance operators; asks to confirm |
-| `moderation.unblock_principal` | Unblock Principal… | Moderation | Instance operators; opens a picker |
+| `moderation.block_principal` | Block Account… | Moderation | Instance operators; asks to confirm |
+| `moderation.unblock_principal` | Unblock Account… | Moderation | Instance operators; opens a picker |
 | `moderation.unblock_ip` | Unblock Address… | Moderation | Instance operators; opens a picker |
 | `moderation.clear_profile` | Clear Profile… | Moderation | Instance operators; asks to confirm |
 | `workspace.revoke_invite` | Revoke Invite… | Workspace | Opens an invite picker; asks to confirm |

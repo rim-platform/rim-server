@@ -249,13 +249,13 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     app("settings.open.plugins", "Settings: Plugins", category::APP),
     app(
         "settings.open.plugin_ai",
-        "Settings: Plugin AI",
+        "Settings: Assistant's Plugin Commands",
         category::APP,
     ),
     app("settings.open.state", "Settings: State", category::APP),
     app("settings.open.emoji", "Settings: Emoji", category::APP),
     app("settings.open.agents", "Settings: Agents", category::APP),
-    app("settings.open.agent", "Settings: AI Agent", category::APP),
+    app("settings.open.agent", "Settings: Assistant", category::APP),
     app(
         "settings.open.workspace",
         "Settings: Workspace",
@@ -266,7 +266,11 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
         "Settings: Moderation",
         category::WORKSPACE,
     ),
-    app("settings.open.bots", "Settings: Bots", category::WORKSPACE),
+    app(
+        "settings.open.bots",
+        "Settings: Bots & webhooks",
+        category::WORKSPACE,
+    ),
     app(
         "settings.open.moderation",
         "Settings: Instance moderation",
@@ -368,7 +372,7 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     ),
     app(
         "agents.allow_in_encrypted_conversation",
-        "Let the AI Agent Read This Conversation…",
+        "Let the Assistant Read This Conversation…",
         category::AGENTS,
     ),
     app(
@@ -389,12 +393,12 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     app("moderation.clear_flag", "Clear Flag", category::MODERATION),
     app(
         "moderation.block_principal",
-        "Block Principal…",
+        "Block Account…",
         category::MODERATION,
     ),
     app(
         "moderation.unblock_principal",
-        "Unblock Principal…",
+        "Unblock Account…",
         category::MODERATION,
     ),
     app(
