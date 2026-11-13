@@ -2,7 +2,8 @@
 //! across relays from creation through Welcome, Commit, a message, an edit and a read state;
 //! the request inbox accepted, ignored and blocked, and an expired request refused; queued host
 //! events pushed on `relayStream` and a gap pulled from the host's outbox; forwarded requests
-//! with replayed and tampered device requests; forwarded GraphQL under the host's batch cap and
+//! with replayed and tampered device requests, and a forwarded path with a dot segment refused
+//! at the relay; forwarded GraphQL under the host's batch cap and
 //! a mutation budget per device; the roles' refusals; and a dead relay that gets no new outbox
 //! rows until its first success, after which its streams show the gap. Clients talk to their own
 //! relay only, over HTTP, and check every host event and forwarded answer against the host's
@@ -920,6 +921,35 @@ async fn forwarded_requests_refuse_replays_tampering_and_relays_a_card_does_not_
     let (stranger, _) = bob.forward(&a, "POST", "/api", body, None, None).await;
     assert_eq!(stranger.status, 403);
     assert_eq!(stranger.body["error"], "not_delegated");
+
+    a.stop().await;
+    b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_forwarded_path_with_a_dot_segment_is_refused_at_the_relay() {
+    let (a, b) = relays().await;
+    let alice = sign_up(&a, "alice", 1).await;
+    let mut bob = sign_up(&b, "bob", 2).await;
+    alice.start_dm(&bob, &b, true).await;
+    bob.pending_request(&alice).await;
+
+    // The HTTP client resolves a literal or encoded `..` segment itself, so these keep it in
+    // a segment the relay decodes.
+    for path in [
+        "/%2e%2e%2Foutbox?after=0&limit=100",
+        "/api/..%2F..%2Foutbox?after=0&limit=100",
+    ] {
+        let (answer, _) = bob.forward(&a, "GET", path, Vec::new(), None, None).await;
+        assert_eq!(answer.status, 400, "{path}: {}", answer.body);
+        assert!(!answer.host_signed, "{path}");
+        assert_eq!(answer.body["error"], "bad_request", "{path}");
+        assert!(
+            answer.body.get("items").is_none(),
+            "{path}: {}",
+            answer.body
+        );
+    }
 
     a.stop().await;
     b.stop().await;

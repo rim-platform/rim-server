@@ -78,6 +78,29 @@ impl DefaultS2sClient {
     }
 }
 
+/// Check that `url`, parsed from `endpoint` followed by `path`, has as its path exactly the
+/// endpoint's path followed by the part of `path` before any `?`.
+///
+/// # Errors
+/// `BadRequest` when the parser changed the path: it resolved a `.` or `..` segment, read a
+/// backslash as a slash, dropped a tab or line break, percent-encoded a character or ended the
+/// path at a `#`.
+fn check_literal_path(endpoint: &str, path: &str, url: &Url) -> Result<(), S2sClientError> {
+    let base = Url::parse(endpoint).map_err(|e| S2sClientError::BadRequest(e.to_string()))?;
+    let base_path = match base.path() {
+        "/" if !endpoint.ends_with('/') => "",
+        p => p,
+    };
+    let named = path.split_once('?').map_or(path, |(p, _)| p);
+    if url.path() == format!("{base_path}{named}") {
+        Ok(())
+    } else {
+        Err(S2sClientError::BadRequest(
+            "the path does not stay as written".into(),
+        ))
+    }
+}
+
 fn header<'a>(response: &'a reqwest::Response, name: &str) -> Option<&'a str> {
     response.headers().get(name).and_then(|v| v.to_str().ok())
 }
@@ -101,6 +124,7 @@ impl S2sClient for DefaultS2sClient {
         }
         let url = Url::parse(&format!("{endpoint}{}", request.path))
             .map_err(|e| S2sClientError::BadRequest(e.to_string()))?;
+        check_literal_path(endpoint, &request.path, &url)?;
         match url.scheme() {
             "https" => {}
             "http" if self.config.allow_http => {}
@@ -231,5 +255,138 @@ impl S2sClient for DefaultS2sClient {
             key_seq: seq,
             headers: kept_headers,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::DateTime;
+    use rim_s2s::{
+        Endpoints, Limits, Registration, RegistrationMode, Role, ServerDescriptor, ServerIdentity,
+        ServerKeyState, ServerSigner, sign_descriptor, sign_inception, timestamp,
+    };
+    use rim_services::s2s::service::MockPeerService;
+
+    use super::*;
+
+    const PEER: &str = "rims1_T5LLFxkrobgyvlf3WVxuvLlfqYSZAssRFgmvCfI2R-c";
+
+    /// A server identity from a fixed seed.
+    fn identity() -> SharedIdentity {
+        let signer = ServerSigner::from_seed([5; 32]);
+        let recovery = ServerSigner::from_seed([105; 32]);
+        let incepted_at = DateTime::from_timestamp(1_767_225_600, 0).expect("2026-01-01");
+        let inception = sign_inception(&signer, &recovery, incepted_at);
+        let state = ServerKeyState::from_inception(&inception).expect("inception");
+        let content = ServerDescriptor::new(
+            state.server_id.clone(),
+            0,
+            1,
+            vec![Role::Relay],
+            Endpoints {
+                graphql: "https://relay.example/api".into(),
+                websocket: "wss://relay.example/api/ws".into(),
+                s2s: Some("https://relay.example/s2s/v1".into()),
+            },
+            vec![79],
+            Limits {
+                max_body_bytes: 8_388_608,
+                clock_skew_seconds: 300,
+                max_deliver_items: 256,
+            },
+            Registration {
+                mode: RegistrationMode::Invite,
+                pow_bits: None,
+            },
+            None,
+            timestamp(Utc::now()),
+        );
+        let descriptor = sign_descriptor(&signer, &content).expect("descriptor");
+        SharedIdentity::new(ServerIdentity {
+            signer,
+            state,
+            log: vec![inception],
+            descriptor,
+            descriptor_content: content,
+        })
+    }
+
+    /// A client whose one peer, [`PEER`], has its s2s endpoint at `endpoint`. Private
+    /// addresses are refused, so a request to a loopback endpoint stops before the network.
+    fn client(endpoint: &str) -> DefaultS2sClient {
+        let endpoint = endpoint.to_string();
+        let mut peers = MockPeerService::new();
+        peers.expect_resolve().returning(move |server_id, _, _| {
+            let keys = PeerKeysDto {
+                server_id: server_id.to_string(),
+                origin: "https://127.0.0.1".to_string(),
+                head_seq: 0,
+                head_key: "ed25519:k".to_string(),
+                previous_key: None,
+                s2s_endpoint: Some(endpoint.clone()),
+            };
+            Box::pin(async move { Ok(PeerLookup::Ready(keys)) })
+        });
+        DefaultS2sClient::new(
+            identity(),
+            Arc::new(peers),
+            S2sClientConfig {
+                own_origin: Some("https://relay.example".to_string()),
+                allow_http: false,
+                allow_private: false,
+                timeout: Duration::from_secs(1),
+                max_response_bytes: 1024,
+            },
+        )
+        .expect("client")
+    }
+
+    async fn send(endpoint: &str, path: &str) -> Result<S2sResponse, S2sClientError> {
+        client(endpoint)
+            .send(S2sRequest {
+                peer_server_id: PEER.to_string(),
+                method: S2sMethod::Get,
+                path: path.to_string(),
+                body: Vec::new(),
+                content_type: None,
+                headers: Vec::new(),
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_path_a_url_parser_would_rewrite_is_refused_before_it_is_signed() {
+        for path in [
+            "/forward/../outbox",
+            "/forward/%2e%2e/outbox",
+            "/forward/a/%2E%2E/.%2e/outbox?after=0",
+            "/forward/./x",
+            "/forward/..\\outbox",
+            "/forward/.\t./outbox",
+            "/forward/../../../api",
+            "/forward/x#y",
+        ] {
+            let result = send("https://127.0.0.1/s2s/v1", path).await;
+            assert!(
+                matches!(result, Err(S2sClientError::BadRequest(_))),
+                "{path}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_literal_path_passes_the_check() {
+        for (endpoint, path) in [
+            ("https://127.0.0.1/s2s/v1", "/forward/x/y?z=1"),
+            ("https://127.0.0.1/s2s/v1", "/forward/a..b/.x?q=/../"),
+            ("https://127.0.0.1", "/forward/x"),
+            ("https://127.0.0.1/s2s/v1/", "/ping"),
+        ] {
+            let result = send(endpoint, path).await;
+            assert!(
+                matches!(&result, Err(S2sClientError::Transport(e)) if e.contains("127.0.0.1")),
+                "{endpoint}{path}: {result:?}"
+            );
+        }
     }
 }
