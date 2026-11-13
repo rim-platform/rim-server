@@ -89,6 +89,15 @@ impl OperationFields {
             0
         }
     }
+
+    /// Root query fields the request runs, counted as [`OperationFields::fields`] are.
+    pub fn query_count(&self) -> usize {
+        if self.operation == Some(OperationType::Query) {
+            self.fields.len()
+        } else {
+            0
+        }
+    }
 }
 
 /// Parses `query` and walks the operation `operation_name` selects; a parse error, which the
@@ -330,6 +339,8 @@ fragment Inner on Mutation {
         assert_eq!(names(&q), ["me"]);
         assert!(!q.may_mutate());
         assert_eq!(q.mutation_count(), 0);
+        assert_eq!(q.query_count(), 1);
+        assert_eq!(m.query_count(), 0);
 
         for name in [None, Some("Missing")] {
             let none = walk(query, name);

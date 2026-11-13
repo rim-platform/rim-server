@@ -155,6 +155,50 @@ async fn a_graphql_body_past_its_caps_gets_413_and_runs_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_batch_past_the_query_field_cap_runs_nothing_without_a_session() {
+    let node = node(|_| {}).await;
+    let http = reqwest::Client::new();
+    let api = format!("{}/api", node.origin);
+    let aliased = |n: usize| {
+        let fields: Vec<String> = (0..n)
+            .map(|i| format!("a{i}: serverInfo {{ version }}"))
+            .collect();
+        json!({ "query": format!("{{ {} }}", fields.join(" ")) })
+    };
+
+    let res = http
+        .post(&api)
+        .json(&vec![aliased(16), aliased(16)])
+        .send()
+        .await
+        .expect("at the cap");
+    assert_eq!(res.status(), StatusCode::OK);
+    let answers: Vec<Value> = res.json().await.expect("json");
+    assert_eq!(answers.len(), 2);
+    assert!(
+        answers.iter().all(|a| a.get("errors").is_none()),
+        "{answers:?}"
+    );
+
+    let res = http
+        .post(&api)
+        .json(&vec![aliased(40); 20])
+        .send()
+        .await
+        .expect("past the cap");
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().await.expect("json");
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"],
+        "TOO_MANY_ROOT_FIELDS"
+    );
+    assert_eq!(body["errors"][0]["extensions"]["limit"], 32);
+    assert!(body.get("data").is_none_or(Value::is_null), "{body}");
+
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_schema_is_served_as_rendered_at_start_and_may_be_cached() {
     let node = node(|_| {}).await;
     let http = reqwest::Client::new();

@@ -315,6 +315,9 @@ async fn graphql_handler(
     );
 
     let response = async move {
+        if let Some(refusal) = crate::graphql_support::query_fields_refusal(&fields) {
+            return GraphQLResponse::from(refusal);
+        }
         // CSRF is enforced once at the HTTP level for the entire batch.
         if let Err(resp) = enforce_csrf_for_batch(&req, &fields) {
             return resp;

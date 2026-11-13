@@ -504,6 +504,7 @@ a number above 0, so a private server limits nothing but the batch size.
 | `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
 | `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
+| none (fixed) | Query root fields in one request: 32 across a batch, each alias, repeated field and fragment expansion counted, a fragment spread twice counting twice, with or without a session, whether sent here or forwarded by another server. | One error with the code `TOO_MANY_ROOT_FIELDS` and `limit` 32; nothing in the request runs |
 | none (fixed) | Account password tries: every `passwordLoginStart` and `passwordChangeStart` counts against the account until a login finishes. Tries 1 to 3 are free; the 4th makes the next wait 1 minute, the 5th 5 minutes, the 6th 15 minutes, the 7th 1 hour, the 8th 4 hours, the 9th 12 hours; the 10th locks the password until a reset with the recovery key. Each `passwordLoginStart` also counts against the address, sharing the 20 failed key sign-ins per 15 minutes. | `RATE_LIMITED` with `retryAfterSeconds` during a wait; `PASSWORD_LOCKED` once locked |
 | none (fixed) | Failed public join link lookups and joins (`publicJoinLinkPreview`, `joinByPublicLink` with an invalid link) per client address, and those a relay makes for its users (`remoteJoinChallenge`, `joinRemoteWorkspace` with a link) per relay server id: 20 within ten minutes cut the address or relay off for an hour. Successful lookups do not count. | `RATE_LIMITED` with `retryAfterSeconds` on every link lookup and join from the address or relay, valid links included |
 
@@ -652,6 +653,7 @@ on the message.
 | `EXPIRED_TOKEN` | An invite token has expired. | |
 | `RATE_LIMITED` | Too many attempts, mutations or messages; wait before retrying (see "Limits"). | `retryAfterSeconds` |
 | `TOO_MANY_SUBSCRIPTIONS` | The WebSocket connection holds as many subscriptions as it may. | `limit` |
+| `TOO_MANY_ROOT_FIELDS` | The request runs more query root fields, or more of the costly ones, than one request may (see "Limits"); nothing in it ran. | `limit` |
 | `CONFIRMATION_STALE` | A command confirmation expired or was already used; ask again. | |
 | `CONFIRMATION_FAILED` | A command confirmation failed verification: it was made for another command, context or caller. | |
 | `CONVERSATION_ARCHIVED` | The conversation is archived and read-only. | |

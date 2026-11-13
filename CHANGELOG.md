@@ -25,6 +25,10 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 - `GET /api/sdl` serves the schema rendered once at start, with `Cache-Control: public,
   max-age=300`, instead of rendering it again for every request.
+- A GraphQL request runs at most 32 query root fields, counted across its batch with each
+  alias, repeated field and fragment expansion, with or without a session and when forwarded
+  by another server. A request over it answers one `TOO_MANY_ROOT_FIELDS` error and runs
+  nothing (`docs/api.md`, "Limits").
 
 ### Changed
 
