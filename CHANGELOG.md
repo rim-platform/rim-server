@@ -21,6 +21,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-11-13
+
 ### Changed
 
 - The built-in AI agent is called the assistant in command titles: `workspace.open_agent` is Open
@@ -64,6 +66,16 @@ tag `v<version>`, the version every crate in the workspace carries.
 - Link previews no longer include the punctuation that ends a sentence (a period, comma or
   closing parenthesis) in the address they fetch, so a link at the end of a sentence shows its
   page instead of "Page not found". Parentheses inside an address are kept.
+
+### Security
+
+- A relay answers `400 bad_request` to `/api/remote/<hostServerId>/<path>` when the path has a
+  `.` or `..` segment (also percent-encoded, in any letter case), an encoded slash or backslash,
+  or a control character, and sends nothing to the host. Before, such a path could reach other
+  server-to-server endpoints of the host than `/forward/`, signed by the relay. The
+  server-to-server client also refuses any request whose path a URL parser would change, so no
+  caller is sent to another path than the one it names (`docs/specs/server-to-server-v1.md`,
+  "Forwarding").
 
 ## [0.0.9] - 2026-11-12
 
@@ -1328,7 +1340,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
   `docs/self-hosting.md` shows how to pass a file in instead.
 
-[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/rim-platform/rim-server/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/rim-platform/rim-server/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/rim-platform/rim-server/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/rim-platform/rim-server/compare/v0.0.6...v0.0.7
