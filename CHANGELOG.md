@@ -51,9 +51,10 @@ tag `v<version>`, the version every crate in the workspace carries.
   `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`; forwarded answers
   that are not JSON are served as downloads.
 - Both Caddyfiles send `Strict-Transport-Security: max-age=31536000`.
-- **Upgrade:** `rim-deploy` installs the `deploy/` files of the commit the verified image was built
-  from, not of the tag as it points when fetched, and `--check` never deploys a release older than
-  the running one. Install the new `rim-deploy` on the host as `deploy/README.md` says.
+- **Upgrade:** `rim-deploy` requires the image's signature to come from the release workflow run
+  at the commit the tag points at, and installs that commit's `deploy/` files, so a moved tag
+  installs nothing; `--check` never deploys a release older than the running one. The host needs
+  `git` (for `git ls-remote`). Install the new `rim-deploy` on the host as `deploy/README.md` says.
 - `upgrade.sh` and `rim-deploy` write the digests their signature checks verified
   (`RIM_SERVER_DIGEST`, `RIM_IMAGECHECK_DIGEST`, `RIM_WEB_DIGEST`) into `.env`, so compose runs
   exactly those images, and the third-party images in the compose files are pinned by digest.

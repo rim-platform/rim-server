@@ -173,9 +173,10 @@ rim-server first.
 **The server.** When rim-server's version is not `RIM_VERSION` in `.env`, the check first
 verifies with cosign that the version's `rim-server` image carries the signature of that tag's
 release workflow, since the tag's files run as root: a tag without an approved release run
-installs nothing. The signature also names the commit the workflow ran at, and the check
-downloads the source tarball of that commit, not of the tag, so a tag moved after the release
-installs nothing either; a signature that names no commit stops the deploy. It copies the
+installs nothing. It reads the commit the tag points at (`git ls-remote`, nothing is cloned) and
+requires the signature to come from the release workflow run at exactly that commit (cosign's
+`--certificate-github-workflow-sha`), then downloads the source tarball of that commit: a tag
+moved to another commit after the release fails the signature check and installs nothing. It copies the
 commit's `deploy/` files over the directory, writes `SOURCE` (the tag, the commit, the time and
 the tarball's SHA-256) and runs their
 `upgrade.sh <version>` there (`docs/operations/upgrade.md`): the signatures, the backup, the
@@ -195,7 +196,8 @@ data. On files from releases whose `compose.yml` does not read `RIM_WEB_VERSION`
 `upgrade.sh` turns into `RIM_WEB_VERSION`. A `RIM_WEB_IMAGE` of any other form is a custom web
 image, and the deployer leaves the web client alone.
 
-Nothing in GitHub reaches the host, and no git runs on it. A release is published when its
+Nothing in GitHub reaches the host: it only reads from GitHub (the latest releases, the tag's
+commit and the tarball). A release is published when its
 `release.yaml` run is approved, so approving a release is the deployment; it runs within five
 minutes, so approve it in a quiet hour.
 
@@ -207,7 +209,8 @@ edited on the host. Settings change in `.env` by hand, and so do the **Upgrade:*
 `CHANGELOG.md`, before the release is approved. When the upgrade does not complete, the files
 from before come back.
 
-Installing it, as root, with Docker (Compose v2.20 or later), cosign, curl and flock on the host:
+Installing it, as root, with Docker (Compose v2.20 or later), cosign, git, curl and flock on the
+host:
 
 ```sh
 mkdir -p /srv/rim-server        # then write /srv/rim-server/.env, chmod 600

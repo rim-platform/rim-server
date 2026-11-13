@@ -129,15 +129,23 @@ verified_digest() {
 	sed -n 's/.*"docker-manifest-digest" *: *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' <<<"$1" | head -n 1
 }
 
-# The commit cosign's verification output $1 says the signing workflow ran at, or nothing.
-verified_commit() {
-	sed -n 's/.*"githubWorkflowSha" *: *"\([0-9a-f]\{40\}\)".*/\1/p' <<<"$1" | head -n 1
+# The commit tag v$1 of the rim-server repository points at now, or nothing: the commit an
+# annotated tag points at, else a lightweight tag's own.
+tag_commit() {
+	local refs peeled
+	refs=$(git ls-remote "https://github.com/$repo" "refs/tags/v$1" "refs/tags/v$1^{}") || return 0
+	peeled=$(awk -v ref="refs/tags/v$1^{}" '$2 == ref && $1 ~ /^[0-9a-f]{40}$/ { print $1; exit }' <<<"$refs")
+	if [[ -n $peeled ]]; then
+		printf '%s\n' "$peeled"
+	else
+		awk -v ref="refs/tags/v$1" '$2 == ref && $1 ~ /^[0-9a-f]{40}$/ { print $1; exit }' <<<"$refs"
+	fi
 }
 
 # Whether the rim-server image of version $1 is published and signed by the rim-server release
-# workflow of tag v$1. Returns 1 with `status` set to 2 when it is not published yet; exits
-# when its signature does not verify or does not name the commit it was built from. Sets
-# `release_commit` to that commit.
+# workflow of tag v$1, run at the commit the tag points at. Returns 1 with `status` set to 2
+# when it is not published yet; exits when the tag is missing or the signature does not verify
+# for that commit. Sets `release_commit` to the commit.
 signed_release() {
 	local image=ghcr.io/$repo:$1
 	if ! docker manifest inspect "$image" >/dev/null 2>&1; then
@@ -146,13 +154,14 @@ signed_release() {
 		return 1
 	fi
 	command -v cosign >/dev/null || die "cosign is not installed"
-	local verified
-	verified=$(cosign verify "$image" \
+	command -v git >/dev/null || die "git is not installed"
+	release_commit=$(tag_commit "$1")
+	[[ -n $release_commit ]] || die "tag v$1 of $repo was not found; nothing from it runs"
+	cosign verify "$image" \
 		--certificate-identity "https://github.com/$repo/.github/workflows/release.yaml@refs/tags/v$1" \
-		--certificate-oidc-issuer "$issuer") ||
-		die "$image is not signed by the release workflow of v$1; nothing from the tag runs"
-	release_commit=$(verified_commit "$verified")
-	[[ -n $release_commit ]] || die "the signature of $image names no commit; nothing from the tag runs"
+		--certificate-oidc-issuer "$issuer" \
+		--certificate-github-workflow-sha "$release_commit" >/dev/null ||
+		die "$image is not signed by the release workflow of v$1 at $release_commit; nothing from the tag runs"
 }
 
 # Downloads the commit the signed image of v<version> was built from, puts its deploy/ files

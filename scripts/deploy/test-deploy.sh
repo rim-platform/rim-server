@@ -76,10 +76,28 @@ printf 'cosign %s\n' "$*" >>"$STUB_CALLS"
 for image in $STUB_UNSIGNED; do
   [[ $2 != "$image" ]] || exit 1
 done
-# What `cosign verify` prints: the digest the signature is over and the commit the signing
-# workflow ran at.
+# A required workflow commit other than the one the stub images were signed at fails, as
+# cosign's --certificate-github-workflow-sha does.
+prev=""
+for arg in "$@"; do
+  [[ $prev != --certificate-github-workflow-sha || $arg == "$STUB_COMMIT" ]] || exit 1
+  prev=$arg
+done
+# What cosign 3 `verify` prints: the digest the signature is over, and no optional fields.
 digest=$(printf '%s' "$2" | sha256sum | cut -d' ' -f1)
-printf '[{"critical":{"image":{"docker-manifest-digest":"sha256:%s"}},"optional":{"githubWorkflowSha":"%s"}}]\n' "$digest" "$STUB_COMMIT"
+printf '[{"critical":{"image":{"docker-manifest-digest":"sha256:%s"}},"optional":{}}]\n' "$digest"
+STUB
+cat >"$work/bin/git" <<'STUB'
+#!/usr/bin/env bash
+printf 'git %s\n' "$*" >>"$STUB_CALLS"
+[[ $1 == ls-remote && ${STUB_NO_TAG:-0} != 1 ]] || exit 0
+# An annotated tag: the tag object, then the commit it points at.
+for ref in "${@:3}"; do
+  case $ref in
+  *'^{}') printf '%s\t%s\n' "${STUB_TAG_COMMIT:-$STUB_COMMIT}" "$ref" ;;
+  *) printf '%s\t%s\n' fedcba9876543210fedcba9876543210fedcba98 "$ref" ;;
+  esac
+done
 STUB
 cat >"$work/bin/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -567,15 +585,19 @@ grep -qF "tag v0.2.0" "$srv/SOURCE" || fail "new release: SOURCE is $(cat "$srv/
 [[ -x $srv/upgrade.sh ]] || fail "new release: upgrade.sh is not executable"
 [[ ! -e $srv/rim_server ]] || fail "new release: files outside deploy/ were copied"
 
-# A signature that names no commit: nothing is fetched.
+# A tag the repository doesn't list: nothing is fetched.
 setup_srv
-mv "$work/bin/cosign" "$work/bin/cosign.real"
-printf '#!/usr/bin/env bash\nprintf "[{}]\\n"\n' >"$work/bin/cosign"
-chmod +x "$work/bin/cosign"
-if rim_deploy --check; then fail "no commit: the check passed"; fi
-expect_stderr "names no commit" "no commit"
-not_called ".tar.gz" || fail "no commit: the tarball was fetched"
-mv "$work/bin/cosign.real" "$work/bin/cosign"
+if STUB_NO_TAG=1 rim_deploy --check; then fail "no tag: the check passed"; fi
+expect_stderr "was not found" "no tag"
+not_called ".tar.gz" || fail "no tag: the tarball was fetched"
+
+# A tag moved to a commit the release run didn't sign: cosign refuses it, nothing is fetched.
+setup_srv
+if STUB_TAG_COMMIT=89abcdef0123456789abcdef0123456789abcdef rim_deploy --check; then
+  fail "moved tag: the check passed"
+fi
+expect_stderr "is not signed by the release workflow of v0.2.0 at 89abcdef" "moved tag"
+not_called ".tar.gz" || fail "moved tag: the tarball was fetched"
 
 # A latest release older than the running version is not deployed by --check, and is by hand.
 setup_srv
@@ -611,7 +633,7 @@ if rim_deploy --check; then fail "unsigned image: the check passed"; fi
 expect_stderr "is not signed by the release workflow of v0.2.0" "unsigned image"
 not_called ".tar.gz" || fail "unsigned image: the tarball was fetched"
 not_called "upgrade.sh" || fail "unsigned image: upgrade.sh ran"
-called "cosign verify $server:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
+called "cosign verify $server:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer --certificate-github-workflow-sha $STUB_COMMIT" ||
   fail "unsigned image: cosign was not asked for the release workflow's identity"
 STUB_UNSIGNED=""
 
