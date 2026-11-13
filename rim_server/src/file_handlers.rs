@@ -552,12 +552,18 @@ pub(crate) async fn attachment_download_as(
 
     HttpResponse::Ok()
         .content_type(content_type)
+        .insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .insert_header((header::CONTENT_SECURITY_POLICY, SANDBOX_CSP))
         .insert_header((
             "Content-Disposition",
             format!("attachment; filename=\"{}\"", safe_name),
         ))
         .body(data)
 }
+
+/// The policy of a file response: no script, frame or subresource of it loads or runs, should
+/// a browser ever render it.
+pub(crate) const SANDBOX_CSP: &str = "sandbox; default-src 'none'";
 
 /// A stored file's bytes, or the 404/500 response.
 async fn read_stored_file(
@@ -1474,6 +1480,16 @@ mod tests {
                     .get(header::CONTENT_DISPOSITION)
                     .expect("disposition"),
                 disposition
+            );
+            assert_eq!(
+                headers
+                    .get(header::X_CONTENT_TYPE_OPTIONS)
+                    .expect("nosniff"),
+                "nosniff"
+            );
+            assert_eq!(
+                headers.get(header::CONTENT_SECURITY_POLICY).expect("csp"),
+                SANDBOX_CSP
             );
             assert_eq!(actix_test::read_body(resp).await, BLOB);
         }
