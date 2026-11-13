@@ -393,12 +393,12 @@ pub(crate) const APP_COMMANDS: &[AppCommand] = &[
     app("moderation.clear_flag", "Clear Flag", category::MODERATION),
     app(
         "moderation.block_principal",
-        "Block Principal…",
+        "Block Account…",
         category::MODERATION,
     ),
     app(
         "moderation.unblock_principal",
-        "Unblock Principal…",
+        "Unblock Account…",
         category::MODERATION,
     ),
     app(

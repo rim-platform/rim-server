@@ -424,8 +424,8 @@ there.
 | `moderation.resolve_report` | Resolve Report… | Moderation | Owners and moderators; opens a report picker |
 | `moderation.dismiss_report` | Dismiss Report… | Moderation | Owners and moderators; opens a report picker |
 | `moderation.clear_flag` | Clear Flag | Moderation | Owners and moderators; the selected flagged message |
-| `moderation.block_principal` | Block Principal… | Moderation | Instance operators; asks to confirm |
-| `moderation.unblock_principal` | Unblock Principal… | Moderation | Instance operators; opens a picker |
+| `moderation.block_principal` | Block Account… | Moderation | Instance operators; asks to confirm |
+| `moderation.unblock_principal` | Unblock Account… | Moderation | Instance operators; opens a picker |
 | `moderation.unblock_ip` | Unblock Address… | Moderation | Instance operators; opens a picker |
 | `moderation.clear_profile` | Clear Profile… | Moderation | Instance operators; asks to confirm |
 | `workspace.revoke_invite` | Revoke Invite… | Workspace | Opens an invite picker; asks to confirm |

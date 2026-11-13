@@ -28,7 +28,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   Assistant's Plugin Commands and `agents.allow_in_encrypted_conversation` is Let the Assistant
   Read This Conversation…. `settings.open.bots` is Settings: Bots & webhooks, the Agents category
   describes the assistant and the agents on your computer, and Browse Plugins says what Settings >
-  Plugins offers. Command ids are unchanged, so keybinds and macros keep working.
+  Plugins offers. `moderation.block_principal` and `moderation.unblock_principal` are Block
+  Account… and Unblock Account…. Command ids are unchanged, so keybinds and macros keep working.
 
 ## [0.0.9] - 2026-11-12
 
