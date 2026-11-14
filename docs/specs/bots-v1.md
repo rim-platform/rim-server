@@ -55,6 +55,21 @@ MUST say so where it shows it.
 - A token that is unknown, revoked or belongs to a deactivated bot or one no longer in its workspace
   gets the same `401`.
 
+## When someone stops being an Owner or Moderator
+
+- A raw token or webhook URL is shown only to the person who creates it, who may keep it. So when a
+  person stops being an Owner or Moderator of a workspace, the server revokes, in that workspace:
+  - every token and webhook of each bot they created, whoever made the token or webhook;
+  - every token and webhook they made for any other bot.
+- This happens when they are made a Member or a Guest, kicked, banned, or leave, before the change
+  itself, so a change that fails part way leaves none of them working. It happens in every workspace
+  when an operator blocks their account on the instance, or when their account is deleted.
+- The bots stay, with their channels and messages. Each revoked token and webhook keeps its
+  `revokedAt` in `botTokens` and `incomingWebhooks`, so an Owner or Moderator sees what needs a new
+  token or URL. A change in a workspace that revoked any is recorded in its audit log as
+  `bot.revoke_on_role_loss`, with the person and how many tokens and webhooks went.
+- A handover of ownership leaves the former Owner a Moderator, so it revokes nothing.
+
 ## What a bot can reach
 
 - A bot is a workspace member with the role `GUEST`, which reads and writes only in conversations it
@@ -142,8 +157,9 @@ poll for events records how many of each kind it handed over, and no text or nam
   private channel only if they are in it, since they can't post where they can't read.
 - The URL is `POST /api/hooks/{token}`, with the token `rimhook_` followed by 43 base64url
   characters, shown once. Only its SHA-256 is stored. It is revoked by an Owner or Moderator, and it
-  stops working with its bot. Deactivating a bot revokes its webhooks. The last time it was used is
-  shown.
+  stops working with its bot. Deactivating a bot revokes its webhooks, and so does its creator's
+  loss of Owner or Moderator (see "When someone stops being an Owner or Moderator"). The last time it
+  was used is shown.
 - Anyone holding the URL can post to that one channel as that bot, within the limit. A proxy's access
   log can hold the URL, so `docs/self-hosting.md` says to keep such logs private. RIM itself MUST NOT
   log the token. A leaked URL is revoked and a new one made.

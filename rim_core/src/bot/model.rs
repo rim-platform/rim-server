@@ -118,6 +118,20 @@ pub struct NewBotToken {
     pub created_by: UserId,
 }
 
+/// How many bot tokens and incoming webhooks one revocation stamped.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RevokedCredentials {
+    pub tokens: u64,
+    pub webhooks: u64,
+}
+
+impl RevokedCredentials {
+    /// Whether nothing was revoked.
+    pub fn is_empty(self) -> bool {
+        self.tokens == 0 && self.webhooks == 0
+    }
+}
+
 /// A token found by its hash, with the bot's standing as far as the bot tables know it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BotTokenHolder {

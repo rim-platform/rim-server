@@ -75,6 +75,12 @@ const MESSAGES: &str = r#"query($s: ID!, $c: ID!) {
   }
 }"#;
 
+const CREATE_WEBHOOK: &str = r#"mutation($input: CreateIncomingWebhookInput!) {
+  createIncomingWebhook(input: $input) { token webhook { id } }
+}"#;
+const WEBHOOKS: &str = r#"query($s: ID!) { incomingWebhooks(serverId: $s) { id revokedAt } }"#;
+const LEAVE: &str = r#"mutation($s: ID!) { leaveWorkspace(serverId: $s) }"#;
+
 fn bots_query() -> String {
     format!("query($s: ID!) {{ bots(serverId: $s) {{ {BOT_FIELDS} }} }}")
 }
@@ -146,6 +152,57 @@ impl Scene {
             .expect("a row")
             .try_get::<i64>("", "n")
             .expect("n")
+    }
+
+    /// A webhook `who` makes for `bot` in `channel`, with its id and token.
+    async fn webhook(&self, who: &Caller, channel: &str, bot: &str) -> (String, String) {
+        let data = self
+            .ok(
+                who,
+                CREATE_WEBHOOK,
+                json!({ "input": { "conversationId": channel, "botUserId": bot, "preset": "PLAIN" } }),
+            )
+            .await;
+        let created = &data["createIncomingWebhook"];
+        (
+            created["webhook"]["id"].as_str().expect("id").to_string(),
+            created["token"].as_str().expect("token").to_string(),
+        )
+    }
+
+    async fn webhook_works(&self, token: &str) -> bool {
+        self.provider
+            .bot_service()
+            .resolve_webhook(token)
+            .await
+            .expect("answered")
+            .is_some()
+    }
+
+    /// Whether `who` sees the token `id` of `bot` as revoked.
+    async fn token_revoked(&self, who: &Caller, bot: &str, id: &str) -> bool {
+        let listed = self.ok(who, TOKENS, json!({ "id": bot })).await;
+        listed["botTokens"]
+            .as_array()
+            .expect("tokens")
+            .iter()
+            .find(|t| t["id"] == id)
+            .expect("listed")["revokedAt"]
+            .is_string()
+    }
+
+    /// Whether `who` sees the webhook `id` as revoked.
+    async fn webhook_revoked(&self, who: &Caller, id: &str) -> bool {
+        let listed = self
+            .ok(who, WEBHOOKS, json!({ "s": self.roles.server_id }))
+            .await;
+        listed["incomingWebhooks"]
+            .as_array()
+            .expect("webhooks")
+            .iter()
+            .find(|w| w["id"] == id)
+            .expect("listed")["revokedAt"]
+            .is_string()
     }
 
     async fn authenticates(&self, token: &str) -> bool {
@@ -783,6 +840,71 @@ async fn a_kick_or_a_ban_stops_the_token() {
         .await,
         1
     );
+}
+
+#[tokio::test]
+async fn losing_the_moderator_role_revokes_the_tokens_and_webhooks_held_and_shows_them() {
+    let s = scene("role_loss").await;
+    let r = &s.roles;
+    let hooks = create_channel(&s.schema, &r.alice, &r.server_id, "hooks", false).await;
+    let kept = create_channel(&s.schema, &r.alice, &r.server_id, "kept", false).await;
+    // Mona's bot with the token she was shown, a token she made for Alice's bot and a webhook
+    // she made for it; Alice's own token and webhook.
+    let (monas_bot, monas_token) = s.create_bot(&r.mona, "Monas").await;
+    let (alices_bot, alices_token) = s.create_bot(&r.alice, "Alices").await;
+    let made = s
+        .ok(
+            &r.mona,
+            CREATE_TOKEN,
+            json!({ "id": alices_bot, "label": "made by mona" }),
+        )
+        .await;
+    let monas_extra = made["createBotToken"]["token"]
+        .as_str()
+        .expect("token")
+        .to_string();
+    let monas_extra_id = made["createBotToken"]["botToken"]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let (monas_hook_id, monas_hook) = s.webhook(&r.mona, &hooks, &alices_bot).await;
+    let (alices_hook_id, alices_hook) = s.webhook(&r.alice, &kept, &alices_bot).await;
+    for token in [&monas_token, &monas_extra, &alices_token] {
+        assert!(s.authenticates(token).await);
+    }
+    assert!(s.webhook_works(&monas_hook).await);
+
+    s.ok(
+        &r.alice,
+        SET_ROLE,
+        json!({ "s": r.server_id, "u": r.mona.user_id.to_string(), "r": "MEMBER" }),
+    )
+    .await;
+    assert!(!s.authenticates(&monas_token).await);
+    assert!(!s.authenticates(&monas_extra).await);
+    assert!(!s.webhook_works(&monas_hook).await);
+    assert!(s.authenticates(&alices_token).await);
+    assert!(s.webhook_works(&alices_hook).await);
+
+    // The Owner sees which ones need a new token or URL.
+    let tokens = s.ok(&r.alice, TOKENS, json!({ "id": monas_bot })).await;
+    assert!(tokens["botTokens"][0]["revokedAt"].is_string());
+    assert!(
+        s.token_revoked(&r.alice, &alices_bot, &monas_extra_id)
+            .await
+    );
+    assert!(s.webhook_revoked(&r.alice, &monas_hook_id).await);
+    assert!(!s.webhook_revoked(&r.alice, &alices_hook_id).await);
+}
+
+#[tokio::test]
+async fn a_moderator_who_leaves_takes_no_working_token_along() {
+    let s = scene("role_leave").await;
+    let r = &s.roles;
+    let (_, monas_token) = s.create_bot(&r.mona, "Monas").await;
+    assert!(s.authenticates(&monas_token).await);
+    s.ok(&r.mona, LEAVE, json!({ "s": r.server_id })).await;
+    assert!(!s.authenticates(&monas_token).await);
 }
 
 #[tokio::test]

@@ -195,8 +195,23 @@ async fn the_workspace_step_deletes_sole_workspaces_leaves_the_others_and_revoke
     )
     .await;
 
+    sql(
+        &ctx,
+        &format!(
+            "WITH u AS (INSERT INTO \"user\" (id, username, display_name, kind) \
+                 VALUES (gen_random_uuid(), 'alices-bot', 'Bot', 'bot') RETURNING id), \
+             b AS (INSERT INTO bot (user_id, server_id, run_by, reads_go_to, created_by) \
+                 SELECT id, '{}', 'Alice', 'Nowhere', '{}' FROM u RETURNING user_id) \
+             INSERT INTO bot_token (id, bot_user_id, label, token_hash, created_by) \
+                 SELECT gen_random_uuid(), user_id, 'ci', 'bot-hash-a', '{}' FROM b",
+            shared.id, alice.id, bob.id
+        ),
+    )
+    .await;
+
     let step = repo.purge_workspaces(alice.id, Utc::now()).await.unwrap();
 
+    assert!(step.counts.contains(&("bot_tokens_revoked", 1)));
     assert!(step.counts.contains(&("workspaces_deleted", 1)));
     assert!(step.counts.contains(&("join_requests", 1)));
     assert!(step.counts.contains(&("workspace_memberships", 1)));

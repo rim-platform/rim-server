@@ -33,6 +33,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   call whose `commandContext.workspaceId` names another workspace than its `server_id` argument
   is refused with `VALIDATION`, and a row goes to a workspace's log only when the caller is a
   member there (`docs/command_model.md`, Target workspace).
+- When someone stops being an Owner or Moderator of a workspace (made a Member or Guest, kicked,
+  banned or leaving), or their account is blocked on the instance or deleted, the bot tokens and
+  incoming webhooks they could still hold there are revoked: those of the bots they created and
+  those they made for other bots. They show as revoked in `botTokens` and `incomingWebhooks`, and
+  the workspace's audit log records it as `bot.revoke_on_role_loss` (`docs/specs/bots-v1.md`).
 
 ## [0.0.10] - 2026-11-13
 
