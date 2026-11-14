@@ -21,6 +21,8 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-11-14
+
 ### Security
 
 - An account's password is no longer locked after ten wrong tries, so it no longer needs a reset
@@ -1378,7 +1380,8 @@ tag `v<version>`, the version every crate in the workspace carries.
   volumes a root Caddy wrote keep working. `docker compose cp` into a container now fails;
   `docs/self-hosting.md` shows how to pass a file in instead.
 
-[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/rim-platform/rim-server/compare/v0.0.11...HEAD
+[0.0.11]: https://github.com/rim-platform/rim-server/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/rim-platform/rim-server/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/rim-platform/rim-server/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/rim-platform/rim-server/compare/v0.0.7...v0.0.8
