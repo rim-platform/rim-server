@@ -1104,8 +1104,9 @@ impl KeyAuthService for DefaultKeyAuthService {
                 return refuse("a registration token or proofOfWork is required");
             }
             (RegistrationMode::Pow { bits }, None, Some(nonce)) => {
-                signup::check_open_signup_rate(&self.signup_rate_limiter, &cmd.remote_ip)?;
+                // A proof that fails costs one hash and uses up none of the address's signups.
                 self.check_proof_of_work(&cmd.key_log, nonce, *bits)?;
+                signup::check_open_signup_rate(&self.signup_rate_limiter, &cmd.remote_ip)?;
                 Some(*bits)
             }
             (RegistrationMode::Pow { .. }, Some(_), None) => None,

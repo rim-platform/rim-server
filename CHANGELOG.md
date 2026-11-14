@@ -38,6 +38,7 @@ tag `v<version>`, the version every crate in the workspace carries.
   incoming webhooks they could still hold there are revoked: those of the bots they created and
   those they made for other bots. They show as revoked in `botTokens` and `incomingWebhooks`, and
   the workspace's audit log records it as `bot.revoke_on_role_loss` (`docs/specs/bots-v1.md`).
+- A signup whose proof-of-work fails no longer uses up one of its address's open signups.
 
 ## [0.0.10] - 2026-11-13
 

@@ -2968,6 +2968,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_proof_of_work_that_fails_uses_up_none_of_the_addresss_signups() {
+        let h = relay_harness(1, crate::quota::Quotas::default());
+        let p = h.present(1).await;
+        for _ in 0..3 {
+            let err = h
+                .svc
+                .signup_with_key(pow_cmd(&p, "ada", 16, "AAAAAAAAkaI"))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+        }
+        h.svc
+            .signup_with_key(pow_cmd(&p, "ada", 16, "AAAAAAAAkaM"))
+            .await
+            .expect("the address's one signup is left");
+        assert_eq!(h.user_count(), 1);
+    }
+
+    #[tokio::test]
     async fn pow_mode_takes_a_token_or_a_proof_of_work_and_limits_per_ip() {
         let h = relay_harness(1, crate::quota::Quotas::default());
         let p = h.present(1).await;
