@@ -316,7 +316,7 @@ mod tests {
     fn client(endpoint: &str) -> DefaultS2sClient {
         let endpoint = endpoint.to_string();
         let mut peers = MockPeerService::new();
-        peers.expect_resolve().returning(move |server_id, _, _| {
+        peers.expect_resolve().returning(move |server_id, _, _, _| {
             let keys = PeerKeysDto {
                 server_id: server_id.to_string(),
                 origin: "https://127.0.0.1".to_string(),
