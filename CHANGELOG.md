@@ -23,6 +23,28 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- `GET /api/sdl` serves the schema rendered once at start, with `Cache-Control: public,
+  max-age=300`, instead of rendering it again for every request.
+- A GraphQL request runs at most 32 query root fields, counted across its batch with each
+  alias, repeated field and fragment expansion, with or without a session and when forwarded
+  by another server. A request over it answers one `TOO_MANY_ROOT_FIELDS` error and runs
+  nothing (`docs/api.md`, "Limits").
+- `remoteServer` and `remoteIdentity` fetch discovery documents within limits: 10 fetches a
+  minute per user and 60 a minute for all explicit pins, a fresh pin of an origin answered
+  without a fetch, and a failed fetch answered from memory for 5 minutes. One request runs at
+  most 4 of `remoteServer` and `remoteIdentity` together (with `previewWebhookFormat`, below);
+  past a limit they answer `RATE_LIMITED` or `TOO_MANY_ROOT_FIELDS`
+  (`docs/specs/server-to-server-v1.md`, "Pinning a peer").
+- Server-to-server requests naming servers this server does not know no longer use up the
+  discovery budget for everyone: their fetches count against the sending address, 5 a minute,
+  first pins and refetches of pinned peers each have a budget of their own, and an id that
+  failed to pin from an origin is not fetched from it again for 5 minutes.
+- A webhook format reads at most the first 1,000 characters of each value and stops filling a
+  message once it is past the length it can post, so a large delivery or preview costs no more
+  than a short one, and one request runs at most 4 `previewWebhookFormat` fields together with
+  `remoteServer` and `remoteIdentity` (`docs/specs/bots-v1.md`).
+- A plugin bundle link download runs one at a time per account and stops after 30 seconds, so a
+  few accounts cannot hold every download slot (`docs/specs/web-plugins-v1.md`).
 - Attachments of a deleted message can no longer be downloaded, and an hourly job deletes their
   files (those of a reported message stay for the report).
 - An upload ticket lasts 5 minutes instead of 15 and an account holds at most 5 open tickets, so

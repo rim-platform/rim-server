@@ -155,6 +155,79 @@ async fn a_graphql_body_past_its_caps_gets_413_and_runs_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_batch_past_the_query_field_cap_runs_nothing_without_a_session() {
+    let node = node(|_| {}).await;
+    let http = reqwest::Client::new();
+    let api = format!("{}/api", node.origin);
+    let aliased = |n: usize| {
+        let fields: Vec<String> = (0..n)
+            .map(|i| format!("a{i}: serverInfo {{ version }}"))
+            .collect();
+        json!({ "query": format!("{{ {} }}", fields.join(" ")) })
+    };
+
+    let res = http
+        .post(&api)
+        .json(&vec![aliased(16), aliased(16)])
+        .send()
+        .await
+        .expect("at the cap");
+    assert_eq!(res.status(), StatusCode::OK);
+    let answers: Vec<Value> = res.json().await.expect("json");
+    assert_eq!(answers.len(), 2);
+    assert!(
+        answers.iter().all(|a| a.get("errors").is_none()),
+        "{answers:?}"
+    );
+
+    let res = http
+        .post(&api)
+        .json(&vec![aliased(40); 20])
+        .send()
+        .await
+        .expect("past the cap");
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().await.expect("json");
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"],
+        "TOO_MANY_ROOT_FIELDS"
+    );
+    assert_eq!(body["errors"][0]["extensions"]["limit"], 32);
+    assert!(body.get("data").is_none_or(Value::is_null), "{body}");
+
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_schema_is_served_as_rendered_at_start_and_may_be_cached() {
+    let node = node(|_| {}).await;
+    let http = reqwest::Client::new();
+    let sdl = format!("{}/api/sdl", node.origin);
+    let first = http.get(&sdl).send().await.expect("sdl");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("public, max-age=300")
+    );
+    let first = first.text().await.expect("text");
+    assert!(first.contains("type Query"), "the schema");
+    let second = http
+        .get(&sdl)
+        .send()
+        .await
+        .expect("sdl")
+        .text()
+        .await
+        .expect("text");
+    assert_eq!(first, second);
+
+    node.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mutation_fields_past_the_budget_answer_rate_limited() {
     let node = node(|config| config.rate_mutations_per_min_per_session = Some(2)).await;
     let http = reqwest::Client::new();

@@ -48,7 +48,7 @@ use rim_services::relay::dto::{
     SignedJson,
 };
 use rim_services::relay::service::RelayService;
-use rim_services::s2s::dto::{PeerKeysDto, PeerLookup, S2sMethod, S2sRequest};
+use rim_services::s2s::dto::{DiscoveryRequester, PeerKeysDto, PeerLookup, S2sMethod, S2sRequest};
 use rim_services::s2s::service::{PeerService, S2sClient};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -447,7 +447,11 @@ impl DefaultRelayService {
 
     /// A pinned peer's keys, ready to verify what it signed.
     async fn peer_keys(&self, server_id: &str, key_seq: Option<u32>) -> ServiceResult<PeerKeysDto> {
-        match self.peers.resolve(server_id, None, key_seq).await? {
+        match self
+            .peers
+            .resolve(server_id, None, key_seq, DiscoveryRequester::Server)
+            .await?
+        {
             PeerLookup::Ready(keys) => Ok(keys),
             PeerLookup::Unknown => Err(ServiceError::Forbidden("unknown peer".to_string())),
             PeerLookup::Forked => Err(ServiceError::Forbidden("peer forked".to_string())),
@@ -1205,21 +1209,22 @@ impl DefaultRelayService {
 }
 
 /// Fetch a principal's identity from the first of `relay_urls` that serves it, pinning each
-/// relay first and skipping one whose server id `admit` refuses. Returns the document and the
-/// serving relay's id.
+/// relay first, its fetch charged to `requester`, and skipping one whose server id `admit`
+/// refuses. Returns the document and the serving relay's id.
 pub(crate) async fn fetch_from_relays(
     peers: &dyn PeerService,
     client: &dyn S2sClient,
     principal_id: &str,
     relay_urls: &[String],
     admit: &(dyn Fn(&str) -> bool + Sync),
+    requester: DiscoveryRequester,
 ) -> ServiceResult<(IdentityDocument, String)> {
     let mut last = ServiceError::NotFound;
     for url in relay_urls {
         let Some(origin) = origin_of(url) else {
             continue;
         };
-        let pinned = match peers.pin(&origin, None).await {
+        let pinned = match peers.pin(&origin, None, requester).await {
             Ok(pinned) => pinned,
             Err(e) => {
                 warn!(origin = %origin, error = %e, "could not pin a relay");
@@ -1755,6 +1760,7 @@ impl RelayService for DefaultRelayService {
                     &principal_id,
                     &[url],
                     &|_| true,
+                    DiscoveryRequester::User(_actor.user_id),
                 )
                 .await?
             }
@@ -1785,7 +1791,10 @@ impl RelayService for DefaultRelayService {
             .ok_or_else(|| {
                 ServiceError::Validation("origin must be scheme://host[:port]".to_string())
             })?;
-        let pinned = self.peers.pin(&origin, None).await?;
+        let pinned = self
+            .peers
+            .pin(&origin, None, DiscoveryRequester::User(_actor.user_id))
+            .await?;
         let discovery = self
             .peers
             .discovery_document(&pinned.server_id)
@@ -2243,7 +2252,7 @@ mod tests {
     #[tokio::test]
     async fn a_relay_that_cannot_be_pinned_is_named_by_its_origin() {
         let mut peers = MockPeerService::new();
-        peers.expect_pin().returning(|_, _| {
+        peers.expect_pin().returning(|_, _, _| {
             Box::pin(async { Err(ServiceError::Validation("no document".to_string())) })
         });
         let mut client = MockS2sClient::new();
@@ -2254,6 +2263,7 @@ mod tests {
             "rimp1_alice",
             &["https://relay.example/x".to_string()],
             &|_| true,
+            DiscoveryRequester::Server,
         )
         .await
         .expect_err("unpinned");
@@ -2270,7 +2280,7 @@ mod tests {
     #[tokio::test]
     async fn a_pinned_relay_that_fails_is_named_by_its_server_id() {
         let mut peers = MockPeerService::new();
-        peers.expect_pin().returning(|origin, _| {
+        peers.expect_pin().returning(|origin, _, _| {
             let pinned = peer("rims1_relay", origin);
             Box::pin(async move { Ok(pinned) })
         });
@@ -2292,6 +2302,7 @@ mod tests {
             "rimp1_alice",
             &["https://relay.example".to_string()],
             &|_| true,
+            DiscoveryRequester::Server,
         )
         .await
         .expect_err("refused");

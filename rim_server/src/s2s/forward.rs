@@ -98,9 +98,9 @@ async fn reply_of(response: HttpResponse) -> Reply {
     }
 }
 
-/// The answer refusing a forwarded batch over this server's batch cap, or one whose mutation
-/// fields the device's budget cannot pay; `None` charges them and lets the batch run. The
-/// refusals are those of `/api`.
+/// The answer refusing a forwarded batch over this server's batch cap or its cap on query root
+/// fields, or one whose mutation fields the device's budget cannot pay; `None` charges them and
+/// lets the batch run. The refusals are those of `/api`.
 fn over_limits(
     limits: &EdgeLimits,
     auth: &ForwardAuth,
@@ -112,6 +112,12 @@ fn over_limits(
             StatusCode::BAD_REQUEST,
             &crate::edge::batch_too_large_body(),
         ));
+    }
+    if let Some(refusal) = crate::graphql_support::query_fields_refusal(fields) {
+        return Some(match serde_json::to_value(refusal) {
+            Ok(body) => Reply::ok(body),
+            Err(e) => internal(e),
+        });
     }
     let retry_after_seconds = limits
         .charge_batch(&MutationCaller::Device(auth.device_key_id), fields)
@@ -488,6 +494,26 @@ mod tests {
         let single: async_graphql::BatchRequest =
             serde_json::from_value(json!({ "query": "{ a }" })).expect("a request");
         assert!(over(&limits, &auth, single).is_none());
+    }
+
+    #[test]
+    fn a_forwarded_batch_over_the_query_field_cap_is_refused_as_on_api() {
+        let limits = limits();
+        let auth = device();
+        let aliases = |n: usize| {
+            let fields: Vec<String> = (0..n).map(|i| format!("a{i}: a")).collect();
+            format!("{{ {} }}", fields.join(" "))
+        };
+        let full = aliases(crate::graphql_support::MAX_QUERY_ROOT_FIELDS);
+        assert!(over(&limits, &auth, batch(&[full.as_str()])).is_none());
+        let half = aliases(crate::graphql_support::MAX_QUERY_ROOT_FIELDS / 2 + 1);
+        let reply = over(&limits, &auth, batch(&[half.as_str(), half.as_str()]))
+            .expect("over the cap across the batch");
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(
+            body(&reply)["errors"][0]["extensions"]["code"],
+            "TOO_MANY_ROOT_FIELDS"
+        );
     }
 
     #[actix_web::test]

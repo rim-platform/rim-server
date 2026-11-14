@@ -1,4 +1,5 @@
 use actix_web::HttpRequest;
+use async_graphql::ErrorExtensions;
 use async_graphql_actix_web::GraphQLResponse;
 use rim_auth::csrf::verify_csrf_token;
 use rim_services::auth::service::RequestAuthenticator;
@@ -50,6 +51,77 @@ pub fn count_mutation_fields(fields: &[RootFields]) -> u32 {
         .map(OperationFields::mutation_count)
         .sum();
     u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// The most query root fields one HTTP request runs, across its batch: each alias, repeated
+/// field and fragment expansion counts, a fragment spread twice counting twice.
+pub const MAX_QUERY_ROOT_FIELDS: usize = 32;
+
+/// The error code of a request refused for running too many query root fields.
+pub const TOO_MANY_ROOT_FIELDS: &str = "TOO_MANY_ROOT_FIELDS";
+
+/// Query root fields across a batch, counted as [`count_mutation_fields`] counts mutation
+/// fields; a request that does not parse counts none, since it runs nothing.
+pub fn count_query_fields(fields: &[RootFields]) -> usize {
+    fields
+        .iter()
+        .filter_map(|f| f.as_ref().ok())
+        .map(OperationFields::query_count)
+        .sum()
+}
+
+/// Query root fields whose work is costly: each may fetch from another server, or renders a
+/// webhook format over a sample body.
+pub const COSTLY_QUERY_FIELDS: &[&str] =
+    &["remoteServer", "remoteIdentity", "previewWebhookFormat"];
+
+/// The most [`COSTLY_QUERY_FIELDS`] one HTTP request runs, across its batch, counted as
+/// [`MAX_QUERY_ROOT_FIELDS`] counts.
+pub const MAX_COSTLY_QUERY_FIELDS: usize = 4;
+
+/// [`COSTLY_QUERY_FIELDS`] across a batch, counted as [`count_query_fields`] counts.
+pub fn count_costly_query_fields(fields: &[RootFields]) -> usize {
+    fields
+        .iter()
+        .filter_map(|f| f.as_ref().ok())
+        .filter(|f| f.query_count() > 0)
+        .flat_map(|f| f.fields.iter())
+        .filter(|name| COSTLY_QUERY_FIELDS.contains(&name.as_str()))
+        .count()
+}
+
+/// The GraphQL answer refusing a batch whose query root fields are over
+/// [`MAX_QUERY_ROOT_FIELDS`], or whose costly ones are over [`MAX_COSTLY_QUERY_FIELDS`]: one
+/// `TOO_MANY_ROOT_FIELDS` error naming the limit, with nothing run. `None` for a batch within
+/// both.
+pub fn query_fields_refusal(fields: &[RootFields]) -> Option<async_graphql::Response> {
+    let (message, limit) = if count_query_fields(fields) > MAX_QUERY_ROOT_FIELDS {
+        (
+            format!(
+                "a request runs at most {MAX_QUERY_ROOT_FIELDS} query root fields, aliases, \
+                 repeated fields and fragment expansions each counted"
+            ),
+            MAX_QUERY_ROOT_FIELDS,
+        )
+    } else if count_costly_query_fields(fields) > MAX_COSTLY_QUERY_FIELDS {
+        (
+            format!(
+                "a request runs at most {MAX_COSTLY_QUERY_FIELDS} of {}, aliases, repeated \
+                 fields and fragment expansions each counted",
+                COSTLY_QUERY_FIELDS.join(", ")
+            ),
+            MAX_COSTLY_QUERY_FIELDS,
+        )
+    } else {
+        return None;
+    };
+    let error = async_graphql::Error::new(message).extend_with(|_, e| {
+        e.set("code", TOO_MANY_ROOT_FIELDS);
+        e.set("limit", limit as u64);
+    });
+    Some(async_graphql::Response::from_errors(vec![
+        error.into_server_error(async_graphql::Pos::default()),
+    ]))
 }
 
 /// Whether every request of the batch is a mutation whose root fields, all found, are among
@@ -458,6 +530,81 @@ mod tests {
             async_graphql::Request::new("mutation {"),
         ]);
         assert_eq!(count_mutation_fields(&batch_fields(&batch)), 3);
+    }
+
+    #[test]
+    fn query_fields_count_aliases_repeats_and_expansions_across_the_batch() {
+        let batch = async_graphql::BatchRequest::Batch(vec![
+            async_graphql::Request::new("{ a: me { id } b: me { id } me { id } }"),
+            async_graphql::Request::new("query { ...F ...F } fragment F on Query { me { id } }"),
+            async_graphql::Request::new("mutation { logout }"),
+            async_graphql::Request::new("{"),
+        ]);
+        assert_eq!(count_query_fields(&batch_fields(&batch)), 5);
+    }
+
+    #[test]
+    fn a_batch_over_the_query_field_cap_is_refused_and_one_at_it_is_not() {
+        let aliases = |n: usize| {
+            let fields: Vec<String> = (0..n).map(|i| format!("a{i}: me {{ id }}")).collect();
+            async_graphql::Request::new(format!("{{ {} }}", fields.join(" ")))
+        };
+        let at_cap = async_graphql::BatchRequest::Batch(vec![
+            aliases(MAX_QUERY_ROOT_FIELDS - 1),
+            aliases(1),
+        ]);
+        assert!(query_fields_refusal(&batch_fields(&at_cap)).is_none());
+
+        let over =
+            async_graphql::BatchRequest::Batch(vec![aliases(MAX_QUERY_ROOT_FIELDS), aliases(1)]);
+        let refusal = query_fields_refusal(&batch_fields(&over)).expect("refused");
+        let extensions = refusal.errors[0].extensions.as_ref().expect("extensions");
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::Value::from(TOO_MANY_ROOT_FIELDS))
+        );
+        assert_eq!(
+            extensions.get("limit"),
+            Some(&async_graphql::Value::from(MAX_QUERY_ROOT_FIELDS as u64))
+        );
+        let fragment = async_graphql::BatchRequest::Single(async_graphql::Request::new(format!(
+            "{{ {} }} fragment F on Query {{ me {{ id }} }}",
+            "...F ".repeat(MAX_QUERY_ROOT_FIELDS + 1)
+        )));
+        assert!(query_fields_refusal(&batch_fields(&fragment)).is_some());
+    }
+
+    #[test]
+    fn costly_query_fields_are_capped_across_the_batch() {
+        let costly = |n: usize| {
+            let fields: Vec<String> = (0..n)
+                .map(|i| {
+                    format!("a{i}: remoteServer(origin: \"https://h{i}.example\") {{ serverId }}")
+                })
+                .collect();
+            async_graphql::Request::new(format!("{{ {} }}", fields.join(" ")))
+        };
+        let at_cap = async_graphql::BatchRequest::Batch(vec![
+            costly(MAX_COSTLY_QUERY_FIELDS - 1),
+            async_graphql::Request::new("{ remoteIdentity(principalId: \"p\") { principalId } }"),
+        ]);
+        assert_eq!(
+            count_costly_query_fields(&batch_fields(&at_cap)),
+            MAX_COSTLY_QUERY_FIELDS
+        );
+        assert!(query_fields_refusal(&batch_fields(&at_cap)).is_none());
+
+        let over = async_graphql::BatchRequest::Batch(vec![costly(3), costly(2)]);
+        let refusal = query_fields_refusal(&batch_fields(&over)).expect("refused");
+        let extensions = refusal.errors[0].extensions.as_ref().expect("extensions");
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::Value::from(TOO_MANY_ROOT_FIELDS))
+        );
+        assert_eq!(
+            extensions.get("limit"),
+            Some(&async_graphql::Value::from(MAX_COSTLY_QUERY_FIELDS as u64))
+        );
     }
 
     /// `depth` inline fragments around `field`.

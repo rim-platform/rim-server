@@ -1,4 +1,7 @@
+use std::net::IpAddr;
+
 use chrono::{DateTime, Utc};
+use rim_core::user::model::UserId;
 
 /// What a pinned peer currently signs with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,19 @@ pub enum PeerLookup {
     Forked,
     /// Refused by an operator.
     Blocked,
+}
+
+/// Whose request a discovery fetch is made for. A user and an address each have a share of the
+/// fetch budget of their own, besides the budget every fetch of its kind shares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryRequester {
+    /// This server, for its own work.
+    Server,
+    /// A signed-in local user.
+    User(UserId),
+    /// A request that is not authenticated yet, from this client address when it is known (an
+    /// IPv6 address by its /64). Requests whose address is unknown share one share.
+    Address(Option<IpAddr>),
 }
 
 /// What blocking or unblocking a peer did.

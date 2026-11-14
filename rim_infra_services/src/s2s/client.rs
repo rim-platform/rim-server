@@ -10,7 +10,7 @@ use rim_s2s::http_sig::{
     parse_response, sign_request,
 };
 use rim_services::s2s::dto::{
-    PeerKeysDto, PeerLookup, S2sClientError, S2sMethod, S2sRequest, S2sResponse,
+    DiscoveryRequester, PeerKeysDto, PeerLookup, S2sClientError, S2sMethod, S2sRequest, S2sResponse,
 };
 use rim_services::s2s::service::{PeerService, S2sClient};
 use url::Url;
@@ -64,7 +64,11 @@ impl DefaultS2sClient {
         server_id: &str,
         key_seq: Option<u32>,
     ) -> Result<PeerKeysDto, S2sClientError> {
-        match self.peers.resolve(server_id, None, key_seq).await {
+        match self
+            .peers
+            .resolve(server_id, None, key_seq, DiscoveryRequester::Server)
+            .await
+        {
             Ok(PeerLookup::Ready(keys)) => Ok(keys),
             Ok(PeerLookup::Unknown) => Err(S2sClientError::UnknownPeer),
             Ok(PeerLookup::Forked) => Err(S2sClientError::PeerForked),
@@ -312,7 +316,7 @@ mod tests {
     fn client(endpoint: &str) -> DefaultS2sClient {
         let endpoint = endpoint.to_string();
         let mut peers = MockPeerService::new();
-        peers.expect_resolve().returning(move |server_id, _, _| {
+        peers.expect_resolve().returning(move |server_id, _, _, _| {
             let keys = PeerKeysDto {
                 server_id: server_id.to_string(),
                 origin: "https://127.0.0.1".to_string(),

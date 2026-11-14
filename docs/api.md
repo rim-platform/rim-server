@@ -121,7 +121,9 @@ before it reconnects. The session ends this way:
 
 ### The schema: `GET /api/sdl`
 
-The whole GraphQL schema of the running build, in SDL, without a session.
+The whole GraphQL schema of the running build, in SDL, without a session. It is rendered once
+when the server starts, and the answer may be cached for five minutes
+(`Cache-Control: public, max-age=300`).
 
 ### Discovery: `GET /.well-known/rim-server`
 
@@ -502,6 +504,8 @@ a number above 0, so a private server limits nothing but the batch size.
 | `RIM_RATE_WS_CONNECTIONS_PER_USER` | Open WebSocket connections per user. | HTTP 429 on the upgrade |
 | `RIM_RATE_SUBSCRIPTIONS_PER_CONNECTION` | Active subscriptions per WebSocket connection. | `TOO_MANY_SUBSCRIPTIONS` on the subscription |
 | `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
+| none (fixed) | Query root fields in one request: 32 across a batch, each alias, repeated field and fragment expansion counted, a fragment spread twice counting twice, with or without a session, whether sent here or forwarded by another server. | One error with the code `TOO_MANY_ROOT_FIELDS` and `limit` 32; nothing in the request runs |
+| none (fixed) | `remoteServer`, `remoteIdentity` and `previewWebhookFormat` in one request: 4 together across a batch, counted as above. Each may fetch from another server or render a webhook format. | One error with the code `TOO_MANY_ROOT_FIELDS` and `limit` 4; nothing in the request runs |
 | none (fixed) | Account password tries: every `passwordLoginStart` and `passwordChangeStart` counts against the account until a login finishes. Tries 1 to 3 are free; the 4th makes the next wait 1 minute, the 5th 5 minutes, the 6th 15 minutes, the 7th 1 hour, the 8th 4 hours, the 9th 12 hours; the 10th locks the password until a reset with the recovery key. Each `passwordLoginStart` also counts against the address, sharing the 20 failed key sign-ins per 15 minutes. | `RATE_LIMITED` with `retryAfterSeconds` during a wait; `PASSWORD_LOCKED` once locked |
 | none (fixed) | Failed public join link lookups and joins (`publicJoinLinkPreview`, `joinByPublicLink` with an invalid link) per client address, and those a relay makes for its users (`remoteJoinChallenge`, `joinRemoteWorkspace` with a link) per relay server id: 20 within ten minutes cut the address or relay off for an hour. Successful lookups do not count. | `RATE_LIMITED` with `retryAfterSeconds` on every link lookup and join from the address or relay, valid links included |
 
@@ -650,6 +654,7 @@ on the message.
 | `EXPIRED_TOKEN` | An invite token has expired. | |
 | `RATE_LIMITED` | Too many attempts, mutations or messages; wait before retrying (see "Limits"). | `retryAfterSeconds` |
 | `TOO_MANY_SUBSCRIPTIONS` | The WebSocket connection holds as many subscriptions as it may. | `limit` |
+| `TOO_MANY_ROOT_FIELDS` | The request runs more query root fields, or more of the costly ones, than one request may (see "Limits"); nothing in it ran. | `limit` |
 | `CONFIRMATION_STALE` | A command confirmation expired or was already used; ask again. | |
 | `CONFIRMATION_FAILED` | A command confirmation failed verification: it was made for another command, context or caller. | |
 | `CONVERSATION_ARCHIVED` | The conversation is archived and read-only. | |
@@ -827,8 +832,9 @@ Clients refetch the directory and, for their own user id, `me` when the event ar
 `POST /api/plugin-bundles/fetch` takes JSON `{url, sha256}`, at most 8 KiB, with a session and
 CSRF token. It returns a validated, hash-pinned bundle as an attachment, at most 8 MiB. The
 `plugin_link_fetch` feature is enabled by default, independent of `workspace_plugins`. Only
-public HTTPS targets are accepted, with at most ten safe redirects and a 120-second timeout.
-Twenty attempts per account per hour are allowed, with four concurrent downloads per server.
+public HTTPS targets are accepted, with at most ten safe redirects and a 30-second timeout.
+Twenty attempts per account per hour are allowed, with four concurrent downloads per server and
+one per account: another request of the account while its download runs answers `429` at once.
 Failures use the normal feature/auth/rate responses; invalid pins or bundles return 422.
 
 ### Flagged messages

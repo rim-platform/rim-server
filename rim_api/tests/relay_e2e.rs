@@ -1338,7 +1338,11 @@ async fn relay_and_host_roles_refuse_what_they_do_not_run() {
         .s2s
         .state
         .peers
-        .pin(&host.origin, Some(&host.id()))
+        .pin(
+            &host.origin,
+            Some(&host.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin");
     let answer = relay
@@ -1360,7 +1364,11 @@ async fn relay_and_host_roles_refuse_what_they_do_not_run() {
     host.s2s
         .state
         .peers
-        .pin(&relay.origin, Some(&relay.id()))
+        .pin(
+            &relay.origin,
+            Some(&relay.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin");
     let identity = host
@@ -2272,7 +2280,11 @@ async fn a_blocked_peer_gets_403_both_ways_until_unblocked() {
     b.s2s
         .state
         .peers
-        .pin(&a.origin, Some(&a.id()))
+        .pin(
+            &a.origin,
+            Some(&a.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin");
     let answer = b
@@ -2387,13 +2399,21 @@ async fn a_host_cannot_file_an_invite_in_the_name_of_someone_it_does_not_speak_f
     a.s2s
         .state
         .peers
-        .pin(&b.origin, Some(&b.id()))
+        .pin(
+            &b.origin,
+            Some(&b.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin");
     b.s2s
         .state
         .peers
-        .pin(&a.origin, Some(&a.id()))
+        .pin(
+            &a.origin,
+            Some(&a.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin");
     bob.ok(

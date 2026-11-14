@@ -362,7 +362,12 @@ async fn an_unknown_peer_is_pinned_from_its_origin() {
     peer.publish(&fetcher);
     let keys = ready(
         service
-            .resolve(&peer.id(), Some("https://Peer.Example"), Some(0))
+            .resolve(
+                &peer.id(),
+                Some("https://Peer.Example"),
+                Some(0),
+                DiscoveryRequester::Server,
+            )
             .await
             .expect("resolve"),
     );
@@ -384,7 +389,12 @@ async fn an_origin_serving_another_server_does_not_pin() {
     Peer::new(2).publish(&fetcher);
     assert_eq!(
         service
-            .resolve(&peer.id(), Some(ORIGIN), Some(0))
+            .resolve(
+                &peer.id(),
+                Some(ORIGIN),
+                Some(0),
+                DiscoveryRequester::Server
+            )
             .await
             .expect("resolve"),
         PeerLookup::Unknown
@@ -393,14 +403,19 @@ async fn an_origin_serving_another_server_does_not_pin() {
     // No origin to pin from, or one that is not https.
     assert_eq!(
         service
-            .resolve(&peer.id(), None, None)
+            .resolve(&peer.id(), None, None, DiscoveryRequester::Server)
             .await
             .expect("resolve"),
         PeerLookup::Unknown
     );
     assert_eq!(
         service
-            .resolve(&peer.id(), Some("http://peer.example"), None)
+            .resolve(
+                &peer.id(),
+                Some("http://peer.example"),
+                None,
+                DiscoveryRequester::Server
+            )
             .await
             .expect("resolve"),
         PeerLookup::Unknown
@@ -414,7 +429,7 @@ async fn a_peer_with_server_to_server_off_or_elsewhere_is_not_pinned() {
     fetcher.serve(ORIGIN, peer.document(None));
     assert_eq!(
         service
-            .resolve(&peer.id(), Some(ORIGIN), None)
+            .resolve(&peer.id(), Some(ORIGIN), None, DiscoveryRequester::Server)
             .await
             .expect("resolve"),
         PeerLookup::Unknown
@@ -424,7 +439,9 @@ async fn a_peer_with_server_to_server_off_or_elsewhere_is_not_pinned() {
         peer.document(Some("https://elsewhere.example/s2s/v1")),
     );
     assert!(matches!(
-        service.pin(ORIGIN, Some(&peer.id())).await,
+        service
+            .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+            .await,
         Err(ServiceError::Validation(_))
     ));
 }
@@ -434,14 +451,17 @@ async fn a_server_rotation_keeps_the_previous_key_for_the_grace_period() {
     let (service, repo, fetcher) = service();
     let mut peer = Peer::new(1);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     let old_key = peer.signer().public_key().to_string();
 
     peer.rotate(11, ServerRotationSigner::Server);
     peer.publish(&fetcher);
     let keys = ready(
         service
-            .resolve(&peer.id(), None, Some(1))
+            .resolve(&peer.id(), None, Some(1), DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -456,7 +476,7 @@ async fn a_server_rotation_keeps_the_previous_key_for_the_grace_period() {
     repo.set_rotated_at(&peer.id(), Utc::now() - chrono::Duration::hours(25));
     let keys = ready(
         service
-            .resolve(&peer.id(), None, Some(1))
+            .resolve(&peer.id(), None, Some(1), DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -468,12 +488,15 @@ async fn a_recovery_rotation_drops_the_previous_key_at_once() {
     let (service, _, fetcher) = service();
     let mut peer = Peer::new(1);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     peer.rotate(12, ServerRotationSigner::Recovery);
     peer.publish(&fetcher);
     let keys = ready(
         service
-            .resolve(&peer.id(), None, Some(1))
+            .resolve(&peer.id(), None, Some(1), DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -487,13 +510,16 @@ async fn a_forked_log_marks_the_peer_until_reset() {
     let (service, repo, fetcher) = service();
     let mut peer = Peer::new(1);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     let mut fork = peer.clone();
     peer.rotate(11, ServerRotationSigner::Server);
     peer.publish(&fetcher);
     ready(
         service
-            .resolve(&peer.id(), None, Some(1))
+            .resolve(&peer.id(), None, Some(1), DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -505,7 +531,7 @@ async fn a_forked_log_marks_the_peer_until_reset() {
     let later = service_over(&repo, &fetcher);
     assert_eq!(
         later
-            .resolve(&peer.id(), None, Some(2))
+            .resolve(&peer.id(), None, Some(2), DiscoveryRequester::Server)
             .await
             .expect("resolve"),
         PeerLookup::Forked
@@ -514,20 +540,32 @@ async fn a_forked_log_marks_the_peer_until_reset() {
     assert_eq!(stored.status, PeerStatus::Forked);
     assert_eq!(
         later
-            .resolve(&peer.id(), Some(ORIGIN), Some(0))
+            .resolve(
+                &peer.id(),
+                Some(ORIGIN),
+                Some(0),
+                DiscoveryRequester::Server
+            )
             .await
             .expect("resolve"),
         PeerLookup::Forked
     );
     assert!(matches!(
-        service_over(&repo, &fetcher).pin(ORIGIN, None).await,
+        service_over(&repo, &fetcher)
+            .pin(ORIGIN, None, DiscoveryRequester::Server)
+            .await,
         Err(ServiceError::Forbidden(_))
     ));
 
     assert!(later.reset(&peer.id()).await.expect("reset"));
     let keys = ready(
         service_over(&repo, &fetcher)
-            .resolve(&fork.id(), Some(ORIGIN), Some(2))
+            .resolve(
+                &fork.id(),
+                Some(ORIGIN),
+                Some(2),
+                DiscoveryRequester::Server,
+            )
             .await
             .expect("resolve"),
     );
@@ -541,7 +579,7 @@ async fn refreshes_are_limited_to_one_a_minute_per_peer() {
     peer.publish(&fetcher);
     ready(
         service
-            .resolve(&peer.id(), Some(ORIGIN), None)
+            .resolve(&peer.id(), Some(ORIGIN), None, DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -551,7 +589,7 @@ async fn refreshes_are_limited_to_one_a_minute_per_peer() {
     // The pin is a second old: its peer's minute is used up, so the higher seq is not fetched.
     let keys = ready(
         service
-            .resolve(&peer.id(), None, Some(1))
+            .resolve(&peer.id(), None, Some(1), DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -565,14 +603,14 @@ async fn a_stale_pin_is_refreshed_and_a_failed_refresh_keeps_it() {
     let peer = Peer::new(1);
     peer.publish(&fetcher);
     service_over(&repo, &fetcher)
-        .pin(ORIGIN, None)
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
         .await
         .expect("pin");
     repo.set_fetched_at(&peer.id(), Utc::now() - chrono::Duration::hours(7));
     fetcher.docs.lock().expect("lock").clear();
     let keys = ready(
         service_over(&repo, &fetcher)
-            .resolve(&peer.id(), None, None)
+            .resolve(&peer.id(), None, None, DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -585,13 +623,16 @@ async fn an_equal_log_takes_a_newer_descriptor() {
     let (service, repo, fetcher) = service();
     let mut peer = Peer::new(1);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, None).await.expect("pin");
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     peer.version = 5;
     peer.publish(&fetcher);
     repo.set_fetched_at(&peer.id(), Utc::now() - chrono::Duration::hours(7));
     ready(
         service_over(&repo, &fetcher)
-            .resolve(&peer.id(), None, None)
+            .resolve(&peer.id(), None, None, DiscoveryRequester::Server)
             .await
             .expect("resolve"),
     );
@@ -612,7 +653,10 @@ async fn a_forgotten_peer_whose_log_extends_its_head_is_pinned_again() {
     let mut peer = Peer::new(1);
     peer.rotate(11, ServerRotationSigner::Server);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     assert_eq!(forget_all(&repo).await, vec![peer.id()]);
     assert!(repo.find(&peer.id()).await.expect("find").is_none());
 
@@ -620,7 +664,12 @@ async fn a_forgotten_peer_whose_log_extends_its_head_is_pinned_again() {
     peer.publish(&fetcher);
     let keys = ready(
         service_over(&repo, &fetcher)
-            .resolve(&peer.id(), Some(ORIGIN), Some(2))
+            .resolve(
+                &peer.id(),
+                Some(ORIGIN),
+                Some(2),
+                DiscoveryRequester::Server,
+            )
             .await
             .expect("resolve"),
     );
@@ -635,27 +684,37 @@ async fn a_forgotten_peer_serving_another_history_is_pinned_forked_until_reset()
     let mut fork = peer.clone();
     peer.rotate(11, ServerRotationSigner::Server);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     forget_all(&repo).await;
 
     fork.rotate(13, ServerRotationSigner::Server);
     fork.rotate(14, ServerRotationSigner::Server);
     fork.publish(&fetcher);
     assert!(matches!(
-        service_over(&repo, &fetcher).pin(ORIGIN, None).await,
+        service_over(&repo, &fetcher)
+            .pin(ORIGIN, None, DiscoveryRequester::Server)
+            .await,
         Err(ServiceError::Forbidden(_))
     ));
     assert!(service.reset(&peer.id()).await.expect("reset"));
     peer.publish(&fetcher);
     service
-        .pin(ORIGIN, Some(&peer.id()))
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
         .await
         .expect("pin again");
     forget_all(&repo).await;
     fork.publish(&fetcher);
     assert_eq!(
         service_over(&repo, &fetcher)
-            .resolve(&peer.id(), Some(ORIGIN), Some(2))
+            .resolve(
+                &peer.id(),
+                Some(ORIGIN),
+                Some(2),
+                DiscoveryRequester::Server
+            )
             .await
             .expect("resolve"),
         PeerLookup::Forked
@@ -666,7 +725,12 @@ async fn a_forgotten_peer_serving_another_history_is_pinned_forked_until_reset()
     assert!(service.reset(&peer.id()).await.expect("reset"));
     let keys = ready(
         service_over(&repo, &fetcher)
-            .resolve(&fork.id(), Some(ORIGIN), Some(2))
+            .resolve(
+                &fork.id(),
+                Some(ORIGIN),
+                Some(2),
+                DiscoveryRequester::Server,
+            )
             .await
             .expect("resolve"),
     );
@@ -680,19 +744,29 @@ async fn a_forgotten_peer_serving_a_log_short_of_its_head_is_not_pinned() {
     let older = peer.clone();
     peer.rotate(11, ServerRotationSigner::Recovery);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     forget_all(&repo).await;
 
     older.publish(&fetcher);
     assert_eq!(
         service_over(&repo, &fetcher)
-            .resolve(&peer.id(), Some(ORIGIN), Some(0))
+            .resolve(
+                &peer.id(),
+                Some(ORIGIN),
+                Some(0),
+                DiscoveryRequester::Server
+            )
             .await
             .expect("resolve"),
         PeerLookup::Unknown
     );
     assert!(matches!(
-        service_over(&repo, &fetcher).pin(ORIGIN, None).await,
+        service_over(&repo, &fetcher)
+            .pin(ORIGIN, None, DiscoveryRequester::Server)
+            .await,
         Err(ServiceError::Conflict(_))
     ));
     assert!(repo.find(&peer.id()).await.expect("find").is_none());
@@ -704,7 +778,10 @@ async fn a_reset_forgets_a_forgotten_head_too() {
     let (service, repo, fetcher) = service();
     let peer = Peer::new(1);
     peer.publish(&fetcher);
-    service.pin(ORIGIN, Some(&peer.id())).await.expect("pin");
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     forget_all(&repo).await;
     assert!(service.reset(&peer.id()).await.expect("reset"));
     assert!(repo.forgotten(&peer.id()).await.expect("head").is_none());
@@ -718,19 +795,21 @@ async fn an_origin_holds_at_most_its_limit_of_pins() {
     for peer in &peers[..MAX_PEERS_PER_ORIGIN] {
         peer.publish(&fetcher);
         service_over(&repo, &fetcher)
-            .pin(ORIGIN, None)
+            .pin(ORIGIN, None, DiscoveryRequester::Server)
             .await
             .expect("pin");
     }
     let last = &peers[MAX_PEERS_PER_ORIGIN];
     last.publish(&fetcher);
     assert!(matches!(
-        service_over(&repo, &fetcher).pin(ORIGIN, None).await,
+        service_over(&repo, &fetcher)
+            .pin(ORIGIN, None, DiscoveryRequester::Server)
+            .await,
         Err(ServiceError::Conflict(_))
     ));
     assert_eq!(
         service_over(&repo, &fetcher)
-            .resolve(&last.id(), Some(ORIGIN), None)
+            .resolve(&last.id(), Some(ORIGIN), None, DiscoveryRequester::Server)
             .await
             .expect("resolve"),
         PeerLookup::Unknown
@@ -738,7 +817,7 @@ async fn an_origin_holds_at_most_its_limit_of_pins() {
     // A server pinned already is refreshed, not refused.
     peers[0].publish(&fetcher);
     service_over(&repo, &fetcher)
-        .pin(ORIGIN, None)
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
         .await
         .expect("refresh");
 }
@@ -749,7 +828,10 @@ async fn a_peer_declaring_its_own_host_gets_its_handle_domain_without_another_fe
     let mut peer = Peer::new(1);
     peer.handle_domain = Some("peer.example".into());
     peer.publish(&fetcher);
-    service.pin(ORIGIN, None).await.expect("pin");
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     assert_eq!(
         service.handle_domain(&peer.id()).await.expect("domain"),
         Some("peer.example".to_string())
@@ -767,7 +849,10 @@ async fn a_delegated_handle_domain_counts_only_while_it_points_back_at_the_peer(
     let delegate =
         |to: &str| serde_json::to_vec(&serde_json::json!({ "delegate": to })).expect("json");
     fetcher.serve(APEX, delegate(ORIGIN));
-    service.pin(ORIGIN, None).await.expect("pin");
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     assert_eq!(
         service.handle_domain(&peer.id()).await.expect("domain"),
         Some("peer.org".to_string())
@@ -777,7 +862,10 @@ async fn a_delegated_handle_domain_counts_only_while_it_points_back_at_the_peer(
     // The domain does not answer: what was recorded stays.
     fetcher.stop_serving(APEX);
     let service = service_over(&repo, &fetcher);
-    service.pin(ORIGIN, None).await.expect("pin");
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     assert_eq!(
         service.handle_domain(&peer.id()).await.expect("domain"),
         Some("peer.org".to_string())
@@ -790,7 +878,10 @@ async fn a_delegated_handle_domain_counts_only_while_it_points_back_at_the_peer(
     fetcher.serve(OTHER, other.document(Some("https://other.example/s2s/v1")));
     fetcher.serve(APEX, delegate(OTHER));
     let service = service_over(&repo, &fetcher);
-    service.pin(ORIGIN, None).await.expect("pin");
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     assert_eq!(
         service.handle_domain(&peer.id()).await.expect("domain"),
         None
@@ -811,7 +902,10 @@ async fn a_checked_domain_the_descriptor_no_longer_declares_does_not_count() {
     let mut peer = Peer::new(1);
     peer.handle_domain = Some("peer.example".into());
     peer.publish(&fetcher);
-    service.pin(ORIGIN, None).await.expect("pin");
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     // A newer descriptor declares another domain; the stored check is for the old one.
     peer.handle_domain = Some("elsewhere.example".into());
     peer.version += 1;
@@ -842,10 +936,210 @@ async fn a_checked_domain_the_descriptor_no_longer_declares_does_not_count() {
     let mut peer = Peer::new(3);
     peer.handle_domain = Some("peer.example".into());
     peer.publish(&fetcher);
-    service.pin(ORIGIN, None).await.expect("pin");
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
     service.set_blocked(&peer.id(), true).await.expect("block");
     assert_eq!(
         service.handle_domain(&peer.id()).await.expect("domain"),
         None
     );
+}
+
+#[tokio::test]
+async fn a_fresh_pin_of_an_origin_is_returned_without_a_fetch() {
+    let (service, repo, fetcher) = service();
+    let peer = Peer::new(1);
+    peer.publish(&fetcher);
+    let first = service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("pin");
+    for expected in [None, Some(peer.id())] {
+        let again = service
+            .pin(ORIGIN, expected.as_deref(), DiscoveryRequester::Server)
+            .await
+            .expect("pin again");
+        assert_eq!(again.server_id, first.server_id);
+    }
+    assert_eq!(fetcher.fetches(), 1);
+
+    // A pin older than the refresh age is fetched again.
+    repo.set_fetched_at(&peer.id(), Utc::now() - chrono::Duration::hours(7));
+    service
+        .pin(ORIGIN, None, DiscoveryRequester::Server)
+        .await
+        .expect("refreshed");
+    assert!(fetcher.fetches() > 1);
+}
+
+#[tokio::test]
+async fn a_failed_pin_is_answered_without_a_fetch_for_a_while() {
+    let (service, _, fetcher) = service();
+    for _ in 0..3 {
+        assert!(matches!(
+            service.pin(ORIGIN, None, DiscoveryRequester::Server).await,
+            Err(ServiceError::Unavailable)
+        ));
+    }
+    Peer::new(2).publish(&fetcher);
+    let wrong = Peer::new(3).id();
+    for _ in 0..3 {
+        assert!(matches!(
+            service
+                .pin(ORIGIN, Some(&wrong), DiscoveryRequester::Server)
+                .await,
+            Err(ServiceError::Validation(_))
+        ));
+    }
+    assert_eq!(fetcher.fetches(), 2);
+}
+
+#[tokio::test]
+async fn a_users_pins_are_limited_per_minute_and_concurrent_ones_too() {
+    let (service, _, fetcher) = service();
+    let user = rim_core::user::model::UserId::new();
+    let service = Arc::new(service);
+    let calls = (0..200).map(|i| {
+        let service = Arc::clone(&service);
+        async move {
+            service
+                .pin(
+                    &format!("https://h{i}.example"),
+                    None,
+                    DiscoveryRequester::User(user),
+                )
+                .await
+        }
+    });
+    let results = futures_util::future::join_all(calls).await;
+    let limited = results
+        .iter()
+        .filter(|r| matches!(r, Err(ServiceError::RateLimited { .. })))
+        .count();
+    assert_eq!(fetcher.fetches(), FETCHES_PER_USER_PER_MINUTE as usize);
+    assert_eq!(limited, 200 - FETCHES_PER_USER_PER_MINUTE as usize);
+
+    // Another user has a share of their own.
+    assert!(matches!(
+        service
+            .pin(
+                "https://other.example",
+                None,
+                DiscoveryRequester::User(rim_core::user::model::UserId::new()),
+            )
+            .await,
+        Err(ServiceError::Unavailable)
+    ));
+}
+
+#[tokio::test]
+async fn pins_share_a_budget_per_minute_whoever_asks() {
+    let (service, _, fetcher) = service();
+    for i in 0..=FETCHES_PER_KIND_PER_MINUTE {
+        let result = service
+            .pin(
+                &format!("https://h{i}.example"),
+                None,
+                DiscoveryRequester::Server,
+            )
+            .await;
+        if i < FETCHES_PER_KIND_PER_MINUTE {
+            assert!(matches!(result, Err(ServiceError::Unavailable)), "{i}");
+        } else {
+            assert!(matches!(result, Err(ServiceError::RateLimited { .. })));
+        }
+    }
+    assert_eq!(fetcher.fetches(), FETCHES_PER_KIND_PER_MINUTE as usize);
+}
+
+/// A request's address, distinct for each `n`.
+fn address(n: u8) -> DiscoveryRequester {
+    DiscoveryRequester::Address(Some(std::net::IpAddr::from([203, 0, 113, n])))
+}
+
+#[tokio::test]
+async fn an_address_naming_unknown_peers_spends_only_its_own_share() {
+    let (service, _, fetcher) = service();
+    for seed in 10..20 {
+        let lookup = service
+            .resolve(&Peer::new(seed).id(), Some(ORIGIN), None, address(1))
+            .await
+            .expect("resolve");
+        assert_eq!(lookup, PeerLookup::Unknown);
+    }
+    assert_eq!(fetcher.fetches(), FETCHES_PER_ADDRESS_PER_MINUTE as usize);
+
+    // Another address, and this server itself, still pin a peer that is real.
+    let peer = Peer::new(1);
+    peer.publish(&fetcher);
+    ready(
+        service
+            .resolve(&peer.id(), Some(ORIGIN), None, address(2))
+            .await
+            .expect("resolve"),
+    );
+}
+
+#[tokio::test]
+async fn unknown_peers_named_from_many_addresses_cannot_stop_a_refresh() {
+    let (service, _, fetcher) = service();
+    let mut peer = Peer::new(1);
+    peer.publish(&fetcher);
+    service
+        .pin(ORIGIN, Some(&peer.id()), DiscoveryRequester::Server)
+        .await
+        .expect("pin");
+    for seed in 10..=(10 + FETCHES_PER_KIND_PER_MINUTE as u8) {
+        service
+            .resolve(
+                &Peer::new(seed).id(),
+                Some("https://attacker.example"),
+                None,
+                address(seed),
+            )
+            .await
+            .expect("resolve");
+    }
+    let before = fetcher.fetches();
+    assert_eq!(before, 1 + FETCHES_PER_KIND_PER_MINUTE as usize);
+
+    peer.rotate(11, ServerRotationSigner::Server);
+    peer.publish(&fetcher);
+    let keys = ready(service.refresh(&peer.id()).await.expect("refresh"));
+    assert_eq!(fetcher.fetches(), before + 1);
+    assert_eq!(keys.head_seq, 1);
+}
+
+#[tokio::test]
+async fn an_unknown_key_id_that_failed_is_not_fetched_again_for_a_while() {
+    let (service, _, fetcher) = service();
+    let named = Peer::new(1);
+    for _ in 0..(2 * FETCHES_PER_ADDRESS_PER_MINUTE) {
+        assert_eq!(
+            service
+                .resolve(
+                    &named.id(),
+                    Some("https://attacker.example"),
+                    None,
+                    address(1),
+                )
+                .await
+                .expect("resolve"),
+            PeerLookup::Unknown
+        );
+    }
+    assert_eq!(fetcher.fetches(), 1);
+
+    // The repeats were answered from memory, so the address still has its share, and the id
+    // at its own origin is neither remembered as failed nor out of its minute.
+    named.publish(&fetcher);
+    ready(
+        service
+            .resolve(&named.id(), Some(ORIGIN), None, address(1))
+            .await
+            .expect("resolve"),
+    );
+    assert_eq!(fetcher.fetches(), 2);
 }
