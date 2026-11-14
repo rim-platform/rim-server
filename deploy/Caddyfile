@@ -3,6 +3,10 @@
 # With it the web client is served on RIM_WEB_DOMAIN and calls the API on that origin, while
 # RIM_DOMAIN stays the server's name for the discovery document and other servers.
 {$RIM_DOMAIN} {$RIM_WEB_DOMAIN} {
+	# Browsers that reached this site over https keep using https for a year. No preload and no
+	# subdomains: the header says nothing about names this file does not serve.
+	header Strict-Transport-Security "max-age=31536000"
+
 	# Attachments are up to 25 MiB and forwarded requests up to 32 MiB.
 	request_body {
 		max_size 32MiB

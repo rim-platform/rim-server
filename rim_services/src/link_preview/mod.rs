@@ -29,7 +29,12 @@ pub fn extract_urls(text: &str) -> Vec<String> {
 }
 
 /// Cuts trailing punctuation and unbalanced closing parentheses off a matched URL.
+///
+/// The parentheses are counted once and the counts follow the cut, so the work is linear in
+/// the length of the match.
 fn trim_url_end(url: &str) -> &str {
+    let opens = url.matches('(').count();
+    let mut closes = url.matches(')').count();
     let mut end = url.len();
     loop {
         let candidate = &url[..end];
@@ -38,11 +43,14 @@ fn trim_url_end(url: &str) -> &str {
         };
         let drop = match last {
             '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_' | '~' => true,
-            ')' => candidate.matches(')').count() > candidate.matches('(').count(),
+            ')' => closes > opens,
             _ => false,
         };
         if !drop {
             return candidate;
+        }
+        if last == ')' {
+            closes -= 1;
         }
         end -= last.len_utf8();
     }
@@ -82,6 +90,14 @@ mod tests {
             extract_urls("https://en.wikipedia.org/wiki/Rust_(language)."),
             ["https://en.wikipedia.org/wiki/Rust_(language)"]
         );
+    }
+
+    #[test]
+    fn a_long_run_of_closing_parentheses_is_trimmed_quickly() {
+        let text = format!("https://a{}", ")".repeat(9990));
+        let started = std::time::Instant::now();
+        assert_eq!(extract_urls(&text), ["https://a"]);
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
     }
 
     #[test]

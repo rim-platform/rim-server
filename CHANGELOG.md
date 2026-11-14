@@ -45,6 +45,32 @@ tag `v<version>`, the version every crate in the workspace carries.
   `remoteServer` and `remoteIdentity` (`docs/specs/bots-v1.md`).
 - A plugin bundle link download runs one at a time per account and stops after 30 seconds, so a
   few accounts cannot hold every download slot (`docs/specs/web-plugins-v1.md`).
+- Attachments of a deleted message can no longer be downloaded, and an hourly job deletes their
+  files (those of a reported message stay for the report).
+- An upload ticket lasts 5 minutes instead of 15 and an account holds at most 5 open tickets, so
+  unused tickets can no longer hold a workspace's storage quota.
+- Link previews keep at most 300 characters of title, 1,000 of description, 100 of site name and
+  2,048 of image address, and fetch each distinct address of a message once. Finding the addresses
+  in a long message no longer takes time that grows with the square of its length.
+- Webhook test sessions are limited to 3 an account, so a few accounts can no longer hold every
+  session on the server, and they no longer keep `X-Forwarded-For`, `X-Real-IP` and similar
+  headers that carry the sender's address.
+- A value a webhook fills into a post no longer turns into a link; only the link of the format's
+  link field does.
+- The operator command line writes control characters in user-written text (such as an abuse
+  report's reason) as escapes instead of sending them to the terminal.
+- Plaintext attachment downloads and a host's answers forwarded by a relay carry
+  `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`; forwarded answers
+  that are not JSON are served as downloads.
+- Both Caddyfiles send `Strict-Transport-Security: max-age=31536000`.
+- **Upgrade:** `rim-deploy` requires the image's signature to come from the release workflow run
+  at the commit the tag points at, and installs that commit's `deploy/` files, so a moved tag
+  installs nothing; `--check` never deploys a release older than the running one. The host needs
+  `git` (for `git ls-remote`). Install the new `rim-deploy` on the host as `deploy/README.md` says.
+- `upgrade.sh` and `rim-deploy` write the digests their signature checks verified
+  (`RIM_SERVER_DIGEST`, `RIM_IMAGECHECK_DIGEST`, `RIM_WEB_DIGEST`) into `.env`, so compose runs
+  exactly those images, and the third-party images in the compose files are pinned by digest.
+
 ## [0.0.10] - 2026-11-13
 
 ### Changed

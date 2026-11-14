@@ -857,15 +857,19 @@ This lets clients render the timeline normally while also knowing whether a time
   only the message's author, at most 25 MB. The declared size is reserved against the
   workspace quota (`RIM_MAX_WORKSPACE_STORAGE_BYTES`), the attachment is stored as pending
   upload, the message's `has_attachments` is set, and the answer is an upload ticket: the
-  attachment id, an upload token, the size limit and an expiry.
+  attachment id, an upload token, the size limit and an expiry. A ticket lasts 5 minutes, and
+  one account holds at most 5 open tickets at once; a further call is refused until one is used
+  or has expired.
 - `POST /api/files/upload` (multipart: `upload_token`, `attachment_id` and one file) stores the
   bytes and marks the attachment uploaded; a file larger than declared is refused.
 - `finalizeAttachment` marks an uploaded attachment ready. `deleteAttachment` removes it and
   refreshes `has_attachments`.
-- An upload still pending 15 minutes after it started is marked failed by the stale-attachment
+- An upload still pending 5 minutes after it started is marked failed by the stale-attachment
   cleanup job (`docs/operations/background-jobs.md`).
 - Reading an attachment (`GET /api/attachments/{id}/download`) needs workspace membership and read
-  access to the conversation of its message.
+  access to the conversation of its message. The attachments of a deleted message answer 404 at
+  once, and the hourly cleanup job deletes their files, except those of a reported message, which
+  stay for the report.
 - In an encrypted conversation the client uploads the encrypted blob: `createAttachment` then
   requires `blobSha256`, a fixed file name and type, and the upload is checked against the hash
   (`docs/specs/e2ee-mls-v1.md`, "Attachments").

@@ -8,7 +8,7 @@
 deploy_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 env_file=${RIM_ENV_FILE:-$deploy_dir/.env}
 # shellcheck disable=SC2034 # read by the scripts that source this file
-helper_image=${RIM_BACKUP_HELPER_IMAGE:-alpine:3.22}
+helper_image=${RIM_BACKUP_HELPER_IMAGE:-alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f}
 
 die() {
 	printf 'error: %s\n' "$*" >&2

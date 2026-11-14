@@ -5,7 +5,10 @@ hosts workspaces and is its users' relay), PostgreSQL 17, the web client, and Ca
 TLS. Caddy sends `/api` (with `/api/ws`), `/.well-known/…` and `/s2s/…` to rim-server and every
 other path to the web client, so the client and the API share one origin, unless the web client
 gets a domain of its own ("The web client on its own domain"). The health probes stay inside
-the compose network.
+the compose network. Both Caddyfiles send `Strict-Transport-Security: max-age=31536000` on the
+https sites, without `includeSubDomains` or `preload`: a browser that has reached the site once
+keeps using https for a year, and the header says nothing about other names. Take it out of the
+Caddyfile only if the domain must go back to plain http.
 A public relay is the same file with `deploy/compose.relay.yml` on top;
 [Run your own relay](../deploy/README.md#deploying-a-public-relay) covers it.
 
@@ -416,7 +419,8 @@ another server keeps showing the display name in its copy of the person's signed
 Attachments, link previews, email, custom emoji, workspace plugins, the AI command surface,
 avatars, pinned plugin link fetches and the text art check can be switched off with `RIM_FEATURES_DISABLED` in `deploy/.env`;
 `docs/operations/features.md` lists what each one covers and what clients see.
-`RIM_LINK_PREVIEW_CONCURRENCY` (default 8) caps the link preview fetches running at once.
+`RIM_LINK_PREVIEW_CONCURRENCY` (default 8) caps the link preview fetches running at once. A preview keeps at most 300 characters of title, 1,000 of description and 100 of site name,
+drops an image address over 2,048 characters, and a message fetches each distinct address once.
 Outgoing requests ignore proxy environment variables.
 
 ## Content check

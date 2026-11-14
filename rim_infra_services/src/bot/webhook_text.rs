@@ -54,17 +54,33 @@ fn begins_with(text: &str, token: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(token))
 }
 
-/// Text with Markdown characters escaped, for values taken from another service.
+/// Text with Markdown characters escaped, for values taken from another service. The `:` of a
+/// `://` and the `.` of a `www.` are escaped too, so the text renders the same but no client turns
+/// it into a link.
 pub(crate) fn escape_markdown(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
-    for c in text.chars() {
-        if matches!(
+    let mut skip = 0;
+    for (at, c) in text.char_indices() {
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        let rest = &text[at..];
+        if c == ':' && rest.starts_with("://") {
+            escaped.push_str("\\:");
+        } else if begins_with(rest, "www.") {
+            escaped.push_str(&rest[..3]);
+            escaped.push_str("\\.");
+            skip = 3;
+        } else if matches!(
             c,
             '\\' | '`' | '*' | '_' | '[' | ']' | '(' | ')' | '<' | '>' | '#' | '~' | '|'
         ) {
             escaped.push('\\');
+            escaped.push(c);
+        } else {
+            escaped.push(c);
         }
-        escaped.push(c);
     }
     escaped
 }
@@ -379,6 +395,10 @@ mod tests {
         );
         assert_eq!(escape_markdown("> quote"), r"\> quote");
         assert_eq!(
+            escape_markdown("Fix https://evil.example/x and WWW.evil.example"),
+            r"Fix https\://evil.example/x and WWW\.evil.example"
+        );
+        assert_eq!(
             escape_markdown("plain words, ünïcode"),
             "plain words, ünïcode"
         );
@@ -589,7 +609,7 @@ mod tests {
         assert_eq!(
             line,
             format!(
-                r"a\_b/c\*d: a\_b opened pull request #7: \*\*bold\*\* \_em\_ \[x\]\(https://evil.example\) \<img src=x onerror=y\> \`c\` \~\~s\~\~ \# h \| t {LINK}"
+                r"a\_b/c\*d: a\_b opened pull request #7: \*\*bold\*\* \_em\_ \[x\]\(https\://evil.example\) \<img src=x onerror=y\> \`c\` \~\~s\~\~ \# h \| t {LINK}"
             )
         );
     }

@@ -7,6 +7,8 @@ use std::fmt;
 use serde::Deserialize;
 use serde_json::Value;
 
+use rim_services::bot::dto::is_address_header;
+
 use super::webhook_text::{
     DecodeError, MAX_FILLED_CHARS, MAX_LINK_CHARS, fitted, link_of, link_value_of, raw_equals,
     value_of,
@@ -316,6 +318,11 @@ fn check_header_name(name: &str) -> Result<(), String> {
             "Only headers starting with `x-` can be used, not `{name}`."
         ));
     }
+    if is_address_header(&lower) {
+        return Err(format!(
+            "The header `{name}` can't be used: it carries the sender's address, which RIM does not keep."
+        ));
+    }
     if let Some(word) = refused_word(&lower) {
         return Err(format!(
             "The header `{name}` can't be used: a name holding `{word}` usually carries a secret."
@@ -335,7 +342,7 @@ fn refused_word(lower: &str) -> Option<&'static str> {
 /// Whether a format may not test the header `name`, in any case, because it usually carries a
 /// secret. A test session drops such a header by the same list.
 pub(crate) fn is_refused_header(name: &str) -> bool {
-    refused_word(&name.to_ascii_lowercase()).is_some()
+    refused_word(&name.to_ascii_lowercase()).is_some() || is_address_header(name)
 }
 
 /// Keys with dots between them, each part `[A-Za-z0-9_-]+`.
@@ -874,7 +881,7 @@ mod tests {
         assert!(parse_mention_ids(&text).is_empty(), "{text}");
         assert!(!text.contains("<@"), "{text}");
         assert!(!mentions_everyone(&text), "{text}");
-        assert!(text.contains(r"\[x\]\(https://evil.example\)"), "{text}");
+        assert!(text.contains(r"\[x\]\(https\://evil.example\)"), "{text}");
     }
 
     #[test]

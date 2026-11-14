@@ -213,12 +213,14 @@ array. A key holding a dot can't be reached.
   blank, `null`, an object or an array), the rule MUST post nothing and answer `202`, without trying
   later rules.
 - A value MUST be put on one line, with whitespace and control characters turned into single spaces and
-  format characters removed, so a bidi override can't reorder the message, and have its Markdown escaped.
-  A joined emoji in a value can come apart. A value left blank by this has none. It MUST NOT be expanded
-  again: a title of `{sender.login}` shows as that text. A string value is read only up to its first 1,000
-  characters after its leading whitespace, since no message holds more, and a value for a link up to 513.
-  Once the filled text runs past the 1,000 characters, later pieces MAY be left out unread, but each
-  placeholder MUST still have a value.
+  format characters removed, so a bidi override can't reorder the message, and have its Markdown escaped,
+  including the `:` of a `://` and the `.` of a `www.`, so the value never becomes a link. Only a link a
+  format's link field names, under the origin the format allows, is one. A joined emoji in a value can
+  come apart. A value left blank by this has none. It MUST NOT be expanded again: a title of
+  `{sender.login}` shows as that text. A string value is read only up to its first 1,000 characters after
+  its leading whitespace, since no message holds more, and a value for a link up to 513. Once the filled
+  text runs past the 1,000 characters, later pieces MAY be left out unread, but each placeholder MUST
+  still have a value.
 - The literal text is what the Owner or Moderator wrote, so its Markdown and line breaks stay.
 - Every mention in the result, the literal text's own included, MUST be made plain text, as for any
   webhook. The result MUST then be cut to 1,000 characters, counting the link.
@@ -309,7 +311,8 @@ once. A client that never sends `testSessionId` always gets a real token.
 
 **What a delivery holds.** When it arrived, its `Content-Type`, the `x-` headers as a format reads them, and the
 body as text. The header names a format may not use (see "Webhook formats") MUST be dropped, by the same list,
-so a header such as `x-gitlab-token` is never kept. No address, `Authorization`, cookie or other header is kept.
+so a header such as `x-gitlab-token` is never kept. No address, `Authorization`, cookie or other header is kept: the headers a proxy adds with the sender's address
+(`Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `X-Client-IP`) are dropped, and a format can't test them.
 
 - A body over 256 KiB is held as "too large" without its bytes, and an unbound session answers `413`.
 - A body that isn't UTF-8 is held as "not text" without its bytes.
@@ -321,7 +324,8 @@ so a header such as `x-gitlab-token` is never kept. No address, `Authorization`,
 **Limits.** This is an unauthenticated route that fills memory, so each of these is enforced:
 
 - 20 deliveries and 1 MiB a session. Past either, the oldest are dropped.
-- 3 open sessions a workspace and 20 an instance. Starting one past either answers `RATE_LIMITED`.
+- 3 open sessions a workspace, 3 an account across all its workspaces, and 20 an instance. Starting one past
+  any of them answers `RATE_LIMITED`.
 - 30 deliveries a minute to an unbound session, then `429`. The per-address limit of `/api` applies too. A bound
   session takes nothing from the webhook's own limit.
 - A session lasts 15 minutes from its start or its last read, and never more than an hour from its start. Expired

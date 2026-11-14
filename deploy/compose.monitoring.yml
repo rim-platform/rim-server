@@ -30,7 +30,7 @@ services:
       RIM_METRICS_ADDR: 0.0.0.0:9090
 
   alloy:
-    image: grafana/alloy:v1.21.0
+    image: grafana/alloy:v1.21.0@sha256:9726bfba078de9bc2212c60c6e643238c700b4fe0868ea78cbe03163d03d95bf
     # The image's own unprivileged user, which owns the storage directory.
     user: alloy
     command:
