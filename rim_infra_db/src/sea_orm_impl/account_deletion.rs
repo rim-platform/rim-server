@@ -362,6 +362,18 @@ impl AccountDeletionRepository for SeaOrmAccountDeletionRepository {
                         "UPDATE instance_invite SET revoked_at = $2 \
                          WHERE created_by_user_id = $1 AND revoked_at IS NULL",
                     ),
+                    (
+                        "bot_tokens_revoked",
+                        "UPDATE bot_token t SET revoked_at = $2 FROM bot b \
+                         WHERE b.user_id = t.bot_user_id AND t.revoked_at IS NULL \
+                             AND (t.created_by = $1 OR b.created_by = $1)",
+                    ),
+                    (
+                        "webhooks_revoked",
+                        "UPDATE incoming_webhook w SET revoked_at = $2 FROM bot b \
+                         WHERE b.user_id = w.bot_user_id AND w.revoked_at IS NULL \
+                             AND (w.created_by = $1 OR b.created_by = $1)",
+                    ),
                 ],
                 &id_and_now,
             )

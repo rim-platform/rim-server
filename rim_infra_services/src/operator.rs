@@ -182,6 +182,7 @@ mod tests {
             key_identity_repo: Arc::new(MockKeyIdentityRepository::new()),
             session_repo: Arc::new(MockSessionRepository::new()),
             user_repo: Arc::new(users),
+            bot_repo: Arc::new(rim_core::bot::repository::MockBotRepository::new()),
         })
     }
 

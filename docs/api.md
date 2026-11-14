@@ -506,7 +506,7 @@ a number above 0, so a private server limits nothing but the batch size.
 | `RIM_API_MAX_BATCH` | GraphQL requests in one batch, default 20, whether sent here or forwarded by another server. | HTTP 400 and `{"error":"batch_too_large"}` |
 | none (fixed) | Query root fields in one request: 32 across a batch, each alias, repeated field and fragment expansion counted, a fragment spread twice counting twice, with or without a session, whether sent here or forwarded by another server. | One error with the code `TOO_MANY_ROOT_FIELDS` and `limit` 32; nothing in the request runs |
 | none (fixed) | `remoteServer`, `remoteIdentity` and `previewWebhookFormat` in one request: 4 together across a batch, counted as above. Each may fetch from another server or render a webhook format. | One error with the code `TOO_MANY_ROOT_FIELDS` and `limit` 4; nothing in the request runs |
-| none (fixed) | Account password tries: every `passwordLoginStart` and `passwordChangeStart` counts against the account until a login finishes. Tries 1 to 3 are free; the 4th makes the next wait 1 minute, the 5th 5 minutes, the 6th 15 minutes, the 7th 1 hour, the 8th 4 hours, the 9th 12 hours; the 10th locks the password until a reset with the recovery key. Each `passwordLoginStart` also counts against the address, sharing the 20 failed key sign-ins per 15 minutes. | `RATE_LIMITED` with `retryAfterSeconds` during a wait; `PASSWORD_LOCKED` once locked |
+| none (fixed) | Account password tries: every `passwordLoginStart` and `passwordChangeStart` counts against the account until a login finishes, 10 in a window of one hour that the first start after the last window opens. Nothing locks the password. Each `passwordLoginStart` also counts against the address, sharing the 20 failed key sign-ins per 15 minutes. | `RATE_LIMITED` with `retryAfterSeconds`, the time until the account's window ends or the address may try again |
 | none (fixed) | Failed public join link lookups and joins (`publicJoinLinkPreview`, `joinByPublicLink` with an invalid link) per client address, and those a relay makes for its users (`remoteJoinChallenge`, `joinRemoteWorkspace` with a link) per relay server id: 20 within ten minutes cut the address or relay off for an hour. Successful lookups do not count. | `RATE_LIMITED` with `retryAfterSeconds` on every link lookup and join from the address or relay, valid links included |
 
 The client address is the TCP peer, or with `RIM_TRUST_FORWARDED_HEADERS=true` the first
@@ -663,7 +663,7 @@ on the message.
 | `MLS_COMMIT_REQUIRED` | An encrypted message needs a Commit first. | `reason`: `pendingRemovals` or `noGroup` |
 | `FEATURE_DISABLED` | The feature is off or unavailable on this instance; `serverInfo.features` says why. | `feature` |
 | `REGISTRATION_FULL` | The server holds as many accounts as it accepts (`RIM_LIMIT_ACCOUNTS`) and takes no new one. The message says so and points to running a server or signing up on another one. | |
-| `PASSWORD_LOCKED` | The account's password locked after ten tries without a success; only a reset with the recovery phrase (`passwordResetStart`) opens it. | |
+| `PASSWORD_LOCKED` | Not sent by this server, which never locks a password; a client may still meet it from an older server, which locked a password after ten tries until a reset with the recovery phrase (`passwordResetStart`). | |
 | `UPSTREAM_UNAVAILABLE` | Another server this request needed could not be reached or gave no verified answer. | `hostServerId` (or null), `origin` when known |
 | `UNAVAILABLE` | A dependency of the server is unavailable. | |
 | `TIMEOUT` | A dependency of the server timed out. | |
@@ -978,7 +978,7 @@ must use the suite of the spec byte for byte.
 | `passwordChangeFinish(loginId, credentialFinalization, registrationUpload, rewrap): PasswordChanged!` | yes | Replaces the password, keeps the server share, stores the rewrap (the newest three are kept) and ends every other session of the account. `UNAUTHENTICATED` for a wrong current password. |
 | `passwordResetChallenge(principalId): KeyLoginChallenge!` | none | A challenge for a `password-reset` statement, valid 120 seconds, single use. |
 | `passwordResetStart(statement, registrationRequest): PasswordResetStart!` | none | Verifies the statement against the recovery key of the account's key log head and answers `{ resetId, registrationResponse }`. Every refusal is `UNAUTHENTICATED`. |
-| `passwordResetFinish(resetId, registrationUpload): Boolean!` | none | Replaces the password, keeps the server share, deletes the rewraps, clears the tries and the lock, and ends every session of the account. |
+| `passwordResetFinish(resetId, registrationUpload): Boolean!` | none | Replaces the password, keeps the server share, deletes the rewraps, clears the tries, and ends every session of the account. |
 
 **Sign-in.** The client runs the password login first (`passwordLoginStart`, then
 `passwordLoginFinish`), opens what it keeps at rest with the server share, signs the `login`
@@ -989,7 +989,7 @@ person from another server signs in at a host with the key alone; their password
 their own server.
 
 **Tries.** See "Limits". A wrong password is `UNAUTHENTICATED`, a wait `RATE_LIMITED` with
-`retryAfterSeconds`, and a locked password `PASSWORD_LOCKED`.
+`retryAfterSeconds`; nothing locks the password.
 
 ### Bots
 

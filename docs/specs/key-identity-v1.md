@@ -370,7 +370,7 @@ never interleave.
 | `profile_card` | One row per user, the newest card as signed |
 | `key_challenge` | Nonce, expiry, `used_at`, `purpose` (`login`, `password_reset`, or `join` with the relay's server id in `relay_server_id`); expired rows are deleted when new challenges are issued |
 | `session.device_key_id` | The device a session belongs to |
-| `account_password` | Per local account: the OPAQUE registration record, the server share sealed under the password key, `failed_attempts`, `next_attempt_at`, `locked_at` |
+| `account_password` | Per local account: the OPAQUE registration record, the server share sealed under the password key, `failed_attempts` (the starts counted in the current window) and `next_attempt_at` (when that window ends); `locked_at` is no longer set, and a value left in it is ignored and cleared at the next start |
 | `password_login` | The server's OPAQUE login state between start and finish (`login` or `change`), 120 seconds; the finish deletes it |
 | `password_ticket` | A finished password login's ticket, by the SHA-256 hex of its token, with the account and a 120-second expiry; the key sign-in consumes it |
 | `password_rewrap` | The previous unlock key sealed under the new one, from each change; the newest three per account |
@@ -520,13 +520,18 @@ no share opens, and every account resets its password with its recovery phrase.
    T("server share") of this login; `rewraps` are newest first.
 3. `loginWithKey(proof, passwordTicket)` consumes the ticket ("Challenge login" rules 4 and 5).
 4. **Tries.** Every start counts as a wrong try, since each lets the caller test one guess; a
-   finished login clears the count. Tries 1 to 3 are free. The 4th makes the next wait 1 minute,
-   the 5th 5 minutes, the 6th 15 minutes, the 7th 1 hour, the 8th 4 hours, the 9th 12 hours. The
-   10th still gets an answer, and locks the password until a reset. A start during a wait is
-   `RATE_LIMITED` with `retryAfterSeconds`; one at a locked password is `PASSWORD_LOCKED`. The
-   count, the wait and the lock are per account, set in the same `UPDATE` that counts the try,
-   so concurrent starts cannot pass one check. Each start also counts against the address in
-   the key sign-in's failure budget (20 per 15 minutes) and is never refunded.
+   finished login clears the count. An account takes 10 starts in a window of one hour, which
+   the first start after the last window ended opens. The 11th start in a window is
+   `RATE_LIMITED` with `retryAfterSeconds`, the time until the window ends; the next window
+   takes 10 again. Nothing locks the password and no reset is needed after any number of tries:
+   anyone who knows a principal id can send starts, so a lock would let them shut the owner
+   out. A stored window end more than one hour ahead counts as ended. The count and the window
+   are per account, set in the same `UPDATE` that counts the try, so concurrent starts cannot
+   pass one check. Each start also counts against the address in the key sign-in's failure
+   budget (20 per 15 minutes) and is never refunded. A principal without a password here is
+   counted against its address only, so a refusal for a full window tells that the principal
+   has a password here. A kept session unlocks on its device without a start, so a full window
+   holds back only sign-ins and unlocks that need the password.
 
 ### Change
 
@@ -557,14 +562,15 @@ and ends every other session of the account. It answers `{ changedAt }`.
    answers `{ resetId, registrationResponse }`; the reset is valid for 120 seconds, once.
 4. `passwordResetFinish(resetId, registrationUpload)`, no session: replaces the record (or
    stores the first one, with a new S, for an account without a password), keeps S, deletes the
-   rewraps, clears the tries and the lock, and ends every session of the account. It answers
+   rewraps, clears the tries, and ends every session of the account. It answers
    `true`. Other devices' wraps of their data key no longer open, since E changed: each asks
    once for the recovery phrase, or starts empty.
 
 ### Audit
 
 `password_set`, `password_changed`, `password_reset`, `password_login_success`,
-`password_login_failure` (with the count), `password_locked`, and `key_login_failure` with
+`password_login_failure` (with the count), `password_tries_limited` (a start that filled its
+window), and `key_login_failure` with
 reason `password_record_missing`, `password_missing` or `password_ticket_invalid`, all with
 `target: "audit"` and ids only: never a password, E, S, K_s, a ticket, a key or an OPAQUE
 message.

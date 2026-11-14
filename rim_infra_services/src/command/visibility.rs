@@ -163,7 +163,7 @@ impl DefaultCommandService {
     }
 
     /// The actor's membership in `workspace_id`, `None` when they are not a member.
-    async fn membership(
+    pub(super) async fn membership(
         &self,
         actor: &Actor,
         workspace_id: ServerId,

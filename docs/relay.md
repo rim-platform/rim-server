@@ -353,8 +353,9 @@ SHA-256("rim.pow.v1\0" || this server's id || "\0" || inception payload || nonce
 ```
 
 starts with that many zero bits. The work is bound to this server and one principal, and
-checking it is one hash. Proof-of-work signups also count against the open-signup limit per IP
-and are audited as `relay.registration_pow`. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
+checking it is one hash. Proof-of-work signups also count against the open-signup limit per IP,
+checked after the proof, so a proof that fails uses up none of the address's signups, and are
+audited as `relay.registration_pow`. The descriptor says `"registration":{"mode":"pow","powBits":24}` and `registrationMode`
 answers `POW`. A signup link from `rim_server invite create` lets a person in without the work;
 it needs no account or workspace, so it works with `RIM_ROLE=relay`.
 

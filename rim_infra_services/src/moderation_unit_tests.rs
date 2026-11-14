@@ -6,6 +6,8 @@ mod tests {
     use async_trait::async_trait;
     use chrono::{Duration, Utc};
 
+    use rim_core::bot::model::RevokedCredentials;
+    use rim_core::bot::repository::MockBotRepository;
     use rim_core::conversation::model::{
         Conversation, ConversationId, ConversationType, PostingPolicy,
     };
@@ -178,8 +180,11 @@ mod tests {
         events: Arc<RecordingBroadcaster>,
         /// `(user, workspace)` pairs whose notifications were deleted.
         cleared_notifications: Arc<Mutex<Vec<(UserId, ServerId)>>>,
-        /// `(kind, user, workspace)` for each user's macros and pipelines deleted.
+        /// `(kind, user, workspace)` for each user's bot credentials revoked and macros and
+        /// pipelines deleted.
         cleared_automations: Arc<Mutex<Vec<Cleared>>>,
+        /// What revoking a user's bot credentials answers.
+        held_bot_credentials: RevokedCredentials,
         conversation: Option<Conversation>,
         message: Option<Message>,
         /// Whether every moderator is a member of every conversation.
@@ -220,6 +225,7 @@ mod tests {
                 events: Arc::default(),
                 cleared_notifications: Arc::default(),
                 cleared_automations: Arc::default(),
+                held_bot_credentials: RevokedCredentials::default(),
                 conversation: None,
                 message: None,
                 conversation_member: true,
@@ -492,6 +498,20 @@ mod tests {
                     Box::pin(async { Ok(1) })
                 });
 
+            let mut bot_repo = MockBotRepository::new();
+            let cleared = Arc::clone(&self.cleared_automations);
+            let held = self.held_bot_credentials;
+            bot_repo
+                .expect_revoke_held_by()
+                .returning(move |user_id, server_id, _| {
+                    cleared.lock().expect("lock").push((
+                        "bot_credentials",
+                        user_id,
+                        server_id.expect("one workspace"),
+                    ));
+                    Box::pin(async move { Ok(held) })
+                });
+
             let mut public_join_link_repo = MockPublicJoinLinkRepository::new();
             public_join_link_repo
                 .expect_cancel_open_requests()
@@ -510,6 +530,7 @@ mod tests {
                     macro_repo: Arc::new(macro_repo),
                     pipeline_repo: Arc::new(pipeline_repo),
                     public_join_link_repo: Arc::new(public_join_link_repo),
+                    bot_repo: Arc::new(bot_repo),
                 },
                 Observers::new(Arc::clone(&self.events) as Arc<dyn Broadcaster>),
             )
@@ -597,8 +618,10 @@ mod tests {
         assert_eq!(
             fx.cleared_automations(),
             [
+                ("bot_credentials", member, fx.server_id),
                 ("macros", member, fx.server_id),
                 ("pipelines", member, fx.server_id),
+                ("bot_credentials", mod_b, fx.server_id),
                 ("macros", mod_b, fx.server_id),
                 ("pipelines", mod_b, fx.server_id),
             ]
@@ -673,8 +696,10 @@ mod tests {
         assert_eq!(
             fx.cleared_automations(),
             [
+                ("bot_credentials", member, fx.server_id),
                 ("macros", member, fx.server_id),
                 ("pipelines", member, fx.server_id),
+                ("bot_credentials", guest, fx.server_id),
                 ("macros", guest, fx.server_id),
                 ("pipelines", guest, fx.server_id),
             ]
@@ -798,6 +823,7 @@ mod tests {
         assert_eq!(
             fx.cleared_automations(),
             [
+                ("bot_credentials", member, fx.server_id),
                 ("macros", member, fx.server_id),
                 ("pipelines", member, fx.server_id),
             ]
@@ -1230,6 +1256,53 @@ mod tests {
                 (guest, "member".to_string())
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn losing_owner_or_moderator_revokes_the_bot_credentials_held_and_records_them() {
+        let [owner, moderator, member, guest] = users();
+        let mut fx = Fx::new(&[
+            (owner, Owner),
+            (moderator, Moderator),
+            (member, Member),
+            (guest, Guest),
+        ]);
+        fx.held_bot_credentials = RevokedCredentials {
+            tokens: 2,
+            webhooks: 1,
+        };
+        let mut repo = MockModerationRepository::new();
+        repo.expect_get_active_timeout()
+            .returning(|_, _, _| Box::pin(async { Ok(None) }));
+        let svc = fx.service(repo);
+        let set = |target, role| SetMemberRoleCmd {
+            actor: Actor::new(owner),
+            server_id: fx.server_id,
+            user_id: target,
+            role,
+        };
+
+        // A promotion and a change below Moderator revoke nothing.
+        svc.set_member_role(set(member, Moderator)).await.unwrap();
+        svc.set_member_role(set(guest, Member)).await.unwrap();
+        assert!(fx.cleared_automations().is_empty());
+
+        svc.set_member_role(set(moderator, Member)).await.unwrap();
+        assert_eq!(
+            fx.cleared_automations(),
+            [("bot_credentials", moderator, fx.server_id)]
+        );
+        let rows = fx.audit.0.lock().expect("lock").clone();
+        let revoked: Vec<_> = rows
+            .iter()
+            .filter(|e| e.command_id == audit_ids::BOT_CREDENTIALS_REVOKED)
+            .collect();
+        assert_eq!(revoked.len(), 1);
+        assert_eq!(revoked[0].actor_user_id, uuid::Uuid::from(owner));
+        assert_eq!(revoked[0].server_id, uuid::Uuid::from(fx.server_id));
+        assert_eq!(revoked[0].args_redacted["user_id"], moderator.to_string());
+        assert_eq!(revoked[0].args_redacted["tokens"], 2);
+        assert_eq!(revoked[0].args_redacted["webhooks"], 1);
     }
 
     // ── slow mode ────────────────────────────────────────────────────────

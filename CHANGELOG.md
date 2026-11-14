@@ -23,6 +23,22 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ### Security
 
+- An account's password is no longer locked after ten wrong tries, so it no longer needs a reset
+  with the recovery phrase: an account takes ten password login starts an hour, and a start past
+  that is refused with `RATE_LIMITED` and the seconds until the hour's window ends. Each start
+  still counts against its address too. `PASSWORD_LOCKED` is no longer sent, and a password
+  locked before takes logins again (`docs/specs/key-identity-v1.md`).
+- `executeCommand` checks capabilities and timeouts in, and writes its audit row to, the
+  workspace the command acts on (its `server_id` argument, else `commandContext.workspaceId`). A
+  call whose `commandContext.workspaceId` names another workspace than its `server_id` argument
+  is refused with `VALIDATION`, and a row goes to a workspace's log only when the caller is a
+  member there (`docs/command_model.md`, Target workspace).
+- When someone stops being an Owner or Moderator of a workspace (made a Member or Guest, kicked,
+  banned or leaving), or their account is blocked on the instance or deleted, the bot tokens and
+  incoming webhooks they could still hold there are revoked: those of the bots they created and
+  those they made for other bots. They show as revoked in `botTokens` and `incomingWebhooks`, and
+  the workspace's audit log records it as `bot.revoke_on_role_loss` (`docs/specs/bots-v1.md`).
+- A signup whose proof-of-work fails no longer uses up one of its address's open signups.
 - `GET /api/sdl` serves the schema rendered once at start, with `Cache-Control: public,
   max-age=300`, instead of rendering it again for every request.
 - A GraphQL request runs at most 32 query root fields, counted across its batch with each

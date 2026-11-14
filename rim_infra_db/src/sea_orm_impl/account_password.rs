@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rim_core::account_password::model::{
-    AccountPassword, AttemptSchedule, AttemptStart, PasswordLogin, PasswordLoginId,
+    AccountPassword, AttemptStart, AttemptWindow, PasswordLogin, PasswordLoginId,
     PasswordLoginPurpose, PasswordReset, PasswordResetId,
 };
 use rim_core::account_password::repository::AccountPasswordRepository;
@@ -31,7 +31,7 @@ fn count_of(value: i32) -> u32 {
 }
 
 const PASSWORD_COLUMNS: &str = "user_id, registration, share_sealed, failed_attempts, \
-     next_attempt_at, locked_at, created_at, updated_at";
+     next_attempt_at, created_at, updated_at";
 
 #[derive(FromQueryResult)]
 struct PasswordRow {
@@ -40,7 +40,6 @@ struct PasswordRow {
     share_sealed: Vec<u8>,
     failed_attempts: i32,
     next_attempt_at: Option<DateTimeWithTimeZone>,
-    locked_at: Option<DateTimeWithTimeZone>,
     created_at: DateTimeWithTimeZone,
     updated_at: DateTimeWithTimeZone,
 }
@@ -52,8 +51,7 @@ impl From<PasswordRow> for AccountPassword {
             registration: row.registration,
             share_sealed: row.share_sealed,
             failed_attempts: count_of(row.failed_attempts),
-            next_attempt_at: row.next_attempt_at.map(Into::into),
-            locked_at: row.locked_at.map(Into::into),
+            window_ends_at: row.next_attempt_at.map(Into::into),
             created_at: row.created_at.into(),
             updated_at: row.updated_at.into(),
         }
@@ -69,7 +67,6 @@ struct CountedRow {
 #[derive(FromQueryResult)]
 struct RefusedRow {
     next_attempt_at: Option<DateTimeWithTimeZone>,
-    locked_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(FromQueryResult)]
@@ -198,33 +195,29 @@ impl AccountPasswordRepository for SeaOrmAccountPasswordRepository {
         &self,
         user_id: UserId,
         now: DateTime<Utc>,
-        schedule: &AttemptSchedule,
+        window: &AttemptWindow,
     ) -> RepoResult<AttemptStart> {
-        // `failed_attempts` on the right-hand side is the count before this try; the wait is
-        // the schedule's entry for the new count, or its last entry past the end.
+        // `next_attempt_at` holds the end of the current window. On the right-hand side the
+        // columns hold the values before this start; `locked_at` is cleared and never set.
+        const OPEN: &str = "COALESCE(next_attempt_at > $2 \
+             AND next_attempt_at <= $2 + make_interval(secs => $4::int8), false)";
         let counted: Option<CountedRow> = self
             .one(
-                "UPDATE account_password SET \
-                     failed_attempts = failed_attempts + 1, \
-                     next_attempt_at = CASE \
-                         WHEN failed_attempts + 1 >= $4 THEN NULL \
-                         WHEN COALESCE(($3::int8[])[LEAST(failed_attempts + 1, \
-                             cardinality($3::int8[]))], 0) > 0 \
-                         THEN $2 + make_interval(secs => ($3::int8[])[LEAST(failed_attempts + 1, \
-                             cardinality($3::int8[]))]) \
-                         ELSE NULL END, \
-                     locked_at = CASE WHEN failed_attempts + 1 >= $4 THEN $2 ELSE NULL END, \
-                     updated_at = $2 \
-                 WHERE user_id = $1 AND locked_at IS NULL \
-                     AND (next_attempt_at IS NULL OR next_attempt_at <= $2) \
-                 RETURNING registration, failed_attempts",
+                &format!(
+                    "UPDATE account_password SET \
+                         failed_attempts = CASE WHEN {OPEN} THEN failed_attempts + 1 ELSE 1 END, \
+                         next_attempt_at = CASE WHEN {OPEN} THEN next_attempt_at \
+                             ELSE $2 + make_interval(secs => $4::int8) END, \
+                         locked_at = NULL, \
+                         updated_at = $2 \
+                     WHERE user_id = $1 AND NOT ({OPEN} AND failed_attempts >= $3) \
+                     RETURNING registration, failed_attempts"
+                ),
                 vec![
                     uuid(user_id),
                     utc(now),
-                    schedule.waits_seconds.clone().into(),
-                    i32::try_from(schedule.lock_after)
-                        .unwrap_or(i32::MAX)
-                        .into(),
+                    i32::try_from(window.max_starts).unwrap_or(i32::MAX).into(),
+                    window.length.num_seconds().into(),
                 ],
             )
             .await?;
@@ -236,14 +229,13 @@ impl AccountPasswordRepository for SeaOrmAccountPasswordRepository {
         }
         let refused: Option<RefusedRow> = self
             .one(
-                "SELECT next_attempt_at, locked_at FROM account_password WHERE user_id = $1",
+                "SELECT next_attempt_at FROM account_password WHERE user_id = $1",
                 vec![uuid(user_id)],
             )
             .await?;
         Ok(match refused {
             None => AttemptStart::NoPassword,
-            Some(row) if row.locked_at.is_some() => AttemptStart::Locked,
-            // A success may clear the wait between the two statements; the caller then tries
+            // A success may clear the window between the two statements; the caller then tries
             // again at once.
             Some(row) => AttemptStart::Wait {
                 until: row.next_attempt_at.map_or(now, Into::into),

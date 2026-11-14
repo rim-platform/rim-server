@@ -334,6 +334,7 @@ impl AppRepos {
             macro_repo: Arc::clone(&self.macro_repo),
             pipeline_repo: Arc::clone(&self.pipeline_repo),
             public_join_link_repo: Arc::clone(&self.public_join_link_repo),
+            bot_repo: Arc::clone(&self.bot_repo),
         }
     }
 
@@ -414,6 +415,7 @@ impl AppRepos {
             key_identity_repo: Arc::clone(&self.key_identity_repo),
             session_repo: Arc::clone(&self.session_repo),
             user_repo: Arc::clone(&self.user_repo),
+            bot_repo: Arc::clone(&self.bot_repo),
         }
     }
 

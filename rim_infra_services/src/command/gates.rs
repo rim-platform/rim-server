@@ -1,4 +1,5 @@
-use rim_services::command::dto::{CommandContextDto, CommandDefinitionDto};
+use rim_core::server::model::ServerId;
+use rim_services::command::dto::CommandDefinitionDto;
 use rim_services::command::initiator::CommandInitiator;
 use rim_services::command::sensitivity::CommandSensitivityDto;
 use rim_services::{Actor, ServiceError, ServiceResult};
@@ -79,10 +80,10 @@ impl Dispatch {
 
 impl DefaultCommandService {
     /// Timeout gate: `Err(TimedOut { until })` when `definition` is Mutating (or
-    /// stricter), does not change only the caller's own state, and the actor is timed out in the
-    /// context's workspace. `changes_only_callers_state` says whether it changes only the
-    /// caller's own state. Without a workspace context there is nothing to check here; the
-    /// services behind the command still apply their own write gates.
+    /// stricter), does not change only the caller's own state, and the actor is timed out in
+    /// `workspace_id`, the workspace the command acts on. `changes_only_callers_state` says
+    /// whether it changes only the caller's own state. Without a workspace there is nothing to
+    /// check here; the services behind the command still apply their own write gates.
     ///
     /// # Errors
     ///
@@ -92,12 +93,12 @@ impl DefaultCommandService {
         definition: &CommandDefinitionDto,
         changes_only_callers_state: bool,
         actor: &Actor,
-        context: Option<&CommandContextDto>,
+        workspace_id: Option<ServerId>,
     ) -> ServiceResult<()> {
         if definition.sensitivity < CommandSensitivityDto::Mutating || changes_only_callers_state {
             return Ok(());
         }
-        let Some(server_id) = context.and_then(|c| c.workspace_id) else {
+        let Some(server_id) = workspace_id else {
             return Ok(());
         };
         match self

@@ -44,11 +44,11 @@ impl AccountPasswordMutations {
     }
 
     /// Start a password login, before `passwordLoginFinish`: the OPAQUE `CredentialRequest` for
-    /// `principalId`. Every start counts as a wrong try until a login finishes: tries 1 to 3
-    /// are free, the 4th to the 9th make the next one wait (`RATE_LIMITED` with
-    /// `retryAfterSeconds`), and the 10th locks the password (`PASSWORD_LOCKED`) until a reset
-    /// with the recovery phrase. A principal without a password here gets an answer of the same
-    /// shape that no password finishes. No session needed.
+    /// `principalId`. Every start counts as a wrong try until a login finishes. An account takes
+    /// ten starts an hour; past that a start is `RATE_LIMITED` with `retryAfterSeconds`, the
+    /// time until the hour's window ends. Nothing locks the password. A principal without a
+    /// password here gets an answer of the same shape that no password finishes. No session
+    /// needed.
     async fn password_login_start(
         &self,
         ctx: &Context<'_>,

@@ -14,6 +14,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use tracing::info;
 
+use rim_core::bot::repository::BotRepository;
 use rim_core::conversation::model::{Conversation, ConversationId, ConversationType};
 use rim_core::conversation::repository::ConversationRepository;
 use rim_core::conversation_member::repository::ConversationMemberRepository;
@@ -86,6 +87,7 @@ pub(crate) mod audit_ids {
     pub(crate) const REPORT_VIEWED: &str = "e2ee.report_viewed";
     /// A member left the workspace (initiator `workspace`).
     pub(crate) const LEAVE: &str = "workspace.leave";
+    pub(crate) const BOT_CREDENTIALS_REVOKED: &str = "bot.revoke_on_role_loss";
 }
 
 /// `initiator` column value of moderation audit rows.
@@ -251,6 +253,8 @@ pub struct ModerationRepos {
     pub pipeline_repo: Arc<dyn PipelineRepository>,
     /// Cancels a banned person's open join requests.
     pub public_join_link_repo: Arc<dyn PublicJoinLinkRepository>,
+    /// Revokes the bot tokens and webhooks of someone who stops being an Owner or Moderator.
+    pub bot_repo: Arc<dyn BotRepository>,
 }
 
 /// The `blobSha256` values (unpadded base64url) of a verified content's `attachments`. The
@@ -503,17 +507,65 @@ impl DefaultModerationService {
         Ok(())
     }
 
-    /// Removes the user from the workspace (a kick, a ban or their own leave) and from every
-    /// conversation of it (so a later re-join does not restore private-channel access), deletes
-    /// their notifications, macros and pipelines there, then announces `MemberLeft`.
+    /// Revoke the bot tokens and incoming webhooks of `server_id` that `user_id` may still hold,
+    /// as they stop being an Owner or Moderator there or leave it: those of the bots they created
+    /// and those they created for any bot. Recorded in the workspace's audit log as `actor`'s
+    /// action when there were any.
+    async fn revoke_bot_credentials(
+        &self,
+        actor: UserId,
+        server_id: ServerId,
+        user_id: UserId,
+    ) -> ServiceResult<()> {
+        let revoked = self
+            .repos
+            .bot_repo
+            .revoke_held_by(user_id, Some(server_id), Utc::now())
+            .await?;
+        if revoked.is_empty() {
+            return Ok(());
+        }
+        info!(
+            target: "audit",
+            event = "bot_credentials_revoked",
+            server_id = %server_id,
+            user_id = %user_id,
+            tokens = revoked.tokens,
+            webhooks = revoked.webhooks,
+            "bot tokens and webhooks revoked with their holder's role"
+        );
+        self.audit(ModerationAuditEntry {
+            actor,
+            server_id,
+            command_id: audit_ids::BOT_CREDENTIALS_REVOKED,
+            args: serde_json::json!({
+                "user_id": user_id.to_string(),
+                "tokens": revoked.tokens,
+                "webhooks": revoked.webhooks,
+            }),
+            dangerous: false,
+            typed_verb: TypedVerb::Delete,
+        })
+        .await;
+        Ok(())
+    }
+
+    /// Removes the user from the workspace (a kick, a ban or their own leave, by `actor`) and
+    /// from every conversation of it (so a later re-join does not restore private-channel
+    /// access), deletes their notifications, macros and pipelines there, then announces
+    /// `MemberLeft`. The bot tokens and webhooks they may hold there are revoked first, so a
+    /// removal that fails part way leaves none of them working.
     async fn remove_from_workspace(
         &self,
+        actor: UserId,
         server_id: ServerId,
         user_id: UserId,
         cause: &str,
         until: Option<DateTime<Utc>>,
         reason: Option<String>,
     ) -> ServiceResult<()> {
+        self.revoke_bot_credentials(actor, server_id, user_id)
+            .await?;
         self.repos
             .server_member_repo
             .remove_member(server_id, user_id)
@@ -829,6 +881,11 @@ impl ModerationService for DefaultModerationService {
             ));
         }
         let previous = target.member_role;
+        // Before the change, so a change that fails part way leaves none of them working.
+        if previous.is_moderator() && !cmd.role.is_moderator() {
+            self.revoke_bot_credentials(cmd.actor.user_id, cmd.server_id, cmd.user_id)
+                .await?;
+        }
         self.repos
             .server_member_repo
             .change_member_role(cmd.server_id, cmd.user_id, cmd.role)
@@ -874,8 +931,15 @@ impl ModerationService for DefaultModerationService {
         if target.is_none() {
             return Err(ServiceError::NotFound);
         }
-        self.remove_from_workspace(cmd.server_id, cmd.user_id, "kick", None, reason.clone())
-            .await?;
+        self.remove_from_workspace(
+            cmd.actor.user_id,
+            cmd.server_id,
+            cmd.user_id,
+            "kick",
+            None,
+            reason.clone(),
+        )
+        .await?;
         info!(server_id = %cmd.server_id, user_id = %cmd.user_id, "kicked member");
 
         self.audit(ModerationAuditEntry {
@@ -906,8 +970,15 @@ impl ModerationService for DefaultModerationService {
                 DEFAULT_WORKSPACE_STAYS.to_string(),
             ));
         }
-        self.remove_from_workspace(cmd.server_id, cmd.actor.user_id, "left", None, None)
-            .await?;
+        self.remove_from_workspace(
+            cmd.actor.user_id,
+            cmd.server_id,
+            cmd.actor.user_id,
+            "left",
+            None,
+            None,
+        )
+        .await?;
         info!(server_id = %cmd.server_id, user_id = %cmd.actor.user_id, "member left");
         record_audit_action(
             self.audit_log_service.as_ref(),
@@ -956,6 +1027,7 @@ impl ModerationService for DefaultModerationService {
             .await?;
         if target.is_some() {
             self.remove_from_workspace(
+                cmd.actor.user_id,
                 cmd.server_id,
                 cmd.user_id,
                 "ban",

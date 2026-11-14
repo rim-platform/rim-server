@@ -10,6 +10,7 @@ use sea_orm::DatabaseConnection;
 use tracing::{info, instrument};
 
 use rim_core::auth::repository::SessionRepository;
+use rim_core::bot::repository::BotRepository;
 use rim_core::key_identity::repository::KeyIdentityRepository;
 use rim_core::relay::model::{
     AbuseReport, AbuseReportFilter, AbuseReportId, NewAbuseReport, PrincipalBlock,
@@ -49,6 +50,8 @@ pub struct RelayAbuseRepos {
     pub session_repo: Arc<dyn SessionRepository>,
     /// Accounts, their invite chain, their invites and blocked emails.
     pub user_repo: Arc<dyn UserRepository>,
+    /// Revokes the bot tokens and webhooks a blocked account could still hold.
+    pub bot_repo: Arc<dyn BotRepository>,
 }
 
 pub struct DefaultRelayAbuseService {
@@ -147,7 +150,8 @@ impl DefaultRelayAbuseService {
     }
 
     /// Block `principal_id` and the account `user`, whichever exist, for `reason`, on the
-    /// transaction's repositories.
+    /// transaction's repositories. The account's sessions end, and its invites and the bot
+    /// tokens and webhooks it could still hold are revoked.
     async fn block_one(
         repos: &RelayAbuseRepos,
         principal_id: Option<String>,
@@ -176,6 +180,20 @@ impl DefaultRelayAbuseService {
             repos.user_repo.lock_user(user.id).await?;
             outcome.ended_sessions = repos.session_repo.revoke_all_for_user(user.id).await?;
             outcome.revoked_invites = repos.user_repo.revoke_invites_created_by(user.id).await?;
+            let revoked = repos
+                .bot_repo
+                .revoke_held_by(user.id, None, Utc::now())
+                .await?;
+            if !revoked.is_empty() {
+                info!(
+                    target: "audit",
+                    event = "bot_credentials_revoked",
+                    user_id = %user.id,
+                    tokens = revoked.tokens,
+                    webhooks = revoked.webhooks,
+                    "bot tokens and webhooks of a blocked account revoked"
+                );
+            }
             if let Some(email) = &user.email {
                 let email_block_new = repos.user_repo.block_email(email, &reason).await?;
                 outcome.newly_blocked = principal_block_new.unwrap_or(email_block_new);
@@ -704,6 +722,7 @@ mod tests {
 
     use rim_core::auth::model::SessionId;
     use rim_core::auth::repository::MockSessionRepository;
+    use rim_core::bot::repository::MockBotRepository;
     use rim_core::key_identity::repository::MockKeyIdentityRepository;
     use rim_core::principal::model::{Principal, PrincipalId};
     use rim_core::relay::repository::MockRelayAbuseRepository;
@@ -890,6 +909,24 @@ mod tests {
                 Box::pin(async move { Ok(reports) })
             });
 
+            let mut bot_repo = MockBotRepository::new();
+            let log = Arc::clone(&self.log);
+            let n = name.clone();
+            bot_repo
+                .expect_revoke_held_by()
+                .returning(move |id, server_id, _| {
+                    assert_eq!(server_id, None, "every workspace's");
+                    log.lock()
+                        .unwrap()
+                        .push(format!("revoke bot credentials {}", n(id)));
+                    Box::pin(async {
+                        Ok(rim_core::bot::model::RevokedCredentials {
+                            tokens: 1,
+                            webhooks: 1,
+                        })
+                    })
+                });
+
             let mut user_repo = MockUserRepository::new();
             let all = users.clone();
             user_repo
@@ -962,6 +999,7 @@ mod tests {
                 key_identity_repo: Arc::new(keys),
                 session_repo: Arc::new(sessions),
                 user_repo: Arc::new(user_repo),
+                bot_repo: Arc::new(bot_repo),
             })
         }
     }
@@ -993,6 +1031,7 @@ mod tests {
                 "lock ada".to_string(),
                 "end sessions ada".to_string(),
                 "revoke invites ada".to_string(),
+                "revoke bot credentials ada".to_string(),
                 "block email ada@example.com: spam wave".to_string(),
                 format!("ignore requests {ADA}"),
                 format!("report {ADA}: blocked: spam wave"),
@@ -1065,6 +1104,7 @@ mod tests {
             vec![
                 "end sessions cy",
                 "revoke invites cy",
+                "revoke bot credentials cy",
                 "block email cy@example.com: spam ring (invited by bob)",
             ]
         );

@@ -7,7 +7,8 @@
 //!
 //! The server never sees the password. It stores the OPAQUE registration record and the
 //! account's server share sealed under the password key, counts every login start as a wrong
-//! try until a login finishes, and returns the share only to a login that proved the password.
+//! try until a login finishes, takes at most a window's worth of them, and returns the share
+//! only to a login that proved the password.
 
 use std::sync::Arc;
 
@@ -24,7 +25,7 @@ use rim_auth::opaque::{
 };
 use rim_auth::session_token::{generate_challenge_nonce, generate_token, hash_token};
 use rim_core::account_password::model::{
-    AccountPassword, AttemptSchedule, AttemptStart, PasswordLogin, PasswordLoginId,
+    AccountPassword, AttemptStart, AttemptWindow, PasswordLogin, PasswordLoginId,
     PasswordLoginPurpose, PasswordReset, PasswordResetId,
 };
 use rim_core::account_password::repository::AccountPasswordRepository;
@@ -246,7 +247,8 @@ pub struct DefaultAccountPasswordService {
     key: Option<PasswordKey>,
     /// `host[:port]` values and the server id a reset's `audience` may name, normalized.
     accepted_audiences: Vec<String>,
-    schedule: AttemptSchedule,
+    /// The login starts an account's password takes per window.
+    window: AttemptWindow,
     /// Registration starts and reset challenges per IP.
     issue_rate_limiter: RegistrationRateLimiter,
     /// Login starts and failed resets per IP; the instance key sign-in failures count against.
@@ -273,7 +275,7 @@ impl DefaultAccountPasswordService {
                 .map(|a| normalize_audience(a.trim()))
                 .filter(|a| !a.is_empty())
                 .collect(),
-            schedule: AttemptSchedule::default(),
+            window: AttemptWindow::default(),
             issue_rate_limiter: RegistrationRateLimiter::new(300, 60),
             failure_rate_limiter: RegistrationRateLimiter::new(900, 20),
             session_revocations: crate::session_revocation::unshared(),
@@ -409,30 +411,29 @@ impl DefaultAccountPasswordService {
     /// Count a try against `user_id`'s password; the record to answer it with.
     ///
     /// # Errors
-    /// `PasswordLocked`, `RateLimited` while a wait runs, `NotFound` without a password.
+    /// `RateLimited` until the window ends once it is full, `NotFound` without a password.
     async fn count_try(&self, user_id: UserId, now: DateTime<Utc>) -> ServiceResult<Vec<u8>> {
         match self
             .repos
             .password_repo
-            .start_attempt(user_id, now, &self.schedule)
+            .start_attempt(user_id, now, &self.window)
             .await?
         {
             AttemptStart::Counted {
                 registration,
                 failed_attempts,
             } => {
-                if self.schedule.locks_at(failed_attempts) {
+                if failed_attempts == self.window.max_starts {
                     info!(
                         target: "audit",
-                        event = "password_locked",
+                        event = "password_tries_limited",
                         user_id = %user_id,
                         failed_attempts,
-                        "a password locked after too many tries"
+                        "a password took all the login starts of its window"
                     );
                 }
                 Ok(registration)
             }
-            AttemptStart::Locked => Err(ServiceError::PasswordLocked),
             AttemptStart::Wait { until } => Err(Self::rate_limited(
                 "password_try",
                 u64::try_from((until - now).num_seconds().max(1)).unwrap_or(1),

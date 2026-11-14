@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use mockall::automock;
 
 use crate::account_password::model::{
-    AccountPassword, AttemptSchedule, AttemptStart, PasswordLogin, PasswordLoginId, PasswordReset,
+    AccountPassword, AttemptStart, AttemptWindow, PasswordLogin, PasswordLoginId, PasswordReset,
     PasswordResetId,
 };
 use crate::repository::error::RepoResult;
@@ -31,7 +31,7 @@ pub trait AccountPasswordRepository: Send + Sync {
     ) -> RepoResult<()>;
 
     /// Replace the account's registration record, keeping its server share, and clear its
-    /// tries and lock. Returns whether the account had a password.
+    /// counted tries. Returns whether the account had a password.
     async fn replace_registration(
         &self,
         user_id: UserId,
@@ -42,17 +42,17 @@ pub trait AccountPasswordRepository: Send + Sync {
     /// How many accounts have a password.
     async fn count_passwords(&self) -> RepoResult<u64>;
 
-    /// Count a login start against the account's password at `now`, in one statement: when the
-    /// password is neither locked nor waiting, add one to its tries and set the wait and the
-    /// lock `schedule` gives the new count.
+    /// Count a login start against the account's password at `now`, in one statement, as
+    /// [`AttemptWindow::count`] says: open a new window when none is open, add one to the count
+    /// of the open one, or refuse when it is full.
     async fn start_attempt(
         &self,
         user_id: UserId,
         now: DateTime<Utc>,
-        schedule: &AttemptSchedule,
+        window: &AttemptWindow,
     ) -> RepoResult<AttemptStart>;
 
-    /// Clear the account's tries, wait and lock after a successful login.
+    /// Clear the account's counted tries after a successful login.
     async fn clear_attempts(&self, user_id: UserId, now: DateTime<Utc>) -> RepoResult<()>;
 
     /// Store a login state, after deleting the states that expired before `now`.

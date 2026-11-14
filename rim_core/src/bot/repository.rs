@@ -6,7 +6,7 @@ use mockall::automock;
 use crate::bot::model::{
     Bot, BotFeedJoin, BotFeedMessage, BotFeedPosition, BotPatch, BotToken, BotTokenHolder,
     BotTokenId, IncomingWebhook, IncomingWebhookHolder, IncomingWebhookId, NewBot, NewBotToken,
-    NewIncomingWebhook, WebhookPreset,
+    NewIncomingWebhook, RevokedCredentials, WebhookPreset,
 };
 use crate::conversation::model::ConversationId;
 use crate::repository::error::RepoResult;
@@ -113,6 +113,16 @@ pub trait BotRepository: Send + Sync {
 
     /// Stamp every webhook of the bot not yet revoked as revoked at `at`. Returns how many.
     async fn revoke_all_webhooks(&self, bot_user_id: UserId, at: DateTime<Utc>) -> RepoResult<u64>;
+
+    /// Stamp as revoked at `at` the tokens and incoming webhooks not yet revoked that `user_id`
+    /// may still hold: those of the bots `user_id` created, and those `user_id` created for any
+    /// bot. Only those of `server_id` when one is given, else those of every workspace.
+    async fn revoke_held_by(
+        &self,
+        user_id: UserId,
+        server_id: Option<ServerId>,
+        at: DateTime<Utc>,
+    ) -> RepoResult<RevokedCredentials>;
 
     /// The webhook with the SHA-256 `token_hash` and its bot's standing, by the unique index.
     async fn find_webhook_holder(

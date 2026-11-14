@@ -762,6 +762,90 @@ async fn revoking_all_of_a_bots_webhooks_leaves_those_of_others_and_earlier_stam
 }
 
 #[tokio::test]
+async fn revoking_what_someone_holds_takes_their_bots_and_what_they_made_in_one_workspace() {
+    let ctx = support::TestCtx::new().await;
+    let (server, ada) = workspace(&ctx, "held").await;
+    let (elsewhere, _) = workspace(&ctx, "held-else").await;
+    let bob = ctx.create_user("held-bob").await;
+    let bots = repo(&ctx);
+    let adas = bots
+        .create_bot(new_bot(server.id, "bot-held-ada", ada.id))
+        .await
+        .unwrap();
+    let bobs = bots
+        .create_bot(new_bot(server.id, "bot-held-bob", bob.id))
+        .await
+        .unwrap();
+    let adas_elsewhere = bots
+        .create_bot(new_bot(elsewhere.id, "bot-held-else", ada.id))
+        .await
+        .unwrap();
+    // Ada's bot, whoever made the token; Bob's bot, with a token Ada made and one of Bob's.
+    let on_adas_by_bob = bots
+        .create_token(new_token(adas.user_id, "held-1", bob.id))
+        .await
+        .unwrap();
+    let on_bobs_by_ada = bots
+        .create_token(new_token(bobs.user_id, "held-2", ada.id))
+        .await
+        .unwrap();
+    let on_bobs_by_bob = bots
+        .create_token(new_token(bobs.user_id, "held-3", bob.id))
+        .await
+        .unwrap();
+    let in_elsewhere = bots
+        .create_token(new_token(adas_elsewhere.user_id, "held-4", ada.id))
+        .await
+        .unwrap();
+    let hook_by_ada = bots
+        .create_webhook(new_webhook(
+            &server,
+            channel_of(&ctx, &server).await,
+            bobs.user_id,
+            "held-5",
+            ada.id,
+        ))
+        .await
+        .unwrap();
+    let hook_by_bob = bots
+        .create_webhook(new_webhook(
+            &server,
+            channel_of(&ctx, &server).await,
+            bobs.user_id,
+            "held-6",
+            bob.id,
+        ))
+        .await
+        .unwrap();
+
+    let at = Utc::now().duration_trunc(Duration::seconds(1)).unwrap();
+    let revoked = bots
+        .revoke_held_by(ada.id, Some(server.id), at)
+        .await
+        .unwrap();
+    assert_eq!((revoked.tokens, revoked.webhooks), (2, 1));
+    let token_revoked_at = async |id| bots.find_token(id).await.unwrap().unwrap().revoked_at;
+    assert_eq!(token_revoked_at(on_adas_by_bob.id).await, Some(at));
+    assert_eq!(token_revoked_at(on_bobs_by_ada.id).await, Some(at));
+    assert_eq!(token_revoked_at(on_bobs_by_bob.id).await, None);
+    assert_eq!(token_revoked_at(in_elsewhere.id).await, None);
+    let hook_revoked_at = async |id| bots.find_webhook(id).await.unwrap().unwrap().revoked_at;
+    assert_eq!(hook_revoked_at(hook_by_ada.id).await, Some(at));
+    assert_eq!(hook_revoked_at(hook_by_bob.id).await, None);
+    assert!(
+        bots.revoke_held_by(ada.id, Some(server.id), at)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Without a workspace, every workspace's.
+    let everywhere = bots.revoke_held_by(ada.id, None, at).await.unwrap();
+    assert_eq!((everywhere.tokens, everywhere.webhooks), (1, 0));
+    assert_eq!(token_revoked_at(in_elsewhere.id).await, Some(at));
+}
+
+#[tokio::test]
 async fn a_webhook_goes_with_its_channel() {
     let ctx = support::TestCtx::new().await;
     let (server, ada) = workspace(&ctx, "hook-gone").await;

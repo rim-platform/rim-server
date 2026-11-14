@@ -18,6 +18,7 @@ pub use registry::emit_ai_callable_inventory_audit;
 use async_trait::async_trait;
 
 use rim_core::command::model::{NewUserCommand, UpdateUserCommand, UserCommand};
+use rim_core::server::model::ServerId;
 use rim_services::audit::dto::{AuditLogEntryDto, AuditOutcome};
 use rim_services::audit::service::AuditLogService;
 use rim_services::command::bounds::{
@@ -171,6 +172,26 @@ impl DefaultCommandService {
 
     pub(super) fn builtin_commands() -> Vec<CommandDefinitionDto> {
         registry::builtin_commands()
+    }
+
+    /// The workspace a call acts on: its `server_id` argument, else its context's workspace;
+    /// `None` when it names neither, or names it with an argument that is not an id.
+    ///
+    /// # Errors
+    ///
+    /// `Validation` when the context's workspace is not the one the `server_id` argument names.
+    fn command_target(cmd: &ExecuteCommandCmd) -> ServiceResult<Option<ServerId>> {
+        let target = executor::command_workspace(cmd.args.as_ref(), cmd.context.as_ref());
+        let context = cmd.context.as_ref().and_then(|c| c.workspace_id);
+        if let (Some(target), Some(context)) = (target, context)
+            && target != context
+        {
+            return Err(ServiceError::Validation(
+                "commandContext.workspaceId is not the workspace the server_id argument names"
+                    .to_string(),
+            ));
+        }
+        Ok(target)
     }
 
     /// Refuses an `execute_command` call whose command id is longer than 256 bytes, whose pipe
@@ -360,6 +381,7 @@ impl CommandService for DefaultCommandService {
 
     async fn execute_command(&self, cmd: ExecuteCommandCmd) -> ServiceResult<CommandResultDto> {
         Self::ensure_call_within_bounds(&cmd)?;
+        let target = Self::command_target(&cmd)?;
 
         // Snapshot the audit fields BEFORE moving `cmd` into
         // `execute_command_inner` (which consumes args/context).
@@ -376,12 +398,6 @@ impl CommandService for DefaultCommandService {
             .run_id
             .clone()
             .filter(|_| cmd.initiator == CommandInitiator::Agent);
-        let server_id_for_audit: uuid::Uuid = cmd
-            .context
-            .as_ref()
-            .and_then(|c| c.workspace_id)
-            .map(|s| s.into())
-            .unwrap_or_else(uuid::Uuid::nil);
         let sanitized_args = bound_audit_args(sanitize_args_for_audit(
             cmd.args.as_ref().unwrap_or(&serde_json::Value::Null),
         ));
@@ -405,8 +421,29 @@ impl CommandService for DefaultCommandService {
             None => "none",
             Some(ConfirmationProof::InBandToken { .. }) => "in_band_token",
         };
+        // The row goes to the target's log only when the caller is a member there, looked up
+        // before the command runs, since it may end the membership.
+        let server_id_for_audit = match target {
+            Some(workspace_id) if writes_audit_row && self.services.audit_log_service.is_some() => {
+                match self.membership(&cmd.actor, workspace_id).await {
+                    Ok(Some(_)) => workspace_id.into(),
+                    Ok(None) => uuid::Uuid::nil(),
+                    Err(e) => {
+                        tracing::warn!(
+                            event = "audit_membership_lookup_failed",
+                            error = %e,
+                            "the command's audit row goes to no workspace"
+                        );
+                        uuid::Uuid::nil()
+                    }
+                }
+            }
+            _ => uuid::Uuid::nil(),
+        };
 
-        let result = self.execute_command_inner(cmd, dispatch, resolver).await;
+        let result = self
+            .execute_command_inner(cmd, dispatch, resolver, target)
+            .await;
 
         let (outcome, error_kind_str) = match &result {
             Ok(result_dto) => match result_dto.status {
