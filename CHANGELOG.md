@@ -28,6 +28,11 @@ tag `v<version>`, the version every crate in the workspace carries.
   that is refused with `RATE_LIMITED` and the seconds until the hour's window ends. Each start
   still counts against its address too. `PASSWORD_LOCKED` is no longer sent, and a password
   locked before takes logins again (`docs/specs/key-identity-v1.md`).
+- `executeCommand` checks capabilities and timeouts in, and writes its audit row to, the
+  workspace the command acts on (its `server_id` argument, else `commandContext.workspaceId`). A
+  call whose `commandContext.workspaceId` names another workspace than its `server_id` argument
+  is refused with `VALIDATION`, and a row goes to a workspace's log only when the caller is a
+  member there (`docs/command_model.md`, Target workspace).
 
 ## [0.0.10] - 2026-11-13
 

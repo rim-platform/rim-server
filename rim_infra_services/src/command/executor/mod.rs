@@ -273,6 +273,18 @@ where
     )))
 }
 
+/// The workspace a command call acts on, as [`resolve_workspace_id`] reads its `server_id`
+/// argument and `context`; `None` when it names none, or names it with an argument that is not
+/// an id.
+pub(super) fn command_workspace(
+    args: Option<&Value>,
+    context: Option<&CommandContextDto>,
+) -> Option<rim_core::server::model::ServerId> {
+    let no_args = serde_json::Map::new();
+    let args = args.and_then(Value::as_object).unwrap_or(&no_args);
+    resolve_workspace_id(args, context, "server_id").ok()
+}
+
 /// Like [`resolve_workspace_id`], for the conversation: a present, non-blank `arg_name` arg is
 /// parsed strictly; otherwise the focused conversation (`context.conversation_id`) is used, so a
 /// palette or keybind invocation acts on the conversation the user is looking at.

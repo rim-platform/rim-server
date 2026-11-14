@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_recursion::async_recursion;
 use serde_json::Value;
 
+use rim_core::server::model::ServerId;
 use rim_services::command::confirmation::{issue_in_band, verify_in_band};
 use rim_services::command::dto::{
     CommandContextDto, CommandDefinitionDto, CommandExecutionTargetDto, CommandResultDto,
@@ -458,7 +459,7 @@ impl DefaultCommandService {
                 &definition,
                 own_state::changes_only_callers_state(command_id),
                 &ctx.actor,
-                ctx.context.as_ref(),
+                executor::command_workspace(args.as_ref(), ctx.context.as_ref()),
             )
             .await?;
             return self
@@ -477,13 +478,15 @@ impl DefaultCommandService {
     }
 
     /// Inner dispatch body for `execute_command`, given what `cmd` dispatches, as
-    /// [`Dispatch::resolve`] resolved it with `resolver`. The public trait method wraps this with
-    /// the audit emit so every branch gets exactly one audit line.
+    /// [`Dispatch::resolve`] resolved it with `resolver`, and the workspace it acts on,
+    /// `target`, which the capability and timeout gates check. The public trait method wraps
+    /// this with the audit emit so every branch gets exactly one audit line.
     pub(super) async fn execute_command_inner(
         &self,
         cmd: ExecuteCommandCmd,
         dispatch: ServiceResult<Dispatch>,
         resolver: CommandResolver<'_>,
+        target: Option<ServerId>,
     ) -> ServiceResult<CommandResultDto> {
         if !cmd.is_pipe && cmd.command_id.contains('|') {
             return Err(ServiceError::Validation(
@@ -499,11 +502,10 @@ impl DefaultCommandService {
         // ── Capability gate ─────────────────────────────────────────────
         let required_caps = dispatch.required_capabilities();
         if !required_caps.is_empty() {
-            let workspace_id = cmd.context.as_ref().and_then(|c| c.workspace_id);
             for cap in &required_caps {
                 self.services
                     .capability_service
-                    .check(&cmd.actor, workspace_id, cap)
+                    .check(&cmd.actor, target, cap)
                     .await
                     .map_err(|err| match err {
                         ServiceError::PermissionDenied => ServiceError::CapabilityMissing {
@@ -578,7 +580,7 @@ impl DefaultCommandService {
                 &resolved.definition,
                 resolved.changes_only_callers_state,
                 &cmd.actor,
-                cmd.context.as_ref(),
+                target,
             )
             .await?;
         }

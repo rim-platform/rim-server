@@ -96,18 +96,19 @@ async fn execute_command_denies_when_capability_check_rejects() {
         .returning(|_, _, _| Err(ServiceError::PermissionDenied));
 
     let svc = fixtures::build_service(capability_service);
+    let workspace = rim_core::server::model::ServerId::new();
 
     let result = svc
         .execute_command(ExecuteCommandCmd {
             actor: actor(),
             command_id: "chat.post_message".to_string(),
             args: Some(serde_json::json!({
-                "server_id": rim_core::server::model::ServerId::new().to_string(),
+                "server_id": workspace.to_string(),
                 "conversation_id": rim_core::conversation::model::ConversationId::new().to_string(),
                 "text": "should never be sent"
             })),
             context: Some(CommandContextDto {
-                workspace_id: Some(rim_core::server::model::ServerId::new()),
+                workspace_id: Some(workspace),
                 conversation_id: None,
                 thread_id: None,
                 selected_text: None,

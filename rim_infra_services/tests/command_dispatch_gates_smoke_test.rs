@@ -185,7 +185,9 @@ fn build_service_with_audit(
             pin_service: Arc::new(rim_services::pin::service::MockPinService::new()),
             read_state_service: Arc::new(MockReadStateService::new()),
             server_member_service: Arc::new(
-                rim_services::server_member::service::MockServerMemberService::new(),
+                rim_services::server_member::service::MockServerMemberService::with_own_role(
+                    Some(rim_core::server_member::model::ServerMemberRole::Member),
+                ),
             ),
             user_service: Arc::new(rim_services::user::service::MockUserService::new()),
             workspace_state_service: Arc::new(MockWorkspaceStateService::new()),

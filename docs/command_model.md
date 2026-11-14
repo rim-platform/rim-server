@@ -768,6 +768,15 @@ Each command should expose the following metadata.
 - `supports_preview`
 - `supports_dry_run`
 
+### Target workspace
+
+`executeCommand` resolves once the workspace a call acts on: its `server_id` argument when one is
+given, else `commandContext.workspaceId`. A call whose `commandContext.workspaceId` names another
+workspace than its `server_id` argument is refused with `VALIDATION` before anything runs, and
+writes no audit row. The capability gate (C1) and the timeout gate (T1) check that workspace, and
+the audit row is written under it. A macro step or a pipe stage is judged by its own `server_id`
+argument, else the call's context, at the role and timeout gates.
+
 ### Confirmation gate (H1)
 
 A call needs a confirmation when the command is dangerous or `Restricted`, or when it is
@@ -791,19 +800,23 @@ it runs need none.
 
 After the capability and confirmation gates, `execute_command` refuses any command whose `sensitivity` is `Mutating` or
 `Restricted` with `ServiceError::TimedOut { until }` (GraphQL `TIMED_OUT`, extension `until`)
-when the actor is timed out in the context's workspace (`ModerationService::active_timeout`).
+when the actor is timed out in the workspace the call acts on ("Target workspace";
+`ModerationService::active_timeout`).
 `Safe` and `Sensitive` commands still run, and so do the commands that change only the caller's
 own state: `chat.mark_as_read`, `chat.mark_as_unread`, `chat.leave_conversation` and every
 `notifications.*` command. A timeout is about speaking, and the GraphQL mutations behind these
 allow them to a timed-out member as well. A macro the server runs is let through only when every
 step is one of these. The gate also runs on nested dispatch (macro steps, pipe stages), before
-the rate limiter, inside the audit wrapper. Without a workspace context it has nothing to check;
+the rate limiter, inside the audit wrapper. Without a target workspace it has nothing to check;
 the services behind the command apply their own write gates anyway. Gate order: C1 capability → H1 confirmation → T1 timeout → R1 rate limit.
 
 ### Audit row
 
 Every `executeCommand` call writes one row to the command audit log, which the workspace's
-Owners and Moderators read (`security/audit-access-matrix.md`). A call of `chat.mark_as_read`,
+Owners and Moderators read (`security/audit-access-matrix.md`). The row goes to the call's target
+workspace ("Target workspace") when the caller is a member there, looked up before the command
+runs; otherwise, and for a call that names no workspace, it goes to no workspace, and only the
+caller's own reads of the log show it. A call of `chat.mark_as_read`,
 `chat.mark_as_unread` or a `notifications.*` command writes none: these change only the caller's
 own view, and a row for every conversation read or notification setting changed would show the
 Owners and Moderators a person's reading habits. The same holds for such a step of a workspace

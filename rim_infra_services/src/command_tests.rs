@@ -1295,10 +1295,23 @@ mod tests {
     }
 
     /// A command service whose builtins include `defs`, with no capability required
-    /// and `audit_svc` as its audit log.
+    /// and `audit_svc` as its audit log; the caller is a member of every workspace.
     fn service_with_builtins(
         defs: Vec<CommandDefinitionDto>,
         audit_svc: Option<Arc<dyn rim_services::audit::service::AuditLogService>>,
+    ) -> DefaultCommandService {
+        service_with_builtins_and_role(
+            defs,
+            audit_svc,
+            Some(rim_core::server_member::model::ServerMemberRole::Member),
+        )
+    }
+
+    /// [`service_with_builtins`] with the caller's `role` in every workspace, `None` for none.
+    fn service_with_builtins_and_role(
+        defs: Vec<CommandDefinitionDto>,
+        audit_svc: Option<Arc<dyn rim_services::audit::service::AuditLogService>>,
+        role: Option<rim_core::server_member::model::ServerMemberRole>,
     ) -> DefaultCommandService {
         DefaultCommandService::with_extra_builtins(
             CommandRepos {
@@ -1318,7 +1331,9 @@ mod tests {
                     rim_services::read_state::service::MockReadStateService::new(),
                 ),
                 server_member_service: Arc::new(
-                    rim_services::server_member::service::MockServerMemberService::new(),
+                    rim_services::server_member::service::MockServerMemberService::with_own_role(
+                        role,
+                    ),
                 ),
                 user_service: Arc::new(rim_services::user::service::MockUserService::new()),
                 workspace_state_service: Arc::new(MockWorkspaceStateService::new()),
@@ -2169,6 +2184,120 @@ mod tests {
             matches!(err, ServiceError::TimedOut { until: u } if u == until),
             "{err:?}"
         );
+    }
+
+    // ── The workspace a command acts on ──
+
+    fn post_in(workspace: rim_core::server::model::ServerId) -> serde_json::Value {
+        serde_json::json!({
+            "server_id": workspace.to_string(),
+            "conversation_id": rim_core::conversation::model::ConversationId::new().to_string(),
+            "text": "hello"
+        })
+    }
+
+    #[tokio::test]
+    async fn the_capability_and_timeout_gates_check_the_workspace_the_command_acts_on() {
+        let workspace = rim_core::server::model::ServerId::new();
+        let until = chrono::Utc::now() + chrono::Duration::minutes(10);
+        let mut message_service = MockMessageService::new();
+        message_service.expect_send_message().never();
+        let mut cap = rim_services::capability::service::MockCapabilityService::new();
+        cap.expect_check()
+            .withf(move |_, ws, _| *ws == Some(workspace))
+            .returning(|_, _, _| Ok(()));
+        let mut moderation = rim_services::moderation::service::MockModerationService::new();
+        moderation
+            .expect_active_timeout()
+            .withf(move |ws, _| *ws == workspace)
+            .returning(move |_, _| Box::pin(async move { Ok(Some(until)) }));
+        let svc = service_with_moderation(
+            MockUserCommandRepository::new(),
+            MockConversationService::new(),
+            message_service,
+            cap,
+            moderation,
+        );
+
+        let err = svc
+            .execute_command(ExecuteCommandCmd {
+                actor: Actor::new(rim_core::user::model::UserId::new()),
+                command_id: "chat.post_message".to_string(),
+                args: Some(post_in(workspace)),
+                context: None,
+                confirmation: None,
+                is_pipe: false,
+                initiator: CommandInitiator::Palette,
+                run_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ServiceError::TimedOut { until: u } if u == until),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_context_naming_another_workspace_than_the_server_id_argument_is_refused() {
+        let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+        audit_svc.expect_write_entry().never();
+        let svc = service_with_builtins(vec![], Some(Arc::new(audit_svc)));
+
+        let err = svc
+            .execute_command(ExecuteCommandCmd {
+                actor: Actor::new(rim_core::user::model::UserId::new()),
+                command_id: "chat.post_message".to_string(),
+                args: Some(post_in(rim_core::server::model::ServerId::new())),
+                context: Some(workspace_context(rim_core::server::model::ServerId::new())),
+                confirmation: None,
+                is_pipe: false,
+                initiator: CommandInitiator::Palette,
+                run_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Validation(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_audit_row_names_the_workspace_only_when_the_caller_is_a_member_there() {
+        for role in [Some(ServerMemberRole::Member), None] {
+            let written: Arc<std::sync::Mutex<Vec<rim_services::audit::dto::AuditLogEntryDto>>> =
+                Arc::default();
+            let sink = Arc::clone(&written);
+            let mut audit_svc = rim_services::audit::service::MockAuditLogService::new();
+            audit_svc
+                .expect_write_entry()
+                .times(1)
+                .returning(move |entry| {
+                    sink.lock().unwrap().push(entry);
+                    Box::pin(async { Ok(()) })
+                });
+            let svc = service_with_builtins_and_role(
+                vec![rate_limited_cmd_def("test.noted", 10)],
+                Some(Arc::new(audit_svc)),
+                role,
+            );
+            let cmd = palette_cmd(
+                Actor::new(rim_core::user::model::UserId::new()),
+                "test.noted",
+            );
+            let workspace: uuid::Uuid = cmd
+                .context
+                .as_ref()
+                .and_then(|c| c.workspace_id)
+                .unwrap()
+                .into();
+
+            svc.execute_command(cmd).await.unwrap();
+            let expected = if role.is_some() {
+                workspace
+            } else {
+                uuid::Uuid::nil()
+            };
+            assert_eq!(written.lock().unwrap()[0].server_id, expected, "{role:?}");
+        }
     }
 
     #[tokio::test]
@@ -4582,8 +4711,8 @@ mod tests {
         }
     }
 
-    /// The role is the one held in the workspace the command acts on: the `server_id` arg
-    /// over the context's workspace.
+    /// The role is the one held in the workspace the command acts on, the `server_id` arg; a
+    /// context naming another workspace is refused.
     #[tokio::test]
     async fn an_owner_runs_the_owner_only_builtin_in_the_workspace_they_own() {
         let owned = rim_core::server::model::ServerId::new();
@@ -4643,7 +4772,7 @@ mod tests {
             &svc,
             "admin.invite_member",
             serde_json::json!({ "server_id": owned.to_string() }),
-            Some(workspace_context(other)),
+            None,
         )
         .await
         .expect("the owner invites");
@@ -4653,10 +4782,22 @@ mod tests {
             &svc,
             "admin.invite_member",
             serde_json::json!({ "server_id": other.to_string() }),
-            Some(workspace_context(owned)),
+            None,
         )
         .await;
         assert_forbidden(refused, "admin.invite_member");
+
+        let mismatched = run_confirmed(
+            &svc,
+            "admin.invite_member",
+            serde_json::json!({ "server_id": owned.to_string() }),
+            Some(workspace_context(other)),
+        )
+        .await;
+        assert!(
+            matches!(mismatched, Err(ServiceError::Validation(_))),
+            "{mismatched:?}"
+        );
     }
 
     #[tokio::test]
