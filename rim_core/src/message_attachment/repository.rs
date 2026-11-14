@@ -4,6 +4,7 @@ use crate::message_attachment::model::{
 };
 use crate::repository::error::RepoResult;
 use crate::server::model::ServerId;
+use crate::user::model::UserId;
 use async_trait::async_trait;
 #[cfg(any(test, feature = "mocks"))]
 use mockall::automock;
@@ -81,4 +82,15 @@ pub trait MessageAttachmentRepository: Send + Sync {
         statuses: Vec<String>,
         before: chrono::DateTime<chrono::Utc>,
     ) -> RepoResult<Vec<MessageAttachmentId>>;
+
+    /// How many upload tickets `user_id` holds open: pending uploads created at or after
+    /// `pending_since` on messages the user sent.
+    async fn open_tickets_for_user(
+        &self,
+        user_id: UserId,
+        pending_since: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<u64>;
+
+    /// Up to `limit` attachments of deleted messages that no report refers to, oldest first.
+    async fn list_of_deleted_messages(&self, limit: u64) -> RepoResult<Vec<MessageAttachment>>;
 }

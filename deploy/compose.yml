@@ -17,7 +17,10 @@
 # rim-imagecheck at RIM_VERSION (default latest; pin it in deploy/.env), and
 # rim-web at RIM_WEB_VERSION, the rim-ui release of the web client (unset: at
 # RIM_VERSION). RIM_SERVER_IMAGE, RIM_IMAGECHECK_IMAGE and RIM_WEB_IMAGE name
-# other images. compose.dev.yml on top builds them from local checkouts instead.
+# other images. RIM_SERVER_DIGEST, RIM_IMAGECHECK_DIGEST and RIM_WEB_DIGEST, which upgrade.sh and
+# rim-deploy write after the signature check, make each published image run by the digest that
+# was verified; with one set, change the version with upgrade.sh, not by hand. compose.dev.yml
+# on top builds the images from local checkouts instead.
 #
 # Every container has a read-only root filesystem and cannot gain privileges:
 # it writes only to its named volumes and to the tmpfs paths listed with it.
@@ -40,7 +43,7 @@ x-database-url: &database-url "postgres://rim:${POSTGRES_PASSWORD:?set POSTGRES_
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
     # The image's postgres user (uid 70), which owns the data directory; the entrypoint
     # then starts the server without switching users.
     user: postgres
@@ -69,7 +72,7 @@ services:
 
   # Runs the migrations, then exits; the server starts after it succeeded.
   migrate:
-    image: ${RIM_SERVER_IMAGE:-ghcr.io/rim-platform/rim-server:${RIM_VERSION:-latest}}
+    image: ${RIM_SERVER_IMAGE:-ghcr.io/rim-platform/rim-server:${RIM_VERSION:-latest}${RIM_SERVER_DIGEST:+@${RIM_SERVER_DIGEST}}}
     entrypoint: ["/app/migration", "up"]
     environment:
       DATABASE_URL: *database-url
@@ -85,7 +88,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   rim:
-    image: ${RIM_SERVER_IMAGE:-ghcr.io/rim-platform/rim-server:${RIM_VERSION:-latest}}
+    image: ${RIM_SERVER_IMAGE:-ghcr.io/rim-platform/rim-server:${RIM_VERSION:-latest}${RIM_SERVER_DIGEST:+@${RIM_SERVER_DIGEST}}}
     environment:
       DATABASE_URL: *database-url
       RUST_LOG: ${RUST_LOG:-info}
@@ -223,7 +226,7 @@ services:
   # internal network only: it reaches nothing and only rim reaches it. rim does not wait for
   # it; while it is down, picture uploads fail and everything else works.
   imagecheck:
-    image: ${RIM_IMAGECHECK_IMAGE:-ghcr.io/rim-platform/rim-imagecheck:${RIM_VERSION:-latest}}
+    image: ${RIM_IMAGECHECK_IMAGE:-ghcr.io/rim-platform/rim-imagecheck:${RIM_VERSION:-latest}${RIM_IMAGECHECK_DIGEST:+@${RIM_IMAGECHECK_DIGEST}}}
     tmpfs: [/tmp]
     read_only: true
     cap_drop: [ALL]
@@ -244,7 +247,7 @@ services:
   # The web client: static files behind nginx. The published image is built with the
   # GraphQL endpoint `/api`, this origin, so one image serves any domain.
   web:
-    image: ${RIM_WEB_IMAGE:-ghcr.io/rim-platform/rim-web:${RIM_WEB_VERSION:-${RIM_VERSION:-latest}}}
+    image: ${RIM_WEB_IMAGE:-ghcr.io/rim-platform/rim-web:${RIM_WEB_VERSION:-${RIM_VERSION:-latest}}${RIM_WEB_DIGEST:+@${RIM_WEB_DIGEST}}}
     # nginx runs as the image's nginx user (uid 101); its temporary files and its pid and
     # lock files go to tmpfs directories it owns.
     tmpfs:
@@ -261,7 +264,7 @@ services:
   # Hands Caddy's volumes to the user Caddy runs as, then exits; Caddy starts after it
   # succeeded. Root, with only the capabilities that change and traverse other users' files.
   caddy-init:
-    image: caddy:2
+    image: caddy:2@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c
     user: "0:0"
     entrypoint: ["chown", "-R", "65534:65534", "/data", "/config"]
     volumes:
@@ -276,7 +279,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   caddy:
-    image: caddy:2
+    image: caddy:2@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c
     # The image's nobody user. Docker lets any user of a container bind ports below 1024.
     user: "65534:65534"
     environment:

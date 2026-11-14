@@ -33,6 +33,11 @@ pub trait MessageAttachmentService: Send + Sync {
         query: super::command::AuthorizeDownloadQuery,
     ) -> ServiceResult<AttachmentDto>;
 
+    /// Delete the files and rows of attachments whose message was deleted, except those of a
+    /// reported message, which stay for the report. Removes a bounded batch and returns how
+    /// many it removed.
+    async fn purge_deleted_message_attachments(&self) -> ServiceResult<u64>;
+
     /// Mark all stale `PendingUpload`/`Uploaded` attachments older than
     /// `older_than_minutes` as failed. Returns the number of attachments updated.
     async fn cleanup_stale_attachments(&self, older_than_minutes: i64) -> ServiceResult<u64>;

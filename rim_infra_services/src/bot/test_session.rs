@@ -290,3 +290,24 @@ impl DefaultBotService {
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::arrived;
+
+    #[test]
+    fn a_delivery_keeps_no_header_that_carries_the_senders_address() {
+        let headers: Vec<(String, String)> = [
+            ("x-forwarded-for", "203.0.113.7"),
+            ("X-Real-IP", "203.0.113.7"),
+            ("x-github-event", "ping"),
+        ]
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .to_vec();
+        let held = arrived(None, &headers, Some(b"{}"));
+        assert_eq!(
+            held.headers,
+            [("x-github-event".to_string(), "ping".to_string())]
+        );
+    }
+}

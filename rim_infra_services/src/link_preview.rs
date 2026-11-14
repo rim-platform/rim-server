@@ -23,6 +23,18 @@ const MAX_PREVIEWS_PER_MESSAGE: usize = 5;
 /// Maximum response body size (1 MB).
 const MAX_BODY_SIZE: usize = 1_048_576;
 
+/// Longest stored `og:title` or `<title>`, in characters.
+const MAX_TITLE_CHARS: usize = 300;
+
+/// Longest stored `og:description`, in characters.
+const MAX_DESCRIPTION_CHARS: usize = 1_000;
+
+/// Longest stored `og:site_name`, in characters.
+const MAX_SITE_NAME_CHARS: usize = 100;
+
+/// Longest stored `og:image` address, in characters.
+const MAX_IMAGE_URL_CHARS: usize = 2_048;
+
 /// HTTP request timeout per URL.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -121,6 +133,14 @@ fn is_url_safe(url: &str) -> bool {
     }
 }
 
+/// The safe addresses of `urls`, each once and in first-seen order.
+fn distinct_safe_urls(urls: &[String]) -> Vec<&String> {
+    let mut seen = std::collections::HashSet::new();
+    urls.iter()
+        .filter(|u| is_url_safe(u) && seen.insert(u.as_str()))
+        .collect()
+}
+
 fn parse_og_tags(html: &str) -> OgData {
     use scraper::{Html, Selector};
 
@@ -161,10 +181,18 @@ fn parse_og_tags(html: &str) -> OgData {
     });
 
     OgData {
-        title,
-        description: og_description,
-        image_url: og_image,
-        site_name: og_site_name,
+        title: title.map(|v| truncate_chars(v, MAX_TITLE_CHARS)),
+        description: og_description.map(|v| truncate_chars(v, MAX_DESCRIPTION_CHARS)),
+        image_url: og_image.filter(|v| v.chars().count() <= MAX_IMAGE_URL_CHARS),
+        site_name: og_site_name.map(|v| truncate_chars(v, MAX_SITE_NAME_CHARS)),
+    }
+}
+
+/// Cuts `value` to at most `max` characters.
+fn truncate_chars(value: String, max: usize) -> String {
+    match value.char_indices().nth(max) {
+        Some((end, _)) => value[..end].to_string(),
+        None => value,
     }
 }
 
@@ -185,7 +213,7 @@ impl LinkPreviewService for DefaultLinkPreviewService {
         if !self.enabled() {
             return Ok(Vec::new());
         }
-        let safe_urls: Vec<&String> = urls.iter().filter(|u| is_url_safe(u)).collect();
+        let safe_urls = distinct_safe_urls(&urls);
         let urls_to_fetch = &safe_urls[..safe_urls.len().min(MAX_PREVIEWS_PER_MESSAGE)];
 
         let mut results = Vec::new();
@@ -304,6 +332,40 @@ mod tests {
         assert!(!is_url_safe("http://localhost/admin"));
         assert!(!is_url_safe("ftp://example.com/file"));
         assert!(is_url_safe("https://example.com"));
+    }
+
+    #[test]
+    fn each_distinct_address_is_fetched_once() {
+        let urls: Vec<String> = [
+            "https://a.example/",
+            "https://a.example/",
+            "http://10.0.0.1/",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(distinct_safe_urls(&urls), [&urls[0]]);
+    }
+
+    #[test]
+    fn parse_og_tags_caps_every_field() {
+        let html = format!(
+            r#"<meta property="og:title" content="{}">
+            <meta property="og:description" content="{}">
+            <meta property="og:site_name" content="{}">
+            <meta property="og:image" content="https://i.example/{}">"#,
+            "t".repeat(5_000),
+            "d".repeat(50_000),
+            "s".repeat(5_000),
+            "p".repeat(3_000),
+        );
+        let og = parse_og_tags(&html);
+        assert_eq!(og.title.unwrap().chars().count(), MAX_TITLE_CHARS);
+        assert_eq!(
+            og.description.unwrap().chars().count(),
+            MAX_DESCRIPTION_CHARS
+        );
+        assert_eq!(og.site_name.unwrap().chars().count(), MAX_SITE_NAME_CHARS);
+        assert!(og.image_url.is_none());
     }
 
     #[test]

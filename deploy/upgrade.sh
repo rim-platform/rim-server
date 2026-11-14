@@ -8,9 +8,11 @@
 #
 # In order: the version's images are published (rim-imagecheck and rim-web only when their
 # services run; exit 2 when one is not, with nothing changed), their cosign signatures name the
-# release workflows, backup.sh runs (skipped when the deployment has no data volume yet),
-# RIM_VERSION=<version> goes into the env file with the old file kept as .env.previous, the
-# images are pulled, the migrations run and the stack starts; then /readyz and
+# release workflows and the digests they are over are recorded, backup.sh runs (skipped when
+# the deployment has no data volume yet), RIM_VERSION=<version> goes into the env file with the
+# old file kept as .env.previous, together with the verified digests (RIM_SERVER_DIGEST,
+# RIM_IMAGECHECK_DIGEST, RIM_WEB_DIGEST) so compose pulls and runs exactly the images that were
+# verified, the images are pulled, the migrations run and the stack starts; then /readyz and
 # https://$RIM_DOMAIN/.well-known/rim-server must answer within RIM_UPGRADE_TIMEOUT seconds (90)
 # each, and Caddy reloads its Caddyfile.
 # When a step after the env file fails, the old env file comes back, the version before starts
@@ -128,6 +130,27 @@ set_version() {
 	mv "$tmp" "$env_file"
 }
 
+# Sets NAME=value in the env file, replacing the line that sets it or adding one; with an empty
+# value the line is removed.
+put_setting() {
+	local tmp
+	tmp=$(mktemp "$env_file.XXXXXX")
+	awk -v name="$1" -v value="$2" '
+		index($0, name "=") == 1 { if (!done && value != "") print name "=" value; done = 1; next }
+		{ print }
+		END { if (!done && value != "") print name "=" value }
+	' "$env_file" >"$tmp"
+	mv "$tmp" "$env_file"
+}
+
+# Records the digests of the verified images in the env file, so compose pulls those and no
+# other; the digest of an image that was not verified is removed.
+set_digests() {
+	put_setting RIM_SERVER_DIGEST "${digests[rim-server]:-}"
+	put_setting RIM_IMAGECHECK_DIGEST "${digests[rim-imagecheck]:-}"
+	put_setting RIM_WEB_DIGEST "${digests[rim-web]:-}"
+}
+
 # Puts the env file from before back, starts the version before again and exits 1. With no
 # version before, there is nothing to go back to and the stack is stopped.
 roll_back() {
@@ -165,12 +188,17 @@ done
 
 say "verifying the signatures"
 command -v cosign >/dev/null || die "cosign is not installed"
+declare -A digests=()
 for entry in "${images[@]}"; do
 	read -r image repository image_version <<<"$entry"
-	cosign verify "ghcr.io/rim-platform/$image:$image_version" \
+	verified=$(cosign verify "ghcr.io/rim-platform/$image:$image_version" \
 		--certificate-identity "https://github.com/rim-platform/$repository/.github/workflows/release.yaml@refs/tags/v$image_version" \
-		--certificate-oidc-issuer "$issuer" >/dev/null ||
+		--certificate-oidc-issuer "$issuer") ||
 		die "ghcr.io/rim-platform/$image:$image_version is not signed by the $repository release workflow"
+	# The digest the signature is over: what is pulled afterwards is that image and no other.
+	digest=$(sed -n 's/.*"docker-manifest-digest" *: *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' <<<"$verified" | head -n 1)
+	[[ -n $digest ]] || die "cosign did not report the digest of ghcr.io/rim-platform/$image:$image_version"
+	digests[$image]=$digest
 done
 
 downgrade=0
@@ -188,6 +216,9 @@ fi
 if ((dry_run)); then
 	((backup == 0)) || say "dry run: $deploy_dir/backup.sh"
 	say "dry run: set RIM_VERSION=$version in $env_file (now ${previous:-unset}), the old file kept as .env.previous"
+	for image in "${!digests[@]}"; do
+		say "dry run: pull $image by the verified digest ${digests[$image]}"
+	done
 	if ((convert_web)); then
 		say "dry run: replace RIM_WEB_IMAGE=$web_image with RIM_WEB_VERSION=$web_version"
 	elif ((pin_web)); then
@@ -217,6 +248,7 @@ elif ((pin_web)); then
 	say "setting RIM_WEB_VERSION=$web_version, the web client's version"
 fi
 set_version
+set_digests
 
 if ((downgrade)); then
 	compose pull "${app_services[@]}" || roll_back "pulling the images"
