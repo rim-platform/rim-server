@@ -16,6 +16,8 @@ pub const MAX_TEST_DELIVERIES: usize = 20;
 pub const MAX_TEST_SESSION_BYTES: usize = 1024 * 1024;
 /// The most open sessions in one workspace.
 pub const MAX_TEST_SESSIONS_PER_WORKSPACE: usize = 3;
+/// The most open sessions one account holds, in all its workspaces together.
+pub const MAX_TEST_SESSIONS_PER_OWNER: usize = 3;
 /// The most open sessions on the server.
 pub const MAX_TEST_SESSIONS: usize = 20;
 /// The largest body a session holds the bytes of; a larger one is held as too large.
@@ -156,6 +158,8 @@ impl fmt::Debug for ArrivedDelivery {
 /// Why a session could not be opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestSessionsFull {
+    /// The account has [`MAX_TEST_SESSIONS_PER_OWNER`] open.
+    Owner,
     /// The workspace has [`MAX_TEST_SESSIONS_PER_WORKSPACE`] open.
     Workspace,
     /// The server has [`MAX_TEST_SESSIONS`] open.
@@ -282,6 +286,13 @@ impl WebhookTestSessionStore for InMemoryTestSessionStore {
         now: DateTime<Utc>,
     ) -> Result<TestSessionInfo, TestSessionsFull> {
         let mut sessions = self.sessions(now);
+        let of_owner = sessions
+            .values()
+            .filter(|held| held.info.owner == session.owner)
+            .count();
+        if of_owner >= MAX_TEST_SESSIONS_PER_OWNER {
+            return Err(TestSessionsFull::Owner);
+        }
         if sessions.len() >= MAX_TEST_SESSIONS {
             return Err(TestSessionsFull::Server);
         }
@@ -464,6 +475,27 @@ mod tests {
         // An expired one makes room.
         let later = now + TEST_SESSION_IDLE + Duration::seconds(1);
         assert!(store.open(unbound(busy, "again"), later).is_ok());
+    }
+
+    #[test]
+    fn one_account_cannot_hold_more_than_three_sessions_across_workspaces() {
+        let store = InMemoryTestSessionStore::new();
+        let now = Utc::now();
+        let owner = UserId::new();
+        let held = |server_id, hash: &str| NewTestSession {
+            owner,
+            ..unbound(server_id, hash)
+        };
+        for n in 0..MAX_TEST_SESSIONS_PER_OWNER {
+            store
+                .open(held(ServerId::new(), &format!("o{n}")), now)
+                .expect("room");
+        }
+        assert_eq!(
+            store.open(held(ServerId::new(), "more"), now),
+            Err(TestSessionsFull::Owner)
+        );
+        assert!(store.open(unbound(ServerId::new(), "other"), now).is_ok());
     }
 
     #[test]

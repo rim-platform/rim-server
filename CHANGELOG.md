@@ -39,6 +39,53 @@ tag `v<version>`, the version every crate in the workspace carries.
   those they made for other bots. They show as revoked in `botTokens` and `incomingWebhooks`, and
   the workspace's audit log records it as `bot.revoke_on_role_loss` (`docs/specs/bots-v1.md`).
 - A signup whose proof-of-work fails no longer uses up one of its address's open signups.
+- `GET /api/sdl` serves the schema rendered once at start, with `Cache-Control: public,
+  max-age=300`, instead of rendering it again for every request.
+- A GraphQL request runs at most 32 query root fields, counted across its batch with each
+  alias, repeated field and fragment expansion, with or without a session and when forwarded
+  by another server. A request over it answers one `TOO_MANY_ROOT_FIELDS` error and runs
+  nothing (`docs/api.md`, "Limits").
+- `remoteServer` and `remoteIdentity` fetch discovery documents within limits: 10 fetches a
+  minute per user and 60 a minute for all explicit pins, a fresh pin of an origin answered
+  without a fetch, and a failed fetch answered from memory for 5 minutes. One request runs at
+  most 4 of `remoteServer` and `remoteIdentity` together (with `previewWebhookFormat`, below);
+  past a limit they answer `RATE_LIMITED` or `TOO_MANY_ROOT_FIELDS`
+  (`docs/specs/server-to-server-v1.md`, "Pinning a peer").
+- Server-to-server requests naming servers this server does not know no longer use up the
+  discovery budget for everyone: their fetches count against the sending address, 5 a minute,
+  first pins and refetches of pinned peers each have a budget of their own, and an id that
+  failed to pin from an origin is not fetched from it again for 5 minutes.
+- A webhook format reads at most the first 1,000 characters of each value and stops filling a
+  message once it is past the length it can post, so a large delivery or preview costs no more
+  than a short one, and one request runs at most 4 `previewWebhookFormat` fields together with
+  `remoteServer` and `remoteIdentity` (`docs/specs/bots-v1.md`).
+- A plugin bundle link download runs one at a time per account and stops after 30 seconds, so a
+  few accounts cannot hold every download slot (`docs/specs/web-plugins-v1.md`).
+- Attachments of a deleted message can no longer be downloaded, and an hourly job deletes their
+  files (those of a reported message stay for the report).
+- An upload ticket lasts 5 minutes instead of 15 and an account holds at most 5 open tickets, so
+  unused tickets can no longer hold a workspace's storage quota.
+- Link previews keep at most 300 characters of title, 1,000 of description, 100 of site name and
+  2,048 of image address, and fetch each distinct address of a message once. Finding the addresses
+  in a long message no longer takes time that grows with the square of its length.
+- Webhook test sessions are limited to 3 an account, so a few accounts can no longer hold every
+  session on the server, and they no longer keep `X-Forwarded-For`, `X-Real-IP` and similar
+  headers that carry the sender's address.
+- A value a webhook fills into a post no longer turns into a link; only the link of the format's
+  link field does.
+- The operator command line writes control characters in user-written text (such as an abuse
+  report's reason) as escapes instead of sending them to the terminal.
+- Plaintext attachment downloads and a host's answers forwarded by a relay carry
+  `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`; forwarded answers
+  that are not JSON are served as downloads.
+- Both Caddyfiles send `Strict-Transport-Security: max-age=31536000`.
+- **Upgrade:** `rim-deploy` requires the image's signature to come from the release workflow run
+  at the commit the tag points at, and installs that commit's `deploy/` files, so a moved tag
+  installs nothing; `--check` never deploys a release older than the running one. The host needs
+  `git` (for `git ls-remote`). Install the new `rim-deploy` on the host as `deploy/README.md` says.
+- `upgrade.sh` and `rim-deploy` write the digests their signature checks verified
+  (`RIM_SERVER_DIGEST`, `RIM_IMAGECHECK_DIGEST`, `RIM_WEB_DIGEST`) into `.env`, so compose runs
+  exactly those images, and the third-party images in the compose files are pinned by digest.
 
 ## [0.0.10] - 2026-11-13
 

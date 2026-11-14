@@ -1390,15 +1390,15 @@ fn peers_resolving(keys: PeerKeysDto, refetched: Option<PeerKeysDto>) -> MockPee
     let mut peers = MockPeerService::new();
     peers
         .expect_resolve()
-        .withf(|server_id, _, key_seq| server_id == PEER && key_seq.is_none())
-        .returning(move |_, _, _| {
+        .withf(|server_id, _, key_seq, _| server_id == PEER && key_seq.is_none())
+        .returning(move |_, _, _, _| {
             let keys = keys.clone();
             Box::pin(async move { Ok(PeerLookup::Ready(keys)) })
         });
     peers
         .expect_resolve()
-        .withf(|server_id, _, key_seq| server_id == PEER && key_seq.is_some())
-        .returning(move |_, _, _| {
+        .withf(|server_id, _, key_seq, _| server_id == PEER && key_seq.is_some())
+        .returning(move |_, _, _, _| {
             let lookup = refetched
                 .clone()
                 .map_or(PeerLookup::Unknown, PeerLookup::Ready);
@@ -2361,7 +2361,7 @@ async fn an_identity_never_cached_needs_a_relay_url() {
 fn pinning_peers(discovery: Option<&str>) -> MockPeerService {
     let discovery = discovery.map(str::to_string);
     let mut peers = MockPeerService::new();
-    peers.expect_pin().returning(|origin, _| {
+    peers.expect_pin().returning(|origin, _, _| {
         let pinned = PeerDto {
             server_id: PEER.to_string(),
             origin: origin.to_string(),
@@ -2996,7 +2996,7 @@ async fn only_people_a_user_knows_skip_the_daily_invites_to_other_servers() {
     let mut peers = MockPeerService::new();
     peers
         .expect_pin()
-        .returning(|_, _| Box::pin(async { Err(ServiceError::Unavailable) }));
+        .returning(|_, _, _| Box::pin(async { Err(ServiceError::Unavailable) }));
     let host = knowing_host(
         ada,
         crate::probation_fixtures::users(Vec::new()),

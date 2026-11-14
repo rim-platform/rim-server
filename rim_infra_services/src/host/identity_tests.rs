@@ -360,7 +360,7 @@ fn host_with(
         .returning(|_, _| Box::pin(async { Ok(true) }));
 
     let mut peers = MockPeerService::new();
-    peers.expect_pin().returning(|origin, _| {
+    peers.expect_pin().returning(|origin, _, _| {
         let pinned = server_at(origin).map(|server_id| PeerDto {
             server_id: server_id.to_string(),
             origin: origin.to_string(),
@@ -376,7 +376,7 @@ fn host_with(
         let domain = (server_id == RELAY).then(|| "relay.example".to_string());
         Box::pin(async move { Ok(domain) })
     });
-    peers.expect_resolve().returning(|server_id, _, _| {
+    peers.expect_resolve().returning(|server_id, _, _, _| {
         let lookup = match origin_of_server(server_id) {
             Some(origin) => PeerLookup::Ready(PeerKeysDto {
                 server_id: server_id.to_string(),

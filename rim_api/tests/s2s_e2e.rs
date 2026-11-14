@@ -383,7 +383,11 @@ async fn b_pins_a_and_a_signed_ping_round_trips_both_ways() {
         .s2s
         .state
         .peers
-        .pin(&a.origin, Some(&a.id()))
+        .pin(
+            &a.origin,
+            Some(&a.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin");
     assert_eq!(pinned.server_id, a.id());
@@ -486,7 +490,16 @@ async fn a_denied_peer_is_refused() {
     let b = start(&second, |_| {}).await;
     let denied = b.id();
     let a = start(&first, |c| c.s2s_denied_peers = Some(denied)).await;
-    b.s2s.state.peers.pin(&a.origin, None).await.expect("pin");
+    b.s2s
+        .state
+        .peers
+        .pin(
+            &a.origin,
+            None,
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
+        .await
+        .expect("pin");
     let answer = client_ping(&b, &a).await;
     assert_eq!(answer.status, 403);
     let body: Value = serde_json::from_slice(&answer.body).expect("json");
@@ -525,13 +538,21 @@ async fn a_rotated_key_has_a_grace_period_and_a_forked_log_is_refused_until_rese
     b.s2s
         .state
         .peers
-        .pin(&a.origin, Some(&a.id()))
+        .pin(
+            &a.origin,
+            Some(&a.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin a");
     a.s2s
         .state
         .peers
-        .pin(&b.origin, Some(&b.id()))
+        .pin(
+            &b.origin,
+            Some(&b.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin b");
     assert_eq!(client_ping(&b, &a).await.status, 200);
@@ -617,13 +638,24 @@ async fn a_rotated_key_has_a_grace_period_and_a_forked_log_is_refused_until_rese
     assert!(b.s2s.reload_identity().await.expect("reload"));
     assert_eq!(b.identity().state.seq, 2);
 
-    // A's one refetch a minute for B was spent on the rotation; an explicit refresh finds the
-    // fork.
+    // A's one refetch a minute for B was spent on the rotation, and an explicit pin of a pin
+    // fetched within 6 hours answers without a fetch; once the pin is older, an explicit pin
+    // fetches and finds the fork.
+    a.db.execute_unprepared(&format!(
+        "UPDATE peer_server SET fetched_at = now() - interval '7 hours' WHERE server_id = '{}'",
+        b.id()
+    ))
+    .await
+    .expect("age the pin");
     assert!(
         a.s2s
             .state
             .peers
-            .pin(&b.origin, Some(&b.id()))
+            .pin(
+                &b.origin,
+                Some(&b.id()),
+                rim_services::s2s::dto::DiscoveryRequester::Server
+            )
             .await
             .is_err()
     );
@@ -639,7 +671,11 @@ async fn a_rotated_key_has_a_grace_period_and_a_forked_log_is_refused_until_rese
     a.s2s
         .state
         .peers
-        .pin(&b.origin, Some(&b.id()))
+        .pin(
+            &b.origin,
+            Some(&b.id()),
+            rim_services::s2s::dto::DiscoveryRequester::Server,
+        )
         .await
         .expect("pin again");
     assert_eq!(client_ping(&b, &a).await.status, 200);

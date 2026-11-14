@@ -1,6 +1,6 @@
 //! Background purges the composition root runs on a timer: stale attachment uploads are marked
-//! failed daily, expired workspace state, conversation invitations and ended sessions are deleted
-//! hourly, accounts whose deletion grace period ended are purged hourly, and stale remote
+//! failed and attachments of deleted messages are removed hourly, expired workspace state,
+//! conversation invitations and ended sessions are deleted hourly, accounts whose deletion grace period ended are purged hourly, and stale remote
 //! identities and idle peer pins are dropped hourly. Each runs first a few minutes after boot and
 //! stops when the shutdown signal changes.
 
@@ -23,8 +23,8 @@ use crate::message_attachment::DefaultMessageAttachmentService;
 
 /// Delay before the first run of each purge, so they stay out of the way of a starting server.
 const FIRST_RUN_DELAY: Duration = Duration::from_secs(5 * 60);
-/// Interval of the stale-attachment cleanup.
-pub const ATTACHMENT_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Interval of the stale-attachment cleanup and the purge of deleted messages' attachments.
+pub const ATTACHMENT_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// Interval of the workspace-state expiry purge.
 pub const WORKSPACE_STATE_PURGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// Interval of the conversation invitation expiry purge.
@@ -75,6 +75,25 @@ pub async fn clean_stale_attachments(service: &dyn MessageAttachmentService) -> 
         }
         Err(e) => {
             tracing::error!(error = %e, "stale attachment cleanup failed");
+            None
+        }
+    }
+}
+
+/// Delete the files and rows of attachments of deleted messages. Returns how many, `None` when
+/// the purge failed (logged).
+pub async fn purge_deleted_message_attachments(
+    service: &dyn MessageAttachmentService,
+) -> Option<u64> {
+    match service.purge_deleted_message_attachments().await {
+        Ok(count) => {
+            if count > 0 {
+                tracing::info!(count, "removed attachments of deleted messages");
+            }
+            Some(count)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "purge of deleted messages' attachments failed");
             None
         }
     }
@@ -238,7 +257,7 @@ pub async fn run_account_purge(
     .await;
 }
 
-/// Run [`clean_stale_attachments`] daily until `shutdown` changes.
+/// Run [`clean_stale_attachments`] and [`purge_deleted_message_attachments`] hourly until `shutdown` changes.
 pub async fn run_attachment_cleanup(
     service: Arc<dyn MessageAttachmentService>,
     shutdown: watch::Receiver<bool>,
@@ -247,6 +266,7 @@ pub async fn run_attachment_cleanup(
         let service = Arc::clone(&service);
         async move {
             clean_stale_attachments(service.as_ref()).await;
+            purge_deleted_message_attachments(service.as_ref()).await;
         }
     })
     .await;

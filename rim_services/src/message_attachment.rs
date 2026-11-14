@@ -3,7 +3,11 @@ pub const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
 
 /// How long an upload ticket stays valid. A pending upload holds its declared size against the
 /// workspace quota for this long, and can't be completed afterwards.
-pub const UPLOAD_TICKET_TTL_MINUTES: i64 = 15;
+pub const UPLOAD_TICKET_TTL_MINUTES: i64 = 5;
+
+/// Most upload tickets one account holds open at once; a further `createAttachment` is refused
+/// until one is used or expires.
+pub const MAX_OPEN_UPLOAD_TICKETS_PER_USER: u64 = 5;
 
 /// Whether a plaintext attachment's media type is supported.
 pub fn is_plaintext_content_type(content_type: &str) -> bool {

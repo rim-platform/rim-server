@@ -10,7 +10,9 @@ use rim_services::message_attachment::command::{
 };
 use rim_services::message_attachment::dto::{AttachmentDto, AttachmentStatus, UploadTicketDto};
 use rim_services::message_attachment::service::MessageAttachmentService;
-use rim_services::message_attachment::{MAX_ATTACHMENT_BYTES, UPLOAD_TICKET_TTL_MINUTES};
+use rim_services::message_attachment::{
+    MAX_ATTACHMENT_BYTES, MAX_OPEN_UPLOAD_TICKETS_PER_USER, UPLOAD_TICKET_TTL_MINUTES,
+};
 use rim_services::storage::service::StorageService;
 use rim_services::{ServiceError, ServiceResult};
 
@@ -35,6 +37,9 @@ pub struct DefaultMessageAttachmentService {
     quota_lock: Arc<tokio::sync::Mutex<()>>,
     notifications: Option<(Observers, Arc<dyn MessageService>)>,
 }
+
+/// Attachments of deleted messages one purge run removes.
+const PURGE_BATCH: u64 = 200;
 
 impl DefaultMessageAttachmentService {
     const PENDING_STATUS: &'static str = "pending_upload";
@@ -357,6 +362,20 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         // still pending; `complete_upload` refuses any file larger than what was declared.
         let attachment = {
             let _quota_guard = self.quota_lock.lock().await;
+            let open_tickets = self
+                .repos
+                .message_attachment_repo
+                .open_tickets_for_user(
+                    cmd.actor.user_id,
+                    chrono::Utc::now() - chrono::Duration::minutes(UPLOAD_TICKET_TTL_MINUTES),
+                )
+                .await?;
+            if open_tickets >= MAX_OPEN_UPLOAD_TICKETS_PER_USER {
+                return Err(ServiceError::Validation(format!(
+                    "too many uploads in progress (max {MAX_OPEN_UPLOAD_TICKETS_PER_USER}); \
+                     finish or wait for them to expire"
+                )));
+            }
             let usage = self.storage_service.get_quota_usage(cmd.server_id).await?;
             if let Some(max) = usage.max_bytes
                 && usage.used_bytes.saturating_add(cmd.size_bytes) > max
@@ -644,6 +663,9 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
             .get_by_id(att.message_id)
             .await?
             .ok_or(ServiceError::NotFound)?;
+        if message.is_deleted {
+            return Err(ServiceError::NotFound);
+        }
 
         let conversation = self
             .repos
@@ -661,6 +683,30 @@ impl MessageAttachmentService for DefaultMessageAttachmentService {
         .await?;
 
         Ok(Self::attachment_dto(att))
+    }
+
+    async fn purge_deleted_message_attachments(&self) -> ServiceResult<u64> {
+        let attachments = self
+            .repos
+            .message_attachment_repo
+            .list_of_deleted_messages(PURGE_BATCH)
+            .await?;
+        let mut purged = 0;
+        for att in attachments {
+            if !att.storage_url.starts_with("pending://")
+                && let Err(e) = self.storage_service.delete_file(&att.storage_url).await
+                && !matches!(e, ServiceError::NotFound)
+            {
+                tracing::warn!(error = %e, "could not delete the file of a deleted message");
+                continue;
+            }
+            self.repos
+                .message_attachment_repo
+                .delete_attachment(att.id)
+                .await?;
+            purged += 1;
+        }
+        Ok(purged)
     }
 
     async fn cleanup_stale_attachments(&self, older_than_minutes: i64) -> ServiceResult<u64> {

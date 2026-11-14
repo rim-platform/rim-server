@@ -356,8 +356,10 @@ Each part is letters, digits, `_` and `-`. A key with a dot in it can't be reach
   anything else in braces is refused when you save.
 - A value is put on one line: whitespace and control characters become single spaces, and format characters
   are removed, so a bidi override can't reorder the message and a joined emoji can come apart. Its Markdown is
-  escaped. It is never expanded again, so a title of `{sender.login}` shows as that text. A header can't be a
-  placeholder, so a format can't print one.
+  escaped, and so is the `:` of a `://` and the `.` of a `www.`, so a value never turns into a link. It is never
+  expanded again, so a title of `{sender.login}` shows as that text. A header can't be a
+  placeholder, so a format can't print one. Only a string's first 1,000 characters, after its leading
+  whitespace, are read, since a post holds no more.
 - `<@id>`, `@channel` and `@here` are made plain text in the whole post, your own text included, and the
   post is cut to 1,000 characters, counting the link.
 
@@ -404,7 +406,8 @@ edited it. To share a format, copy its JSON. `updateIncomingWebhookFormat` with 
 
 **Trying one.** `previewWebhookFormat` takes a format, sample headers and a sample body of at most 256 KiB, and
 says which rule would decide and what it would post, or why nothing would. It runs what a delivery runs, and it
-posts and stores nothing.
+posts and stores nothing. One request runs at most 4 previews, counted with `remoteServer` and `remoteIdentity`
+and each alias counted.
 
 **An older app** shows a webhook with a format as Plain, and revoking it still works.
 
@@ -439,7 +442,8 @@ delivery has when it arrived, its `Content-Type`, its `x-` headers and its body 
 what a delivery would post, give it to `previewWebhookFormat` with the format you're writing.
 
 **What isn't kept.** No address, `Authorization`, cookie or header but the `x-` ones, and none of those whose name
-a format refuses, such as `x-gitlab-token`. A body over 256 KiB is held as too large without its bytes, and one
+a format refuses, such as `x-gitlab-token`, or that a proxy adds with the sender's address (`X-Forwarded-For`,
+`X-Real-IP`). A body over 256 KiB is held as too large without its bytes, and one
 that isn't UTF-8 as not text. Nothing a session holds reaches the database, a log line, an audit entry or a
 metric. The audit log has `bot.webhook.test_session.start` and `bot.webhook.test_session.end`, with ids alone.
 
@@ -449,7 +453,7 @@ metric. The audit log has `bot.webhook.test_session.start` and `bot.webhook.test
 |---|---|
 | Deliveries held | 20 a session, the oldest dropped |
 | What a session holds | 1 MiB, the oldest dropped |
-| Open sessions | 3 a workspace, 20 on the server. Past that, starting one is `RATE_LIMITED` |
+| Open sessions | 3 a workspace, 3 an account, 20 on the server. Past that, starting one is `RATE_LIMITED` |
 | Deliveries to a new webhook's test URL | 30 a minute, then `429` |
 | How long it lasts | 15 minutes from the start or the last read, never more than an hour |
 

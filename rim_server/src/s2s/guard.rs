@@ -22,11 +22,12 @@ use rim_services::remote_workspace::dto::{
     CancelRequest, JoinChallengeRequest, JoinRequest, PresenceRequest, RevocationAnswer,
     RevocationRequest, SubscriptionsAnswer, SubscriptionsRequest,
 };
-use rim_services::s2s::dto::{PeerKeysDto, PeerLookup};
+use rim_services::s2s::dto::{DiscoveryRequester, PeerKeysDto, PeerLookup};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::body::{BodyError, declared_length, read_bounded};
+use crate::edge::EdgeLimits;
 use crate::metrics;
 use crate::s2s::S2sState;
 
@@ -283,6 +284,12 @@ async fn verify(
             &peer_id,
             Some(&pending.rim_origin),
             Some(pending.key_id.seq),
+            // Nothing in the request is verified yet, so a fetch it causes is charged to the
+            // address it comes from.
+            DiscoveryRequester::Address(
+                req.app_data::<web::Data<EdgeLimits>>()
+                    .and_then(|limits| limits.source_of(req)),
+            ),
         )
         .await
     {

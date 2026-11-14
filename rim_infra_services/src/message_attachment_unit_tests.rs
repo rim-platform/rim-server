@@ -89,6 +89,12 @@ mod tests {
                 statuses: Vec<String>,
                 before: chrono::DateTime<chrono::Utc>,
             ) -> RepoResult<Vec<MessageAttachmentId>>;
+            async fn open_tickets_for_user(
+                &self,
+                user_id: UserId,
+                pending_since: chrono::DateTime<chrono::Utc>,
+            ) -> RepoResult<u64>;
+            async fn list_of_deleted_messages(&self, limit: u64) -> RepoResult<Vec<MessageAttachment>>;
         }
     }
 
@@ -389,9 +395,12 @@ mod tests {
         conversation_id: ConversationId,
         message_id: MessageId,
         actor_id: UserId,
-        message_attachment_repo: MockMessageAttachmentRepository,
+        mut message_attachment_repo: MockMessageAttachmentRepository,
         storage: MockStorageService,
     ) -> DefaultMessageAttachmentService {
+        message_attachment_repo
+            .expect_open_tickets_for_user()
+            .returning(|_, _| Ok(0));
         let mut msg = message(message_id, conversation_id);
         msg.sent_by = actor_id;
         let msg_for_set = msg.clone();
@@ -958,6 +967,9 @@ mod tests {
         let captured_id_for_add = Arc::clone(&captured_id);
 
         let mut message_attachment_repo = MockMessageAttachmentRepository::new();
+        message_attachment_repo
+            .expect_open_tickets_for_user()
+            .returning(|_, _| Ok(0));
         message_attachment_repo.expect_add_attachment().return_once(
             move |att: NewMessageAttachment| {
                 assert_eq!(att.message_id, message_id);
@@ -1342,5 +1354,139 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ServiceError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn create_attachment_refuses_an_account_with_too_many_open_tickets() {
+        let (server_id, conversation_id, message_id, actor_id) = (
+            ServerId::new(),
+            ConversationId::new(),
+            MessageId::new(),
+            UserId::new(),
+        );
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_open_tickets_for_user().returning(|_, _| {
+            Ok(rim_services::message_attachment::MAX_OPEN_UPLOAD_TICKETS_PER_USER)
+        });
+        repo.expect_add_attachment().never();
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_get_quota_usage()
+            .returning(|_| Box::pin(async { Ok(quota(0, 1_000)) }));
+
+        let svc = create_ready_service(
+            server_id,
+            conversation_id,
+            message_id,
+            actor_id,
+            repo,
+            storage,
+        );
+        let err = svc
+            .create_attachment(create_cmd(
+                server_id,
+                conversation_id,
+                message_id,
+                actor_id,
+                10,
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ServiceError::Validation(m) if m.contains("uploads in progress")),
+            "expected ticket cap error, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorize_download_refuses_the_attachment_of_a_deleted_message() {
+        let (server_id, conversation_id, message_id, actor_id) = (
+            ServerId::new(),
+            ConversationId::new(),
+            MessageId::new(),
+            UserId::new(),
+        );
+        let attachment_id = MessageAttachmentId::new();
+        let mut att = attachment(attachment_id);
+        att.message_id = message_id;
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_get_by_id()
+            .returning(move |_| Ok(Some(att.clone())));
+        let mut msg = message(message_id, conversation_id);
+        msg.is_deleted = true;
+        let mut message_repo = MockMessageRepository::new();
+        message_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(msg.clone())));
+        let mut conversation_repo = MockConversationRepository::new();
+        conversation_repo
+            .expect_get_by_id()
+            .returning(move |_| Ok(Some(conversation(server_id, conversation_id))));
+        let mut conversation_member_repo = MockConversationMemberRepository::new();
+        conversation_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        let mut server_member_repo = MockServerMemberRepository::new();
+        server_member_repo
+            .expect_is_member()
+            .returning(|_, _| Ok(true));
+        server_member_repo
+            .expect_get_member_standing()
+            .returning(|_, _| {
+                Ok(Some(rim_core::server_member::model::MemberStanding::new(
+                    rim_core::server_member::model::ServerMemberRole::Member,
+                )))
+            });
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(conversation_repo),
+                conversation_member_repo: Arc::new(conversation_member_repo),
+                message_repo: Arc::new(message_repo),
+                message_attachment_repo: Arc::new(repo),
+                server_member_repo: Arc::new(server_member_repo),
+            },
+            Arc::new(MockStorageService::new()),
+        );
+        let err = svc
+            .authorize_download(
+                rim_services::message_attachment::command::AuthorizeDownloadQuery {
+                    actor_user_id: actor_id,
+                    attachment_id,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn purge_deletes_the_file_and_row_of_each_deleted_message_attachment() {
+        let mut stored = attachment(MessageAttachmentId::new());
+        stored.storage_url = "attachments/a.txt".to_string();
+        let stored_id = stored.id;
+        let mut repo = MockMessageAttachmentRepository::new();
+        repo.expect_list_of_deleted_messages()
+            .returning(move |_| Ok(vec![stored.clone()]));
+        repo.expect_delete_attachment()
+            .withf(move |id| *id == stored_id)
+            .times(1)
+            .returning(|_| Ok(()));
+        let mut storage = MockStorageService::new();
+        storage
+            .expect_delete_file()
+            .withf(|key| key == "attachments/a.txt")
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let svc = DefaultMessageAttachmentService::new(
+            AttachmentRepos {
+                conversation_repo: Arc::new(MockConversationRepository::new()),
+                conversation_member_repo: Arc::new(MockConversationMemberRepository::new()),
+                message_repo: Arc::new(MockMessageRepository::new()),
+                message_attachment_repo: Arc::new(repo),
+                server_member_repo: Arc::new(MockServerMemberRepository::new()),
+            },
+            Arc::new(storage),
+        );
+        assert_eq!(svc.purge_deleted_message_attachments().await.unwrap(), 1);
     }
 }

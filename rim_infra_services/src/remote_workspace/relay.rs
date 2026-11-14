@@ -31,7 +31,7 @@ use rim_services::remote_workspace::dto::{
     RevocationRequest, SubscriptionResult, SubscriptionsAnswer, SubscriptionsRequest,
 };
 use rim_services::remote_workspace::service::{RevocationFanout, WorkspaceRelayService};
-use rim_services::s2s::dto::{PeerLookup, S2sMethod, S2sRequest, S2sResponse};
+use rim_services::s2s::dto::{DiscoveryRequester, PeerLookup, S2sMethod, S2sRequest, S2sResponse};
 use rim_services::s2s::service::{PeerService, S2sClient};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -278,8 +278,13 @@ impl DefaultWorkspaceRelay {
             .map_err(|e| ServiceError::Validation(format!("delegation: {e}")))
     }
 
-    /// Pin the host at `origin` under `host_server_id`.
-    async fn pin_host(&self, host_server_id: &str, origin: &str) -> ServiceResult<()> {
+    /// Pin the host at `origin` under `host_server_id`, a fetch charged to `user_id`.
+    async fn pin_host(
+        &self,
+        host_server_id: &str,
+        origin: &str,
+        user_id: UserId,
+    ) -> ServiceResult<()> {
         if !rim_s2s::is_server_id(host_server_id) {
             return Err(ServiceError::Validation(
                 "hostServerId is not a server id".to_string(),
@@ -295,7 +300,13 @@ impl DefaultWorkspaceRelay {
             .ok_or_else(|| {
                 ServiceError::Validation("hostOrigin must be scheme://host[:port]".to_string())
             })?;
-        self.peers.pin(&origin, Some(host_server_id)).await?;
+        self.peers
+            .pin(
+                &origin,
+                Some(host_server_id),
+                DiscoveryRequester::User(user_id),
+            )
+            .await?;
         Ok(())
     }
 
@@ -374,7 +385,11 @@ impl DefaultWorkspaceRelay {
         let answer: RevocationAnswer = serde_json::from_slice(&response.body).ok()?;
         let signed = statement(&answer.ack);
         let read = read_revocation_ack(&signed).ok()?;
-        let keys = match self.peers.resolve(host, None, Some(read.key_seq)).await {
+        let keys = match self
+            .peers
+            .resolve(host, None, Some(read.key_seq), DiscoveryRequester::Server)
+            .await
+        {
             Ok(PeerLookup::Ready(keys)) => keys,
             _ => return None,
         };
@@ -455,7 +470,8 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
         request: JoinChallengeRequest,
     ) -> ServiceResult<JoinChallengeDto> {
         self.principal(actor.user_id).await?;
-        self.pin_host(&host_server_id, &host_origin).await?;
+        self.pin_host(&host_server_id, &host_origin, actor.user_id)
+            .await?;
         let body = serde_json::to_vec(&request).map_err(ServiceError::internal)?;
         let response = self.post(&host_server_id, "/join/challenge", body).await?;
         if response.status != 200 {
@@ -486,7 +502,7 @@ impl WorkspaceRelayService for DefaultWorkspaceRelay {
             .ok_or_else(|| {
                 ServiceError::Validation("this account has no key identity".to_string())
             })?;
-        self.pin_host(&input.host_server_id, &input.host_origin)
+        self.pin_host(&input.host_server_id, &input.host_origin, actor.user_id)
             .await?;
         let body = serde_json::to_vec(&JoinRequest {
             invite_token: input.invite_token.clone(),

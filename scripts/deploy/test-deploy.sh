@@ -76,6 +76,28 @@ printf 'cosign %s\n' "$*" >>"$STUB_CALLS"
 for image in $STUB_UNSIGNED; do
   [[ $2 != "$image" ]] || exit 1
 done
+# A required workflow commit other than the one the stub images were signed at fails, as
+# cosign's --certificate-github-workflow-sha does.
+prev=""
+for arg in "$@"; do
+  [[ $prev != --certificate-github-workflow-sha || $arg == "$STUB_COMMIT" ]] || exit 1
+  prev=$arg
+done
+# What cosign 3 `verify` prints: the digest the signature is over, and no optional fields.
+digest=$(printf '%s' "$2" | sha256sum | cut -d' ' -f1)
+printf '[{"critical":{"image":{"docker-manifest-digest":"sha256:%s"}},"optional":{}}]\n' "$digest"
+STUB
+cat >"$work/bin/git" <<'STUB'
+#!/usr/bin/env bash
+printf 'git %s\n' "$*" >>"$STUB_CALLS"
+[[ $1 == ls-remote && ${STUB_NO_TAG:-0} != 1 ]] || exit 0
+# An annotated tag: the tag object, then the commit it points at.
+for ref in "${@:3}"; do
+  case $ref in
+  *'^{}') printf '%s\t%s\n' "${STUB_TAG_COMMIT:-$STUB_COMMIT}" "$ref" ;;
+  *) printf '%s\t%s\n' fedcba9876543210fedcba9876543210fedcba98 "$ref" ;;
+  esac
+done
 STUB
 cat >"$work/bin/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -109,6 +131,7 @@ export PATH=$work/bin:$PATH STUB_CALLS=$work/calls
 export STUB_UNPUBLISHED="" STUB_UNSIGNED="" STUB_VOLUME="" STUB_IMAGECHECK=0 STUB_WEB=0
 export STUB_BAD_VERSION="" STUB_FAIL="" STUB_BAD_WEB=""
 export STUB_PUBLIC_DOWN=0
+export STUB_COMMIT=0123456789abcdef0123456789abcdef01234567
 unset RIM_VERSION RIM_WEB_VERSION RIM_WEB_IMAGE COMPOSE_FILE
 
 called() {
@@ -246,6 +269,24 @@ called "curl -fsS https://relay.example.org/.well-known/rim-server" || fail "upg
 called "docker compose -f $d/compose.yml --env-file $d/.env exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile" ||
   fail "upgrade: Caddy not reloaded"
 [[ $(tail -n 1 "$work/stdout") == 0.2.0 ]] || fail "upgrade: printed $(tail -n 1 "$work/stdout")"
+
+# The digests the signatures were verified over go into the env file, so compose pulls those.
+for var_image in "RIM_SERVER_DIGEST $server:0.2.0" "RIM_IMAGECHECK_DIGEST $imagecheck:0.2.0" "RIM_WEB_DIGEST $web:0.1.0"; do
+  read -r var image <<<"$var_image"
+  expected_digest=sha256:$(printf '%s' "$image" | sha256sum | cut -d' ' -f1)
+  [[ $(sed -n "s/^$var=//p" "$d/.env") == "$expected_digest" ]] || fail "upgrade: $var is not the verified digest of $image"
+  ! grep -q "^$var=" "$d/.env.previous" || fail "upgrade: $var leaked into .env.previous"
+done
+
+# A signature that reports no digest is refused before anything changes.
+setup_upgrade 0.1.0
+mv "$work/bin/cosign" "$work/bin/cosign.real"
+printf '#!/usr/bin/env bash\nprintf "[{}]\\n"\n' >"$work/bin/cosign"
+chmod +x "$work/bin/cosign"
+if upgrade 0.2.0; then fail "no digest: the upgrade passed"; fi
+expect_stderr "cosign did not report the digest" "no digest"
+[[ $(env_version "$d/.env") == 0.1.0 && -z $(steps) ]] || fail "no digest: something changed"
+mv "$work/bin/cosign.real" "$work/bin/cosign"
 
 # COMPOSE_FILE in the env file replaces the default compose file.
 setup_upgrade 0.1.0
@@ -532,8 +573,10 @@ done
 # the tag, and its upgrade.sh runs from the directory.
 setup_srv
 rim_deploy --check || fail "new release: $(cat "$work/stderr")"
-grep -q "^curl .* https://github.com/rim-platform/rim-server/archive/refs/tags/v0.2.0.tar.gz$" "$work/calls" ||
-  fail "new release: the tag was not fetched"
+grep -q "^curl .* https://github.com/rim-platform/rim-server/archive/$STUB_COMMIT.tar.gz$" "$work/calls" ||
+  fail "new release: the signed commit was not fetched"
+not_called "archive/refs/tags" || fail "new release: the tag was fetched by name"
+grep -qF "commit $STUB_COMMIT" "$srv/SOURCE" || fail "new release: SOURCE lacks the commit: $(cat "$srv/SOURCE")"
 called "upgrade.sh 0.2.0 in $srv" || fail "new release: upgrade.sh did not run in $srv"
 [[ $(cat "$srv/compose.yml") == "compose of 0.2.0" ]] || fail "new release: compose.yml not replaced"
 [[ -f $srv/default-workspace.json && -f $srv/systemd/rim-deploy.service ]] || fail "new release: new files missing"
@@ -541,6 +584,30 @@ called "upgrade.sh 0.2.0 in $srv" || fail "new release: upgrade.sh did not run i
 grep -qF "tag v0.2.0" "$srv/SOURCE" || fail "new release: SOURCE is $(cat "$srv/SOURCE")"
 [[ -x $srv/upgrade.sh ]] || fail "new release: upgrade.sh is not executable"
 [[ ! -e $srv/rim_server ]] || fail "new release: files outside deploy/ were copied"
+
+# A tag the repository doesn't list: nothing is fetched.
+setup_srv
+if STUB_NO_TAG=1 rim_deploy --check; then fail "no tag: the check passed"; fi
+expect_stderr "was not found" "no tag"
+not_called ".tar.gz" || fail "no tag: the tarball was fetched"
+
+# A tag moved to a commit the release run didn't sign: cosign refuses it, nothing is fetched.
+setup_srv
+if STUB_TAG_COMMIT=89abcdef0123456789abcdef0123456789abcdef rim_deploy --check; then
+  fail "moved tag: the check passed"
+fi
+expect_stderr "is not signed by the release workflow of v0.2.0 at 89abcdef" "moved tag"
+not_called ".tar.gz" || fail "moved tag: the tarball was fetched"
+
+# A latest release older than the running version is not deployed by --check, and is by hand.
+setup_srv
+printf 'POSTGRES_PASSWORD=secret\nRIM_VERSION=0.3.0\n' >"$srv/.env"
+rim_deploy --check || fail "older latest: $(cat "$work/stderr")"
+expect_stderr "is older than the running 0.3.0" "older latest"
+not_called ".tar.gz" || fail "older latest: the tarball was fetched"
+not_called "upgrade.sh" || fail "older latest: upgrade.sh ran"
+rim_deploy 0.2.0 || fail "older by hand: $(cat "$work/stderr")"
+called "upgrade.sh 0.2.0 in $srv" || fail "older by hand: upgrade.sh did not run"
 
 # rim-web not published yet: the check ends quietly and the files from before come back.
 setup_srv
@@ -566,7 +633,7 @@ if rim_deploy --check; then fail "unsigned image: the check passed"; fi
 expect_stderr "is not signed by the release workflow of v0.2.0" "unsigned image"
 not_called ".tar.gz" || fail "unsigned image: the tarball was fetched"
 not_called "upgrade.sh" || fail "unsigned image: upgrade.sh ran"
-called "cosign verify $server:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer" ||
+called "cosign verify $server:0.2.0 --certificate-identity https://github.com/rim-platform/rim-server/.github/workflows/release.yaml@refs/tags/v0.2.0 $issuer --certificate-github-workflow-sha $STUB_COMMIT" ||
   fail "unsigned image: cosign was not asked for the release workflow's identity"
 STUB_UNSIGNED=""
 
@@ -704,6 +771,25 @@ rim_deploy --check || fail "new web release, new compose.yml: $(cat "$work/stder
 ! grep -q '^RIM_WEB_IMAGE=' "$srv/.env" || fail "new compose.yml: RIM_WEB_IMAGE stayed"
 [[ $(grep -c '^RIM_WEB_VERSION=' "$srv/.env") == 1 ]] || fail "new compose.yml: RIM_WEB_VERSION set twice"
 grep -qxF POSTGRES_PASSWORD=secret "$srv/.env" || fail "new compose.yml: another setting was lost"
+
+# The verified digest of the web image goes into the env file when compose.yml reads it.
+setup_srv
+release v0.1.0
+printf 'compose of 0.2.0, which reads RIM_WEB_VERSION and RIM_WEB_DIGEST\n' >"$srv/compose.yml"
+printf 'RIM_WEB_DIGEST=sha256:stale\n' >>"$srv/.env"
+web_release v0.1.1
+rim_deploy --check || fail "web digest: $(cat "$work/stderr")"
+[[ $(env_setting RIM_WEB_DIGEST) == "sha256:$(printf '%s' "$web:0.1.1" | sha256sum | cut -d' ' -f1)" ]] ||
+  fail "web digest: RIM_WEB_DIGEST is $(env_setting RIM_WEB_DIGEST)"
+[[ $(grep -c '^RIM_WEB_DIGEST=' "$srv/.env") == 1 ]] || fail "web digest: set twice"
+
+# A rim-ui release older than the running web client is not deployed by --check.
+setup_srv
+release v0.1.0
+web_release v0.0.9
+rim_deploy --check || fail "older web: $(cat "$work/stderr")"
+expect_stderr "latest web client release 0.0.9 is older than the running 0.1.0" "older web"
+not_called "pull web" || fail "older web: the web container was pulled"
 
 # A new server release and a new rim-ui release: both deploy, the server first.
 setup_srv

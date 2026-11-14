@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use actix_web::http::StatusCode;
+use actix_web::http::{StatusCode, header};
 use actix_web::{HttpRequest, HttpResponse, web};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -14,7 +14,7 @@ use rim_services::auth::service::RequestAuthenticator;
 use rim_services::s2s::dto::{S2sMethod, S2sRequest, S2sResponse};
 
 use crate::body::{BodyError, read_bounded};
-use crate::file_handlers::{map_service_error_to_response, require_csrf};
+use crate::file_handlers::{SANDBOX_CSP, map_service_error_to_response, require_csrf};
 use crate::graphql_support::extract_auth;
 use crate::s2s::S2sState;
 use crate::s2s::forward::{
@@ -63,12 +63,25 @@ fn host_answer(answer: S2sResponse) -> HttpResponse {
     if !answer.content_type.is_empty() {
         response.content_type(answer.content_type.as_str());
     }
+    response.insert_header((header::X_CONTENT_TYPE_OPTIONS, "nosniff"));
+    response.insert_header((header::CONTENT_SECURITY_POLICY, SANDBOX_CSP));
+    if !is_json(&answer.content_type) {
+        response.insert_header((header::CONTENT_DISPOSITION, "attachment"));
+    }
     for (name, value) in &answer.headers {
         if PASSED_HEADERS.contains(&name.as_str()) {
             response.insert_header((name.as_str(), value.as_str()));
         }
     }
     response.body(answer.body)
+}
+
+/// Whether `content_type` names JSON, with or without parameters.
+fn is_json(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
 }
 
 /// Marks the response to a forward the host gave no verified answer to.
@@ -282,6 +295,26 @@ mod tests {
     use crate::s2s::S2sSettings;
 
     #[actix_web::test]
+    async fn a_hosts_html_answer_is_a_download_that_nothing_renders() {
+        let response = host_answer(S2sResponse {
+            status: 200,
+            content_type: "text/html".to_string(),
+            body: b"<script>1</script>".to_vec(),
+            key_seq: 0,
+            headers: vec![],
+        });
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
+        assert_eq!(header("content-disposition").as_deref(), Some("attachment"));
+        assert_eq!(header("x-content-type-options").as_deref(), Some("nosniff"));
+    }
+
+    #[actix_web::test]
     async fn a_hosts_answer_keeps_its_retry_after_and_host_response_headers() {
         let response = host_answer(S2sResponse {
             status: 429,
@@ -308,6 +341,12 @@ mod tests {
         assert_eq!(header(RIM_HOST_SIGNATURE).as_deref(), Some("ed25519:sig"));
         assert_eq!(header("content-type").as_deref(), Some("application/json"));
         assert_eq!(header("x-other"), None);
+        assert_eq!(header("x-content-type-options").as_deref(), Some("nosniff"));
+        assert_eq!(
+            header("content-security-policy").as_deref(),
+            Some(SANDBOX_CSP)
+        );
+        assert_eq!(header("content-disposition"), None);
         let body = actix_web::body::to_bytes(response.into_body())
             .await
             .expect("body");

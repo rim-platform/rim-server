@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -6,6 +7,7 @@ use reqwest::{Client, Url};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
+use rim_core::user::model::UserId;
 use rim_services::command::rate_limit::RateLimitDecision;
 use rim_services::workspace_plugin::MAX_PLUGIN_BUNDLE_BYTES;
 use rim_services::workspace_plugin::command::FetchPluginBundleCmd;
@@ -14,7 +16,8 @@ use rim_services::{ServiceError, ServiceResult};
 use crate::outbound::{BodyError, PublicOnlyResolver, is_public_address, read_capped, url_ip};
 use crate::registration_rate_limiter::RegistrationRateLimiter;
 
-const FETCH_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long one download may take, connecting included.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn checked_url(raw: &str) -> ServiceResult<Url> {
     let url =
@@ -88,6 +91,22 @@ pub(crate) struct BundleFetcher {
     client: Option<Client>,
     limiter: RegistrationRateLimiter,
     slots: Semaphore,
+    /// The accounts with a download running, so each holds at most one of the slots.
+    running: Mutex<HashSet<UserId>>,
+}
+
+/// An account's running download, ended when dropped.
+struct RunningFetch<'a> {
+    running: &'a Mutex<HashSet<UserId>>,
+    user_id: UserId,
+}
+
+impl Drop for RunningFetch<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.running.lock() {
+            running.remove(&self.user_id);
+        }
+    }
 }
 
 impl BundleFetcher {
@@ -108,7 +127,17 @@ impl BundleFetcher {
             client,
             limiter: RegistrationRateLimiter::new(3600, 20),
             slots: Semaphore::new(4),
+            running: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Start a download for `user_id`, or `None` while one of theirs is running.
+    fn start(&self, user_id: UserId) -> Option<RunningFetch<'_>> {
+        let mut running = self.running.lock().ok()?;
+        running.insert(user_id).then(|| RunningFetch {
+            running: &self.running,
+            user_id,
+        })
     }
 
     pub(crate) async fn fetch(&self, cmd: FetchPluginBundleCmd) -> ServiceResult<Vec<u8>> {
@@ -124,6 +153,12 @@ impl BundleFetcher {
         }
         let url = checked_url(&cmd.url)?;
         let host = url.host_str().unwrap_or_default().to_string();
+        let Some(_running) = self.start(cmd.actor.user_id) else {
+            tracing::info!(target: "audit", event = "plugin_bundle_fetch", actor_id = %cmd.actor.user_id, host, outcome = "already_running");
+            return Err(ServiceError::RateLimited {
+                retry_after_seconds: FETCH_TIMEOUT.as_secs(),
+            });
+        };
         if let RateLimitDecision::Limited {
             retry_after_seconds,
         } = self.limiter.check_and_record(
@@ -170,6 +205,28 @@ mod tests {
             assert!(checked_url(url).is_err(), "{url}");
         }
         assert!(checked_url("https://example.com/plugin.rimbundle").is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_account_runs_one_download_at_a_time() {
+        let fetcher = BundleFetcher::new();
+        let ada = UserId::new();
+        let cmd = |user_id| FetchPluginBundleCmd {
+            actor: rim_services::Actor::new(user_id),
+            url: "https://bundles.example/plugin.rimbundle".to_string(),
+            sha256: "0".repeat(64),
+        };
+        let running = fetcher.start(ada).expect("the first download");
+        assert!(matches!(
+            fetcher.fetch(cmd(ada)).await,
+            Err(ServiceError::RateLimited { .. })
+        ));
+        let other = fetcher
+            .start(UserId::new())
+            .expect("another account's download");
+        drop(running);
+        drop(other);
+        assert!(fetcher.start(ada).is_some(), "free again once it ended");
     }
 
     #[test]

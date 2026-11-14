@@ -94,6 +94,10 @@ relay still answers.
 | Audit exports | `/data/audit-exports/`, command audit rows past `RIM_AUDIT_RETENTION_DAYS`, deleted after `RIM_AUDIT_EXPORT_RETENTION_DAYS` | with every dump |
 | TLS certificates | volume `rim-relay_caddy_data` | not needed: Caddy gets new ones |
 
+Caddy sends `Strict-Transport-Security: max-age=31536000` (one year, no `includeSubDomains`, no
+`preload`) on the relay's https site, so a browser that reached the relay once does not go back
+to plain http. Check it after a Caddyfile change with `curl -sI https://<domain>/`.
+
 ### How long personal data and logs are kept
 
 The terms tell people that the addresses they connect from appear in the server's logs, which

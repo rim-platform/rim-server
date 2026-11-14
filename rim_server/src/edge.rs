@@ -61,7 +61,7 @@ fn parse_address(value: &str) -> Option<IpAddr> {
 
 /// The key an address is rate-limited under: IPv4 as is, IPv6 by its /64, so one host cannot
 /// rotate through its interface identifiers.
-fn rate_key(ip: IpAddr) -> IpAddr {
+pub(crate) fn rate_key(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V4(_) => ip,
         IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(
@@ -218,6 +218,11 @@ impl EdgeLimits {
                 Some(rate_limited_response(retry_after_seconds))
             }
         }
+    }
+
+    /// The address `req` comes from, as the per-address limits key it: IPv6 by its /64.
+    pub(crate) fn source_of(&self, req: &HttpRequest) -> Option<IpAddr> {
+        client_ip(req, self.trust_forwarded_headers).map(rate_key)
     }
 
     /// Whether a batch of `len` requests is over the cap.

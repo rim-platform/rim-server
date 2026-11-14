@@ -10,6 +10,7 @@ use rim_core::message_attachment::repository::MessageAttachmentRepository;
 use rim_core::repository::error::RepoResult;
 use rim_core::repository::error::{RepoError, RepoErrorKind};
 use rim_core::server::model::ServerId;
+use rim_core::user::model::UserId;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
@@ -352,6 +353,54 @@ impl MessageAttachmentRepository for SeaOrmMessageAttachmentRepository {
             .await
             .map_err(map_db_err)?;
         Ok(model.map(Into::into))
+    }
+
+    async fn open_tickets_for_user(
+        &self,
+        user_id: UserId,
+        pending_since: chrono::DateTime<chrono::Utc>,
+    ) -> RepoResult<u64> {
+        #[derive(FromQueryResult)]
+        struct CountRow {
+            count: i64,
+        }
+
+        let row = CountRow::find_by_statement(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            r#"SELECT COUNT(*)::bigint AS count
+                 FROM message_attachment a
+                 JOIN message m ON m.id = a.message_id
+                WHERE m.sent_by = $1
+                  AND a.storage_url LIKE 'pending://%'
+                  AND a.metadata->>'status' = 'pending_upload'
+                  AND a.id >= $2"#,
+            [
+                Uuid::from(user_id).into(),
+                v7_lower_bound(pending_since).into(),
+            ],
+        ))
+        .one(&self.db)
+        .await
+        .map_err(map_db_err)?;
+        Ok(row.map_or(0, |r| u64::try_from(r.count).unwrap_or(0)))
+    }
+
+    async fn list_of_deleted_messages(&self, limit: u64) -> RepoResult<Vec<MessageAttachment>> {
+        let models = message_attachment::Entity::find()
+            .from_raw_sql(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"SELECT a.* FROM message_attachment a
+                 JOIN message m ON m.id = a.message_id
+                WHERE m.is_deleted
+                  AND NOT EXISTS (SELECT 1 FROM message_report r WHERE r.message_id = m.id)
+                ORDER BY a.id
+                LIMIT $1"#,
+                [i64::try_from(limit).unwrap_or(i64::MAX).into()],
+            ))
+            .all(&self.db)
+            .await
+            .map_err(map_db_err)?;
+        Ok(models.into_iter().map(Into::into).collect())
     }
 }
 

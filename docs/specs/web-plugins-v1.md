@@ -664,9 +664,10 @@ default and independent of `workspace_plugins`; it stores no bundle in a workspa
 
 Only HTTPS URLs without credentials or fragments are accepted. Every connection uses a
 public-address resolver, with no proxy, including redirect targets. IP literals are checked
-separately. Redirects remain HTTPS and stop after ten; downloads stop at 8 MiB or 120 seconds.
-Each account has twenty attempts an hour; four downloads run concurrently, with a five-second
-slot wait. Audit events record the account and original host, without paths, query strings or
+separately. Redirects remain HTTPS and stop after ten; downloads stop at 8 MiB or 30 seconds.
+Each account has twenty attempts an hour and runs one download at a time: another one while it
+runs answers `429` at once, without counting. Four downloads run concurrently, with a
+five-second slot wait. Audit events record the account and original host, without paths, query strings or
 bundle contents. Responses are authenticated attachments with `no-store` and `nosniff`.
 An older server may return 400/404 or treat the path as a workspace upload; clients explain
 that an update is needed. The disabled feature returns FEATURE_DISABLED, invalid pins or

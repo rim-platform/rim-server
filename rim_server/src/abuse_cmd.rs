@@ -256,6 +256,20 @@ pub async fn run_with(
     execute(parse(group, args)?, config).await
 }
 
+/// `text` with each control character, the escape character included, written out as an escape
+/// such as `\u{1b}`, so user-written text can't drive the operator's terminal.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_debug().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 fn describe_report(out: &mut String, report: &AbuseReportDto) {
     let state = match report.resolved_at {
         Some(at) => format!("resolved {}", at.to_rfc3339()),
@@ -268,8 +282,11 @@ fn describe_report(out: &mut String, report: &AbuseReportDto) {
         report.created_at.to_rfc3339()
     );
     for (name, value) in [
-        ("principal", report.subject_principal_id.clone()),
-        ("server", report.subject_server_id.clone()),
+        (
+            "principal",
+            report.subject_principal_id.as_deref().map(printable),
+        ),
+        ("server", report.subject_server_id.as_deref().map(printable)),
         ("request", report.request_id.map(|id| id.to_string())),
         (
             "reporter",
@@ -284,15 +301,18 @@ fn describe_report(out: &mut String, report: &AbuseReportDto) {
             let _ = writeln!(out, "    {name:<9}: {value}");
         }
     }
-    let _ = writeln!(out, "    reason   : {}", report.reason);
+    let _ = writeln!(out, "    reason   : {}", printable(&report.reason));
 }
 
 /// `username (principal)`, or `username (no key identity)`.
 fn account_label(account: &AccountSummaryDto) -> String {
     format!(
         "{} ({})",
-        account.username,
-        account.principal_id.as_deref().unwrap_or("no key identity")
+        printable(&account.username),
+        account
+            .principal_id
+            .as_deref()
+            .map_or_else(|| "no key identity".to_string(), printable)
     )
 }
 
@@ -308,7 +328,7 @@ fn describe_block(out: &mut String, outcome: &PrincipalBlockOutcome, cascade: bo
         let _ = writeln!(out, "{subject} was blocked already; reason replaced");
     }
     if cascade {
-        let _ = writeln!(out, "    reason: {}", outcome.reason);
+        let _ = writeln!(out, "    reason: {}", printable(&outcome.reason));
     }
     let _ = writeln!(
         out,
@@ -316,7 +336,7 @@ fn describe_block(out: &mut String, outcome: &PrincipalBlockOutcome, cascade: bo
         outcome.ended_sessions, outcome.ignored_requests, outcome.revoked_invites
     );
     if let Some(email) = &outcome.blocked_email {
-        let _ = writeln!(out, "    blocked email {email}");
+        let _ = writeln!(out, "    blocked email {}", printable(email));
     }
 }
 
@@ -329,8 +349,11 @@ fn describe_invitees(out: &mut String, outcome: &PrincipalBlockOutcome) {
         let _ = writeln!(
             out,
             "    {}  {}  {}",
-            invitee.username,
-            invitee.principal_id.as_deref().unwrap_or("no key identity"),
+            printable(&invitee.username),
+            invitee
+                .principal_id
+                .as_deref()
+                .map_or_else(|| "no key identity".to_string(), printable),
             invitee.created_at.to_rfc3339()
         );
     }
@@ -350,7 +373,7 @@ fn describe_record(out: &mut String, record: &PrincipalRecordDto) {
             let _ = writeln!(
                 out,
                 "account    : {} (user {}), created {}",
-                account.account.username,
+                printable(&account.account.username),
                 account.account.user_id,
                 account.account.created_at.to_rfc3339()
             );
@@ -360,7 +383,7 @@ fn describe_record(out: &mut String, record: &PrincipalRecordDto) {
                 } else {
                     ""
                 };
-                let _ = writeln!(out, "email      : {email}{state}");
+                let _ = writeln!(out, "email      : {}{state}", printable(email));
             }
             match (&account.inviter, account.invite_id) {
                 (Some(inviter), Some(invite_id)) => {
@@ -416,7 +439,7 @@ fn describe_record(out: &mut String, record: &PrincipalRecordDto) {
                 out,
                 "blocked    : since {}: {}",
                 block.created_at.to_rfc3339(),
-                block.reason
+                printable(&block.reason)
             );
         }
         None => {
@@ -510,7 +533,7 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
                     "{}  {}  {}",
                     block.principal_id,
                     block.created_at.to_rfc3339(),
-                    block.reason
+                    printable(&block.reason)
                 );
             }
         }
@@ -596,6 +619,14 @@ async fn execute(command: Command, config: &RIMConfig) -> Result<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printable_writes_control_characters_out_instead_of_sending_them() {
+        let shown = printable("spam\u{1b}[2K\u{1b}]52;c;AAAA\u{7}\nnext");
+        assert!(!shown.chars().any(char::is_control), "{shown:?}");
+        assert!(shown.contains("\\u{1b}"));
+        assert_eq!(printable("plain, ünïcode"), "plain, ünïcode");
+    }
 
     fn args(list: &[&str]) -> impl Iterator<Item = String> {
         list.iter()

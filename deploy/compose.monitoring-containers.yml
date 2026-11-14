@@ -37,7 +37,7 @@ services:
   # GET /version, /info and /containers/<64-hex id>/json, with or without an API version.
   # The watchdog exits when the socket stops answering, so a restart binds the new one.
   docker-proxy:
-    image: wollomatic/socket-proxy:1.13.1
+    image: wollomatic/socket-proxy:1.13.1@sha256:3935b709275e4ec35d6ed5a5c4a1f0d01ed31eec5e7234efc3357ecd47689002
     command:
       - -listenip=0.0.0.0
       - -allowfrom=cadvisor
@@ -61,7 +61,7 @@ services:
   # without the mounts below it, so it still finds the socket after containerd restarts;
   # it runs as root, the socket's owner, without capabilities.
   containerd-proxy:
-    image: envoyproxy/envoy:distroless-v1.39.4
+    image: envoyproxy/envoy:distroless-v1.39.4@sha256:ccb37e93d8274a525fe00d67287716dbe3d58bc4237d7627af9e64fae0fd25c8
     user: "0:0"
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
     volumes:
@@ -84,7 +84,7 @@ services:
   # CPU and memory per container, labelled with its compose project and service, read from
   # the host's cgroup tree (the host cgroup namespace); unprivileged, without capabilities.
   cadvisor:
-    image: ghcr.io/google/cadvisor:0.60.6
+    image: ghcr.io/google/cadvisor:0.60.6@sha256:b8e7d1093144fd088f425ff003d75a4aa405de075db78dae3bc563730b1bd07a
     user: "65534:65534"
     command:
       - --docker=tcp://docker-proxy:2375

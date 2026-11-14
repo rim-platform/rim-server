@@ -7,7 +7,12 @@ use std::fmt;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::webhook_text::{DecodeError, fitted, link_of, raw_of, value_of};
+use rim_services::bot::dto::is_address_header;
+
+use super::webhook_text::{
+    DecodeError, MAX_FILLED_CHARS, MAX_LINK_CHARS, fitted, link_of, link_value_of, raw_equals,
+    value_of,
+};
 
 /// The most rules a format holds.
 const MAX_RULES: usize = 20;
@@ -145,22 +150,31 @@ impl Template {
     }
 
     /// The text with each placeholder filled by `fill`, or the placeholder that had no value.
+    /// Once the text is over `limit` characters, the pieces after it are left out, though every
+    /// placeholder must still have a value.
     fn fill(
         &self,
         payload: &Value,
         fill: impl Fn(&Value) -> Option<String>,
+        limit: usize,
     ) -> Result<String, String> {
         let mut text = String::new();
+        let mut chars = 0;
         for piece in &self.pieces {
-            match piece {
-                Piece::Text(literal) => text.push_str(literal),
+            let value;
+            let piece_text = match piece {
+                Piece::Text(literal) => literal.as_str(),
                 Piece::Placeholder { written, paths } => {
-                    let value = paths
+                    value = paths
                         .iter()
                         .find_map(|path| read(payload, path).and_then(&fill))
                         .ok_or_else(|| written.clone())?;
-                    text.push_str(&value);
+                    value.as_str()
                 }
+            };
+            if chars <= limit {
+                text.push_str(piece_text);
+                chars += piece_text.chars().count();
             }
         }
         Ok(text)
@@ -304,6 +318,11 @@ fn check_header_name(name: &str) -> Result<(), String> {
             "Only headers starting with `x-` can be used, not `{name}`."
         ));
     }
+    if is_address_header(&lower) {
+        return Err(format!(
+            "The header `{name}` can't be used: it carries the sender's address, which RIM does not keep."
+        ));
+    }
     if let Some(word) = refused_word(&lower) {
         return Err(format!(
             "The header `{name}` can't be used: a name holding `{word}` usually carries a secret."
@@ -323,7 +342,7 @@ fn refused_word(lower: &str) -> Option<&'static str> {
 /// Whether a format may not test the header `name`, in any case, because it usually carries a
 /// secret. A test session drops such a header by the same list.
 pub(crate) fn is_refused_header(name: &str) -> bool {
-    refused_word(&name.to_ascii_lowercase()).is_some()
+    refused_word(&name.to_ascii_lowercase()).is_some() || is_address_header(name)
 }
 
 /// Keys with dots between them, each part `[A-Za-z0-9_-]+`.
@@ -462,13 +481,13 @@ pub(crate) fn render(
         let fields_hold = rule.when.iter().all(|condition| match condition {
             WebhookCondition::Header { .. } => true,
             WebhookCondition::Field { path, equals } => {
-                read(payload, path).and_then(raw_of).as_deref() == Some(equals.as_str())
+                read(payload, path).is_some_and(|value| raw_equals(value, equals))
             }
         });
         if !fields_hold {
             continue;
         }
-        let text = match rule.post.fill(payload, value_of) {
+        let text = match rule.post.fill(payload, value_of, MAX_FILLED_CHARS) {
             Ok(text) => text,
             Err(placeholder) => {
                 return Ok(Rendered::NoValue {
@@ -478,7 +497,10 @@ pub(crate) fn render(
             }
         };
         let link = rule.link.as_ref().and_then(|link| {
-            let value = link.value.fill(payload, raw_of).ok()?;
+            let value = link
+                .value
+                .fill(payload, link_value_of, MAX_LINK_CHARS)
+                .ok()?;
             link_of(&value, &link.origin)
         });
         return Ok(Rendered::Post {
@@ -859,7 +881,7 @@ mod tests {
         assert!(parse_mention_ids(&text).is_empty(), "{text}");
         assert!(!text.contains("<@"), "{text}");
         assert!(!mentions_everyone(&text), "{text}");
-        assert!(text.contains(r"\[x\]\(https://evil.example\)"), "{text}");
+        assert!(text.contains(r"\[x\]\(https\://evil.example\)"), "{text}");
     }
 
     #[test]
@@ -897,6 +919,54 @@ mod tests {
         let message = posted(&deliver(&format, &[], &body));
         assert_eq!(message.chars().count(), 1_000);
         assert!(message.ends_with("🦀 https://example.com/a"), "{message}");
+    }
+
+    #[test]
+    fn a_long_value_is_read_only_as_far_as_a_line_holds() {
+        let escaped = value_of(&json!("*".repeat(1_000_000))).expect("a value");
+        assert!(escaped.len() <= 2_000, "{} bytes", escaped.len());
+        assert_eq!(
+            value_of(&json!(format!("{}a b", " ".repeat(5_000)))).as_deref(),
+            Some("a b")
+        );
+    }
+
+    #[test]
+    fn a_rule_does_not_expand_a_long_value_past_the_line() {
+        let thirty = format(json!({ "version": 1, "rules": [{ "post": "{a}".repeat(30) }] }));
+        let payload = json!({ "a": "*".repeat(1_000_000) });
+        let filled = thirty.rules[0]
+            .post
+            .fill(&payload, value_of, MAX_FILLED_CHARS)
+            .expect("filled");
+        assert!(filled.len() < 10_000, "filled {} bytes", filled.len());
+
+        // A placeholder past the cut still needs a value.
+        let missing = format(json!({ "version": 1, "rules": [{
+            "post": format!("{}{{b}}", "{a}".repeat(29)),
+        }]}));
+        assert!(matches!(
+            deliver(&missing, &[], &payload.to_string()),
+            Rendered::NoValue { .. }
+        ));
+    }
+
+    #[test]
+    fn the_message_from_a_long_value_is_what_it_was() {
+        let format = format(one_rule(json!([]), "{a} and {b}"));
+        let body = json!({ "a": "x".repeat(5_000), "b": "y" }).to_string();
+        assert_eq!(posted(&deliver(&format, &[], &body)), "x".repeat(1_000));
+    }
+
+    #[test]
+    fn a_long_link_value_is_still_no_link() {
+        let format = linked("{u}", "https://example.com/");
+        let body = json!({ "t": "x", "u": format!("https://example.com/{}", "a".repeat(100_000)) })
+            .to_string();
+        assert!(matches!(
+            deliver(&format, &[], &body),
+            Rendered::Post { link: None, .. }
+        ));
     }
 
     // ── link ─────────────────────────────────────────────────────────────
