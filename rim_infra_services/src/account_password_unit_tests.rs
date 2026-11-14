@@ -413,12 +413,20 @@ mod tests {
         }
 
         async fn login_start(&self, principal: &str) -> Result<PasswordLoginId, ServiceError> {
+            self.login_start_from(principal, IP).await
+        }
+
+        async fn login_start_from(
+            &self,
+            principal: &str,
+            remote_ip: &str,
+        ) -> Result<PasswordLoginId, ServiceError> {
             let (_, request) = Login::start(b"guess");
             self.svc
                 .login_start(PasswordLoginStartCmd {
                     principal_id: principal.to_string(),
                     request,
-                    remote_ip: IP.to_string(),
+                    remote_ip: remote_ip.to_string(),
                 })
                 .await
                 .map(|dto| dto.login_id)
@@ -545,51 +553,59 @@ mod tests {
     // ── Wrong tries ─────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn three_tries_are_free_then_each_waits_longer_and_the_tenth_locks() {
+    async fn ten_starts_an_hour_from_anywhere_then_a_wait_and_never_a_lock() {
         let w = world();
         let a = w.account_with_password(1, b"pw").await;
-        for _ in 0..3 {
-            w.login_start(a.principal()).await.unwrap();
-        }
-        // The 4th try is allowed and starts the first wait.
-        w.login_start(a.principal()).await.unwrap();
-        for (try_number, wait) in [(5u32, 60u64), (6, 300), (7, 900), (8, 3600), (9, 14_400)] {
-            let err = w.login_start(a.principal()).await.unwrap_err();
-            match err {
-                ServiceError::RateLimited {
-                    retry_after_seconds,
-                } => assert_eq!(retry_after_seconds, wait, "before try {try_number}"),
-                other => panic!("before try {try_number}: {other:?}"),
-            }
-            let wait_seconds = i64::try_from(wait).unwrap();
-            w.advance(Duration::seconds(wait_seconds - 1));
-            assert!(w.login_start(a.principal()).await.is_err());
-            w.advance(Duration::seconds(1));
-            w.login_start(a.principal()).await.unwrap();
-            assert_eq!(w.tries(&a), try_number);
-        }
-        let err = w.login_start(a.principal()).await.unwrap_err();
-        assert!(
-            matches!(
-                err,
-                ServiceError::RateLimited {
-                    retry_after_seconds: 43_200
+        // Starts from other addresses, which prove nothing about the account, fill its window
+        // and hold the owner back until it ends; the next window opens again, for days.
+        for day in 0..2 {
+            for hour in 0..24 {
+                for n in 0..10u8 {
+                    w.login_start_from(a.principal(), &format!("198.51.100.{n}"))
+                        .await
+                        .unwrap();
                 }
-            ),
-            "{err:?}"
-        );
-        w.advance(Duration::hours(12));
-        // The 10th try still gets an answer, and locks the password.
+                assert_eq!(w.tries(&a), 10);
+                let err = w.login_start(a.principal()).await.unwrap_err();
+                assert!(
+                    matches!(
+                        err,
+                        ServiceError::RateLimited {
+                            retry_after_seconds: 3600
+                        }
+                    ),
+                    "day {day}, hour {hour}: {err:?}"
+                );
+                w.advance(Duration::minutes(59));
+                let err = w.login_start(a.principal()).await.unwrap_err();
+                assert!(
+                    matches!(
+                        err,
+                        ServiceError::RateLimited {
+                            retry_after_seconds: 60
+                        }
+                    ),
+                    "day {day}, hour {hour}: {err:?}"
+                );
+                w.advance(Duration::minutes(1));
+            }
+        }
         w.login_start(a.principal()).await.unwrap();
-        assert!(
-            w.passwords.state().passwords[&a.user_id]
-                .locked_at
-                .is_some()
-        );
-        w.advance(Duration::days(30));
-        let err = w.login_start(a.principal()).await.unwrap_err();
-        assert!(matches!(err, ServiceError::PasswordLocked), "{err:?}");
-        assert_eq!(w.tries(&a), 10);
+        assert_eq!(w.tries(&a), 1);
+    }
+
+    #[tokio::test]
+    async fn a_window_held_back_longer_than_one_hour_counts_as_ended() {
+        let w = world();
+        let a = w.account_with_password(1, b"pw").await;
+        {
+            let mut state = w.passwords.state();
+            let password = state.passwords.get_mut(&a.user_id).unwrap();
+            password.failed_attempts = 10;
+            password.window_ends_at = Some(*w.now.lock().unwrap() + Duration::hours(12));
+        }
+        w.login_start(a.principal()).await.unwrap();
+        assert_eq!(w.tries(&a), 1);
     }
 
     #[tokio::test]
@@ -773,7 +789,7 @@ mod tests {
     // ── Reset ───────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn a_reset_signed_by_the_recovery_key_keeps_the_share_clears_the_lock_and_ends_sessions()
+    async fn a_reset_signed_by_the_recovery_key_keeps_the_share_clears_the_tries_and_ends_sessions()
     {
         let w = world();
         let a = w.account_with_password(1, b"forgotten").await;
@@ -787,7 +803,7 @@ mod tests {
             let mut state = w.passwords.state();
             let password = state.passwords.get_mut(&a.user_id).unwrap();
             password.failed_attempts = 10;
-            password.locked_at = Some(Utc::now());
+            password.window_ends_at = Some(Utc::now() + Duration::hours(1));
             state.rewraps.insert(a.user_id, vec![b"old".to_vec()]);
         }
         w.session(&a).await;
@@ -798,7 +814,7 @@ mod tests {
 
         let stored = w.passwords.state().passwords[&a.user_id].clone();
         assert_eq!(stored.failed_attempts, 0);
-        assert!(stored.locked_at.is_none());
+        assert!(stored.window_ends_at.is_none());
         assert_eq!(
             TEST_PASSWORD_KEY
                 .open_share(a.user_id, &stored.share_sealed)

@@ -21,6 +21,14 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Security
+
+- An account's password is no longer locked after ten wrong tries, so it no longer needs a reset
+  with the recovery phrase: an account takes ten password login starts an hour, and a start past
+  that is refused with `RATE_LIMITED` and the seconds until the hour's window ends. Each start
+  still counts against its address too. `PASSWORD_LOCKED` is no longer sent, and a password
+  locked before takes logins again (`docs/specs/key-identity-v1.md`).
+
 ## [0.0.10] - 2026-11-13
 
 ### Changed

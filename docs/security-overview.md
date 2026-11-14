@@ -41,9 +41,10 @@ checked with strict Ed25519 ([key identity](specs/key-identity-v1.md)).
   checked with OPAQUE ([key identity](specs/key-identity-v1.md), "Account password"): the
   server stores a record that checks the password without revealing it, and a sign-in needs the
   device key's proof and the password together. The server counts every login start as a wrong
-  try until a login finishes: three are free, the 4th to the 9th make the next wait from one
-  minute to twelve hours, and the 10th locks the password until a reset signed by the recovery
-  key. A finished login returns the account's server share, sealed under the login's session
+  try until a login finishes, and an account takes 10 starts an hour: the 11th waits until the
+  hour's window ends. Nothing locks the password, since anyone who knows a principal id can send
+  starts; each start also counts against its address (20 failures per 15 minutes, shared with
+  the key sign-in). A finished login returns the account's server share, sealed under the login's session
   key; the client needs it with the password to open its local data. The records need the
   password key file `<RIM_DATA_DIR>/password-key.json` (`RIM_PASSWORD_KEY_FILE`), which also
   seals the shares, which `/readyz` checks and which the backups hold; without it every account
@@ -263,7 +264,7 @@ Joined from the spec tables and the review brief's summary.
 | Compromised device | Read what its cache, archive and MLS state hold; send as that device; on the desktop, read the vault | Revocation, then removal from every group; later epochs use new keys | What it already decrypted; anything else the user's account on that computer reaches |
 | Malicious own server | See metadata; withhold, delay, reorder; refuse Commits; control membership; read and change channels; mark any report verified | Pinned key-log heads; leaf checks; DM and encryption pins; MLS sender checks | Availability; channel confidentiality; metadata privacy; the verdict on reports, which moderators take from the server |
 | Database or key-file thief | Read channels, metadata, ciphertext and session token hashes; with the franking key file, mint receipts; with the link key file, read the public join links; with the password key file and the database, run offline guesses against a password record and open the server shares | No private key in the database; reports checked against recorded commitments; franking and server key rotation and recovery; OPAQUE records without the key file allow no guessing, and each guess costs an Argon2id run (64 MiB, 3 passes) | Channel text in the dump; a weak PIN once both the database and the key file are taken |
-| Another person using the same browser profile or OS account | Open the app on a device where the account was used | The account password at every sign-in, checked by the server with the counted, slowed and locked tries; the server share only after the password; the device key alone signs in no account of this server that has a password | What the device holds unencrypted until the clients seal it under the data key; a kept session left open; an unkept one's file downloads while its cookie lives |
+| Another person using the same browser profile or OS account | Open the app on a device where the account was used | The account password at every sign-in, checked by the server with counted tries, 10 an hour per account and 20 failures per 15 minutes per address; the server share only after the password; the device key alone signs in no account of this server that has a password | What the device holds unencrypted until the clients seal it under the data key; a kept session left open; an unkept one's file downloads while its cookie lives |
 | Another server | Signed junk within limits; DM requests and last-resort key package claims as a stranger | Self-certifying server ids and pinned keys; signed requests with nonces; the request inbox; peer blocks | What a person's own relay or a workspace's host sees |
 | Network attacker | See TLS metadata | TLS; signed requests and responses between servers; pinned server ids | Broken TLS between an app and its server; a forged certificate for a server not yet pinned |
 | Malicious plugin author | What the granted permissions allow; for a plugin on the computer, anything the user can do | Sandbox and per-plugin policy; the permission prompt; the signed registry; bundle fingerprints | Leaks through channels the sandbox cannot close; a local plugin the user chose to trust |

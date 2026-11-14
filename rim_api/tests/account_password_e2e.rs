@@ -225,32 +225,54 @@ async fn an_expired_ticket_is_refused() {
     );
 }
 
+fn retry_after(response: &async_graphql::Response) -> Option<u64> {
+    match response.errors[0]
+        .extensions
+        .as_ref()
+        .and_then(|e| e.get("retryAfterSeconds"))
+    {
+        Some(async_graphql::Value::Number(n)) => n.as_u64(),
+        _ => None,
+    }
+}
+
 #[tokio::test]
-async fn ten_tries_without_a_success_lock_the_password_until_a_reset() {
+async fn ten_starts_an_hour_then_a_wait_until_the_window_ends_and_never_a_lock() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::Open).await;
     let ada = signed_up(&ctx, "ada", 3).await;
-    // Nine tries are behind it and the wait after the ninth has run out.
+    // Nine starts in a window that ends in half an hour; the tenth still gets an answer.
     ctx.conn
         .execute_unprepared(&format!(
-            "UPDATE account_password SET failed_attempts = 9, next_attempt_at = now() \
-             - interval '1 second' WHERE user_id = '{}'",
+            "UPDATE account_password SET failed_attempts = 9, \
+             next_attempt_at = now() + interval '30 minutes' WHERE user_id = '{}'",
             ada.user_id
         ))
         .await
-        .expect("set the count");
-    // The tenth gets an answer and locks the password.
+        .expect("fill the window");
     assert_eq!(
         code(&ada.login(&schema, Some(b"wrong")).await),
         "UNAUTHENTICATED"
     );
     let response = ada.login(&schema, Some(TEST_PASSWORD)).await;
-    assert_eq!(code(&response), "PASSWORD_LOCKED");
-
-    // A reset with the recovery key opens it again.
-    reset(&schema, &ada, b"new password").await;
+    assert_eq!(code(&response), "RATE_LIMITED");
+    let retry = retry_after(&response);
     assert!(
-        ada.login(&schema, Some(b"new password"))
+        retry.is_some_and(|s| (1700..=1800).contains(&s)),
+        "{retry:?}"
+    );
+
+    // Once the window ends the right password signs in, with no reset.
+    ctx.conn
+        .execute_unprepared(&format!(
+            "UPDATE account_password SET next_attempt_at = now() - interval '1 second' \
+             WHERE user_id = '{}'",
+            ada.user_id
+        ))
+        .await
+        .expect("end the window");
+    assert!(
+        ada.login(&schema, Some(TEST_PASSWORD))
             .await
             .errors
             .is_empty()
@@ -258,26 +280,23 @@ async fn ten_tries_without_a_success_lock_the_password_until_a_reset() {
 }
 
 #[tokio::test]
-async fn a_try_during_the_wait_is_rate_limited_with_the_seconds_left() {
+async fn a_password_locked_or_held_back_for_hours_before_takes_starts_again() {
     let ctx = TestCtx::new().await;
     let schema = ctx.build_schema(RegistrationMode::Open).await;
     let ada = signed_up(&ctx, "ada", 4).await;
-    for _ in 0..4 {
-        assert_eq!(
-            code(&ada.login(&schema, Some(b"wrong")).await),
-            "UNAUTHENTICATED"
-        );
-    }
-    let response = ada.login(&schema, Some(TEST_PASSWORD)).await;
-    assert_eq!(code(&response), "RATE_LIMITED");
-    let retry = response.errors[0]
-        .extensions
-        .as_ref()
-        .and_then(|e| e.get("retryAfterSeconds"))
-        .cloned();
+    ctx.conn
+        .execute_unprepared(&format!(
+            "UPDATE account_password SET failed_attempts = 10, locked_at = now(), \
+             next_attempt_at = now() + interval '12 hours' WHERE user_id = '{}'",
+            ada.user_id
+        ))
+        .await
+        .expect("lock the password");
     assert!(
-        matches!(retry, Some(async_graphql::Value::Number(ref n)) if n.as_u64().is_some_and(|s| (1..=60).contains(&s))),
-        "{retry:?}"
+        ada.login(&schema, Some(TEST_PASSWORD))
+            .await
+            .errors
+            .is_empty()
     );
 }
 

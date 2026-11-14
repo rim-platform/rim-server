@@ -203,11 +203,6 @@ pub enum ServiceError {
     #[error("{}", REGISTRATION_FULL_MESSAGE)]
     RegistrationFull,
 
-    /// The account's password locked after ten wrong tries; only a reset with the recovery key
-    /// opens it. Surfaced as the `PASSWORD_LOCKED` GraphQL error code.
-    #[error("{}", PASSWORD_LOCKED_MESSAGE)]
-    PasswordLocked,
-
     #[error("internal error")]
     Internal(#[source] Option<anyhow::Error>),
 }
@@ -215,10 +210,6 @@ pub enum ServiceError {
 /// The message of [`ServiceError::RegistrationFull`].
 pub const REGISTRATION_FULL_MESSAGE: &str = "this server is full and takes no new accounts; \
      run your own server or sign up on another one";
-
-/// The message of [`ServiceError::PasswordLocked`].
-pub const PASSWORD_LOCKED_MESSAGE: &str =
-    "this password is locked after too many wrong tries; reset it with the recovery phrase";
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
 

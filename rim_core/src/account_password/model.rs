@@ -1,5 +1,5 @@
 //! A local account's password, checked with OPAQUE: its registration record, its server share,
-//! the wrong tries counted against it, and the short-lived rows between the steps of a login,
+//! the login starts counted against it, and the short-lived rows between the steps of a login,
 //! a change and a reset.
 
 use chrono::{DateTime, Duration, Utc};
@@ -19,57 +19,64 @@ pub struct AccountPassword {
     pub registration: Vec<u8>,
     /// The account's server share, sealed under the server's password key.
     pub share_sealed: Vec<u8>,
-    /// Login starts since the last successful login.
+    /// Login starts counted in the current window since the last successful login.
     pub failed_attempts: u32,
-    /// The next login start is refused before this.
-    pub next_attempt_at: Option<DateTime<Utc>>,
-    /// When the password locked; only a reset with the recovery key opens it.
-    pub locked_at: Option<DateTime<Utc>>,
+    /// When the current window of counted starts ends; `None` before the first start.
+    pub window_ends_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-/// How many tries are free, how long each later try makes the next one wait, and at which try
-/// the password locks. A try is a login start; a successful finish clears the count.
+/// How many login starts an account's password takes in one window, and how long a window
+/// lasts. The first start after a window ended opens the next one; a start past the limit waits
+/// until the window ends. A successful finish clears the count. Nothing locks the password.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttemptSchedule {
-    /// The wait after the n-th try, in seconds, at index n - 1; 0 for none. Tries past the end
-    /// wait as long as the last entry says.
-    pub waits_seconds: Vec<i64>,
-    /// The try that locks the password.
-    pub lock_after: u32,
+pub struct AttemptWindow {
+    /// The starts one window takes.
+    pub max_starts: u32,
+    /// How long a window lasts.
+    pub length: Duration,
 }
 
-impl Default for AttemptSchedule {
-    /// Tries 1 to 3 are free; after the 4th the next waits 1 minute, after the 5th 5 minutes,
-    /// the 6th 15 minutes, the 7th 1 hour, the 8th 4 hours, the 9th 12 hours; the 10th locks.
+impl Default for AttemptWindow {
+    /// Ten starts an hour.
     fn default() -> Self {
         Self {
-            waits_seconds: vec![0, 0, 0, 60, 300, 900, 3600, 14_400, 43_200],
-            lock_after: 10,
+            max_starts: 10,
+            length: Duration::hours(1),
         }
     }
 }
 
-impl AttemptSchedule {
-    /// The wait the `count`-th try imposes on the next one; `None` when there is none.
-    pub fn wait_after(&self, count: u32) -> Option<Duration> {
-        if count == 0 {
-            return None;
-        }
-        let index = usize::try_from(count - 1).unwrap_or(usize::MAX);
-        let seconds = self
-            .waits_seconds
-            .get(index)
-            .or(self.waits_seconds.last())
-            .copied()
-            .unwrap_or(0);
-        (seconds > 0).then(|| Duration::seconds(seconds))
+impl AttemptWindow {
+    /// Whether a window ending at `ends_at` is still open at `now`. An end further than one
+    /// window length after `now` counts as ended, so no stored time holds a start back longer
+    /// than one window.
+    pub fn is_open(&self, ends_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+        ends_at.is_some_and(|end| end > now && end <= now + self.length)
     }
 
-    /// Whether the `count`-th try locks the password.
-    pub fn locks_at(&self, count: u32) -> bool {
-        count >= self.lock_after
+    /// Count one more start at `now` against `count` starts in a window ending at `ends_at`.
+    /// Returns the new count and window end, or, when the window is full, when it ends.
+    ///
+    /// # Errors
+    /// The end of the open window when it already took [`Self::max_starts`] starts.
+    pub fn count(
+        &self,
+        count: u32,
+        ends_at: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> Result<(u32, DateTime<Utc>), DateTime<Utc>> {
+        match ends_at {
+            Some(end) if self.is_open(ends_at, now) => {
+                if count >= self.max_starts {
+                    Err(end)
+                } else {
+                    Ok((count + 1, end))
+                }
+            }
+            _ => Ok((1, now + self.length)),
+        }
     }
 }
 
@@ -81,9 +88,7 @@ pub enum AttemptStart {
         registration: Vec<u8>,
         failed_attempts: u32,
     },
-    /// The password is locked; nothing was counted.
-    Locked,
-    /// Too soon after the last try; nothing was counted.
+    /// The window is full until `until`; nothing was counted.
     Wait { until: DateTime<Utc> },
     /// The account has no password.
     NoPassword,
@@ -138,28 +143,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_schedule_frees_three_tries_then_waits_longer_and_locks_at_ten() {
-        let schedule = AttemptSchedule::default();
-        let waits: Vec<Option<i64>> = (1..=9)
-            .map(|n| schedule.wait_after(n).map(|d| d.num_seconds()))
-            .collect();
+    fn a_window_takes_ten_starts_an_hour_and_the_next_opens_once_it_ends() {
+        let window = AttemptWindow::default();
+        let now = Utc::now();
+        let end = now + Duration::hours(1);
+        assert_eq!(window.count(0, None, now), Ok((1, end)));
+        assert_eq!(window.count(9, Some(end), now), Ok((10, end)));
+        assert_eq!(window.count(10, Some(end), now), Err(end));
         assert_eq!(
-            waits,
-            vec![
-                None,
-                None,
-                None,
-                Some(60),
-                Some(300),
-                Some(900),
-                Some(3600),
-                Some(14_400),
-                Some(43_200)
-            ]
+            window.count(10, Some(end), end - Duration::seconds(1)),
+            Err(end)
         );
-        assert!(!schedule.locks_at(9));
-        assert!(schedule.locks_at(10));
-        assert_eq!(schedule.wait_after(0), None);
+        assert_eq!(
+            window.count(10, Some(end), end),
+            Ok((1, end + Duration::hours(1)))
+        );
+        assert_eq!(
+            window
+                .count(500, Some(end), end + Duration::days(30))
+                .map(|c| c.0),
+            Ok(1)
+        );
+    }
+
+    #[test]
+    fn an_end_further_than_one_window_away_counts_as_ended() {
+        let window = AttemptWindow::default();
+        let now = Utc::now();
+        let far = now + Duration::hours(12);
+        assert!(!window.is_open(Some(far), now));
+        assert_eq!(
+            window.count(9, Some(far), now),
+            Ok((1, now + Duration::hours(1)))
+        );
     }
 
     #[test]

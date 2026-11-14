@@ -8,7 +8,7 @@ mod support;
 use chrono::{Duration, SubsecRound, Utc};
 
 use rim_core::account_password::model::{
-    AttemptSchedule, AttemptStart, PasswordLogin, PasswordLoginId, PasswordLoginPurpose,
+    AttemptStart, AttemptWindow, PasswordLogin, PasswordLoginId, PasswordLoginPurpose,
     PasswordReset, PasswordResetId,
 };
 use rim_core::account_password::repository::AccountPasswordRepository;
@@ -40,9 +40,9 @@ async fn a_password_is_stored_once_replaced_counted_and_goes_with_its_account() 
     assert_eq!(stored.created_at, now);
     assert_eq!(repo.count_passwords().await.unwrap(), 1);
 
-    let schedule = AttemptSchedule::default();
+    let window = AttemptWindow::default();
     for _ in 0..4 {
-        repo.start_attempt(user.id, now, &schedule).await.unwrap();
+        repo.start_attempt(user.id, now, &window).await.unwrap();
     }
     assert!(
         repo.replace_registration(user.id, vec![5], now)
@@ -53,7 +53,7 @@ async fn a_password_is_stored_once_replaced_counted_and_goes_with_its_account() 
     assert_eq!(replaced.registration, vec![5]);
     assert_eq!(replaced.share_sealed, vec![3, 4], "the share stays");
     assert_eq!(replaced.failed_attempts, 0);
-    assert_eq!(replaced.next_attempt_at, None);
+    assert_eq!(replaced.window_ends_at, None);
     let stranger = ctx.create_user("bob").await;
     assert!(
         !repo
@@ -70,67 +70,79 @@ async fn a_password_is_stored_once_replaced_counted_and_goes_with_its_account() 
 }
 
 #[tokio::test]
-async fn tries_follow_the_schedule_in_one_statement_and_the_tenth_locks() {
+async fn tries_fill_a_window_of_ten_in_one_statement_and_never_lock() {
     let ctx = support::TestCtx::new().await;
     let repo = SeaOrmAccountPasswordRepository::new(ctx.db.clone());
     let user = ctx.create_user("ada").await;
-    let schedule = AttemptSchedule::default();
-    let mut now = Utc::now().trunc_subsecs(6);
+    let window = AttemptWindow::default();
+    let now = Utc::now().trunc_subsecs(6);
+    // The first start, a minute in, opens the window.
+    let end = now + Duration::minutes(1) + Duration::hours(1);
 
     let nobody = ctx.create_user("nobody").await;
     assert_eq!(
-        repo.start_attempt(nobody.id, now, &schedule).await.unwrap(),
+        repo.start_attempt(nobody.id, now, &window).await.unwrap(),
         AttemptStart::NoPassword
     );
 
     repo.insert(user.id, vec![7], vec![8], now).await.unwrap();
-    for count in 1..=3u32 {
+    for count in 1..=10u32 {
         assert_eq!(
-            repo.start_attempt(user.id, now, &schedule).await.unwrap(),
+            repo.start_attempt(user.id, now + Duration::minutes(i64::from(count)), &window)
+                .await
+                .unwrap(),
             AttemptStart::Counted {
                 registration: vec![7],
                 failed_attempts: count
             }
         );
     }
-    for count in 4..=9u32 {
-        let started = repo.start_attempt(user.id, now, &schedule).await.unwrap();
-        assert!(
-            matches!(started, AttemptStart::Counted { failed_attempts, .. } if failed_attempts == count),
-            "{started:?}"
-        );
-        let wait = schedule.wait_after(count).unwrap();
+    let full = repo.get(user.id).await.unwrap().unwrap();
+    assert_eq!(full.failed_attempts, 10);
+    assert_eq!(full.window_ends_at, Some(end));
+    for at in [now + Duration::minutes(11), end - Duration::seconds(1)] {
         assert_eq!(
-            repo.start_attempt(user.id, now, &schedule).await.unwrap(),
-            AttemptStart::Wait { until: now + wait }
+            repo.start_attempt(user.id, at, &window).await.unwrap(),
+            AttemptStart::Wait { until: end }
         );
-        now += wait;
     }
-    let tenth = repo.start_attempt(user.id, now, &schedule).await.unwrap();
-    assert!(
-        matches!(
-            tenth,
-            AttemptStart::Counted {
-                failed_attempts: 10,
-                ..
-            }
-        ),
-        "{tenth:?}"
-    );
-    let locked = repo.get(user.id).await.unwrap().unwrap();
-    assert_eq!(locked.locked_at, Some(now));
-    assert_eq!(locked.next_attempt_at, None);
     assert_eq!(
-        repo.start_attempt(user.id, now + Duration::days(9), &schedule)
-            .await
-            .unwrap(),
-        AttemptStart::Locked
+        repo.start_attempt(user.id, end, &window).await.unwrap(),
+        AttemptStart::Counted {
+            registration: vec![7],
+            failed_attempts: 1
+        }
+    );
+    let next = repo.get(user.id).await.unwrap().unwrap();
+    assert_eq!(next.window_ends_at, Some(end + Duration::hours(1)));
+
+    // A row an older schedule locked, or held back for longer than one window, takes starts.
+    ctx.db
+        .execute_unprepared(&format!(
+            "UPDATE account_password SET failed_attempts = 10, locked_at = '{}', \
+             next_attempt_at = '{}' WHERE user_id = '{}'",
+            now.to_rfc3339(),
+            (now + Duration::hours(12)).to_rfc3339(),
+            user.id
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.start_attempt(user.id, now, &window).await.unwrap(),
+        AttemptStart::Counted {
+            registration: vec![7],
+            failed_attempts: 1
+        }
+    );
+    assert_eq!(
+        repo.get(user.id).await.unwrap().unwrap().window_ends_at,
+        Some(now + Duration::hours(1))
     );
 
     repo.clear_attempts(user.id, now).await.unwrap();
     let cleared = repo.get(user.id).await.unwrap().unwrap();
     assert_eq!(cleared.failed_attempts, 0);
-    assert_eq!(cleared.locked_at, None);
+    assert_eq!(cleared.window_ends_at, None);
 }
 
 #[tokio::test]

@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use rim_auth::opaque::client::Registration;
 use rim_auth::opaque::server_registration_start;
 use rim_core::account_password::model::{
-    AccountPassword, AttemptSchedule, AttemptStart, PasswordLogin, PasswordLoginId, PasswordReset,
+    AccountPassword, AttemptStart, AttemptWindow, PasswordLogin, PasswordLoginId, PasswordReset,
     PasswordResetId,
 };
 use rim_core::account_password::repository::AccountPasswordRepository;
@@ -101,8 +101,7 @@ impl AccountPasswordRepository for FakePasswords {
                 registration,
                 share_sealed,
                 failed_attempts: 0,
-                next_attempt_at: None,
-                locked_at: None,
+                window_ends_at: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -122,8 +121,7 @@ impl AccountPasswordRepository for FakePasswords {
         };
         password.registration = registration;
         password.failed_attempts = 0;
-        password.next_attempt_at = None;
-        password.locked_at = None;
+        password.window_ends_at = None;
         password.updated_at = now;
         Ok(true)
     }
@@ -136,38 +134,30 @@ impl AccountPasswordRepository for FakePasswords {
         &self,
         user_id: UserId,
         now: DateTime<Utc>,
-        schedule: &AttemptSchedule,
+        window: &AttemptWindow,
     ) -> RepoResult<AttemptStart> {
         let mut state = self.state();
         let Some(password) = state.passwords.get_mut(&user_id) else {
             return Ok(AttemptStart::NoPassword);
         };
-        if password.locked_at.is_some() {
-            return Ok(AttemptStart::Locked);
+        match window.count(password.failed_attempts, password.window_ends_at, now) {
+            Ok((count, ends_at)) => {
+                password.failed_attempts = count;
+                password.window_ends_at = Some(ends_at);
+                password.updated_at = now;
+                Ok(AttemptStart::Counted {
+                    registration: password.registration.clone(),
+                    failed_attempts: count,
+                })
+            }
+            Err(until) => Ok(AttemptStart::Wait { until }),
         }
-        if let Some(until) = password.next_attempt_at.filter(|at| *at > now) {
-            return Ok(AttemptStart::Wait { until });
-        }
-        password.failed_attempts += 1;
-        let count = password.failed_attempts;
-        if schedule.locks_at(count) {
-            password.locked_at = Some(now);
-            password.next_attempt_at = None;
-        } else {
-            password.next_attempt_at = schedule.wait_after(count).map(|wait| now + wait);
-        }
-        password.updated_at = now;
-        Ok(AttemptStart::Counted {
-            registration: password.registration.clone(),
-            failed_attempts: count,
-        })
     }
 
     async fn clear_attempts(&self, user_id: UserId, now: DateTime<Utc>) -> RepoResult<()> {
         if let Some(password) = self.state().passwords.get_mut(&user_id) {
             password.failed_attempts = 0;
-            password.next_attempt_at = None;
-            password.locked_at = None;
+            password.window_ends_at = None;
             password.updated_at = now;
         }
         Ok(())

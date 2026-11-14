@@ -15,8 +15,8 @@ use crate::key_auth::dto::KeyChallengeDto;
 /// running a login whose ticket `loginWithKey` consumes, changing it, and resetting it with the
 /// recovery key.
 ///
-/// Every login start counts as a wrong try until a login finishes: tries 1 to 3 are free, the
-/// 4th to the 9th make the next one wait longer, and the 10th locks the password until a reset.
+/// Every login start counts as a wrong try until a login finishes. An account takes ten starts
+/// an hour; a start past that waits until the hour's window ends. Nothing locks the password.
 #[async_trait]
 #[cfg_attr(any(test, feature = "mocks"), automock)]
 pub trait AccountPasswordService: Send + Sync {
@@ -33,11 +33,11 @@ pub trait AccountPasswordService: Send + Sync {
 
     /// Count a login try against the principal's password and answer it. A principal without a
     /// local password gets an answer of the same shape that no password finishes, and nothing
-    /// is counted.
+    /// is counted. An account takes ten starts an hour; nothing locks its password.
     ///
     /// # Errors
-    /// - `PasswordLocked` after ten tries without a success.
-    /// - `RateLimited` while the last try's wait runs, or when the caller's IP fails too often.
+    /// - `RateLimited` until the account's window ends once it took ten starts, or when the
+    ///   caller's IP fails too often.
     /// - `Validation` for a malformed principal id or request.
     async fn login_start(&self, cmd: PasswordLoginStartCmd)
     -> ServiceResult<PasswordLoginStartDto>;
@@ -59,7 +59,7 @@ pub trait AccountPasswordService: Send + Sync {
     ///
     /// # Errors
     /// - `NotFound` when the account has no password.
-    /// - `PasswordLocked` and `RateLimited` as for [`Self::login_start`].
+    /// - `RateLimited` as for [`Self::login_start`].
     /// - `Validation` for a malformed request.
     async fn change_start(
         &self,
