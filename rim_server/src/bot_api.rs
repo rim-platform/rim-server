@@ -1064,6 +1064,7 @@ mod tests {
             edited_at: None,
             encryption: None,
             flagged_at: None,
+            posted_via: None,
         }
     }
 

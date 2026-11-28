@@ -2205,6 +2205,7 @@ mod tests {
                 franking_key_id: 1,
             }),
             flagged_at: None,
+            posted_via: None,
         }
     }
 

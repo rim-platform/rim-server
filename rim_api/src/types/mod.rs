@@ -107,8 +107,8 @@ pub use keybind::{Keybind, KeybindContext, KeybindScope, KeybindSource};
 pub use macro_def::{MacroDef, MacroStep};
 pub use message::{
     ConversationChangesStatus, ConversationMessageChanges, LinkPreview, Message, MessageChange,
-    MessageChangeCursorInput, MessageChangeKind, MessageChangesInput, ReactionGroup,
-    SearchMessagesInput, SearchResultMessage,
+    MessageChangeCursorInput, MessageChangeKind, MessageChangesInput, MessagePostedVia,
+    ReactionGroup, SearchMessagesInput, SearchResultMessage,
 };
 pub use moderation::{
     DeletedMemberMessages, MemberMessageCounts, MemberTimeout, MessageReport,

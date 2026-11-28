@@ -140,6 +140,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261107_085948_add_incoming_webhook_template::Migration),
             Box::new(m20261107_151959_create_home_layout::Migration),
             Box::new(m20261109_090838_add_macro_fields_to_user_command::Migration),
+            Box::new(m20261128_102502_add_posted_via_to_message::Migration),
         ]
     }
 }
@@ -267,3 +268,4 @@ mod m20261107_014136_add_bot_sees_member_joins;
 mod m20261107_085948_add_incoming_webhook_template;
 mod m20261107_151959_create_home_layout;
 mod m20261109_090838_add_macro_fields_to_user_command;
+mod m20261128_102502_add_posted_via_to_message;

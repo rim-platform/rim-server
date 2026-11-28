@@ -825,6 +825,16 @@ in `serverInfo.capabilities`.
   for a never-edited or deleted message, the value `MessageChange.editedAt` carries.
   `MessageUpdated` events carry it as `message.edited_at`. A server with it lists
   `message_edited_at` in `serverInfo.capabilities`.
+- `Message.postedVia` says how a message was posted when not by the person's own client: `AGENT`
+  for a message an `executeCommand` call with the initiator `AGENT` posted (`chat.post_message`
+  or `chat.reply_to_selected_message`, directly or as a step of a macro the agent ran), null
+  otherwise and for a deleted message. The message is still the person's and carries their name;
+  a client shows a small mark next to it. The initiator is the client's word, so the mark is too:
+  a client that does not say it is the agent posts unmarked. The mark stays when the message is
+  edited. `sendMessage`, the bot API, pipelines and a forward post unmarked messages, and an
+  encrypted message is never marked. `NewMessage` and `MessageUpdated` events carry it as
+  `message.posted_via` (`"agent"` or null), and the change feed's `MessageChange.message` as
+  `postedVia`. A server with it lists `message_posted_via` in `serverInfo.capabilities`.
 
 ## Reply Semantics
 

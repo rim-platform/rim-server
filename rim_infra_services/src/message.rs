@@ -606,6 +606,7 @@ impl DefaultMessageService {
             edited_at: message.edited_at,
             encryption,
             flagged_at: message.flagged_at,
+            posted_via: message.posted_via,
         })
     }
 
@@ -676,6 +677,7 @@ impl DefaultMessageService {
             edited_at: message.edited_at,
             encryption,
             flagged_at: message.flagged_at,
+            posted_via: message.posted_via,
         }
     }
 
@@ -1085,6 +1087,7 @@ impl MessageService for DefaultMessageService {
             thread_id: None,
             parent_message_id,
             forwarded_from_message_id: cmd.forwarded_from_message_id,
+            posted_via: cmd.posted_via,
         };
 
         // Run create + activity touch inside a transaction when DB is available.
@@ -1238,6 +1241,7 @@ impl MessageService for DefaultMessageService {
             thread_id: Some(thread.id),
             parent_message_id,
             forwarded_from_message_id: None,
+            posted_via: None,
         };
 
         let message = repos.message_repo.create_message(&new_msg).await?;
@@ -1887,6 +1891,7 @@ impl MessageService for DefaultMessageService {
             thread_id: None,
             parent_message_id: None,
             forwarded_from_message_id: Some(cmd.message_id),
+            posted_via: None,
         };
 
         let (repos, scope) = self.begin_write().await?;

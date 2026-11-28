@@ -180,6 +180,7 @@ async fn execute_command_proceeds_when_capability_check_passes() {
                     edited_at: None,
                     encryption: None,
                     flagged_at: None,
+                    posted_via: None,
                 })
             })
         });

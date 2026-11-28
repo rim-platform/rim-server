@@ -33,6 +33,7 @@ async fn add_get_and_list_attachments_for_message() {
             sent_by: user.id,
             text: Some("t".to_string()),
             forwarded_from_message_id: None,
+            posted_via: None,
         })
         .await
         .unwrap();
@@ -115,6 +116,7 @@ async fn get_attachments_for_messages_batch() {
             sent_by: user.id,
             text: Some("msg1".to_string()),
             forwarded_from_message_id: None,
+            posted_via: None,
         })
         .await
         .unwrap();
@@ -127,6 +129,7 @@ async fn get_attachments_for_messages_batch() {
             sent_by: user.id,
             text: Some("msg2".to_string()),
             forwarded_from_message_id: None,
+            posted_via: None,
         })
         .await
         .unwrap();

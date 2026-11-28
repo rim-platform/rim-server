@@ -358,6 +358,7 @@ mod tests {
             edited_at: None,
             encryption: None,
             reactions: vec![],
+            posted_via: None,
         };
         let m = member_user_ids;
         let t = conversation_type;

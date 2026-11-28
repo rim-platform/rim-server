@@ -36,6 +36,7 @@ pub const CAPABILITIES: &[&str] = &[
     "account_macros",
     "command_initiator_ui",
     "command_relative_minutes",
+    "message_posted_via",
 ];
 
 /// The running server build, the API version it speaks and the optional features it runs.
@@ -204,7 +205,7 @@ impl ServerInfo {
     /// `read_marker` (`UnreadCount.unreadAfter`, `markAsUnread`, the `ReadMarkerRewound` event),
     /// `bot_events` (`Bot.seesMemberJoins`, the same field of `CreateBotInput` and `UpdateBotInput`,
     /// and `/api/bot/v1/events`), `pipeline_post_as_bot` (`PipelineActionGql.postAsBot`,
-    /// `PipelineActionInput.postAsBot`).
+    /// `PipelineActionInput.postAsBot`), `message_posted_via` (`Message.postedVia`).
     /// A client ignores names it does not know.
     async fn capabilities(&self) -> Vec<String> {
         CAPABILITIES

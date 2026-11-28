@@ -22,10 +22,12 @@ use super::pipe_parser::{self, PipeSegment};
 use super::resolver::{CommandResolver, Resolved, expanded_steps_exceeded};
 use super::user_commands;
 
-/// The caller, context and user-command nesting depth of one dispatch, and the run it is part of.
+/// The caller, the initiator of its call, context and user-command nesting depth of one
+/// dispatch, and the run it is part of.
 #[derive(Clone)]
 pub(super) struct ExecutionContext {
     pub actor: Actor,
+    pub initiator: CommandInitiator,
     pub context: Option<CommandContextDto>,
     pub depth: usize,
     pub run: Arc<RunScope>,
@@ -241,11 +243,20 @@ impl DefaultCommandService {
     pub(super) async fn execute_builtin(
         &self,
         actor: Actor,
+        initiator: CommandInitiator,
         command_id: &str,
         args: Option<Value>,
         context: Option<CommandContextDto>,
     ) -> ServiceResult<CommandResultDto> {
-        executor::execute_builtin_command(&self.services, actor, command_id, args, context).await
+        executor::execute_builtin_command(
+            &self.services,
+            actor,
+            initiator,
+            command_id,
+            args,
+            context,
+        )
+        .await
     }
 
     #[async_recursion]
@@ -290,6 +301,7 @@ impl DefaultCommandService {
     pub(super) async fn execute_piped(
         &self,
         actor: Actor,
+        initiator: CommandInitiator,
         stages: Vec<(PipeSegment, Option<Resolved>)>,
         context: Option<CommandContextDto>,
         run: Arc<RunScope>,
@@ -339,6 +351,7 @@ impl DefaultCommandService {
                     merged_args,
                     ExecutionContext {
                         actor,
+                        initiator,
                         context: context.clone(),
                         depth: 0,
                         run: Arc::clone(&run),
@@ -463,7 +476,7 @@ impl DefaultCommandService {
             )
             .await?;
             return self
-                .execute_builtin(ctx.actor, command_id, args, ctx.context)
+                .execute_builtin(ctx.actor, ctx.initiator, command_id, args, ctx.context)
                 .await;
         }
 
@@ -616,7 +629,7 @@ impl DefaultCommandService {
 
         match dispatch {
             Dispatch::Pipe(stages) => {
-                self.execute_piped(cmd.actor, stages, cmd.context, run)
+                self.execute_piped(cmd.actor, cmd.initiator, stages, cmd.context, run)
                     .await
             }
             Dispatch::Single(None) => Err(ServiceError::NotFound),
@@ -626,6 +639,7 @@ impl DefaultCommandService {
                     cmd.args,
                     ExecutionContext {
                         actor: cmd.actor,
+                        initiator: cmd.initiator,
                         context: cmd.context,
                         depth: 0,
                         run,

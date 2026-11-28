@@ -31,6 +31,8 @@ pub struct Model {
     pub franking_receipt: Option<Vec<u8>>,
     pub franking_key_id: Option<i32>,
     pub flagged_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub posted_via: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

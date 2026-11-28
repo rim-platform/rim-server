@@ -283,6 +283,7 @@ fn test_message_dto() -> rim_services::message::dto::MessageDto {
         edited_at: None,
         encryption: None,
         flagged_at: None,
+        posted_via: None,
     }
 }
 

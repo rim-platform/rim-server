@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use rim_core::message::model::MessagePostedVia;
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::message::command::{DeleteMessageCmd, EditMessageCmd, SendMessageCmd};
 use rim_services::{Actor, ServiceError, ServiceResult};
 
@@ -8,9 +10,26 @@ use rim_services::command::dto::{CommandContextDto, CommandResultDto, CommandRes
 
 use super::{require_string_arg, resolve_conversation_id, resolve_workspace_id};
 
+/// How a message a call made with `initiator` posts is marked: `Agent` for the agent's calls,
+/// `None` for every other initiator.
+fn posted_via(initiator: CommandInitiator) -> Option<MessagePostedVia> {
+    match initiator {
+        CommandInitiator::Agent => Some(MessagePostedVia::Agent),
+        CommandInitiator::Palette
+        | CommandInitiator::Macro
+        | CommandInitiator::Keybind
+        | CommandInitiator::ContextMenu
+        | CommandInitiator::Plugin
+        | CommandInitiator::Cli
+        | CommandInitiator::Ui
+        | CommandInitiator::Bot => None,
+    }
+}
+
 pub(super) async fn post_message(
     services: &CommandServices,
     actor: Actor,
+    initiator: CommandInitiator,
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
@@ -31,6 +50,7 @@ pub(super) async fn post_message(
             text: Some(text),
             forwarded_from_message_id: None,
             parent_message_id: None,
+            posted_via: posted_via(initiator),
         })
         .await?;
 
@@ -50,6 +70,7 @@ pub(super) async fn post_message(
 pub(super) async fn reply_to_selected_message(
     services: &CommandServices,
     actor: Actor,
+    initiator: CommandInitiator,
     args: serde_json::Map<String, Value>,
     context: Option<CommandContextDto>,
 ) -> ServiceResult<CommandResultDto> {
@@ -78,6 +99,7 @@ pub(super) async fn reply_to_selected_message(
             text: Some(text),
             forwarded_from_message_id: None,
             parent_message_id: Some(parent_message_id),
+            posted_via: posted_via(initiator),
         })
         .await?;
 
@@ -190,13 +212,14 @@ mod tests {
     use std::sync::Arc;
 
     use rim_core::conversation::model::ConversationId;
-    use rim_core::message::model::MessageId;
+    use rim_core::message::model::{MessageId, MessagePostedVia};
     use rim_core::server::model::ServerId;
     use rim_core::user::model::UserId;
     use rim_services::Actor;
     use rim_services::auth::service::MockAuthService;
     use rim_services::capability::service::MockCapabilityService;
     use rim_services::command::dto::{CommandContextDto, CommandResultStatusDto};
+    use rim_services::command::initiator::CommandInitiator;
     use rim_services::conversation::service::MockConversationService;
     use rim_services::message::dto::MessageDto;
     use rim_services::message::service::MockMessageService;
@@ -271,6 +294,7 @@ mod tests {
             edited_at: None,
             encryption: None,
             flagged_at: None,
+            posted_via: None,
         }
     }
 
@@ -308,9 +332,15 @@ mod tests {
             conversation_id: Some(conv),
             ..ctx_with(ws)
         };
-        let result = super::post_message(&svc, actor(), text_args(None), Some(ctx))
-            .await
-            .expect("the message goes to the focused conversation");
+        let result = super::post_message(
+            &svc,
+            actor(),
+            CommandInitiator::Palette,
+            text_args(None),
+            Some(ctx),
+        )
+        .await
+        .expect("the message goes to the focused conversation");
         assert_eq!(result.status, CommandResultStatusDto::Success);
         assert_eq!(
             result.payload.expect("payload")["conversation_id"],
@@ -334,9 +364,15 @@ mod tests {
             conversation_id: Some(ConversationId::new()),
             ..ctx_with(ws)
         };
-        let result = super::post_message(&svc, actor(), text_args(Some(arg_conv)), Some(ctx))
-            .await
-            .expect("the message goes to the arg conversation");
+        let result = super::post_message(
+            &svc,
+            actor(),
+            CommandInitiator::Palette,
+            text_args(Some(arg_conv)),
+            Some(ctx),
+        )
+        .await
+        .expect("the message goes to the arg conversation");
         assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 
@@ -367,7 +403,7 @@ mod tests {
             "text".to_string(),
             serde_json::Value::String("hello".to_string()),
         );
-        let result = super::post_message(&svc, actor(), args, None)
+        let result = super::post_message(&svc, actor(), CommandInitiator::Palette, args, None)
             .await
             .expect("post_message with arg server_id must succeed");
         assert_eq!(result.status, CommandResultStatusDto::Success);
@@ -396,9 +432,15 @@ mod tests {
             "text".to_string(),
             serde_json::Value::String("hello".to_string()),
         );
-        let result = super::post_message(&svc, actor(), args, Some(ctx_with(ws)))
-            .await
-            .expect("post_message with context workspace must succeed");
+        let result = super::post_message(
+            &svc,
+            actor(),
+            CommandInitiator::Palette,
+            args,
+            Some(ctx_with(ws)),
+        )
+        .await
+        .expect("post_message with context workspace must succeed");
         assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 
@@ -431,9 +473,15 @@ mod tests {
             "text".to_string(),
             serde_json::Value::String("hello".to_string()),
         );
-        let result = super::post_message(&svc, actor(), args, Some(ctx_with(ctx_ws)))
-            .await
-            .expect("arg wins when both present");
+        let result = super::post_message(
+            &svc,
+            actor(),
+            CommandInitiator::Palette,
+            args,
+            Some(ctx_with(ctx_ws)),
+        )
+        .await
+        .expect("arg wins when both present");
         assert_eq!(result.status, CommandResultStatusDto::Success);
     }
 
@@ -451,7 +499,7 @@ mod tests {
             "text".to_string(),
             serde_json::Value::String("hello".to_string()),
         );
-        let err = super::post_message(&svc, actor(), args, None)
+        let err = super::post_message(&svc, actor(), CommandInitiator::Palette, args, None)
             .await
             .unwrap_err();
         assert!(
@@ -462,5 +510,116 @@ mod tests {
             assert!(msg.contains("server_id"));
             assert!(msg.contains("context.workspace_id"));
         }
+    }
+
+    // ── posted_via ───────────────────────────────────────────────────────────
+
+    /// A message service that expects one send whose `posted_via` is `expected`.
+    fn expect_posted_via(
+        ws: ServerId,
+        conv: ConversationId,
+        expected: Option<MessagePostedVia>,
+    ) -> CommandServices {
+        let mut msg_svc = MockMessageService::new();
+        msg_svc
+            .expect_send_message()
+            .withf(move |cmd| cmd.posted_via == expected)
+            .times(1)
+            .return_once(move |_| Box::pin(async move { Ok(fake_message(ws, conv)) }));
+        make_services(msg_svc)
+    }
+
+    /// The context of a message selected in a conversation of `ws`.
+    fn selected_ctx(ws: ServerId, conv: ConversationId) -> CommandContextDto {
+        CommandContextDto {
+            conversation_id: Some(conv),
+            selected_message_id: Some(MessageId::new()),
+            ..ctx_with(ws)
+        }
+    }
+
+    /// The agent's call marks the posted message.
+    #[tokio::test]
+    async fn post_message_by_the_agent_is_marked() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let svc = expect_posted_via(ws, conv, Some(MessagePostedVia::Agent));
+        let ctx = CommandContextDto {
+            conversation_id: Some(conv),
+            ..ctx_with(ws)
+        };
+
+        super::post_message(
+            &svc,
+            actor(),
+            CommandInitiator::Agent,
+            text_args(None),
+            Some(ctx),
+        )
+        .await
+        .expect("the agent's message is posted");
+    }
+
+    /// Every initiator other than the agent posts an unmarked message.
+    #[tokio::test]
+    async fn post_message_by_another_initiator_is_not_marked() {
+        for initiator in [
+            CommandInitiator::Palette,
+            CommandInitiator::Macro,
+            CommandInitiator::Keybind,
+            CommandInitiator::ContextMenu,
+            CommandInitiator::Plugin,
+            CommandInitiator::Cli,
+            CommandInitiator::Ui,
+            CommandInitiator::Bot,
+        ] {
+            let ws = ServerId::new();
+            let conv = ConversationId::new();
+            let svc = expect_posted_via(ws, conv, None);
+            let ctx = CommandContextDto {
+                conversation_id: Some(conv),
+                ..ctx_with(ws)
+            };
+
+            super::post_message(&svc, actor(), initiator, text_args(None), Some(ctx))
+                .await
+                .unwrap_or_else(|e| panic!("{initiator} posts unmarked: {e:?}"));
+        }
+    }
+
+    /// The agent's reply to the selected message is marked.
+    #[tokio::test]
+    async fn reply_by_the_agent_is_marked() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let svc = expect_posted_via(ws, conv, Some(MessagePostedVia::Agent));
+
+        super::reply_to_selected_message(
+            &svc,
+            actor(),
+            CommandInitiator::Agent,
+            text_args(None),
+            Some(selected_ctx(ws, conv)),
+        )
+        .await
+        .expect("the agent's reply is posted");
+    }
+
+    /// A reply from the palette is not marked.
+    #[tokio::test]
+    async fn reply_from_the_palette_is_not_marked() {
+        let ws = ServerId::new();
+        let conv = ConversationId::new();
+        let svc = expect_posted_via(ws, conv, None);
+
+        super::reply_to_selected_message(
+            &svc,
+            actor(),
+            CommandInitiator::Palette,
+            text_args(None),
+            Some(selected_ctx(ws, conv)),
+        )
+        .await
+        .expect("the reply is posted");
     }
 }

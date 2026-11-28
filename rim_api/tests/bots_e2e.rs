@@ -729,6 +729,7 @@ async fn deactivating_ends_the_tokens_and_the_membership_and_keeps_the_messages(
             text: Some("written by the bot".to_string()),
             parent_message_id: None,
             forwarded_from_message_id: None,
+            posted_via: None,
         })
         .await
         .expect("a bot in a channel posts through the same service");

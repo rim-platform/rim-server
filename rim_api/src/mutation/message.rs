@@ -46,6 +46,7 @@ impl MessageMutations {
                 text: Some(input.text),
                 parent_message_id,
                 forwarded_from_message_id,
+                posted_via: None,
             })
             .await
             .map_err(map_service_error)?;

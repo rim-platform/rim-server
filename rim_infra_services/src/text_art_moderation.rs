@@ -363,6 +363,7 @@ mod tests {
             edited_at: None,
             reactions: vec![],
             encryption: None,
+            posted_via: None,
         }
     }
 
@@ -403,6 +404,7 @@ mod tests {
             has_attachments: false,
             encryption: None,
             flagged_at: None,
+            posted_via: None,
         }
     }
 

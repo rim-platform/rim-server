@@ -1454,6 +1454,7 @@ mod tests {
             sent_at: Utc::now(),
             edited_at: None,
             flagged_at: None,
+            posted_via: None,
         }
     }
 

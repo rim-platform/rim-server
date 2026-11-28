@@ -21,6 +21,16 @@ tag `v<version>`, the version every crate in the workspace carries.
 
 ## [Unreleased]
 
+### Added
+
+- A message an agent posted carries `Message.postedVia = AGENT` (`MessagePostedVia`), so clients
+  can show a small mark next to it: a `chat.post_message` or `chat.reply_to_selected_message`
+  call of `executeCommand` with the initiator `AGENT`, directly or as a step of a macro the agent
+  ran. The mark stays when the message is edited; every other way of posting leaves it null.
+  Message events carry it as `message.posted_via`. `serverInfo.capabilities` lists
+  `message_posted_via` (`docs/messaging.md`, `docs/command_model.md`,
+  `docs/specs/agent-data-flow-v1.md`).
+
 ## [0.0.11] - 2026-11-14
 
 ### Security

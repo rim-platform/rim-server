@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use entity::message;
-use rim_core::message::model::{Message, MessageId, NewMessage};
+use rim_core::message::model::{Message, MessageId, MessagePostedVia, NewMessage};
 use rim_core::message::repository::{
     AuthorChannelCounts, AuthorChannelScope, DeletedMessage, ListMessagesParams, MessageChange,
     MessageCursor, MessageRepository, MessageSearchHit, MessageSearchParams, MessageTally,
@@ -83,6 +83,7 @@ struct MessageSearchRow {
     is_deleted: bool,
     has_attachments: bool,
     flagged_at: Option<DateTimeWithTimeZone>,
+    posted_via: Option<String>,
     rank: f32,
     headline: Option<String>,
 }
@@ -104,6 +105,7 @@ impl From<MessageSearchRow> for MessageSearchHit {
                 has_attachments: row.has_attachments,
                 encryption: None,
                 flagged_at: row.flagged_at.map(Into::into),
+                posted_via: row.posted_via.as_deref().and_then(MessagePostedVia::parse),
             },
             rank: row.rank,
             headline: row.headline,
@@ -151,6 +153,7 @@ impl MessageRepository for SeaOrmMessageRepository {
             text: Set(new_message.text.to_owned()),
             is_deleted: Set(false),
             has_attachments: Set(false),
+            posted_via: Set(new_message.posted_via.map(|via| via.as_str().to_string())),
             ..Default::default()
         };
 
@@ -347,7 +350,7 @@ impl MessageRepository for SeaOrmMessageRepository {
         let sql = format!(
             r#"SELECT m.id, m.conversation_id, m.thread_id, m.parent_message_id,
                       m.forwarded_from_message_id, m.sent_at, m.edited_at, m.sent_by, m.text,
-                      m.is_deleted, m.has_attachments, m.flagged_at,
+                      m.is_deleted, m.has_attachments, m.flagged_at, m.posted_via,
                       ts_rank(m.search_tsv, q.query) AS rank,
                       ts_headline('english', coalesce(m.text, ''), q.query,
                                   CASE WHEN char_length(coalesce(m.text, '')) <= {WHOLE_HEADLINE_MAX_CHARS}

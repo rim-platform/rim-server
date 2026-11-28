@@ -42,6 +42,9 @@ pub struct MessageDto {
 
     /// When the automatic text art check flagged the message; `None` while it is not flagged.
     pub flagged_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// How the message was posted when not by the person's own client; `None` otherwise.
+    pub posted_via: Option<rim_core::message::model::MessagePostedVia>,
 }
 
 /// An encrypted message's envelope as members see it.

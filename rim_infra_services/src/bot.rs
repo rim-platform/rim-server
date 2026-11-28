@@ -2176,6 +2176,7 @@ mod tests {
             has_attachments: false,
             encryption: None,
             flagged_at: None,
+            posted_via: None,
         };
         let mention = rim_core::message_mention::model::MessageMention {
             message_id: message.id,

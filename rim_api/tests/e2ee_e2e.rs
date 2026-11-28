@@ -2334,6 +2334,7 @@ async fn an_unready_party_is_invited_and_joins_by_accepting() {
             thread_id: None,
             parent_message_id: None,
             forwarded_from_message_id: None,
+            posted_via: None,
         })
         .await
         .expect("message");

@@ -1,6 +1,6 @@
 use crate::Actor;
 use rim_core::conversation::model::ConversationId;
-use rim_core::message::model::MessageId;
+use rim_core::message::model::{MessageId, MessagePostedVia};
 use rim_core::message_thread::model::MessageThreadId;
 use rim_core::repository::pagination::PageDir;
 use rim_core::server::model::ServerId;
@@ -30,6 +30,10 @@ pub struct SendMessageCmd {
     /// The message this one forwards, recorded as its origin; the caller must be able to read
     /// it.
     pub forwarded_from_message_id: Option<MessageId>,
+
+    /// How the message is posted when not by the person's own client. Set by the command
+    /// executor for a call whose initiator is the agent; `None` for every other caller.
+    pub posted_via: Option<MessagePostedVia>,
 }
 
 /// An encrypted message, sent from the session's device under a client-chosen id.

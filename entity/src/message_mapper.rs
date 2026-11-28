@@ -1,5 +1,5 @@
 use crate::message;
-use rim_core::message::model::{Message, MessageEncryption};
+use rim_core::message::model::{Message, MessageEncryption, MessagePostedVia};
 
 impl From<message::Model> for Message {
     fn from(m: message::Model) -> Self {
@@ -17,6 +17,7 @@ impl From<message::Model> for Message {
             sent_by: m.sent_by.into(),
             text: m.text,
             flagged_at: m.flagged_at.map(Into::into),
+            posted_via: m.posted_via.as_deref().and_then(MessagePostedVia::parse),
         }
     }
 }

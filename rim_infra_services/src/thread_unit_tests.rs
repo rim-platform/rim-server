@@ -401,6 +401,7 @@ mod tests {
             sent_at: chrono::Utc::now(),
             edited_at: None,
             flagged_at: None,
+            posted_via: None,
         };
         let existing_thread = thread(conv_id);
 
@@ -541,6 +542,7 @@ mod tests {
             sent_at: now,
             edited_at: None,
             flagged_at: None,
+            posted_via: None,
         };
     }
 }

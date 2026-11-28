@@ -25,6 +25,34 @@ pub struct Message {
     pub encryption: Option<MessageEncryption>,
     /// When the automatic text art check flagged the message; `None` while it is not flagged.
     pub flagged_at: Option<DateTime<Utc>>,
+    /// How the message was posted when not by the person's own client; `None` otherwise.
+    pub posted_via: Option<MessagePostedVia>,
+}
+
+/// How a message was posted when not by the person's own client, stored as text in
+/// `message.posted_via`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePostedVia {
+    /// An `executeCommand` call whose initiator was the agent posted it.
+    Agent,
+}
+
+impl MessagePostedVia {
+    /// The stored text value: `agent`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+        }
+    }
+
+    /// Parses a stored text value; `None` for a value this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "agent" => Some(Self::Agent),
+            _ => None,
+        }
+    }
 }
 
 /// The MLS envelope of an encrypted message row.
@@ -52,4 +80,6 @@ pub struct NewMessage {
     pub thread_id: Option<MessageThreadId>,
     pub parent_message_id: Option<MessageId>,
     pub forwarded_from_message_id: Option<MessageId>,
+    /// How the message is posted when not by the person's own client; `None` otherwise.
+    pub posted_via: Option<MessagePostedVia>,
 }

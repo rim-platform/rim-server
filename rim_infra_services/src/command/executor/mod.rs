@@ -14,16 +14,19 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use rim_services::command::initiator::CommandInitiator;
 use rim_services::message::dto::MessageDto;
 use rim_services::{Actor, ServiceError, ServiceResult};
 
 use crate::command::CommandServices;
 use rim_services::command::dto::{CommandContextDto, CommandResultDto};
 
-/// Dispatches a resolved builtin command id to its domain executor.
+/// Dispatches a resolved builtin command id to its domain executor, for a call made with
+/// `initiator`.
 pub(super) async fn execute_builtin_command(
     services: &CommandServices,
     actor: Actor,
+    initiator: CommandInitiator,
     command_id: &str,
     args: Option<Value>,
     context: Option<CommandContextDto>,
@@ -31,9 +34,12 @@ pub(super) async fn execute_builtin_command(
     let args = require_object_args(args)?;
 
     match command_id {
-        "chat.post_message" => chat_messages::post_message(services, actor, args, context).await,
+        "chat.post_message" => {
+            chat_messages::post_message(services, actor, initiator, args, context).await
+        }
         "chat.reply_to_selected_message" => {
-            chat_messages::reply_to_selected_message(services, actor, args, context).await
+            chat_messages::reply_to_selected_message(services, actor, initiator, args, context)
+                .await
         }
         "chat.delete_message" => {
             chat_messages::delete_message(services, actor, args, context).await

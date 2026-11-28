@@ -4669,6 +4669,7 @@ async fn filed_for_a_message(uninvited: Vec<String>) -> Vec<(Vec<String>, String
                 edited_at: None,
                 reactions: Vec::new(),
                 encryption: None,
+                posted_via: None,
             },
         })
         .await

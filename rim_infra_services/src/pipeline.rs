@@ -1617,6 +1617,7 @@ mod tests {
                 edited_at: None,
                 encryption: None,
                 reactions: vec![],
+                posted_via: None,
             },
         }
     }

@@ -462,6 +462,10 @@ pub struct MessageEventData {
     pub reactions: Vec<ReactionGroupData>,
     /// The envelope of an encrypted message; `None` for plaintext.
     pub encryption: Option<MessageEncryptionData>,
+    /// How the message was posted when not by the person's own client, `agent` for an agent's
+    /// command call; null otherwise and for a deleted message.
+    #[serde(default)]
+    pub posted_via: Option<rim_core::message::model::MessagePostedVia>,
 }
 
 /// An encrypted message's envelope in events. Binary values are unpadded base64url; `sent_at_us`
@@ -515,6 +519,7 @@ impl From<&MessageDto> for MessageEventData {
             edited_at: if dto.is_deleted { None } else { dto.edited_at },
             reactions: vec![],
             encryption: dto.encryption.as_ref().map(Into::into),
+            posted_via: if dto.is_deleted { None } else { dto.posted_via },
         }
     }
 }

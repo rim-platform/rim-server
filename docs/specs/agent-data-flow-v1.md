@@ -124,8 +124,12 @@ The person can also start the connection inside the desktop app.
 - When the account locks or the agents switch goes off, a dialog that is open ends as discarded.
 - The record gets an entry when the agent asks and another with the outcome, with the message id if one
   was sent and never the text.
-- The message is the person's: it carries their name, and the others in the channel are not told an agent
-  wrote it. The audit log records the `AGENT` initiator, which an Owner or Moderator can read.
+- The message is the person's: it carries their name. The server marks it `Message.postedVia = AGENT`,
+  because the call's initiator is `AGENT`, and keeps the mark when the message is edited, so the
+  others in the channel can see an agent posted it; a step of a macro the agent ran is marked the
+  same way. No agent name is stored. The mark rests on the initiator, which is the client's word. A
+  server with it lists `message_posted_via` in `serverInfo.capabilities`. The audit log records the
+  `AGENT` initiator too, which an Owner or Moderator can read.
 
 ## Runs
 

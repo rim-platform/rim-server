@@ -669,6 +669,7 @@ mod tests {
                 text: Some("plain".to_string()),
                 parent_message_id: None,
                 forwarded_from_message_id: None,
+                posted_via: None,
             })
             .await
             .unwrap_err();

@@ -68,6 +68,7 @@ mod tests {
             sent_at: chrono::Utc::now(),
             edited_at: None,
             flagged_at: None,
+            posted_via: None,
         }
     }
 
@@ -130,6 +131,7 @@ mod tests {
                         sent_at: chrono::Utc::now(),
                         edited_at: None,
                         flagged_at: None,
+                        posted_via: None,
                     })
                 })
             });
@@ -167,6 +169,7 @@ mod tests {
                 text: Some("   ".to_string()),
                 parent_message_id: None,
                 forwarded_from_message_id: None,
+                posted_via: None,
             })
             .await
             .unwrap();
@@ -273,6 +276,7 @@ mod tests {
                     text: Some("hi".to_string()),
                     parent_message_id: None,
                     forwarded_from_message_id: None,
+                    posted_via: None,
                 })
                 .await;
             if fail_write {
@@ -570,6 +574,7 @@ mod tests {
             sent_at: chrono::Utc::now(),
             edited_at: None,
             flagged_at: None,
+            posted_via: None,
         };
         let msg_for_repo = msg.clone();
         message_repo
@@ -1069,6 +1074,7 @@ mod tests {
                     sent_at: chrono::Utc::now(),
                     edited_at: None,
                     flagged_at: None,
+                    posted_via: None,
                 })
             })
         });
@@ -1106,6 +1112,7 @@ mod tests {
             text: Some("hello".to_string()),
             parent_message_id: None,
             forwarded_from_message_id: None,
+            posted_via: None,
         }
     }
 
@@ -1923,6 +1930,7 @@ mod tests {
                 text: Some("hi".to_string()),
                 parent_message_id: None,
                 forwarded_from_message_id: None,
+                posted_via: None,
             })
             .await
             .expect("the send succeeds although notifications failed");

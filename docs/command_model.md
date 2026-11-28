@@ -964,6 +964,13 @@ to an older server it omits the initiator, which that server records as `palette
 is the client's word: the server does not check where a call came from. Only the bot API sets
 `BOT`, which GraphQL has no value for.
 
+A message an `AGENT` call posts, with `chat.post_message` or `chat.reply_to_selected_message`,
+directly, in a pipe or as a step of a macro the agent ran, carries `Message.postedVia = AGENT`,
+so the others in the channel can see an agent posted it. The mark stays when the message is
+edited. A call with any other initiator posts an unmarked message, and so do pipelines and bots.
+Like the initiator it rests on, the mark is the client's word. A server with it lists
+`message_posted_via` in `serverInfo.capabilities` (`docs/messaging.md`, Timeline And Threads).
+
 `admin.ban` takes a `minutes` argument that ends the ban that many minutes from now, and
 `notifications.mute_conversation` the duration `minutes` with a `minutes` count. A server that
 lacks them ignores `minutes` on a ban, which would then never end, so a client offers a duration

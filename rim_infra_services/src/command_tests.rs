@@ -3630,6 +3630,7 @@ mod tests {
             edited_at: None,
             encryption: None,
             flagged_at: None,
+            posted_via: None,
         }
     }
 
@@ -3641,6 +3642,88 @@ mod tests {
             parent_message_id: cmd.parent_message_id,
             ..message_in(cmd.server_id, cmd.conversation_id)
         }
+    }
+
+    /// Runs the agent-callable macro `user.say`, whose one step posts a message, with
+    /// `initiator`, confirming when asked, and returns the `posted_via` of the step's send.
+    async fn posted_via_of_macro_step(
+        initiator: CommandInitiator,
+    ) -> Option<rim_core::message::model::MessagePostedVia> {
+        let actor = new_actor();
+        let workspace = rim_core::server::model::ServerId::new();
+        let conversation = rim_core::conversation::model::ConversationId::new();
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let recorded = Arc::clone(&seen);
+        let mut message_service = MockMessageService::new();
+        message_service
+            .expect_send_message()
+            .times(1)
+            .returning(move |cmd| {
+                *recorded.lock().expect("lock") = Some(cmd.posted_via);
+                Box::pin(async move { Ok(sent_message(cmd)) })
+            });
+        let say = UserCommand {
+            ai_callable: true,
+            ..stored_user_command(
+                actor.user_id,
+                "user.say",
+                vec![step(
+                    "chat.post_message",
+                    serde_json::json!({
+                        "server_id": workspace.to_string(),
+                        "conversation_id": conversation.to_string(),
+                        "text": "hello",
+                    }),
+                )],
+            )
+        };
+        let svc = service_with_capability(
+            repo_with(vec![say]),
+            MockConversationService::new(),
+            message_service,
+            allow_all_caps(),
+        );
+        let cmd = ExecuteCommandCmd {
+            initiator,
+            context: Some(workspace_context(workspace)),
+            ..palette_cmd(actor, "user.say")
+        };
+
+        let first = svc.execute_command(cmd.clone()).await.expect("first call");
+        let result = match first.confirmation_required {
+            None => first,
+            Some(challenge) => svc
+                .execute_command(ExecuteCommandCmd {
+                    confirmation: Some(
+                        rim_services::command::confirmation::ConfirmationProof::InBandToken {
+                            token: challenge.token,
+                            args_hash: challenge.args_hash,
+                        },
+                    ),
+                    ..cmd
+                })
+                .await
+                .expect("confirmed call"),
+        };
+        assert_eq!(result.status, CommandResultStatusDto::Success);
+        seen.lock()
+            .expect("lock")
+            .take()
+            .expect("the step sent a message")
+    }
+
+    /// A message a step of a macro the agent ran posts is marked as the agent's; the same
+    /// macro from the palette posts an unmarked one.
+    #[tokio::test]
+    async fn macro_step_message_is_marked_only_when_the_agent_ran_the_macro() {
+        assert_eq!(
+            posted_via_of_macro_step(CommandInitiator::Agent).await,
+            Some(rim_core::message::model::MessagePostedVia::Agent)
+        );
+        assert_eq!(
+            posted_via_of_macro_step(CommandInitiator::Palette).await,
+            None
+        );
     }
 
     /// Kick, ban and set-role stop at a confirmation challenge before reaching the

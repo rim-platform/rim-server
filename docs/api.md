@@ -779,7 +779,8 @@ each list.
   inputs, and `macroStepCommands`, Macros below; `command_initiator_ui`: the `UI` value of
   `CommandInitiator`, which app controls send, `command_model.md` Invocation Sources;
   `command_relative_minutes`: the `minutes` argument of `admin.ban` and the `minutes` duration of
-  `notifications.mute_conversation`, `command_model.md`). A client asks
+  `notifications.mute_conversation`, `command_model.md`; `message_posted_via`:
+  `Message.postedVia` and `message.posted_via` in message events, `messaging.md`). A client asks
   for such a field, or sends such a value, only when its name is listed, so it keeps working
   against older servers; it ignores names it does not know.
 

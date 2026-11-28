@@ -280,6 +280,7 @@ async fn execute_command_post_message_round_trips_through_executor() {
                     edited_at: None,
                     encryption: None,
                     flagged_at: None,
+                    posted_via: None,
                 })
             })
         });

@@ -156,6 +156,7 @@ fn message(conversation_id: ConversationId, author: UserId, text: &str) -> Messa
         has_attachments: false,
         encryption: None,
         flagged_at: None,
+        posted_via: None,
     }
 }
 

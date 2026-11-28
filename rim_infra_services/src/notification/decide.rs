@@ -320,6 +320,7 @@ mod tests {
             has_attachments: false,
             encryption: None,
             flagged_at: None,
+            posted_via: None,
         }
     }
 

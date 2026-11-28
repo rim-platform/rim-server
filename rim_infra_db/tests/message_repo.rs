@@ -3,13 +3,14 @@
 mod support;
 
 use rim_core::conversation::model::ConversationType;
-use rim_core::message::model::{MessageId, NewMessage};
+use rim_core::message::model::{MessageId, MessagePostedVia, NewMessage};
 use rim_core::message::repository::{ListMessagesParams, MessageCursor, MessageRepository};
 use rim_core::message_thread::repository::MessageThreadRepository;
 use rim_core::repository::error::RepoErrorKind;
 use rim_core::repository::pagination::{PageDir, SortOrder};
 use rim_infra_db::sea_orm_impl::message::SeaOrmMessageRepository;
 use rim_infra_db::sea_orm_impl::message_thread::SeaOrmMessageThreadRepository;
+use sea_orm::{ConnectionTrait, DbBackend, Statement};
 
 #[tokio::test]
 async fn create_get_update_text_and_soft_delete() {
@@ -32,6 +33,7 @@ async fn create_get_update_text_and_soft_delete() {
             sent_by: user.id,
             text: Some("hello".to_string()),
             forwarded_from_message_id: None,
+            posted_via: None,
         })
         .await
         .unwrap();
@@ -83,6 +85,7 @@ async fn update_message_text_returns_edited_at() {
             sent_by: user.id,
             text: Some("hello".to_string()),
             forwarded_from_message_id: None,
+            posted_via: None,
         })
         .await
         .unwrap();
@@ -96,6 +99,87 @@ async fn update_message_text_returns_edited_at() {
 
     let fetched = repo.get_by_id(created.id).await.unwrap().unwrap();
     assert_eq!(fetched.edited_at, Some(edited_at));
+}
+
+/// A message saved as posted by the agent reads back so through a lookup, a search and an edit;
+/// one saved without it reads back unmarked, and the column refuses an unknown value.
+#[tokio::test]
+async fn posted_via_is_saved_and_kept_on_edit() {
+    let ctx = support::TestCtx::new().await;
+    let repo = SeaOrmMessageRepository::new(ctx.db.clone());
+
+    let server = ctx.create_server("s").await;
+    let conv = ctx
+        .create_conversation(server.id, ConversationType::Group)
+        .await;
+    let user = ctx.create_user("msg-user-posted-via").await;
+    let new_message = |text: &str, posted_via| NewMessage {
+        conversation_id: conv.id,
+        thread_id: None,
+        parent_message_id: None,
+        sent_by: user.id,
+        text: Some(text.to_string()),
+        forwarded_from_message_id: None,
+        posted_via,
+    };
+
+    let by_agent = repo
+        .create_message(&new_message(
+            "posted by the agent",
+            Some(MessagePostedVia::Agent),
+        ))
+        .await
+        .unwrap();
+    let by_person = repo
+        .create_message(&new_message("posted by the person", None))
+        .await
+        .unwrap();
+    assert_eq!(by_agent.posted_via, Some(MessagePostedVia::Agent));
+    assert_eq!(by_person.posted_via, None);
+
+    let fetched = repo.get_by_id(by_agent.id).await.unwrap().unwrap();
+    assert_eq!(fetched.posted_via, Some(MessagePostedVia::Agent));
+    let fetched = repo.get_by_id(by_person.id).await.unwrap().unwrap();
+    assert_eq!(fetched.posted_via, None);
+
+    let hits = repo
+        .search_messages_fts(rim_core::message::repository::MessageSearchParams {
+            conversation_ids: vec![conv.id],
+            tsquery: "agent".to_string(),
+            author_id: None,
+            has_link: false,
+            has_attachment: false,
+            after: None,
+            before: None,
+            limit: 10,
+            cursor: None,
+            dir: PageDir::After,
+        })
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].message.posted_via, Some(MessagePostedVia::Agent));
+
+    let edited = repo
+        .update_message_text(by_agent.id, "edited by the person".to_string())
+        .await
+        .unwrap();
+    assert_eq!(edited.posted_via, Some(MessagePostedVia::Agent));
+    let fetched = repo.get_by_id(by_agent.id).await.unwrap().unwrap();
+    assert_eq!(fetched.posted_via, Some(MessagePostedVia::Agent));
+
+    let refused = ctx
+        .db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "UPDATE message SET posted_via = 'bot' WHERE id = $1",
+            [sea_orm::prelude::Uuid::from(by_person.id).into()],
+        ))
+        .await;
+    assert!(
+        refused.is_err(),
+        "the check constraint refuses an unknown value"
+    );
 }
 
 #[tokio::test]

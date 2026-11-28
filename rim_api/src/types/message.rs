@@ -54,6 +54,23 @@ pub struct Message {
     pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub encryption: Option<super::MessageEncryption>,
     pub flagged_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub posted_via: Option<MessagePostedVia>,
+}
+
+/// How a message was posted when not by the person's own client.
+#[derive(Enum, Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MessagePostedVia {
+    /// An `executeCommand` call with the initiator `AGENT` posted it, directly or as a step of a
+    /// macro the agent ran.
+    Agent,
+}
+
+impl From<rim_core::message::model::MessagePostedVia> for MessagePostedVia {
+    fn from(value: rim_core::message::model::MessagePostedVia) -> Self {
+        match value {
+            rim_core::message::model::MessagePostedVia::Agent => Self::Agent,
+        }
+    }
 }
 
 impl From<rim_services::message::dto::MessageDto> for Message {
@@ -93,6 +110,11 @@ impl From<rim_services::message::dto::MessageDto> for Message {
                 None
             } else {
                 value.flagged_at
+            },
+            posted_via: if value.is_deleted {
+                None
+            } else {
+                value.posted_via.map(Into::into)
             },
         }
     }
@@ -186,6 +208,14 @@ impl Message {
     /// `message_edited_at`.
     async fn edited_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.edited_at
+    }
+
+    /// How the message was posted when not by the person's own client: `AGENT` when an agent's
+    /// call posted it (the initiator is the client's word, as on every `executeCommand` call);
+    /// null otherwise and for a deleted message. Kept when the message is edited. Listed in
+    /// `serverInfo.capabilities` as `message_posted_via`.
+    async fn posted_via(&self) -> Option<MessagePostedVia> {
+        self.posted_via
     }
 
     #[graphql(complexity = 5)]
